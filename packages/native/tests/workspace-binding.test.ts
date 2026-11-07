@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * Workspace binding of the native coding lane through the PUBLIC binding:
  * tools registered for workspace A are offered/executable only to sessions
@@ -40,15 +41,17 @@ async function open(options: {
     provider.baseUrl,
     null,
   );
-  const service = await store.createService({
-    jsToolAuthority: { configuredMode: "full_auto" },
-    providerConfig: {
-      protocol: "chat-completions",
-      providerId: "probe",
-      connectionId,
-      model: "loopback-model",
-    },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      jsToolAuthority: { configuredMode: "full_auto" },
+      providerConfig: {
+        protocol: "chat-completions",
+        providerId: "probe",
+        connectionId,
+        model: "loopback-model",
+      },
+    }),
+  );
   await service.registerCodingTools({
     workspaceRoot: options.root,
     sandbox: "off",

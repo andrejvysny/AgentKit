@@ -4,12 +4,15 @@ use agentkit_connections::{
     RequestFence, RequestPlan, ReqwestConnectionNetwork,
 };
 use agentkit_core::{
-    CoreError,
+    CoreError, DispatchGuard,
     providers::{AuthKind, ConnectionIdentity, TrustedTransport},
 };
 use async_trait::async_trait;
 use serde_json::Value;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 use tokio_util::sync::CancellationToken;
 
 /// Selection is immutable. Account OAuth requires a separately qualified adapter.
@@ -20,6 +23,7 @@ pub struct NativeConnectionTransport {
     network: Arc<ReqwestConnectionNetwork>,
     identity: ConnectionIdentity,
     fence: RequestFence,
+    request_guard: Option<Arc<dyn DispatchGuard>>,
 }
 
 impl NativeConnectionTransport {
@@ -54,7 +58,13 @@ impl NativeConnectionTransport {
             network,
             identity,
             fence,
+            request_guard: None,
         })
+    }
+
+    pub fn with_request_guard(mut self, guard: Option<Arc<dyn DispatchGuard>>) -> Self {
+        self.request_guard = guard;
+        self
     }
 
     fn prepare(&self, operation: &str, body: Option<Value>) -> Result<RequestPlan, CoreError> {
@@ -121,6 +131,25 @@ impl TrustedTransport for NativeConnectionTransport {
         body: Option<Value>,
         cancellation: CancellationToken,
     ) -> Result<reqwest::Response, CoreError> {
+        self.request_guarded(
+            identity,
+            operation,
+            body,
+            self.request_guard.clone(),
+            cancellation,
+        )
+        .await
+    }
+
+    async fn request_guarded(
+        &self,
+        identity: &ConnectionIdentity,
+        operation: &str,
+        body: Option<Value>,
+        guard: Option<Arc<dyn DispatchGuard>>,
+        cancellation: CancellationToken,
+    ) -> Result<reqwest::Response, CoreError> {
+        let guard = guard.or_else(|| self.request_guard.clone());
         self.check_current()?;
         if identity != &self.identity {
             return Err(CoreError::new(
@@ -133,12 +162,35 @@ impl TrustedTransport for NativeConnectionTransport {
             .check_available(&plan)
             .map_err(connection_error)?;
         let network = self.network.clone();
-        tokio::select! { biased;
+        let fence = self
+            .native
+            .fence(&plan, &self.consent)
+            .map_err(connection_error)?;
+        let rejection = Arc::new(Mutex::new(None));
+        let rejected = rejection.clone();
+        let response = tokio::select! { biased;
             _ = cancellation.cancelled() => Err(CoreError::new("cancelled", "aborted")),
             response = self.native.execute_resolved_with(&plan, &self.consent, move |plan, secrets| {
-                Box::pin(async move { network.send_streaming_resolved(plan, secrets).await })
+                Box::pin(async move {
+                    if let Some(guard) = guard
+                        && let Err(error) = guard.check().await
+                    {
+                        *rejected.lock().unwrap_or_else(|error| error.into_inner()) = Some(error);
+                        return Err(ConnectionError::ConsentDenied);
+                    }
+                    fence.check()?;
+                    network.send_streaming_resolved(plan, secrets).await
+                })
             }) => response.map_err(connection_error),
+        };
+        let rejected = rejection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(error) = rejected {
+            return Err(error);
         }
+        response
     }
 }
 
@@ -329,6 +381,117 @@ mod tests {
         assert_eq!(
             transport.check_current().unwrap_err().code,
             "connection_changed"
+        );
+    }
+    #[derive(Debug)]
+    struct SelectedGuard(Arc<std::sync::atomic::AtomicBool>);
+    #[async_trait]
+    impl DispatchGuard for SelectedGuard {
+        async fn check(&self) -> Result<(), CoreError> {
+            if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(CoreError::new(
+                    "selected_content_revoked",
+                    "Selected content grant was revoked",
+                ))
+            }
+        }
+        fn fence(&self) -> agentkit_core::DispatchFence {
+            agentkit_core::DispatchFence {
+                task_id: "run".into(),
+                attempt_id: "attempt".into(),
+                fencing_token: 1,
+            }
+        }
+    }
+    struct DelayedSecrets {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    #[async_trait]
+    impl agentkit_connections::SecretStore for DelayedSecrets {
+        async fn get(
+            &self,
+            _: &agentkit_connections::SecretKey,
+        ) -> Result<agentkit_connections::Secret, ConnectionError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(agentkit_connections::Secret::new("synthetic-key"))
+        }
+        async fn put(
+            &self,
+            _: &agentkit_connections::SecretKey,
+            _: agentkit_connections::Secret,
+        ) -> Result<(), ConnectionError> {
+            Ok(())
+        }
+        async fn delete(&self, _: &agentkit_connections::SecretKey) -> Result<(), ConnectionError> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn selected_grant_is_rechecked_after_the_async_vault_read() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut config = configuration();
+        config.endpoint = format!("http://{}/v1", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        config.credential_required = true;
+        let app = ConnectionRepository::default().for_app(AppId::new("vault-guard").unwrap());
+        let id = ConnectionId::new("provider").unwrap();
+        app.create(id.clone(), config.clone()).unwrap();
+        let secrets = Arc::new(DelayedSecrets {
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let network =
+            Arc::new(ReqwestConnectionNetwork::new(Duration::from_secs(1), 4096).unwrap());
+        let native = NativeConnections::new(app, secrets.clone(), network.clone());
+        let body = json!({"model":"model","messages":[]});
+        let plan = native
+            .plan_to(
+                &id,
+                PlanInput {
+                    capability: Capability::Chat,
+                    model: Some("model".into()),
+                    disclosed_data: BTreeSet::from(["messages".into()]),
+                    payload: serde_json::to_vec(&body).unwrap(),
+                },
+                format!("{}/chat/completions", config.endpoint)
+                    .parse()
+                    .unwrap(),
+            )
+            .unwrap();
+        let consent = native.approve(&plan).unwrap();
+        let alive = Arc::new(AtomicBool::new(true));
+        let transport = NativeConnectionTransport::new(native, plan, consent, network)
+            .unwrap()
+            .with_request_guard(Some(Arc::new(SelectedGuard(alive.clone()))));
+        let pending = tokio::spawn(async move {
+            transport
+                .request(
+                    &transport.identity(),
+                    "chat/completions",
+                    Some(body),
+                    CancellationToken::new(),
+                )
+                .await
+        });
+        secrets.started.notified().await;
+        alive.store(false, Ordering::SeqCst);
+        secrets.release.notify_one();
+        let error = tokio::time::timeout(Duration::from_secs(1), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "selected_content_revoked");
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
         );
     }
 }

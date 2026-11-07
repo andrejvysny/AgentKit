@@ -184,7 +184,19 @@ async fn fixture_inner(
         runtime,
         plan_approval: None,
         wake: Some(host.wake_handle()),
-    });
+    })
+    .with_profiles(Arc::new(
+        ProfileRegistry::new(&[json!({
+            "id": "p",
+            "kind": "coding",
+            "instructions": "Exercise command authorization with inert tools only.",
+            "tools": ["run_command"],
+            "permissionMode": mode.as_str(),
+            "limits": {"maxToolIterations": 4, "maxToolCallsPerIteration": 8},
+            "resources": {"projectInstructions": false}
+        })])
+        .unwrap(),
+    ));
     create_session(&service).await;
     Fixture {
         store,
@@ -200,6 +212,8 @@ async fn create_session(service: &AgentSessionService) {
             title: None,
             profile_id: "p".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,

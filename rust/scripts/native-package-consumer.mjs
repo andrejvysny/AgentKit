@@ -98,7 +98,17 @@ if (mode === "run") {
   rmSync(`${dbPath}-wal`, { force: true });
   rmSync(`${dbPath}-shm`, { force: true });
   const store = await NativeStore.open(dbPath);
-  const service = await store.createService({ closeTimeoutMs: 5000 });
+  const service = await store.createService({
+    closeTimeoutMs: 5000,
+    profiles: [
+      {
+        id: "package-consumer",
+        extends: "coding",
+        tools: ["run_cmd", "run_slow"],
+        limits: { maxToolIterations: 4, maxToolCallsPerIteration: 8 },
+      },
+    ],
+  });
   let providerCalls = 0;
   let releaseSlow;
   const slowGate = new Promise((resolve) => {
@@ -171,9 +181,19 @@ if (mode === "run") {
     },
   );
   try {
+    let unknownRefused = false;
+    try {
+      await service.createSession({
+        profileId: "unregistered-consumer-profile",
+      });
+    } catch (error) {
+      unknownRefused =
+        error instanceof Error && error.message.includes("unknown profile");
+    }
+    assert(unknownRefused, "an unregistered profile bypassed native admission");
     await service.createSession({
       sessionId: "pack-sess",
-      profileId: "p1",
+      profileId: "package-consumer",
       model: "test-model",
       executionMode: "auto_edit",
     });

@@ -10,6 +10,7 @@ use std::{collections::HashMap, future::Future, time::Duration};
 #[derive(Clone)]
 pub struct ChatExecutorOptions {
     pub context: Option<Arc<dyn ContextProvider>>,
+    pub content_authority: Option<Arc<dyn crate::ContentAuthority>>,
     pub attachments: Option<Arc<dyn AttachmentResolver>>,
     pub usage: Option<Arc<dyn UsageAuthorizer>>,
     pub provider_factory: Option<Arc<dyn ChatProviderFactory>>,
@@ -44,9 +45,13 @@ pub struct ChatExecutorOptions {
     pub actor_id: Option<String>,
     pub hook_timeouts: ChatHookTimeouts,
     pub attachment_budgets: AttachmentBudgets,
+    /// Explicit replay ceiling. Default preserves the full active transcript.
     pub history_limit: usize,
+    /// Permit session summarization when context fills. Default false.
+    pub auto_compaction: bool,
     pub execution_budgets: BudgetLimits,
     pub max_tool_iterations: u32,
+    pub max_output_tokens: Option<u64>,
     pub max_tool_calls_per_iteration: usize,
     pub default_tool_timeout_ms: Option<u64>,
 }
@@ -54,6 +59,7 @@ impl Default for ChatExecutorOptions {
     fn default() -> Self {
         Self {
             context: None,
+            content_authority: None,
             attachments: None,
             usage: None,
             provider_factory: None,
@@ -71,9 +77,11 @@ impl Default for ChatExecutorOptions {
             actor_id: None,
             hook_timeouts: ChatHookTimeouts::default(),
             attachment_budgets: AttachmentBudgets::default(),
-            history_limit: 200,
+            history_limit: usize::MAX,
+            auto_compaction: false,
             execution_budgets: BudgetLimits::default(),
             max_tool_iterations: 4,
+            max_output_tokens: None,
             max_tool_calls_per_iteration: 8,
             default_tool_timeout_ms: None,
         }
@@ -197,6 +205,11 @@ impl ChatProvider for PreparedProvider {
         cancellation: CancellationToken,
     ) -> ProviderStream {
         let provider = self.clone();
+        input.request_guard = Some(Arc::new(ProviderRequestGuard {
+            context: self.context.clone(),
+            authority: self.options.content_authority.clone(),
+            previous: input.request_guard.take(),
+        }));
         Box::pin(futures::stream::once(async move {
             let (messages,warnings)=resolve_attachments(&provider.options,&provider.context,&provider.chat_id,input.messages).await.map_err(core_error)?;
             input.messages=messages;
@@ -206,14 +219,17 @@ impl ChatProvider for PreparedProvider {
             provider.inner.apply_request_defaults(&mut input);
             let admission = provider.budget.as_ref().map(|budget| budget.admit(&mut input, provider.context.runtime.id(), provider.inner.allows_implicit_output_limit())).transpose()?;
             if let Some(usage)=&provider.options.usage {
-                let estimate=input.messages.iter().map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);
+                let estimate=input.selected_content.iter().chain(input.messages.iter()).map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);
                 let request=json!({"runId":input.run_id,"chatId":provider.chat_id,"providerId":provider.inner.id(),"model":input.model,"estimatedPromptTokens":estimate});
                 bounded(usage.authorize(&input.run_id,&request),cancellation.clone(),provider.options.hook_timeouts.usage_ms,"usage.authorize").await.map_err(core_error)?;
             }
             if cancellation.is_cancelled() {return Err(CoreError::new("cancelled","aborted"));}
             let warnings=futures::stream::iter(warnings.into_iter().map(Ok));
             let admitted = futures::stream::iter(admission.into_iter().map(|data| Ok(ProviderEvent::Event { kind: "run.context.admitted".into(), data })));
-            let dispatch = futures::stream::once(async move { Ok(provider.inner.stream_chat(input,cancellation)) }).try_flatten();
+            let dispatch = futures::stream::once(async move {
+                if let Some(guard) = &input.request_guard { guard.check().await?; }
+                Ok(provider.inner.stream_chat(input,cancellation))
+            }).try_flatten();
             Ok(warnings.chain(admitted).chain(dispatch))
         }).try_flatten())
     }
@@ -425,4 +441,34 @@ pub(super) async fn stage_registry(
         context.emit("run.warning",json!({"code":"tool_schema_invalid","message":format!("Tool {name} was omitted: invalid definition or schema.")})).await?;
     }
     Ok(staged.registry)
+}
+
+struct ProviderRequestGuard {
+    context: ExecutionContext,
+    authority: Option<Arc<dyn crate::ContentAuthority>>,
+    previous: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+}
+impl std::fmt::Debug for ProviderRequestGuard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderRequestGuard")
+            .field("task_id", &self.context.task.task_id)
+            .finish_non_exhaustive()
+    }
+}
+#[async_trait]
+impl agentkit_core::DispatchGuard for ProviderRequestGuard {
+    async fn check(&self) -> Result<(), CoreError> {
+        if let Some(previous) = &self.previous {
+            previous.check().await?;
+        }
+        self.context.check_dispatch().await.map_err(core_error)?;
+        crate::run_content::selected_messages(&self.context, self.authority.as_ref())
+            .await
+            .map_err(core_error)?;
+        self.context.check_dispatch().await.map_err(core_error)
+    }
+    fn fence(&self) -> agentkit_core::DispatchFence {
+        self.context.dispatch_guard().fence()
+    }
 }

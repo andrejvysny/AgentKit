@@ -224,9 +224,13 @@ async fn server_echoed_secrets_are_redacted_in_results_and_errors() {
         "resolved secret leaked into the tool result: {serialized}"
     );
     assert!(serialized.contains("[redacted]"));
-    // Only text parts reach the model; the embedded resource text is covered
-    // by the whole-result serialization check above.
-    assert_eq!(result.model_data.unwrap()["text"], "token [redacted]");
+    // Resource text now reaches the model with untrusted source attribution;
+    // it must receive the same secret redaction as ordinary text.
+    assert_eq!(
+        result.model_data.unwrap()["text"],
+        "token [redacted]\n[Source: res://leak]\nnested [redacted]"
+    );
+    assert_eq!(result.sources[0]["metadata"]["trusted"], false);
 
     let failure = tool.execute(context(), json!({})).await.unwrap();
     assert!(!failure.ok);

@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 
 import { available, missing, required } from "./helpers/binding.js";
@@ -118,16 +119,18 @@ suite(
           "sk-loopback",
         );
       expect(connectionId).toStartWith("conn_");
-      service = await store.createService({
-        providerConfig: {
-          protocol: "chat-completions",
-          providerId: "loopback",
-          connectionId,
-          model: "model-a",
-          temperature: 0.3,
-          maxTokens: 128,
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "chat-completions",
+            providerId: "loopback",
+            connectionId,
+            model: "model-a",
+            temperature: 0.3,
+            maxTokens: 128,
+          },
+        }),
+      );
       // Deliberately no setProvider: the JS callback slot stays unused.
       await service.createSession({ sessionId: "lane-cc", profileId: "p1" });
       const sent = await service.send("lane-cc", { content: "say hi" });
@@ -217,14 +220,16 @@ suite(
           `${provider.baseUrl}/`,
           "sk-loopback",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "responses",
-          providerId: "loopback-rs",
-          connectionId,
-          model: "model-r",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "responses",
+            providerId: "loopback-rs",
+            connectionId,
+            model: "model-r",
+          },
+        }),
+      );
       await service.createSession({ sessionId: "lane-rs", profileId: "p1" });
       const sent = await service.send("lane-rs", { content: "say hi" });
       if (sent.kind !== "turn") throw new Error("unreachable");
@@ -308,14 +313,16 @@ suite(
           provider.baseUrl,
           "sk-loopback",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "responses",
-          providerId: "terminal-reasoning",
-          connectionId,
-          model: "model-r",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "responses",
+            providerId: "terminal-reasoning",
+            connectionId,
+            model: "model-r",
+          },
+        }),
+      );
       await service.createSession({ sessionId: "tr", profileId: "p1" });
       const sent = await service.send("tr", { content: "say hi" });
       if (sent.kind !== "turn") throw new Error("unreachable");
@@ -361,14 +368,16 @@ suite(
           provider.baseUrl,
           "sk-loopback",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "responses",
-          providerId: "conflicting-reasoning",
-          connectionId,
-          model: "model-r",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "responses",
+            providerId: "conflicting-reasoning",
+            connectionId,
+            model: "model-r",
+          },
+        }),
+      );
       await service.createSession({ sessionId: "cr", profileId: "p1" });
       const sent = await service.send("cr", { content: "say hi" });
       if (sent.kind !== "turn") throw new Error("unreachable");
@@ -397,7 +406,7 @@ suite(
     const store = await NativeStoreCtor.inMemory();
     let service: NativeSessionService | undefined;
     try {
-      service = await store.createService();
+      service = await store.createService(testServiceOptions());
       await service.createSession({ sessionId: "none", profileId: "p1" });
       const sent = await service.send("none", { content: "hi" });
       if (sent.kind !== "turn") throw new Error("unreachable");
@@ -439,15 +448,17 @@ suite(
             provider.baseUrl,
             "sk-loopback",
           );
-        service = await store.createService({
-          jsToolAuthority: { configuredMode: "full_auto" },
-          providerConfig: {
-            protocol: "chat-completions",
-            providerId: "policy",
-            connectionId,
-            model: "cap-model",
-          },
-        });
+        service = await store.createService(
+          testServiceOptions({
+            jsToolAuthority: { configuredMode: "full_auto" },
+            providerConfig: {
+              protocol: "chat-completions",
+              providerId: "policy",
+              connectionId,
+              model: "cap-model",
+            },
+          }),
+        );
         await service.registerTool(
           {
             name: "probe_hist",
@@ -507,7 +518,7 @@ suite("js callback lane keeps single-chunk delta semantics", async () => {
   const store = await NativeStoreCtor.inMemory();
   let service: NativeSessionService | undefined;
   try {
-    service = await store.createService();
+    service = await store.createService(testServiceOptions());
     service.setProvider(() => ({
       content: "Hello world",
       finishReason: "stop",
@@ -565,17 +576,19 @@ suite(
               provider.baseUrl,
               "sk-loopback",
             );
-          service = await store.createService({
-            providerConfig: {
-              protocol,
-              providerId: "cap",
-              connectionId,
-              model: "cap-model",
-              ...(capCase.configured === undefined
-                ? {}
-                : { maxTokens: capCase.configured }),
-            },
-          });
+          service = await store.createService(
+            testServiceOptions({
+              providerConfig: {
+                protocol,
+                providerId: "cap",
+                connectionId,
+                model: "cap-model",
+                ...(capCase.configured === undefined
+                  ? {}
+                  : { maxTokens: capCase.configured }),
+              },
+            }),
+          );
           const sessionId = `cap-${protocol}-${capCase.label}`;
           await service.createSession({
             sessionId,
@@ -628,15 +641,17 @@ suite(
     try {
       for (const bad of [18014398509481984, -5, 0, Number.NaN, 1.5]) {
         await expect(
-          store.createService({
-            providerConfig: {
-              protocol: "responses",
-              providerId: "cap",
-              connectionId: "cap-conn",
-              model: "cap-model",
-              maxTokens: bad,
-            },
-          }),
+          store.createService(
+            testServiceOptions({
+              providerConfig: {
+                protocol: "responses",
+                providerId: "cap",
+                connectionId: "cap-conn",
+                model: "cap-model",
+                maxTokens: bad,
+              },
+            }),
+          ),
         ).rejects.toThrow(
           /providerConfig\.maxTokens must be a positive safe integer/,
         );

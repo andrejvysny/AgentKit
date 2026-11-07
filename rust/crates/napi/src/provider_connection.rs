@@ -56,6 +56,8 @@ struct Connection {
 static CONNECTIONS: LazyLock<Mutex<HashMap<String, Connection>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+#[path = "provider_ports.rs"]
+pub(crate) mod ports;
 #[path = "provider_registration.rs"]
 mod registration;
 #[cfg(test)]
@@ -112,6 +114,8 @@ impl BindingTransport {
                 ))
             })?;
         let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| errors::internal("the HTTP client"))?;
         Ok(Arc::new(Self {
@@ -177,6 +181,18 @@ impl TrustedTransport for BindingTransport {
         body: Option<Value>,
         cancellation: CancellationToken,
     ) -> std::result::Result<reqwest::Response, CoreError> {
+        self.request_guarded(identity, operation, body, None, cancellation)
+            .await
+    }
+
+    async fn request_guarded(
+        &self,
+        identity: &ConnectionIdentity,
+        operation: &str,
+        body: Option<Value>,
+        guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<reqwest::Response, CoreError> {
         self.check_current()?;
         if cancellation.is_cancelled() {
             return Err(CoreError::new("cancelled", "aborted"));
@@ -217,6 +233,9 @@ impl TrustedTransport for BindingTransport {
         }
         if let Some(body) = body.filter(|_| !get) {
             request = request.json(&body);
+        }
+        if let Some(guard) = guard {
+            guard.check().await?;
         }
         self.check_current()?;
         let response = request

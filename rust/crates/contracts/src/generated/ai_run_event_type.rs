@@ -15,6 +15,8 @@ pub enum AiRunEventType {
     RunMessageReasoningDelta,
     #[serde(rename = "run.message.completed")]
     RunMessageCompleted,
+    #[serde(rename = "run.tool.preparing")]
+    RunToolPreparing,
     #[serde(rename = "run.tool.requested")]
     RunToolRequested,
     #[serde(rename = "run.tool.running")]
@@ -33,6 +35,8 @@ pub enum AiRunEventType {
     RunContextAdmitted,
     #[serde(rename = "run.verification")]
     RunVerification,
+    #[serde(rename = "run.progress")]
+    RunProgress,
     #[serde(rename = "run.input.applied")]
     RunInputApplied,
     #[serde(rename = "run.waiting")]

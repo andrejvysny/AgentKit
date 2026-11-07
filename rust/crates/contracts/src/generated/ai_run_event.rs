@@ -12,6 +12,7 @@ pub enum AiRunEvent {
     MessageDelta(AiRunMessageDeltaEvent),
     MessageReasoningDelta(AiRunMessageReasoningDeltaEvent),
     MessageCompleted(AiRunMessageCompletedEvent),
+    ToolPreparing(AiRunToolPreparingEvent),
     ToolRequested(AiRunToolRequestedEvent),
     ToolRunning(AiRunToolRunningEvent),
     ToolSucceeded(AiRunToolSucceededEvent),
@@ -21,6 +22,7 @@ pub enum AiRunEvent {
     ContextCompacted(AiRunContextCompactedEvent),
     ContextAdmitted(AiRunContextAdmittedEvent),
     Verification(AiRunVerificationEvent),
+    Progress(AiRunProgressEvent),
     InputApplied(AiRunInputAppliedEvent),
     Waiting(AiRunWaitingEvent),
     Completed(AiRunCompletedEvent),
@@ -44,6 +46,11 @@ crate::impl_json_deserialize!(AiRunEvent, |value: Value| {
         <AiRunMessageCompletedEvent as crate::JsonDeserialize>::from_json(value.clone())
     {
         return Ok(Self::MessageCompleted(member));
+    }
+    if let Ok(member) =
+        <AiRunToolPreparingEvent as crate::JsonDeserialize>::from_json(value.clone())
+    {
+        return Ok(Self::ToolPreparing(member));
     }
     if let Ok(member) =
         <AiRunToolRequestedEvent as crate::JsonDeserialize>::from_json(value.clone())
@@ -81,6 +88,9 @@ crate::impl_json_deserialize!(AiRunEvent, |value: Value| {
     if let Ok(member) = <AiRunVerificationEvent as crate::JsonDeserialize>::from_json(value.clone())
     {
         return Ok(Self::Verification(member));
+    }
+    if let Ok(member) = <AiRunProgressEvent as crate::JsonDeserialize>::from_json(value.clone()) {
+        return Ok(Self::Progress(member));
     }
     if let Ok(member) = <AiRunInputAppliedEvent as crate::JsonDeserialize>::from_json(value.clone())
     {

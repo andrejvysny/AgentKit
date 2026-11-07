@@ -23,17 +23,22 @@
  */
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AiChatMessage,
   AiRunEvent,
   AiToolDefinition,
 } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
-import { defaultProfileRegistry, readSessionDescriptor } from "@agentkit/host";
-import type { ProfileRegistry, SessionReasoningEffort } from "@agentkit/host";
+import type { SessionReasoningEffort } from "@agentkit/host";
 import {
   NativeSessionService,
   NativeStore,
+  NativeAgentError,
+  listNativeProfiles,
+  type CreateSessionInputJson,
+  type NativeAgentProfile,
+  type NativeResolvedAgentProfile,
   type ProviderRequest,
   type ProviderResult,
 } from "@agentkit/native";
@@ -78,7 +83,9 @@ export interface NativeSessionState {
   sessionId: string;
   descriptor: {
     version: number;
-    profile: { id: string };
+    profile: { id: string; digest?: string };
+    profileSnapshot?: Omit<NativeResolvedAgentProfile, "digest">;
+    contentSelection?: CreateSessionInputJson["contentSelection"];
     model?: string;
     reasoningEffort?: SessionReasoningEffort;
     workspace?: { root: string; trusted?: boolean };
@@ -138,10 +145,22 @@ export interface CodingAgentOptions {
   /** SQLite file for the native store: sessions, tasks, transcripts, receipts. */
   dbPath: string;
   sessionId: string;
-  /** A profile id; see `defaultProfileRegistry()`. */
+  /** Resolved and frozen by the native profile registry. */
   profileId: string;
+  profiles?: readonly NativeAgentProfile[];
+  /** Immutable template/skill selection for a new session. */
+  contentSelection?: CreateSessionInputJson["contentSelection"];
+  /** Host-selected connector grants; native content assembly remains authoritative. */
+  contentAuthority?: {
+    authorize: NonNullable<
+      Parameters<NativeSessionService["setContentAuthority"]>[0]
+    >;
+    identity?: NonNullable<
+      Parameters<NativeSessionService["setContentAuthority"]>[1]
+    >;
+  };
   model: string;
-  /** Applied with `setModel` on a new session, or when it differs on an existing one. */
+  /** Recorded atomically at creation; changed explicitly on an existing session. */
   reasoningEffort?: SessionReasoningEffort;
   /** OpenAI-compatible endpoint for the Rust provider lane. Required when no
    * `providerFactory` is injected; ignored by the injected (JS) provider lane. */
@@ -192,15 +211,26 @@ export interface SessionListing {
 /** Collapse one scripted/streamed provider answer into the single final
  * result the binding's JS provider lane expects (the runtime synthesizes
  * the durable provider event stream from it). A failed run is a thrown
- * error — never a fabricated success. Usage is not reported by this lane. */
+ * error — never a fabricated success. The fixed client remains a host extension. */
 async function finalResult(
   client: AiProviderClient,
   request: ProviderRequest,
 ): Promise<ProviderResult> {
+  await request.checkAuthority?.();
   const input: AiChatRequest = {
     runId: request.runId,
     model: request.model,
     messages: request.messages as AiChatMessage[],
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+    ...(request.checkAuthority === undefined
+      ? {}
+      : { beforeRequest: request.checkAuthority }),
+    ...(request.reasoningEffort == null
+      ? {}
+      : { reasoningEffort: request.reasoningEffort }),
+    ...(request.runContent === undefined
+      ? {}
+      : { runContent: request.runContent as AiChatRequest["runContent"] }),
     ...(request.tools.length > 0
       ? { tools: request.tools as AiToolDefinition[] }
       : {}),
@@ -214,6 +244,7 @@ async function finalResult(
   };
   let content = "";
   let finishReason = "stop";
+  let usage: Record<string, unknown> | undefined;
   const toolCalls: { id?: string; name: string; arguments?: unknown }[] = [];
   for await (const event of client.streamChat(input)) {
     switch (event.type) {
@@ -250,6 +281,9 @@ async function finalResult(
         const data = event.data as { errorMessage?: string };
         throw new Error(data.errorMessage ?? "provider failed");
       }
+      case "run.usage":
+        usage = { ...event.data };
+        break;
       case "run.cancelled":
         throw new Error("provider call cancelled");
       default:
@@ -260,6 +294,7 @@ async function finalResult(
     content,
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     finishReason,
+    ...(usage === undefined ? {} : { usage }),
   };
 }
 
@@ -276,7 +311,7 @@ export class CodingAgentApp {
     readonly options: CodingAgentOptions,
     readonly store: NativeStore,
     service: NativeSessionService,
-    private readonly profiles: ProfileRegistry,
+    private readonly profile: NativeResolvedAgentProfile,
   ) {
     this.service = service;
   }
@@ -299,20 +334,27 @@ export class CodingAgentApp {
     if (!isAbsolute(options.dbPath))
       throw new Error("dbPath must be an absolute path");
     mkdirSync(dirname(options.dbPath), { recursive: true });
-    const profiles = defaultProfileRegistry();
-    const profile = profiles.resolve(options.profileId);
+    const profiles = await listNativeProfiles(options.profiles);
+    const profile = profiles.find((item) => item.id === options.profileId);
     if (profile === undefined) {
       throw new Error(
         `Unknown profile "${options.profileId}". Known: ${profiles
-          .list()
           .map((p) => p.id)
           .join(", ")}.`,
       );
     }
     const store = await NativeStore.open(options.dbPath);
-    const app = { options, store, profiles };
-    const service = await CodingAgentApp.buildService(app);
-    return new CodingAgentApp(options, store, service, profiles);
+    try {
+      const service = await CodingAgentApp.buildService({
+        options,
+        store,
+        profile,
+      });
+      return new CodingAgentApp(options, store, service, profile);
+    } catch (error) {
+      await store.close();
+      throw error;
+    }
   }
 
   /** One service over the store: the tool lane (or the Rust provider lane,
@@ -323,11 +365,10 @@ export class CodingAgentApp {
   private static async buildService(app: {
     options: CodingAgentOptions;
     store: NativeStore;
-    profiles: ProfileRegistry;
+    profile: NativeResolvedAgentProfile;
   }): Promise<NativeSessionService> {
-    const { options, store, profiles } = app;
-    const profile = profiles.resolve(options.profileId);
-    const wantedMode = options.mode ?? profile?.permissionMode ?? "ask";
+    const { options, store, profile } = app;
+    const wantedMode = options.mode ?? profile.permissionMode;
     if (NATIVE_MODES[wantedMode] !== true)
       throw new Error(
         `profile "${options.profileId}" has unsupported permissionMode "${wantedMode}"`,
@@ -377,6 +418,7 @@ export class CodingAgentApp {
       };
     }
     const service = await store.createService({
+      ...(options.profiles === undefined ? {} : { profiles: options.profiles }),
       jsToolAuthority: {
         configuredMode,
         planToolNames: [SUBMIT_PLAN_TOOL_NAME],
@@ -391,6 +433,11 @@ export class CodingAgentApp {
       },
       ...(providerConfig === undefined ? {} : { providerConfig }),
     });
+    if (options.contentAuthority)
+      service.setContentAuthority(
+        options.contentAuthority.authorize,
+        options.contentAuthority.identity,
+      );
     if (provider !== undefined) {
       const client = provider;
       service.setProvider((request) => finalResult(client, request));
@@ -419,6 +466,18 @@ export class CodingAgentApp {
       const state = await this.live().getState(this.options.sessionId);
       const effort = this.options.reasoningEffort;
       const descriptor = (state as unknown as NativeSessionState).descriptor;
+      if (
+        this.options.contentSelection !== undefined &&
+        (!isDeepStrictEqual(
+          descriptor.contentSelection?.template ?? null,
+          this.options.contentSelection.template ?? null,
+        ) ||
+          !isDeepStrictEqual(
+            descriptor.contentSelection?.skills ?? [],
+            this.options.contentSelection.skills ?? [],
+          ))
+      )
+        throw new Error("Use a new session ID to change contentSelection.");
       if (effort === undefined || descriptor.reasoningEffort === effort)
         return state as unknown as NativeSessionState;
       return (await this.live().setModel(this.options.sessionId, {
@@ -429,20 +488,20 @@ export class CodingAgentApp {
     const created = (await this.live().createSession({
       sessionId: this.options.sessionId,
       profileId: this.options.profileId,
+      profileDigest: this.profile.digest,
       model: this.options.model,
+      ...(this.options.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: this.options.reasoningEffort }),
+      ...(this.options.contentSelection === undefined
+        ? {}
+        : { contentSelection: this.options.contentSelection }),
       workspace: { root: resolve(this.options.repo), trusted: true },
       ...(this.options.mode === undefined
         ? {}
         : { executionMode: this.options.mode }),
     })) as unknown as NativeSessionState;
-    const effort = this.options.reasoningEffort;
-    // createSession has no effort field; setModel is the one place it is set.
-    return effort === undefined
-      ? created
-      : ((await this.live().setModel(this.options.sessionId, {
-          model: this.options.model,
-          reasoningEffort: effort,
-        })) as unknown as NativeSessionState);
+    return created;
   }
 
   /**
@@ -479,7 +538,7 @@ export class CodingAgentApp {
     this.service = await CodingAgentApp.buildService({
       options: this.options,
       store: this.store,
-      profiles: this.profiles,
+      profile: this.profile,
     });
   }
 
@@ -654,8 +713,21 @@ export class CodingAgentApp {
       });
       if (page.length === 0) break;
       for (const chat of page) {
-        const descriptor = readSessionDescriptor(chat.metadata);
-        if (descriptor === undefined) continue;
+        let descriptor: NativeSessionState["descriptor"];
+        try {
+          descriptor = (
+            (await this.live().getState(
+              chat.id,
+            )) as unknown as NativeSessionState
+          ).descriptor;
+        } catch (error) {
+          if (
+            error instanceof NativeAgentError &&
+            error.code === "session_not_found"
+          )
+            continue;
+          throw error;
+        }
         const turns = await this.turnsFor(chat.id);
         const last = turns[turns.length - 1];
         listings.push({

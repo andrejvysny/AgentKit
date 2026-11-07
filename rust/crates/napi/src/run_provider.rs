@@ -175,7 +175,7 @@ impl ChatProvider for Provider {
                 cancellation,
             },
         );
-        let payload = json!({"kind":"provider","callId":id,"request":{"runId":request.run_id,"model":request.model,"messages":request.messages,"tools":request.tools,"temperature":request.temperature,"maxOutputTokens":request.max_output_tokens,"continuation":request.continuation,"continuationScope":request.continuation_scope,"continuationRequired":request.continuation_required}}).to_string();
+        let payload = json!({"kind":"provider","callId":id,"request":{"runId":request.run_id,"model":request.model,"messages":request.messages,"tools":request.tools,"reasoningEffort":request.reasoning_effort,"runContent":{"messages":request.selected_content},"temperature":request.temperature,"maxOutputTokens":request.max_output_tokens,"continuation":request.continuation,"continuationScope":request.continuation_scope,"continuationRequired":request.continuation_required}}).to_string();
         let status = self.bridge.deliver_message(payload);
         if status != napi::Status::Ok {
             end_run_provider(id.clone());

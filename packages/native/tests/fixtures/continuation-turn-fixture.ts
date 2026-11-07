@@ -1,3 +1,4 @@
+import { testServiceOptions } from "../helpers/test-profiles.js";
 /**
  * One application process of the provider-continuity scenario: registers
  * the provider connection itself, opens the on-disk store, runs one turn
@@ -24,10 +25,14 @@
  * }
  * ```
  * Prints `RESULT <json>` with `{ connectionId, turnId, status, error }`
- * and exits 0 whenever the turn settled (success OR failure); exit 2 on
- * harness trouble.
+ * and exits 0 whenever the turn settled (success OR failure), or an explicitly
+ * expected admission refusal occurred; exit 2 on harness trouble.
  */
-import { NativeSessionService, NativeStore } from "../../src/index.js";
+import {
+  NativeAgentError,
+  NativeSessionService,
+  NativeStore,
+} from "../../src/index.js";
 
 interface Options {
   storePath: string;
@@ -37,6 +42,7 @@ interface Options {
   chatId: string;
   connectionKey?: string;
   providerId?: string;
+  expectAdmissionError?: "unknown_provider";
   revokeAndReRegister?: boolean;
   restoreContinuity?: {
     expectedGeneration: number;
@@ -81,14 +87,16 @@ async function main(): Promise<number> {
   }
   let service: NativeSessionService | undefined;
   try {
-    service = await store.createService({
-      providerConfig: {
-        protocol: "responses",
-        providerId: options.providerId ?? "continuity",
-        connectionId,
-        model: "model-c",
-      },
-    });
+    service = await store.createService(
+      testServiceOptions({
+        providerConfig: {
+          protocol: "responses",
+          providerId: options.providerId ?? "continuity",
+          connectionId,
+          model: "model-c",
+        },
+      }),
+    );
     if (options.phase === 1) {
       await service.createSession({
         sessionId: options.chatId,
@@ -96,9 +104,34 @@ async function main(): Promise<number> {
         model: "model-c",
       });
     }
-    const sent = await service.send(options.chatId, {
-      content: `turn for phase ${options.phase}`,
-    });
+    const tasksBefore =
+      options.expectAdmissionError === undefined
+        ? undefined
+        : await store.callStore<unknown[]>("tasks.listByScope", {
+            scopeId: options.chatId,
+          });
+    let sent: Awaited<ReturnType<NativeSessionService["send"]>>;
+    try {
+      sent = await service.send(options.chatId, {
+        content: `turn for phase ${options.phase}`,
+      });
+    } catch (error) {
+      if (
+        options.expectAdmissionError === undefined ||
+        !(error instanceof NativeAgentError) ||
+        error.message !== options.expectAdmissionError
+      )
+        throw error;
+      const tasksAfter = await store.callStore<unknown[]>("tasks.listByScope", {
+        scopeId: options.chatId,
+      });
+      console.log(
+        `RESULT ${JSON.stringify({ connectionId, turnId: "", status: "rejected", error: error.message, errorCode: error.code, taskCountBefore: tasksBefore?.length, taskCountAfter: tasksAfter.length })}`,
+      );
+      return 0;
+    }
+    if (options.expectAdmissionError !== undefined)
+      throw new Error("Expected provider admission refusal.");
     if (sent.kind !== "turn") return 2;
     const turnId = sent.turnId;
     // No cursor: afterSeq is EXCLUSIVE; a passing admission event owns

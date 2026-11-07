@@ -55,10 +55,11 @@ impl ChatCompletionsProvider {
             let response = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CoreError::new("cancelled", "aborted")),
-                response = self.transport.request(
+                response = self.transport.request_guarded(
                     &self.identity,
                     "chat/completions",
                     Some(body.clone()),
+                    input.request_guard.clone(),
                     cancellation.clone(),
                 ) => response,
             };
@@ -322,9 +323,10 @@ impl ChatProvider for ChatCompletionsProvider {
     }
 }
 fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
+    content::validate_selected(&input.selected_content)?;
     let mut messages = vec![];
     let mut roles = vec![];
-    for message in &input.messages {
+    for message in input.selected_content.iter().chain(input.messages.iter()) {
         let (content, dropped) = content::parts(message, false, true)?;
         if dropped && !roles.contains(&message.role) {
             roles.push(message.role.clone());
@@ -365,6 +367,9 @@ fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
             "include_usage": true,
         },
     });
+    if let Some(value) = input.reasoning_effort {
+        body["reasoning_effort"] = serde_json::to_value(value).expect("enum serialization");
+    }
     if let Some(value) = input.temperature {
         body["temperature"] = value.into();
     }
@@ -488,7 +493,10 @@ impl ChatState {
         }
         if let Some(calls) = delta["tool_calls"].as_array() {
             for call in calls {
-                self.tool_delta(call)?;
+                let slot = self.tool_delta(call)?;
+                if let Some(progress) = self.tool_progress(slot) {
+                    events.push(progress);
+                }
             }
         }
         if let Some(reason) = choice["finish_reason"]
@@ -499,7 +507,25 @@ impl ChatState {
         }
         Ok(events)
     }
-    fn tool_delta(&mut self, delta: &Value) -> Result<(), CoreError> {
+    /// `ToolCallProgress` for a call once it has a name, on every fragment;
+    /// the run loop throttles what it persists. An id the provider has not
+    /// sent yet falls back to the `call_{slot}` that `assemble` will assign.
+    fn tool_progress(&self, slot: usize) -> Option<ProviderEvent> {
+        let call = &self.calls[slot];
+        if call.name.is_empty() {
+            return None;
+        }
+        Some(ProviderEvent::ToolCallProgress {
+            id: if call.id.is_empty() {
+                format!("call_{slot}")
+            } else {
+                call.id.clone()
+            },
+            name: call.name.clone(),
+            args_bytes: call.arguments_json.len() as u64,
+        })
+    }
+    fn tool_delta(&mut self, delta: &Value) -> Result<usize, CoreError> {
         let id = delta["id"].as_str().unwrap_or("");
         let name = delta["function"]["name"].as_str().unwrap_or("");
         let index = agentkit_contracts::javascript_number(&delta["index"]).map(|number| {
@@ -554,7 +580,7 @@ impl ChatState {
         if let Some(arguments) = delta["function"]["arguments"].as_str() {
             call.arguments_json.push_str(arguments);
         }
-        Ok(())
+        Ok(slot)
     }
     fn assemble(&self) -> Vec<ToolCall> {
         self.calls

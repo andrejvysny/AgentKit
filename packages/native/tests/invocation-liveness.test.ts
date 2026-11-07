@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * W1b — an invocation that the runtime already gave up on must NEVER enter
  * user code.
@@ -84,15 +85,17 @@ async function openService(provider: FixtureProvider): Promise<{
     provider.baseUrl,
     null,
   );
-  const service = await store.createService({
-    jsToolAuthority: { configuredMode: "full_auto" },
-    providerConfig: {
-      protocol: "chat-completions",
-      providerId: "probe",
-      connectionId,
-      model: "loopback-model",
-    },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      jsToolAuthority: { configuredMode: "full_auto" },
+      providerConfig: {
+        protocol: "chat-completions",
+        providerId: "probe",
+        connectionId,
+        model: "loopback-model",
+      },
+    }),
+  );
   return { store, service };
 }
 

@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,14 +118,16 @@ suite(
           provider.baseUrl,
           "sk-instr",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "chat-completions",
-          providerId: "instr",
-          connectionId,
-          model: "model-a",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "chat-completions",
+            providerId: "instr",
+            connectionId,
+            model: "model-a",
+          },
+        }),
+      );
       await service.createSession({
         sessionId: "ws-1",
         profileId: "p1",
@@ -178,14 +181,16 @@ suite(
           provider.baseUrl,
           "sk-instr",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "chat-completions",
-          providerId: "instr",
-          connectionId,
-          model: "model-a",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "chat-completions",
+            providerId: "instr",
+            connectionId,
+            model: "model-a",
+          },
+        }),
+      );
       // Untrusted root: every section carries the verbatim notice.
       await service.createSession({
         sessionId: "ws-u",

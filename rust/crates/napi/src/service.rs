@@ -64,6 +64,13 @@ const MAX_SUBAGENT_POOL: i64 = 64;
 
 struct Core {
     host: AgentHost,
+    content_authority: Arc<dyn agentkit_host::ContentAuthority>,
+    native_provider_factory: Arc<agentkit_host::http::NativeProviderFactory>,
+    provider_ports: Arc<crate::provider_connection::ports::BridgeProviderPorts>,
+    provider_memory_secrets: Arc<agentkit_connections::MemorySecretStore>,
+    mcp_config_runtime: Arc<dyn agentkit_host::McpConfigRuntime>,
+    mcp_config_secrets: Arc<dyn agentkit_host::McpConfigSecrets>,
+    profiles: Arc<agentkit_host::ProfileRegistry>,
     service: AgentSessionService,
     contributor: Arc<JsToolContributor>,
     lane: Arc<CodingLane>,
@@ -165,6 +172,10 @@ impl SessionService {
         store_handle: agentkit_store::SqliteStore,
         on_event: ThreadsafeFunction<String>,
         options_json: Option<String>,
+        mcp_ports: (
+            Arc<dyn agentkit_host::McpConfigRuntime>,
+            Arc<dyn agentkit_host::McpConfigSecrets>,
+        ),
     ) -> Result<Self> {
         let options = parse_service_options(options_json.as_deref())?;
         let bridge = Arc::new(JsBridge::new(on_event));
@@ -216,11 +227,25 @@ impl SessionService {
         // Immutable for the service lifetime: a durable payload's providerId
         // must resolve identically before and after a restart.
         let registry = Arc::new(agentkit_host::ProviderRegistry::new(routable));
+        let provider_ports = Arc::new(crate::provider_connection::ports::BridgeProviderPorts::new(
+            bridge.clone(),
+        ));
+        let provider_memory_secrets = Arc::new(agentkit_connections::MemorySecretStore::default());
+        let native_provider_factory = Arc::new(
+            agentkit_host::http::NativeProviderFactory::default()
+                .with_static_provider_ids(registry.ids().map(str::to_owned).collect()),
+        );
+        let content_authority: Arc<dyn agentkit_host::ContentAuthority> =
+            Arc::new(crate::provider::JsContentAuthority(Arc::clone(&bridge)));
+        let profiles =
+            Arc::new(agentkit_host::ProfileRegistry::new(&options.profiles).map_err(errors::host)?);
         let advisor_provider = Arc::clone(&provider);
         let executor: Arc<dyn TaskExecutor> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
                     providers: Some(Arc::clone(&registry)),
+                    provider_factory: Some(native_provider_factory.clone()),
+                    content_authority: Some(content_authority.clone()),
                     tool_contributors: vec![
                         Arc::clone(&contributor) as Arc<dyn ToolContributor>,
                         // The Rust coding toolpack, once registered, joins
@@ -313,6 +338,19 @@ impl SessionService {
             plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
             wake: Some(host.wake_handle()),
         })
+        .with_profiles(profiles.clone())
+        .with_defaults(
+            options
+                .provider
+                .as_ref()
+                .map(|provider| provider.provider_id.clone()),
+            options
+                .provider
+                .as_ref()
+                .map(|provider| provider.model.clone()),
+        )
+        .with_content_authority(content_authority.clone())
+        .with_provider_factory(native_provider_factory.clone())
         .with_gate(host.admission_gate());
         host.set_session_flush_planner(Arc::new(service.clone()))
             .await;
@@ -355,6 +393,13 @@ impl SessionService {
         let service = Self {
             core: Arc::new(Mutex::new(Some(Core {
                 host,
+                content_authority,
+                native_provider_factory,
+                provider_ports,
+                provider_memory_secrets,
+                mcp_config_runtime: mcp_ports.0,
+                mcp_config_secrets: mcp_ports.1,
+                profiles,
                 service,
                 contributor,
                 lane,
@@ -1554,6 +1599,7 @@ fn optional_string_strict(object: &Value, key: &str) -> Result<Option<String>> {
 /// silently ignored, so the binding never advertises a policy it cannot
 /// enforce.
 struct ServiceOptions {
+    profiles: Vec<Value>,
     close_timeout: Duration,
     configured_mode: CodingMode,
     plan: PlanConfiguration,
@@ -1611,6 +1657,7 @@ impl ProviderProtocol {
 impl Default for ServiceOptions {
     fn default() -> Self {
         Self {
+            profiles: vec![],
             close_timeout: Duration::from_millis(DEFAULT_CLOSE_TIMEOUT_MS),
             configured_mode: CodingMode::Ask,
             plan: PlanConfiguration {
@@ -1633,6 +1680,13 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
     };
     let object = parse_object(text, "the service options")?;
     let mut options = ServiceOptions::default();
+    if let Some(value) = object.get("profiles") {
+        options.profiles = value
+            .as_array()
+            .cloned()
+            .ok_or_else(|| errors::invalid("profiles must be an array"))?;
+        agentkit_host::ProfileRegistry::new(&options.profiles).map_err(errors::host)?;
+    }
     if let Some(value) = object.get("closeTimeoutMs") {
         let millis = value
             .as_u64()
@@ -1936,6 +1990,18 @@ fn parse_create_session(text: &str) -> Result<CreateSessionInput> {
         title: optional_string(&object, "title")?,
         profile_id,
         profile_digest: optional_string_strict(&object, "profileDigest")?,
+        reasoning_effort: object
+            .get("reasoningEffort")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| errors::invalid("Invalid reasoningEffort"))?,
+        content_selection: object
+            .get("contentSelection")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| errors::invalid("Invalid contentSelection"))?,
         provider_id: optional_string_strict(&object, "providerId")?,
         model: optional_string_strict(&object, "model")?,
         workspace: object.get("workspace").cloned(),

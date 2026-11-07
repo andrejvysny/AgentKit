@@ -30,7 +30,7 @@ afterEach(async () => {
 test.skipIf(!nativeBackendAvailable)(
   "all 48 REST operations exercise native host and explicit optional-service boundaries",
   async () => {
-    const client = server.client;
+    let client = server.client;
     const covered = new Set<RestOperation>();
     const call = async <T>(
       name: RestOperation,
@@ -297,9 +297,21 @@ test.skipIf(!nativeBackendAvailable)(
     expect(mcp.transport.kind === "stdio" && mcp.transport.env?.["TOKEN"]).toBe(
       "***",
     );
+    expect(JSON.stringify(mcp)).not.toContain("never-publish");
+    const references = Object.values(mcp.secretRefs ?? {});
+    expect(references).toHaveLength(1);
+    expect(references[0]).toMatch(
+      /^mcp\/[0-9a-f]+\/[0-9a-f]+\/secret_[0-9a-f]{32}$/,
+    );
     expect(await call("listMcpServers", client.listMcpServers())).toHaveLength(
       1,
     );
+    server = await server.restart();
+    client = server.client;
+    const restored = await client.listMcpServers();
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.secretRefs).toEqual(mcp.secretRefs);
+    expect(JSON.stringify(restored)).not.toContain("never-publish");
     expect(
       (
         await call(

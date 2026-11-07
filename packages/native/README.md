@@ -70,10 +70,13 @@ working, tested versions of these calls live in `tests/smoke.test.ts`.
 import { NativeStore } from "@agentkit/native"; // once the gated npm lane has published; in the workspace, import from packages/native
 
 const store = await NativeStore.open("/state/agentkit.sqlite"); // or NativeStore.inMemory()
-const service = await store.createService({ closeTimeoutMs: 5_000 });
+const service = await store.createService({
+  closeTimeoutMs: 5_000,
+  profiles: [{ id: "echo", extends: "chat", tools: ["echo"] }],
+});
 
 service.setProvider(async (request) => ({
-  content: "echo: " + request.messages.at(-1)?.content,
+  content: "echo: " + JSON.stringify(request.messages.at(-1)),
   finishReason: "stop",
 }));
 
@@ -82,10 +85,10 @@ await service.registerTool(
       type: "object", properties: { text: { type: "string" } },
       required: ["text"],
     } },
-  async (input) => ({ content: String((input as { text: string }).text) }),
+  async (input) => ({ ok: true, data: input }),
 );
 
-await service.createSession({ sessionId: "s1", profileId: "p1", model: "test-model" });
+await service.createSession({ sessionId: "s1", profileId: "echo", model: "test-model" });
 const sent = await service.send("s1", { content: "run the echo tool" });
 // send/followUp/steer return a discriminated result: { kind: "turn", turnId }
 // or a queued/rejected variant — match on `kind`.
@@ -106,6 +109,8 @@ await service.close(); // Open → Closing → Closed; idempotent, concurrent-sa
 await store.close();  // releases the file lock — service closes first
 ```
 
+Native built-in profiles are active by default; unknown profile ids fail admission. Resolve profiles with `listNativeProfiles` or `resolveNativeProfile`, and pass the same overrides to `createService`. `createSession` accepts typed `reasoningEffort` and `contentSelection`. Native defaults preserve full eligible history and disable automatic compaction/tool-result elision. See [native admission and host ports](../../docs/rust/native-admission.md) for ceilings, immutable selections, explicit vault/consent/MCP ports and migration limits.
+
 Session management and send methods accept an optional `{ signal }`. A signal
 already aborted prevents the call. Aborting afterward stops waiting only;
 durable work may still complete. Use `cancel` or `interrupt` to request a stop.
@@ -125,10 +130,11 @@ primitives. These internal building blocks do not replace the frozen TypeScript
 store adapters or host and service constructors. The memory adapter's public live
 Maps remain an open compatibility decision.
 
-Native coding-command standing approvals are disabled until executable, script,
-configuration, and environment identity can be bound. Eligible commands re-ask
-in modes that require approval; high-risk commands require a fresh approval even
-in `full_auto`.
+Native coding-command standing approvals bind fingerprint-v4 executable,
+package-script, configuration, startup-file, and environment identities.
+Eligible commands reuse a remembered grant only while that identity matches;
+ambiguous or unbound identities re-ask. High-risk commands require a fresh
+approval even in `full_auto`.
 
 Approvals surface through the same calls: the run parks (`run.waiting`,
 visible in `getState().pendingHumanRequests`), `approve(requestId,

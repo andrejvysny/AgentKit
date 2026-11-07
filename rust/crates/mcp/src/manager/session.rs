@@ -197,6 +197,12 @@ impl Session {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         !state.disposed && !state.revoked && state.client.is_some()
     }
+    pub fn revoked(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .revoked
+    }
     pub fn revoke(&self) {
         let mut state = self
             .state
@@ -362,6 +368,8 @@ impl Session {
                         error,
                         McpClientError::Configuration
                             | McpClientError::SecretMissing
+                            | McpClientError::AuthRequired
+                            | McpClientError::InvocationRefused
                             | McpClientError::Cancelled
                             | McpClientError::Closed
                             | McpClientError::Protocol
@@ -444,7 +452,8 @@ impl Session {
         let _cancel_on_drop = cancellation.clone().drop_guard();
         let client = self
             .connector
-            .connect(
+            .connect_named(
+                &self.config.alias,
                 transport,
                 self.config.resilience.client_options(),
                 cancellation,

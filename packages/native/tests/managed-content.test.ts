@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * The managed-content binding surface: `NativeManagedContent` typed methods
  * over the `callStore` port path (`promptTemplates.*`, `skills.*`,
@@ -585,7 +586,7 @@ nativeTest(
   async () => {
     const store = await NativeStore.inMemory();
     const managed = new NativeManagedContent({ store });
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       const { baseUrl } = await service.startHttpServer({ bearerToken: TOKEN });
 

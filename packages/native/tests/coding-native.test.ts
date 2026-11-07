@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * The NATIVE coding lane through the PUBLIC binding: the Rust toolpack
  * registers through `registerCodingTools`, executes on the same executor
@@ -133,15 +134,17 @@ async function openNativeCoding(options: {
     provider.baseUrl,
     null,
   );
-  const service = await store.createService({
-    jsToolAuthority: { configuredMode: options.codingMode },
-    providerConfig: {
-      protocol: "chat-completions",
-      providerId: "probe",
-      connectionId,
-      model: "loopback-model",
-    },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      jsToolAuthority: { configuredMode: options.codingMode },
+      providerConfig: {
+        protocol: "chat-completions",
+        providerId: "probe",
+        connectionId,
+        model: "loopback-model",
+      },
+    }),
+  );
   await service.registerCodingTools({
     workspaceRoot: options.workspace,
     // Keep remembered-approval controls independent of personal startup

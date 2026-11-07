@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -156,7 +157,7 @@ suite(
   "plan mode never runs a JS write callback without an approval",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     const { provider } = scripted(
       toolCall("call-write", "write_back", { path: "a.txt" }),
       final("done"),
@@ -201,9 +202,11 @@ suite(
     const dir = disposableDir();
     const path = join(dir, "plan-grant.db");
     const store = await NativeStoreCtor.open(path);
-    const service = await store.createService({
-      jsToolAuthority: { planToolNames: ["submit_plan"] },
-    });
+    const service = await store.createService(
+      testServiceOptions({
+        jsToolAuthority: { planToolNames: ["submit_plan"] },
+      }),
+    );
     let writes = 0;
     const { provider } = scripted(
       toolCall("call-plan", "submit_plan", {
@@ -301,7 +304,7 @@ suite(
     await service.close();
     await store.close();
     const reopened = await NativeStoreCtor.open(path);
-    const second = await reopened.createService();
+    const second = await reopened.createService(testServiceOptions());
     const replay = await second.getState(sessionId);
     expect(replay.sessionId).toBe(sessionId);
     expect(writes).toBe(1);
@@ -318,7 +321,7 @@ suite(
     // run unapproved in auto_edit because the binding guard branched on
     // effect. The shared matrix classifies by capability: commands ask.
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     const { provider } = scripted(
       toolCall("call-cmd", "run_cmd", { command: "ls -la" }),
       final("done"),
@@ -385,12 +388,14 @@ suite(
     // effects before the plan-tool check, so a JS submit_plan declaring
     // effect "read" ran without ever creating an approval request.
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService({
-      jsToolAuthority: {
-        planToolNames: ["submit_plan"],
-        planGrantMode: "auto_edit",
-      },
-    });
+    const service = await store.createService(
+      testServiceOptions({
+        jsToolAuthority: {
+          planToolNames: ["submit_plan"],
+          planGrantMode: "auto_edit",
+        },
+      }),
+    );
     let planBodies = 0;
     const { provider } = scripted(
       toolCall("call-plan", "submit_plan", {
@@ -461,7 +466,9 @@ suite(
 
 suite("close dispatches no new callbacks and always completes", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService({ closeTimeoutMs: 2_000 });
+  const service = await store.createService(
+    testServiceOptions({ closeTimeoutMs: 2_000 }),
+  );
   let providerCalls = 0;
   // Deliberately never settles — the executor form is required because
   // this promise is the in-flight callback under test, never resolved.
@@ -518,7 +525,9 @@ suite("close dispatches no new callbacks and always completes", async () => {
 
 suite("close hard-stops a never-resolving provider within bound", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService({ closeTimeoutMs: 300 });
+  const service = await store.createService(
+    testServiceOptions({ closeTimeoutMs: 300 }),
+  );
   let providerCalls = 0;
   service.setProvider(async () => {
     providerCalls += 1;
@@ -545,7 +554,7 @@ suite("close hard-stops a never-resolving provider within bound", async () => {
 
 suite("concurrent close callers share one completion", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService();
+  const service = await store.createService(testServiceOptions());
   const created = await service.createSession({
     profileId: "authority",
     model: "test-model",
@@ -567,7 +576,9 @@ suite(
     const dir = disposableDir();
     const path = join(dir, "paused-callback.db");
     const store = await NativeStoreCtor.open(path);
-    const service = await store.createService({ closeTimeoutMs: 3_000 });
+    const service = await store.createService(
+      testServiceOptions({ closeTimeoutMs: 3_000 }),
+    );
     let effects = 0;
     let dispatches = 0;
     let release!: () => void;
@@ -620,7 +631,7 @@ suite(
 
     // Fresh-process-equivalent reopen: no re-dispatch, no fabricated result.
     const reopened = await NativeStoreCtor.open(path);
-    const second = await reopened.createService();
+    const second = await reopened.createService(testServiceOptions());
     const state = await second.getState(sessionId);
     expect(state.sessionId).toBe(sessionId);
     expect(effects).toBe(1);
@@ -643,7 +654,7 @@ suite(
   "the binding parser preserves malformed-present values natively reject",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     for (const key of ["workspace", "context", "skills"]) {
       const bad: Record<string, unknown> = {
         profileId: "authority",
@@ -761,15 +772,17 @@ suite(
           `http://127.0.0.1:${provider.port}`,
           "sk-loopback",
         );
-      service = await store.createService({
-        jsToolAuthority: { configuredMode: "full_auto" },
-        providerConfig: {
-          protocol: "responses",
-          providerId: "rest-minted",
-          connectionId,
-          model: "model",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          jsToolAuthority: { configuredMode: "full_auto" },
+          providerConfig: {
+            protocol: "responses",
+            providerId: "rest-minted",
+            connectionId,
+            model: "model",
+          },
+        }),
+      );
       await service.registerTool(
         {
           name: "rest_write",

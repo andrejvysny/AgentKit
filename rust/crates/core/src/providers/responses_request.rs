@@ -1,5 +1,5 @@
 use super::{content, ConnectionIdentity};
-use crate::{ChatMessage, ChatRequest, CoreError, ToolCall};
+use crate::{ChatMessage, ChatRequest, CoreError, ReasoningSummary, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -9,10 +9,18 @@ const MAX_BYTES: usize = 1024 * 1024;
 struct State {
     version: u8,
     scope: Scope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_content: Option<RunContentBinding>,
     message_count: usize,
     message_digest: String,
     #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
     input_items: Vec<Value>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunContentBinding {
+    run_id: String,
+    digest: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -39,6 +47,7 @@ pub fn build_responses_request_with_warnings(
     identity: &ConnectionIdentity,
     account: bool,
 ) -> Result<(Value, Vec<String>), CoreError> {
+    content::validate_selected(&input.selected_content)?;
     if account && (input.temperature.is_some() || input.max_output_tokens.is_some()) {
         return Err(CoreError::responses("unsupported_parameter"));
     }
@@ -49,29 +58,55 @@ pub fn build_responses_request_with_warnings(
         let state: State = serde_json::from_value(state.clone())
             .map_err(|_| CoreError::responses("invalid_continuation"))?;
         check_state(&state, input, identity)?;
-        offset = state.message_count;
-        items = state.input_items;
+        let digest = selected_digest(input)?;
+        let previous = state.run_content.as_ref();
+        if previous.is_some_and(|binding| binding.run_id == input.run_id)
+            && previous.map(|binding| binding.digest.as_str()) != digest.as_deref()
+        {
+            return Err(CoreError::responses("continuation_history_mismatch"));
+        }
+        // A different selection on a later turn starts from canonical history.
+        // Private state may encode reasoning about the old selection.
+        if previous.map(|binding| binding.digest.as_str()) == digest.as_deref() {
+            offset = state.message_count;
+            items = state.input_items;
+        }
     } else if input.continuation_required {
         return Err(CoreError::responses("continuation_required"));
     }
+    // Managed content is request-local; never checkpoint it as transcript.
+    let selected_items = map_messages(&input.selected_content)?;
     items.extend(map_messages(&input.messages[offset..])?);
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
     let instructions = input
-        .messages
+        .selected_content
         .iter()
+        .chain(input.messages.iter())
         .filter(|message| message.role == "system")
         .map(|message| content::text(message, true))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
     let (tools, warnings) = tools(input)?;
-    let mut body = json!({"model":input.model,"input":items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
+    let mut wire_items = selected_items;
+    wire_items.extend(items);
+    let mut body = json!({"model":input.model,"input":wire_items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
     if !instructions.is_empty() {
         body["instructions"] = instructions.into();
     }
     if !tools.is_empty() {
         body["tools"] = tools.into();
+    }
+    let mut reasoning = serde_json::Map::new();
+    if let Some(value) = input.reasoning_effort {
+        reasoning.insert("effort".into(), json!(value));
+    }
+    if input.reasoning_summary != ReasoningSummary::Off {
+        reasoning.insert("summary".into(), json!(input.reasoning_summary));
+    }
+    if !reasoning.is_empty() {
+        body["reasoning"] = reasoning.into();
     }
     if let Some(value) = input.temperature {
         body["temperature"] = value.into();
@@ -90,6 +125,16 @@ fn check_state(
     let Some(scope) = &input.continuation_scope else {
         return Err(CoreError::responses("invalid_continuation"));
     };
+    if state.run_content.as_ref().is_some_and(|binding| {
+        binding.run_id.is_empty()
+            || binding.digest.len() != 64
+            || !binding
+                .digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(CoreError::responses("invalid_continuation"));
+    }
     if state.version != 1
         || state.input_items.len() > 1024
         || state.message_digest.len() != 64
@@ -156,12 +201,22 @@ pub(crate) fn make_continuation(
         .as_array()
         .cloned()
         .ok_or_else(|| CoreError::responses("invalid_request"))?;
+    // Strip request-local content before persisting provider continuation.
+    let selected_count = map_messages(&input.selected_content)?.len();
+    if selected_count > items.len() {
+        return Err(CoreError::responses("invalid_request"));
+    }
+    items.drain(..selected_count);
     items.extend_from_slice(output);
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
     let state = State {
         version: 1,
+        run_content: selected_digest(input)?.map(|digest| RunContentBinding {
+            run_id: input.run_id.clone(),
+            digest,
+        }),
         scope: Scope {
             provider_id: identity.provider_id.clone(),
             protocol: identity.protocol.clone(),
@@ -179,6 +234,19 @@ pub(crate) fn make_continuation(
         serde_json::to_value(state).map_err(|_| CoreError::responses("invalid_continuation"))?;
     bounded(&value)?;
     Ok(Some(value))
+}
+fn selected_digest(input: &ChatRequest) -> Result<Option<String>, CoreError> {
+    if let Some(digest) = &input.content_binding_digest {
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(CoreError::responses("invalid_request"));
+        }
+        return Ok(Some(digest.clone()));
+    }
+    message_digest(&input.selected_content).map(Some)
 }
 fn message_digest(messages: &[ChatMessage]) -> Result<String, CoreError> {
     let stable: Vec<Value> = messages
@@ -381,4 +449,104 @@ pub(crate) fn bounded(value: &Value) -> Result<String, CoreError> {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
     Ok(encoded)
+}
+
+#[cfg(test)]
+mod selected_content_tests {
+    use super::*;
+    use crate::{ContinuationScope, ReasoningEffort};
+
+    #[test]
+    fn content_binding_fences_same_run_and_changed_next_turn_replays_canonical_history() {
+        let identity = ConnectionIdentity {
+            provider_id: "p".into(),
+            protocol: "responses".into(),
+            connection_id: "c".into(),
+            generation: 1,
+        };
+        let mut input = ChatRequest {
+            run_id: "run-1".into(),
+            model: "model".into(),
+            messages: vec![ChatMessage::text("user", "canonical")],
+            selected_content: vec![ChatMessage::text("user", "selected first")],
+            reasoning_effort: Some(ReasoningEffort::High),
+            continuation_scope: Some(ContinuationScope {
+                chat_id: "chat".into(),
+                branch_id: "branch".into(),
+            }),
+            ..Default::default()
+        };
+        let body = build_responses_request(&input, &identity, false).unwrap();
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["input"][0]["content"][0]["text"], "selected first");
+        let output = vec![
+            json!({"type":"reasoning","encrypted_content":"opaque"}),
+            json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}),
+        ];
+        let state = make_continuation(&input, &identity, &body, &output, "answer", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(state["messageCount"], 2);
+        assert_eq!(state["runContent"]["runId"], "run-1");
+        assert!(!state["inputItems"].to_string().contains("selected first"));
+        input
+            .messages
+            .push(ChatMessage::text("assistant", "answer"));
+        input.messages.push(ChatMessage::text("user", "next"));
+        input.continuation = Some(state.clone());
+        let continued = build_responses_request(&input, &identity, false).unwrap();
+        assert_eq!(continued["input"].as_array().unwrap().len(), 5);
+        input.selected_content = vec![ChatMessage::text("user", "selected second")];
+        assert_eq!(
+            build_responses_request(&input, &identity, false)
+                .unwrap_err()
+                .code,
+            "continuation_history_mismatch"
+        );
+        input.run_id = "run-2".into();
+        let replay = build_responses_request(&input, &identity, false).unwrap();
+        assert!(!replay["input"].to_string().contains("opaque"));
+        assert!(!replay["input"].to_string().contains("selected first"));
+        assert!(replay["input"].to_string().contains("selected second"));
+        assert!(replay["input"].to_string().contains("canonical"));
+    }
+    #[test]
+    fn empty_selection_is_bound_within_the_same_run() {
+        let identity = ConnectionIdentity {
+            provider_id: "p".into(),
+            protocol: "responses".into(),
+            connection_id: "c".into(),
+            generation: 1,
+        };
+        let mut input = ChatRequest {
+            run_id: "run".into(),
+            model: "model".into(),
+            messages: vec![ChatMessage::text("user", "question")],
+            continuation_scope: Some(crate::ContinuationScope {
+                chat_id: "chat".into(),
+                branch_id: "branch".into(),
+            }),
+            ..Default::default()
+        };
+        let body = build_responses_request(&input, &identity, false).unwrap();
+        let checkpoint = make_continuation(&input, &identity, &body, &[], "answer", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint["runContent"]["runId"], "run");
+        input
+            .messages
+            .push(ChatMessage::text("assistant", "answer"));
+        input
+            .selected_content
+            .push(ChatMessage::text("system", "new instructions"));
+        input.continuation = Some(checkpoint);
+        assert_eq!(
+            build_responses_request(&input, &identity, false)
+                .unwrap_err()
+                .code,
+            "continuation_history_mismatch"
+        );
+        input.run_id = "next-run".into();
+        assert!(build_responses_request(&input, &identity, false).is_ok());
+    }
 }

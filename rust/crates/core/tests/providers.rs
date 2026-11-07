@@ -67,6 +67,7 @@ fn sse(values: &[Value]) -> String {
 }
 fn request() -> ChatRequest {
     ChatRequest {
+        run_id: "provider-run".into(),
         model: "m".into(),
         messages: vec![ChatMessage::text("user", "hi")],
         ..Default::default()
@@ -184,6 +185,294 @@ async fn responses_reconciles_live_prefix_and_terminal_snapshot() {
     let body = &transport.sent.lock().unwrap()[0];
     assert_eq!(body["store"], false);
     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+}
+#[tokio::test]
+async fn responses_accepts_reencrypted_reasoning_in_terminal_output() {
+    // OpenAI re-encrypts reasoning per event, so the done item and the
+    // terminal output carry different ciphertexts. The terminal copy wins.
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"reason1","type":"reasoning","encrypted_content":"added"}}),
+        json!({"type":"response.output_item.done","output_index":0,"item":{"id":"reason1","type":"reasoning","encrypted_content":"done"}}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":1,"item_id":"message1","content_index":0,"delta":"answer"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"reason1","type":"reasoning","encrypted_content":"terminal"},
+            message()]}}),
+    ]);
+    let transport = Transport::new("responses", vec![(200, stream)]);
+    let provider = ResponsesProvider::new(transport).unwrap();
+    let saved = Arc::new(Saved {
+        states: Mutex::new(vec![]),
+        fail: false,
+    });
+    let mut input = request();
+    input.continuation_scope = Some(ContinuationScope {
+        chat_id: "chat".into(),
+        branch_id: "branch".into(),
+    });
+    input.continuation_store = Some(saved.clone());
+    let events: Vec<_> = provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(saved.states.lock().unwrap()[0]
+        .to_string()
+        .contains("terminal"));
+}
+fn tool_progress(events: &[Result<ProviderEvent, CoreError>]) -> Vec<(String, String, u64)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ProviderEvent::ToolCallProgress {
+                id,
+                name,
+                args_bytes,
+            }) => Some((id.clone(), name.clone(), *args_bytes)),
+            _ => None,
+        })
+        .collect()
+}
+fn progress(id: &str, bytes: &[u64]) -> Vec<(String, String, u64)> {
+    bytes
+        .iter()
+        .map(|bytes| (id.to_owned(), "write".to_owned(), *bytes))
+        .collect()
+}
+#[tokio::test]
+async fn responses_reports_tool_call_progress_per_fragment_before_the_request() {
+    let big = "a".repeat(3000);
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"fc1","type":"function_call","call_id":"c1","name":"write","arguments":"","namespace":"agentkit"}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc1","delta":big}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc1","delta":"tail"}),
+    ]);
+    let provider =
+        ResponsesProvider::new(Transport::new("responses", vec![(200, stream)])).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert_eq!(tool_progress(&events), progress("c1", &[0, 3000, 3004]));
+}
+#[tokio::test]
+async fn chat_reports_tool_call_progress_once_named_and_before_the_request() {
+    let big = "a".repeat(3000);
+    let stream = sse(&[
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"arguments":""}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"write","arguments":""}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":big}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"tail"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ]) + "data: [DONE]\n\n";
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, stream)]))
+            .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert_eq!(tool_progress(&events), progress("c1", &[0, 3000, 3004]));
+    let last_progress = events
+        .iter()
+        .rposition(|event| matches!(event, Ok(ProviderEvent::ToolCallProgress { .. })))
+        .unwrap();
+    let requested = events
+        .iter()
+        .position(
+            |event| matches!(event, Ok(ProviderEvent::ToolRequested(call)) if call.id == "c1"),
+        )
+        .unwrap();
+    assert!(last_progress < requested);
+}
+fn body_for(effort: Option<ReasoningEffort>, summary: ReasoningSummary) -> Value {
+    let identity = ConnectionIdentity {
+        provider_id: "p".into(),
+        protocol: "responses".into(),
+        connection_id: "c".into(),
+        generation: 1,
+    };
+    let mut input = request();
+    input.reasoning_effort = effort;
+    input.reasoning_summary = summary;
+    build_responses_request(&input, &identity, false).unwrap()
+}
+#[test]
+fn responses_request_asks_for_reasoning_summary_by_default() {
+    assert_eq!(
+        ChatRequest::default().reasoning_summary,
+        ReasoningSummary::Auto
+    );
+    assert_eq!(
+        body_for(None, ReasoningSummary::Auto)["reasoning"],
+        json!({"summary":"auto"})
+    );
+    assert_eq!(
+        body_for(Some(ReasoningEffort::High), ReasoningSummary::Auto)["reasoning"],
+        json!({"effort":"high","summary":"auto"})
+    );
+    assert_eq!(
+        body_for(Some(ReasoningEffort::Low), ReasoningSummary::Detailed)["reasoning"],
+        json!({"effort":"low","summary":"detailed"})
+    );
+    assert_eq!(
+        body_for(None, ReasoningSummary::Concise)["reasoning"],
+        json!({"summary":"concise"})
+    );
+    assert_eq!(
+        body_for(Some(ReasoningEffort::Medium), ReasoningSummary::Off)["reasoning"],
+        json!({"effort":"medium"})
+    );
+    assert!(body_for(None, ReasoningSummary::Off)
+        .get("reasoning")
+        .is_none());
+}
+fn responses_transport(provider_id: &str, replies: Vec<(u16, String)>) -> Arc<Transport> {
+    let mut transport = Transport::new("responses", replies);
+    Arc::get_mut(&mut transport).unwrap().identity.provider_id = provider_id.into();
+    transport
+}
+fn answer_stream() -> String {
+    sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        terminal(vec![message()]),
+    ])
+}
+const SUMMARY_REJECTION: &str = r#"{"error":{"message":"Your organization must be verified to generate reasoning summaries.","type":"invalid_request_error","param":"reasoning.summary","code":"unsupported_value"}}"#;
+#[tokio::test]
+async fn responses_retries_once_without_rejected_summary_and_remembers_the_model() {
+    let transport = responses_transport(
+        "summary-retry",
+        vec![
+            (400, SUMMARY_REJECTION.into()),
+            (200, answer_stream()),
+            (200, answer_stream()),
+            (200, answer_stream()),
+        ],
+    );
+    let provider = ResponsesProvider::new(transport.clone()).unwrap();
+    let mut input = request();
+    input.model = "remembered".into();
+    input.reasoning_effort = Some(ReasoningEffort::High);
+    let events: Vec<_> = provider
+        .stream_chat(input.clone(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    let later: Vec<_> = provider
+        .stream_chat(input.clone(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(later.iter().all(Result::is_ok), "{later:?}");
+    input.model = "other".into();
+    let other: Vec<_> = provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(other.iter().all(Result::is_ok), "{other:?}");
+    let sent = transport.sent.lock().unwrap();
+    let reasoning: Vec<_> = sent.iter().map(|body| body["reasoning"].clone()).collect();
+    assert_eq!(
+        reasoning,
+        vec![
+            json!({"effort":"high","summary":"auto"}),
+            json!({"effort":"high"}),
+            json!({"effort":"high"}),
+            json!({"effort":"high","summary":"auto"}),
+        ]
+    );
+}
+#[tokio::test]
+async fn responses_summary_retry_is_once_and_only_for_summary_rejections() {
+    let unrelated = responses_transport(
+        "summary-unrelated",
+        vec![
+            (
+                400,
+                r#"{"error":{"message":"Invalid input","code":"invalid_value"}}"#.into(),
+            ),
+            (200, answer_stream()),
+        ],
+    );
+    let events: Vec<_> = ResponsesProvider::new(unrelated.clone())
+        .unwrap()
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Err(error) if error.code == "provider_error")));
+    assert_eq!(unrelated.sent.lock().unwrap().len(), 1);
+    let twice = responses_transport(
+        "summary-twice",
+        vec![
+            (400, SUMMARY_REJECTION.into()),
+            (400, SUMMARY_REJECTION.into()),
+            (200, answer_stream()),
+        ],
+    );
+    let events: Vec<_> = ResponsesProvider::new(twice.clone())
+        .unwrap()
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().any(Result::is_err));
+    let sent = twice.sent.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    assert!(sent[1].get("reasoning").is_none());
+}
+#[tokio::test]
+async fn responses_summary_retry_tells_a_rejected_effort_from_a_rejected_reasoning_object() {
+    let effort = responses_transport(
+        "summary-effort",
+        vec![
+            (400, r#"{"error":{"message":"Unsupported value: 'reasoning.effort'","param":"reasoning.effort"}}"#.into()),
+            (200, answer_stream()),
+        ],
+    );
+    let mut input = request();
+    input.reasoning_effort = Some(ReasoningEffort::Minimal);
+    let events: Vec<_> = ResponsesProvider::new(effort.clone())
+        .unwrap()
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().any(Result::is_err));
+    assert_eq!(effort.sent.lock().unwrap().len(), 1);
+    let object = responses_transport(
+        "summary-object",
+        vec![
+            (400, r#"{"error":{"message":"Unsupported parameter: 'reasoning' is not supported with this model.","param":"reasoning"}}"#.into()),
+            (200, answer_stream()),
+        ],
+    );
+    let events: Vec<_> = ResponsesProvider::new(object.clone())
+        .unwrap()
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    let sent = object.sent.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    assert!(sent[1].get("reasoning").is_none());
+}
+#[tokio::test]
+async fn responses_summary_off_sends_no_summary_and_never_retries() {
+    let transport = responses_transport(
+        "summary-off",
+        vec![(400, SUMMARY_REJECTION.into()), (200, answer_stream())],
+    );
+    let mut input = request();
+    input.reasoning_summary = ReasoningSummary::Off;
+    let events: Vec<_> = ResponsesProvider::new(transport.clone())
+        .unwrap()
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().any(Result::is_err));
+    let sent = transport.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].get("reasoning").is_none());
 }
 #[tokio::test]
 async fn responses_streams_reasoning_deltas() {
@@ -590,8 +879,8 @@ async fn chat_unindexed_and_reused_index_assembly_matches_typescript_fixtures() 
         let calls = events
             .iter()
             .find_map(|event| {
-                if let Ok(ProviderEvent::Event { data, .. }) = event {
-                    Some(data["toolCalls"].as_array().unwrap())
+                if let Ok(ProviderEvent::Event { kind, data }) = event {
+                    (kind == "run.message.completed").then(|| data["toolCalls"].as_array().unwrap())
                 } else {
                     None
                 }

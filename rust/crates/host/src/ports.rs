@@ -21,7 +21,7 @@ impl Runtime for SystemRuntime {
     }
 
     fn id(&self) -> String {
-        uuid::Uuid::new_v4().to_string()
+        uuid::Uuid::now_v7().to_string()
     }
 }
 
@@ -56,6 +56,17 @@ pub trait DelegationGuidance: Send + Sync {
 
 #[async_trait]
 pub trait ChatProviderFactory: Send + Sync {
+    fn available(&self) -> bool {
+        true
+    }
+    async fn snapshot(
+        &self,
+        _provider_id: &str,
+        _model: &str,
+        _cancel: CancellationToken,
+    ) -> HostResult<Option<Value>> {
+        Ok(None)
+    }
     async fn resolve(
         &self,
         snapshot: &Value,

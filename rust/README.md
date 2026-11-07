@@ -88,12 +88,13 @@ database path, consent controls and supported provider configuration.
 
 ## Managed content and schema qualification
 
-The current shared contracts contain 97 schemas and 48 REST operations. The
-native desktop backend does not implement optional managed connectors, OAuth,
-prompt-template management, or skill services. Those service routes return
-`501 not_implemented`. Submit and regenerate requests containing
-`contentSelection` also return `501` before creating a turn; native execution
-must not silently omit selected instructions.
+The current shared contracts contain 101 schemas and 48 REST operations. The
+native desktop backend resolves selected published prompt templates and managed
+skills before admission, freezes revisions and connector authority, and transmits
+typed reasoning through native and callback providers. See
+[native admission](../docs/rust/native-admission.md) for profiles, transcript and
+context ceilings, Responses binding/replay behavior, and API migration. Optional
+provider/MCP lifecycle services still require explicit host composition.
 
 Tool schemas retain resource `$id` and declared dialects, while ordinary JSON
 payloads in `const`, `enum`, defaults, and examples retain their literal keys.

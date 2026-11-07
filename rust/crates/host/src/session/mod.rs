@@ -5,14 +5,9 @@
 //! The store is the only authority: every busy check and every queue
 //! conversion is a single actor job, so there is no check-then-write window
 //! for a concurrent submit to lose a race in. The service holds no provider
-//! client. Descriptor settings the native dispatch path cannot honor —
-//! selected Skills (content selection) and provider reasoning effort —
-//! are REFUSED before any turn effect with `not_implemented` (never
-//! silently omitted), mirroring the HTTP boundary's 501 for
-//! `contentSelection`. Context assembly options (`policy`,
-//! `toolResultElision`, the token budgets) are NOT refused: the executor
-//! honors them (`chat_context.rs`, `chat_history.rs`,
-//! `tool_result_elision.rs`).
+//! client. Profiles and selected managed content are resolved before admission,
+//! then carried as immutable snapshots. Reasoning and context settings travel
+//! through the native executor to provider dispatch.
 
 mod descriptor;
 mod execution_authority;
@@ -66,10 +61,8 @@ impl SessionError {
     }
 }
 
-/// The detail the HTTP boundary returns for a `contentSelection`
-/// (`crates/host/src/http/turns.rs`: `501 not_implemented`), shared verbatim
-/// with the session submit refusal so both boundaries carry one
-/// code/message pair while native content resolution is unimplemented.
+/// Legacy message retained for source compatibility; native content admission
+/// now resolves immutable snapshots and no longer emits this refusal.
 pub const CONTENT_UNSUPPORTED_MESSAGE: &str =
     "Native prompt templates and skills are not configured.";
 
@@ -154,6 +147,8 @@ pub struct CreateSessionInput {
     pub title: Option<String>,
     pub profile_id: String,
     pub profile_digest: Option<String>,
+    pub reasoning_effort: Option<agentkit_core::ReasoningEffort>,
+    pub content_selection: Option<crate::RunContentSelection>,
     pub provider_id: Option<String>,
     pub model: Option<String>,
     /// `{root, trusted}`; validated by the descriptor reader.
@@ -286,6 +281,11 @@ struct Deps {
     /// queue at all. When set, every admission that would create a task
     /// refuses an unregistered kind BEFORE any row lands.
     gate: Option<crate::AdmissionGate>,
+    profiles: Arc<crate::ProfileRegistry>,
+    provider_factory: Option<Arc<dyn crate::ChatProviderFactory>>,
+    default_provider_id: Option<String>,
+    default_model: Option<String>,
+    content_authority: Option<Arc<dyn crate::ContentAuthority>>,
 }
 
 /// The session service. Cheap to clone; all state lives in the store.
@@ -359,6 +359,11 @@ impl AgentSessionService {
                 plan_approval: deps.plan_approval,
                 wake: deps.wake,
                 gate: None,
+                profiles: Arc::new(crate::ProfileRegistry::default()),
+                provider_factory: None,
+                default_provider_id: None,
+                default_model: None,
+                content_authority: None,
             }),
         }
     }
@@ -377,6 +382,35 @@ impl AgentSessionService {
     pub fn with_gate(mut self, gate: crate::AdmissionGate) -> Self {
         let mut deps = self.deps.as_ref().clone();
         deps.gate = Some(gate);
+        self.deps = Arc::new(deps);
+        self
+    }
+
+    pub fn with_profiles(mut self, profiles: Arc<crate::ProfileRegistry>) -> Self {
+        let mut deps = self.deps.as_ref().clone();
+        deps.profiles = profiles;
+        self.deps = Arc::new(deps);
+        self
+    }
+
+    pub fn with_defaults(mut self, provider_id: Option<String>, model: Option<String>) -> Self {
+        let mut deps = self.deps.as_ref().clone();
+        deps.default_provider_id = provider_id;
+        deps.default_model = model;
+        self.deps = Arc::new(deps);
+        self
+    }
+
+    pub fn with_provider_factory(mut self, factory: Arc<dyn crate::ChatProviderFactory>) -> Self {
+        let mut deps = self.deps.as_ref().clone();
+        deps.provider_factory = Some(factory);
+        self.deps = Arc::new(deps);
+        self
+    }
+
+    pub fn with_content_authority(mut self, authority: Arc<dyn crate::ContentAuthority>) -> Self {
+        let mut deps = self.deps.as_ref().clone();
+        deps.content_authority = Some(authority);
         self.deps = Arc::new(deps);
         self
     }
@@ -456,18 +490,59 @@ impl AgentSessionService {
                 "turnKind must be a dotted lowercase task kind outside the reserved chat.* / agentkit.* prefixes.",
             ));
         }
+        let resolved_profile = self
+            .deps
+            .profiles
+            .resolve(&input.profile_id)
+            .map_err(|e| SessionError::invalid_input(e.to_string()))?;
+        let digest = resolved_profile.digest();
+        if input.profile_digest.as_ref().is_some_and(|d| d != &digest) {
+            return Err(SessionError::invalid_input(
+                "Profile digest does not match resolved profile.",
+            ));
+        }
         let mut raw = Map::new();
+        raw.insert(
+            "profileSnapshot".into(),
+            serde_json::to_value(&resolved_profile).expect("profile"),
+        );
         raw.insert("version".into(), Value::from(1));
         let mut profile = Map::new();
         profile.insert("id".into(), input.profile_id.clone().into());
-        if let Some(digest) = &input.profile_digest {
-            profile.insert("digest".into(), digest.clone().into());
-        }
+        profile.insert("digest".into(), digest.into());
         raw.insert("profile".into(), Value::Object(profile));
-        for (key, value) in [("providerId", &input.provider_id), ("model", &input.model)] {
+        for (key, value) in [
+            (
+                "providerId",
+                &input
+                    .provider_id
+                    .clone()
+                    .or(self.deps.default_provider_id.clone()),
+            ),
+            (
+                "model",
+                &input
+                    .model
+                    .clone()
+                    .or(resolved_profile.model.clone())
+                    .or(self.deps.default_model.clone()),
+            ),
+        ] {
             if let Some(value) = value {
                 raw.insert(key.into(), value.clone().into());
             }
+        }
+        if let Some(effort) = input.reasoning_effort.or(resolved_profile.reasoning_effort) {
+            raw.insert(
+                "reasoningEffort".into(),
+                serde_json::to_value(effort).expect("effort"),
+            );
+        }
+        if let Some(selection) = &input.content_selection {
+            raw.insert(
+                "contentSelection".into(),
+                serde_json::to_value(selection).expect("selection"),
+            );
         }
         raw.insert("createdAt".into(), self.now_iso().into());
         for (key, value) in [
@@ -491,7 +566,11 @@ impl AgentSessionService {
                  must match the session descriptor grammar.",
             ));
         }
-        let state = match &input.execution_mode {
+        let initial_mode = input
+            .execution_mode
+            .clone()
+            .unwrap_or(resolved_profile.permission_mode.clone());
+        let state = match &Some(initial_mode) {
             Some(mode) => {
                 // Validate the mode first so a bad one cannot half-create
                 // the session.
@@ -879,13 +958,15 @@ impl AgentSessionService {
             // A steer converts under the SAME deterministic record id the
             // in-run projection uses, so every placement path for one input
             // is the same receipt — never two records for one steering.
-            let Some(candidate) = self.stage_candidate(
-                session_id,
-                descriptor,
-                &record.input_id,
-                record.kind,
-                &record.content,
-            )?
+            let Some(candidate) = self
+                .stage_candidate(
+                    session_id,
+                    descriptor,
+                    &record.input_id,
+                    record.kind,
+                    &record.content,
+                )
+                .await?
             else {
                 continue; // malformed content is skipped, like the TS logger path
             };
@@ -1570,7 +1651,7 @@ impl AgentSessionService {
     /// [`agentkit_store::TurnStaging`] carries the same config into the one
     /// promotion the host's snapshot cannot pre-stage. `None` is the staging
     /// filter: unusable content stays Pending and visible.
-    fn stage_candidate(
+    async fn stage_candidate(
         &self,
         session_id: &str,
         descriptor: &Value,
@@ -1588,7 +1669,7 @@ impl AgentSessionService {
         };
         let assistant_message_id = format!("msg_a:{input_id}");
         let task_id = turn_id_for(input_id);
-        let mut payload = self.turn_payload_base(session_id, descriptor)?;
+        let mut payload = self.turn_payload_base(session_id, descriptor).await?;
         payload.insert(
             "assistantMessageId".into(),
             assistant_message_id.clone().into(),
@@ -1624,27 +1705,21 @@ impl AgentSessionService {
     /// snapshot could not name: the same contract [`Self::stage_candidate`]
     /// applies. The transaction checks the persisted descriptor before
     /// stamping it, so a concurrent patch forces the host to re-plan.
-    fn turn_staging(&self, session_id: &str, descriptor: &Value) -> SessionResult<TurnStaging> {
+    async fn turn_staging(
+        &self,
+        session_id: &str,
+        descriptor: &Value,
+    ) -> SessionResult<TurnStaging> {
         Ok(TurnStaging {
             kind: session_turn_kind(descriptor),
-            config: Value::Object(self.turn_payload_base(session_id, descriptor)?),
+            config: Value::Object(self.turn_payload_base(session_id, descriptor).await?),
         })
     }
 
     /// The task kind this session's turns run under, plus the immutable
     /// snapshot every turn carries.
     ///
-    /// REFUSES, before any turn effect, descriptor settings the native
-    /// dispatch path cannot honor: selected Skills (content selection — the
-    /// executor never resolves it, so dispatching would silently omit the
-    /// selected instructions) and provider reasoning effort (the provider
-    /// request carries no effort field; it would vanish). This mirrors the
-    /// HTTP boundary's refusal of `contentSelection` (`http/turns.rs`:
-    /// `501 not_implemented`, "Native prompt templates and skills are not
-    /// configured.") in code and message shape. Context options are not
-    /// refused: the `sessionContext` snapshot staged here is what the
-    /// executor's assembly (policy, elision) and budget read.
-    fn turn_payload(
+    async fn turn_payload(
         &self,
         session_id: &str,
         descriptor: &Value,
@@ -1652,7 +1727,7 @@ impl AgentSessionService {
         assistant_message_id: &str,
         parent_message_id: Option<&str>,
     ) -> SessionResult<Value> {
-        let mut payload = self.turn_payload_base(session_id, descriptor)?;
+        let mut payload = self.turn_payload_base(session_id, descriptor).await?;
         if let Some(parent) = parent_message_id {
             payload.insert("parentMessageId".into(), parent.into());
         }
@@ -1667,27 +1742,106 @@ impl AgentSessionService {
     /// promotion, or the recovery of a half-admitted input. The refusal
     /// checks live here so no path can stage a turn the native dispatch path
     /// cannot honor.
-    fn turn_payload_base(
+    /// Captures immutable profile/content and current session defaults before admission.
+    pub async fn snapshot_turn_configuration(&self, session_id: &str) -> SessionResult<Value> {
+        let (_, descriptor) = self.require_session(session_id).await?;
+        Ok(Value::Object(
+            self.turn_payload_base(session_id, &descriptor).await?,
+        ))
+    }
+
+    async fn turn_payload_base(
         &self,
         session_id: &str,
         descriptor: &Value,
     ) -> SessionResult<Map<String, Value>> {
-        if session_content_selection(descriptor).is_some() {
-            return Err(SessionError::new(
-                "not_implemented",
-                CONTENT_UNSUPPORTED_MESSAGE,
-            ));
-        }
-        if descriptor.get("reasoningEffort").is_some() {
-            return Err(SessionError::new(
-                "not_implemented",
-                "Provider reasoning effort is not configured on the native executor.",
-            ));
-        }
         let mut payload = Map::new();
         payload.insert("chatId".into(), session_id.into());
+        payload.insert("sessionDescriptor".into(), descriptor.clone());
+        let profile: crate::AgentProfile = match descriptor.get("profileSnapshot") {
+            Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
+                SessionError::invalid_input(format!("Invalid profile snapshot: {e}"))
+            })?,
+            None => self
+                .deps
+                .profiles
+                .resolve(descriptor["profile"]["id"].as_str().unwrap_or_default())
+                .map_err(|e| SessionError::invalid_input(e.to_string()))?,
+        };
+        if descriptor["profile"]["digest"]
+            .as_str()
+            .is_some_and(|d| d != profile.digest())
+        {
+            return Err(SessionError::invalid_input(
+                "Profile snapshot digest mismatch.",
+            ));
+        }
+        payload.insert(
+            "profileSnapshot".into(),
+            serde_json::to_value(&profile).expect("profile"),
+        );
+        payload.insert("profileDigest".into(), profile.digest().into());
+        let mut selection: crate::RunContentSelection = serde_json::from_value(
+            session_content_selection(descriptor).unwrap_or_else(|| json!({})),
+        )
+        .map_err(|e| SessionError::invalid_input(format!("Invalid content selection: {e}")))?;
+        for skill in &profile.resources.skills {
+            if !selection
+                .skills
+                .iter()
+                .any(|selected| selected.id == skill.id)
+            {
+                selection.skills.push(skill.clone());
+            }
+        }
+        if selection.template.is_some() || !selection.skills.is_empty() {
+            let selection = serde_json::to_value(selection)
+                .map_err(|e| SessionError::invalid_input(e.to_string()))?;
+            let snapshot = crate::run_content::freeze_run_content(
+                self.store(),
+                selection.clone(),
+                session_id,
+                self.deps.content_authority.as_ref(),
+            )
+            .await
+            .map_err(|e| SessionError::invalid_input(e.to_string()))?;
+            payload.insert("contentSelection".into(), selection);
+            payload.insert("contentSnapshot".into(), snapshot);
+        }
+        if descriptor.get("model").is_none()
+            && let Some(model) = &profile.model
+        {
+            payload.insert("model".into(), model.clone().into());
+        }
+        if descriptor.get("reasoningEffort").is_none()
+            && let Some(effort) = profile.reasoning_effort
+        {
+            payload.insert(
+                "reasoningEffort".into(),
+                serde_json::to_value(effort).expect("effort"),
+            );
+        }
         for (key, value) in turn_config(descriptor) {
             payload.insert(key, value);
+        }
+        if let Some(factory) = &self.deps.provider_factory
+            && let (Some(provider), Some(model)) = (
+                payload.get("providerId").and_then(Value::as_str),
+                payload.get("model").and_then(Value::as_str),
+            )
+        {
+            let cancel = agentkit_core::CancellationToken::new();
+            let _cancel_on_drop = cancel.clone().drop_guard();
+            let snapshot = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                factory.snapshot(provider, model, cancel),
+            )
+            .await
+            .map_err(|_| SessionError::invalid_input("provider_snapshot_timeout"))?
+            .map_err(|error| SessionError::invalid_input(error.to_string()))?;
+            if let Some(snapshot) = snapshot {
+                payload.insert("providerSnapshot".into(), snapshot);
+            }
         }
         payload.insert(
             "sessionContext".into(),
@@ -1815,13 +1969,15 @@ impl AgentSessionService {
         // turn an admission can start is staged from exactly the bytes the
         // input stores (`queue_content` / `read_input_content` shape).
         let envelope = json!({"content": content});
-        let candidate = self.stage_candidate(
-            session_id,
-            descriptor,
-            &input_id,
-            kind.input_kind(),
-            &envelope,
-        )?;
+        let candidate = self
+            .stage_candidate(
+                session_id,
+                descriptor,
+                &input_id,
+                kind.input_kind(),
+                &envelope,
+            )
+            .await?;
         let content_hash = self.hash_of(kind, &envelope["content"]);
         let admission = self
             .store()
@@ -1933,13 +2089,15 @@ impl AgentSessionService {
         let task_id = input_id
             .map(turn_id_for)
             .unwrap_or_else(|| self.mint("task_"));
-        let payload = self.turn_payload(
-            session_id,
-            descriptor,
-            &user_message_id,
-            &assistant_message_id,
-            None,
-        )?;
+        let payload = self
+            .turn_payload(
+                session_id,
+                descriptor,
+                &user_message_id,
+                &assistant_message_id,
+                None,
+            )
+            .await?;
         let task = SubmitTask {
             task_id: task_id.clone(),
             kind: session_turn_kind(descriptor),
@@ -2051,7 +2209,10 @@ impl crate::SessionFlushPlanner for AgentSessionService {
         // an earlier submission was made with. A descriptor the native
         // dispatch path cannot honor stages nothing (fail-closed, exactly
         // like the candidate filter below) rather than half-stamping a turn.
-        let staging = self.turn_staging(&settling.scope_id, &descriptor).ok();
+        let staging = self
+            .turn_staging(&settling.scope_id, &descriptor)
+            .await
+            .ok();
         // At settling time the settling turn itself counts as terminal: a
         // steer aimed at it that was never placed is a promotion candidate
         // (after the follow-ups). The whole eligible queue goes to the store

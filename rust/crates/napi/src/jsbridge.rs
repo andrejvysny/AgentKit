@@ -24,6 +24,13 @@ use tokio::sync::oneshot;
 
 pub(crate) enum PendingKind {
     Provider,
+    ContentAuthority,
+    McpElicitation,
+    McpOAuthSecret,
+    McpOAuthRedirect,
+    McpOAuthHttp,
+    ProviderSecret,
+    ProviderConsent,
     Tool,
     Retry,
     Steering,
@@ -33,6 +40,7 @@ pub(crate) enum PendingKind {
 }
 
 struct Pending {
+    guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
     sender: oneshot::Sender<std::result::Result<Value, String>>,
     /// Set once the JS router has synchronously claimed this envelope for
     /// dispatch (see [`JsBridge::claim`]). A second claim of the same id —
@@ -156,10 +164,37 @@ impl JsBridge {
         request: &Value,
         cancellation: &agentkit_core::CancellationToken,
     ) -> std::result::Result<Value, String> {
+        self.request_guarded(kind, call_id, request, None, cancellation)
+            .await
+    }
+
+    pub(crate) async fn request_guarded(
+        self: Arc<Self>,
+        kind: PendingKind,
+        call_id: &str,
+        request: &Value,
+        guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+        cancellation: &agentkit_core::CancellationToken,
+    ) -> std::result::Result<Value, String> {
         let (sender, receiver) = oneshot::channel();
-        let abort_on_drop = matches!(&kind, PendingKind::Tool);
+        let abort_on_drop = matches!(
+            &kind,
+            PendingKind::Tool
+                | PendingKind::Provider
+                | PendingKind::McpElicitation
+                | PendingKind::McpOAuthSecret
+                | PendingKind::McpOAuthRedirect
+                | PendingKind::McpOAuthHttp
+        );
         let label = match kind {
             PendingKind::Provider => "provider",
+            PendingKind::ContentAuthority => "contentAuthority",
+            PendingKind::McpElicitation => "mcp.elicit",
+            PendingKind::McpOAuthSecret => "mcp.oauth.secret",
+            PendingKind::McpOAuthRedirect => "mcp.oauth.redirect",
+            PendingKind::McpOAuthHttp => "mcp.oauth.http",
+            PendingKind::ProviderSecret => "providerSecret",
+            PendingKind::ProviderConsent => "providerConsent",
             PendingKind::Tool => "tool",
             PendingKind::Retry => "retry",
             PendingKind::Steering => "steering",
@@ -186,6 +221,7 @@ impl JsBridge {
             inner.pending.insert(
                 call_id.to_owned(),
                 Pending {
+                    guard,
                     sender,
                     claimed: false,
                 },
@@ -317,6 +353,15 @@ impl JsBridge {
             let _ = pending.sender.send(Err(
                 "the binding closed before the callback settled".to_owned()
             ));
+            // The state is already Closing, so use the delivery handle directly.
+            // Active host callbacks still need their cancellation signal.
+            self.deliver
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .call(
+                    Ok(serde_json::json!({"kind":"discard","callId":id}).to_string()),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                );
         }
         true
     }
@@ -377,4 +422,48 @@ pub(crate) fn resolve(call_id: &str, payload: Option<String>, error: Option<Stri
     };
     bridge.settle(call_id, result);
     true
+}
+
+/// Custom provider adapters call this after awaited preparation before their send.
+pub(crate) async fn check_provider_authority(
+    call_id: &str,
+) -> Result<(), agentkit_core::CoreError> {
+    let inactive = || {
+        agentkit_core::CoreError::new(
+            "callback_not_active",
+            "Provider callback is no longer active.",
+        )
+    };
+    let bridge = calls()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(call_id)
+        .and_then(Weak::upgrade)
+        .ok_or_else(inactive)?;
+    let guard = {
+        let inner = bridge
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.state != BridgeState::Open {
+            return Err(inactive());
+        }
+        let pending = inner
+            .pending
+            .get(call_id)
+            .filter(|pending| pending.claimed)
+            .ok_or_else(inactive)?;
+        pending.guard.clone()
+    };
+    if let Some(guard) = guard {
+        guard.check().await?;
+    }
+    let inner = bridge
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if inner.state != BridgeState::Open || !inner.pending.contains_key(call_id) {
+        return Err(inactive());
+    }
+    Ok(())
 }

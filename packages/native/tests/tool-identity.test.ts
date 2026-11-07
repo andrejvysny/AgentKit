@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * W1a — a tool NAME is a unique registration identity, atomically across
  * BOTH registries (Rust descriptors + JS callbacks).
@@ -73,9 +74,11 @@ async function withService(): Promise<{
   const store = await NativeStore.open(
     join(mkdtempSync(join(tmpdir(), "agentkit-identity-")), "store.sqlite"),
   );
-  const service = await store.createService({
-    jsToolAuthority: { configuredMode: "full_auto" },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      jsToolAuthority: { configuredMode: "full_auto" },
+    }),
+  );
   return { store, service };
 }
 

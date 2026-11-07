@@ -1,3 +1,4 @@
+import { testServiceOptions } from "../helpers/test-profiles.js";
 /**
  * Run separately because a synchronous claim/resolve deadlock also freezes
  * JavaScript timers. The parent owns both the heartbeat and wall-clock bounds.
@@ -207,7 +208,16 @@ async function run(): Promise<void> {
   const store = NativeStore.memory();
   const service = await store.createService(
     receive,
-    JSON.stringify({ subagentMaxConcurrency: 20, closeTimeoutMs: 2_000 }),
+    JSON.stringify(
+      testServiceOptions(
+        JSON.parse(
+          JSON.stringify({
+            subagentMaxConcurrency: 20,
+            closeTimeoutMs: 2_000,
+          }) ?? "{}",
+        ),
+      ),
+    ),
   );
   service.bindEnv();
   try {

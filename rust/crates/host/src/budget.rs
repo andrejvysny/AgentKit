@@ -54,12 +54,16 @@ pub struct RoleTaskOverrides {
 
 impl RoleTaskOverrides {
     /// Overlay the role's bounds onto the executor defaults: a role can
-    /// only RAISE OR LOWER the provider-request and overall-time bounds;
+    /// only LOWER the provider-request and overall-time host ceilings;
     /// everything else keeps the host's policy.
     pub fn apply(&self, limits: agentkit_core::BudgetLimits) -> agentkit_core::BudgetLimits {
+        let minimum = |left: Option<u64>, right: Option<u64>| match (left, right) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        };
         agentkit_core::BudgetLimits {
-            provider_requests: self.max_provider_requests.or(limits.provider_requests),
-            overall_ms: self.overall_timeout_ms.or(limits.overall_ms),
+            provider_requests: minimum(self.max_provider_requests, limits.provider_requests),
+            overall_ms: minimum(self.overall_timeout_ms, limits.overall_ms),
             ..limits
         }
     }

@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
@@ -49,9 +50,11 @@ async function windowsCommandRefusal(): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "agentkit-windows-command-"));
   const path = join(directory, "store.sqlite");
   const store = await NativeStore.open(path);
-  const service = await store.createService({
-    jsToolAuthority: { configuredMode: "full_auto" },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      jsToolAuthority: { configuredMode: "full_auto" },
+    }),
+  );
   try {
     try {
       await service.registerCodingTools({
@@ -136,10 +139,12 @@ test("native close drains no-start receipt while external workspace lease stays 
   writeFileSync(lock, owner, { mode: 0o600 });
   const path = join(directory, "store.sqlite");
   const store = await NativeStore.open(path);
-  const service = await store.createService({
-    closeTimeoutMs: 100,
-    jsToolAuthority: { configuredMode: "full_auto" },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      closeTimeoutMs: 100,
+      jsToolAuthority: { configuredMode: "full_auto" },
+    }),
+  );
   try {
     await service.registerCodingTools({
       workspaceRoot: workspace,

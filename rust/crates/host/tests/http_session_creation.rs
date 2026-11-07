@@ -33,7 +33,7 @@ async fn backend() -> (SqliteStore, DesktopBackend) {
 async fn serve(backend: DesktopBackend) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1/chats", listener.local_addr().unwrap());
-    let backend = Arc::new(backend.with_session_profile("desktop-profile").unwrap());
+    let backend = Arc::new(backend.with_session_profile("chat").unwrap());
     let server = tokio::spawn(async move {
         axum::serve(listener, backend.into_router(Config::default()))
             .await
@@ -80,9 +80,125 @@ async fn validated_rest_session_creation_has_no_intermediate_rows() {
     let chat: Value = response.json().await.unwrap();
     assert_eq!(
         chat["metadata"]["agentkit.session"]["profile"]["id"],
-        "desktop-profile"
+        "chat"
     );
     assert_eq!(chat["metadata"]["custom"], "kept");
     assert_eq!(store.list_chats(true).await.unwrap().len(), 1);
+    server.abort();
+}
+
+struct NoopTurn;
+#[async_trait::async_trait]
+impl agentkit_host::TaskExecutor for NoopTurn {
+    async fn execute(&self, _: agentkit_host::ExecutionContext) -> agentkit_host::HostResult<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn generic_metadata_updates_cannot_remove_or_forge_the_session_profile() {
+    let store = SqliteStore::memory(16).unwrap();
+    let host = AgentHost::new(
+        store.clone(),
+        std::collections::HashMap::from([(
+            "chat.turn".into(),
+            Arc::new(NoopTurn) as Arc<dyn agentkit_host::TaskExecutor>,
+        )]),
+        Arc::new(SystemRuntime),
+        HostOptions::default(),
+    )
+    .unwrap();
+    let backend = DesktopBackend::open(
+        host,
+        Actor {
+            id: "desktop".into(),
+            metadata: BTreeMap::new(),
+        },
+        TOKEN,
+        "model",
+    )
+    .await
+    .unwrap();
+    let (url, server) = serve(backend).await;
+    let client = reqwest::Client::new();
+    let chat: Value = client
+        .post(&url)
+        .bearer_auth(TOKEN)
+        .json(&json!({"metadata":{"custom":"original"}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = chat["id"].as_str().unwrap();
+    let target = format!("{url}/{id}");
+    let original = chat["metadata"]["agentkit.session"].clone();
+    let response = client
+        .patch(&target)
+        .bearer_auth(TOKEN)
+        .json(&json!({"metadata":{"custom":"updated"}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        store.get_chat(id).await.unwrap().unwrap().metadata["agentkit.session"],
+        original
+    );
+    let mut forged = original.clone();
+    let profile = agentkit_host::ProfileRegistry::default()
+        .resolve("coding")
+        .unwrap();
+    forged["profile"] = json!({"id":"coding","digest":profile.digest()});
+    forged["profileSnapshot"] = serde_json::to_value(profile).unwrap();
+    assert!(agentkit_host::read_session_descriptor(&json!({"agentkit.session":forged})).is_some());
+    let response = client
+        .patch(&target)
+        .bearer_auth(TOKEN)
+        .json(&json!({"metadata":{"agentkit.session":forged}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let sent = client
+        .post(format!("{target}/messages"))
+        .bearer_auth(TOKEN)
+        .header("idempotency-key", "safe-profile")
+        .json(&json!({"content":"question","model":"model"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sent.status(), 201);
+    let sent: Value = sent.json().await.unwrap();
+    let task = store
+        .get_task(sent["runId"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.payload["profileSnapshot"]["id"], "chat");
+    assert_eq!(task.payload["profileSnapshot"]["tools"], json!([]));
+    server.abort();
+}
+
+#[tokio::test]
+async fn ordinary_http_chat_creation_refuses_host_metadata_injection() {
+    let (store, backend) = backend().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/chats", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Arc::new(backend).into_router(Config::default()))
+            .await
+            .unwrap();
+    });
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(TOKEN)
+        .json(&json!({"metadata":{"agentkit.session":{"version":1}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(store.list_chats(true).await.unwrap().is_empty());
     server.abort();
 }

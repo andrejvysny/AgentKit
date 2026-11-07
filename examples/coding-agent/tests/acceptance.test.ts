@@ -100,6 +100,9 @@ interface OpenOptions {
    * native worker polls on a second; the interrupt tests budget for it). */
   leaseMs?: number;
   reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  profiles?: import("@agentkit/native").NativeAgentProfile[];
+  contentAuthority?: import("../src/app.js").CodingAgentOptions["contentAuthority"];
+  contentSelection?: import("@agentkit/native").CreateSessionInputJson["contentSelection"];
   /** Provider call number (1-based) that parks until its signal aborts. */
   hangOnCall?: number;
   /** Execution backend for shell/test commands. The suite deliberately
@@ -118,6 +121,7 @@ interface Harness {
    * reconciled tool result, which lives in the model's history, not the store. */
   requests: AiChatMessage[][];
   efforts: (string | undefined)[];
+  selectedContent: AiChatRequest["runContent"][];
   repo: string;
   dbPath: string;
   events: AiRunEvent[];
@@ -130,6 +134,7 @@ class RecordingProvider implements AiProviderClient {
   readonly requests: AiChatMessage[][] = [];
   /** The reasoning effort each request carried (undefined when none). */
   readonly efforts: (string | undefined)[] = [];
+  readonly selectedContent: AiChatRequest["runContent"][] = [];
   constructor(
     readonly inner: AiProviderClient,
     private readonly hangOnCall?: number,
@@ -143,6 +148,8 @@ class RecordingProvider implements AiProviderClient {
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.requests.push([...input.messages]);
     this.efforts.push(input.reasoningEffort);
+    this.selectedContent.push(input.runContent);
+    await input.beforeRequest?.();
     if (this.requests.length === this.hangOnCall) {
       // Park like a stalled network read: only the run's abort ends it, and the
       // scripted inner client is NOT consumed, so the retry sees the same script.
@@ -173,6 +180,11 @@ async function open(options: OpenOptions): Promise<Harness> {
     dbPath,
     sessionId: options.sessionId ?? "s1",
     profileId: options.profileId ?? "coding",
+    ...(options.profiles === undefined ? {} : { profiles: options.profiles }),
+    ...(options.contentSelection === undefined
+      ? {}
+      : { contentSelection: options.contentSelection }),
+    contentAuthority: options.contentAuthority,
     model: "mock-model",
     testCommands: ["bun test"],
     sandbox: options.sandbox ?? "off",
@@ -189,6 +201,7 @@ async function open(options: OpenOptions): Promise<Harness> {
     mock,
     requests: recorder.requests,
     efforts: recorder.efforts,
+    selectedContent: recorder.selectedContent,
     repo,
     dbPath,
     events,
@@ -696,13 +709,7 @@ describe("coding agent — the session lifecycle", () => {
     await h.app.close();
   });
 
-  it("records a changed reasoning effort; the native executor refuses to run on it", async () => {
-    // Native truth (rust/crates/host/src/session/mod.rs turn_payload_base):
-    // a session descriptor with a reasoning effort stages no turn — the
-    // binding has not wired provider effort, and it says so with
-    // `not_implemented` instead of silently dropping the request the user
-    // asked for. The effort itself is durable and visible, exactly as the
-    // old stack recorded it; only the silent-obey path became a refusal.
+  it("sends a changed reasoning effort through the native provider callback", async () => {
     const h = await open({
       mode: "full_auto",
       script: [say("first"), say("second")],
@@ -712,11 +719,130 @@ describe("coding agent — the session lifecycle", () => {
     expect(h.efforts).toEqual([undefined]);
     await h.app.setModel("mock-model", "high");
     expect((await h.app.state()).descriptor.reasoningEffort).toBe("high");
-    await expect(h.app.send("two")).rejects.toMatchObject({
-      code: "not_implemented",
-    });
-    expect(h.efforts).toHaveLength(1); // no second request was ever made
+    await run(h, "two");
+    expect(h.efforts).toEqual([undefined, "high"]);
     await h.app.close();
+  });
+
+  it("uses a native-resolved custom profile and freezes its instructions and effort", async () => {
+    const h = await open({
+      profileId: "custom-review",
+      profiles: [
+        {
+          id: "custom-review",
+          extends: "coding/reviewer",
+          instructions: "Native custom review instruction",
+          reasoningEffort: "low",
+        },
+      ],
+      script: [say("reviewed")],
+    });
+    const state = await h.app.state();
+    expect(state.descriptor.profile.digest).toBeString();
+    expect(state.descriptor.profileSnapshot?.instructions).toBe(
+      "Native custom review instruction",
+    );
+    expect(state.descriptor.profileSnapshot?.tools).not.toContain("edit_file");
+    await run(h, "Review this");
+    expect(h.efforts).toEqual(["low"]);
+    expect(JSON.stringify(h.requests)).toContain(
+      "Native custom review instruction",
+    );
+    await h.app.close();
+  });
+
+  it("freezes selected native content and forwards it through the custom provider lane", async () => {
+    const h = await open({
+      script: [say("selected")],
+      reasoningEffort: "high",
+    });
+    const { NativeManagedContent } = await import("@agentkit/native");
+    const managed = new NativeManagedContent({ store: h.app.store });
+    await managed.promptTemplates.publish({
+      id: "selected-template",
+      revision: "1",
+      description: "selected",
+      argumentsSchema: { type: "object", properties: {} },
+      messages: [
+        { role: "system", content: "Selected native template instruction" },
+      ],
+    });
+    const skill = await managed.skills.publish({
+      source: "test",
+      path: "selected",
+      content:
+        "---\nname: selected\ndescription: selected\nmetadata:\n  requires-connectors: github\n---\nNative skill instruction\n",
+    });
+    await h.app.close();
+    const contentSelection = {
+      skills: [{ id: skill.id, revision: skill.revision }],
+      template: { id: "selected-template", revision: "1", arguments: {} },
+    };
+    let authorizations = 0;
+    const selected = await open({
+      contentAuthority: {
+        authorize: () => {
+          authorizations++;
+          return ["github"];
+        },
+      },
+      repo: h.repo,
+      dbPath: h.dbPath,
+      sessionId: "selected",
+      contentSelection,
+      reasoningEffort: "high",
+      script: [say("selected")],
+    });
+    expect(
+      (await selected.app.state()).descriptor.contentSelection,
+    ).toMatchObject(contentSelection);
+    await run(selected, "Use selected content");
+    expect(JSON.stringify(selected.selectedContent)).toContain(
+      "Selected native template instruction",
+    );
+    expect(JSON.stringify(selected.requests)).not.toContain(
+      "Selected native template instruction",
+    );
+    expect(JSON.stringify(selected.selectedContent)).toContain(
+      "Native skill instruction",
+    );
+    expect(authorizations).toBeGreaterThan(0);
+    expect(selected.efforts).toEqual(["high"]);
+    await selected.app.close();
+    const unchanged = await CodingAgentApp.open({
+      repo: h.repo,
+      dbPath: h.dbPath,
+      sessionId: "selected",
+      profileId: "coding",
+      model: "mock-model",
+      sandbox: "off",
+      providerFactory: () => selected.mock,
+      contentSelection,
+    });
+    try {
+      await expect(unchanged.ensureSession()).resolves.toBeDefined();
+    } finally {
+      await unchanged.close();
+    }
+    const changed = await CodingAgentApp.open({
+      repo: h.repo,
+      dbPath: h.dbPath,
+      sessionId: "selected",
+      profileId: "coding",
+      model: "mock-model",
+      sandbox: "off",
+      providerFactory: () => selected.mock,
+      contentSelection: {
+        template: { ...contentSelection.template, revision: "2" },
+      },
+    });
+    try {
+      await expect(changed.ensureSession()).rejects.toThrow(
+        "Use a new session ID",
+      );
+    } finally {
+      await changed.close();
+    }
   });
 
   it("creates a session with --effort and lists it", async () => {

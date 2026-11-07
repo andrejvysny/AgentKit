@@ -1301,6 +1301,7 @@ impl SqliteStore {
             let mut messages = Vec::new();
             let mut blocks = Vec::new();
             let mut unavailable = Vec::new();
+            let mut used_connectors = std::collections::BTreeSet::new();
             if let Some(template) = selection.get("template").filter(|v| !v.is_null()) {
                 let rendered = render_prompt_template(&fetch_template(db, template)?, template)?;
                 messages = rendered["messages"].as_array().expect("shape").clone();
@@ -1359,6 +1360,7 @@ impl SqliteStore {
                             "Skill changed during activation.".into(),
                         ));
                     }
+                    used_connectors.extend(requirements.into_iter().map(str::to_owned));
                     blocks.push(json!({
                         "id": format!("skill:{}@{}", record["id"].as_str().expect("stored"), revision),
                         "title": format!("Skill: {}", record["name"].as_str().expect("stored")),
@@ -1374,7 +1376,7 @@ impl SqliteStore {
                     unavailable.push(json!({ "id": id, "reason": error.to_string() }));
                 }
             }
-            Ok(json!({ "blocks": blocks, "messages": messages, "unavailable": unavailable }))
+            Ok(json!({ "blocks": blocks, "messages": messages, "unavailable": unavailable, "authorizedConnectors": used_connectors }))
         })
         .await
     }

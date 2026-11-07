@@ -423,7 +423,7 @@ fn content_selection_tracks_skills() {
     let descriptor = accepted(with(json!({"skills": [{"id": "a", "revision": "1"}]})));
     assert_eq!(
         session_content_selection(&descriptor),
-        Some(json!({"skills": [{"id": "a", "revision": "1"}]}))
+        Some(json!({"template":null,"skills": [{"id": "a", "revision": "1"}]}))
     );
     assert_eq!(session_content_selection(&accepted(base())), None);
     assert_eq!(

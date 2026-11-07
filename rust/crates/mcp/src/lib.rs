@@ -2,24 +2,36 @@
 mod backend;
 mod bridge;
 mod client;
+mod client_request;
+mod elicitation;
 mod guards;
 mod handler;
 mod http_client;
 mod json_boundary;
 mod json_fields;
 mod manager;
+mod model_content;
+mod oauth;
+mod oauth_http;
+mod oauth_redaction;
+mod oauth_store;
 mod server;
 mod stdio_client;
 
 pub use backend::{Backend, CatalogTool, Features, SessionScope};
 pub use bridge::{BridgeError, McpToolSet, aliases_are_one_step, resolve_original};
 pub use client::{ClientOptions, McpClient, McpClientError};
+pub use elicitation::ElicitationHandler;
+pub use http_client::McpHttpExecutor;
 pub use manager::{
     ConnectReport, ContributionReport, DefaultConnector, ManagerClock, McpClientManager,
     McpConnection, McpConnector, McpSecretResolver, Resilience, ServerConfig, SystemClock,
     ToolBinding, TransportConfig,
 };
+pub use model_content::{ModelContentCapabilities, ModelContentProjection, project_model_content};
+pub use oauth::{ManagedOAuthOptions, ManagedOAuthProvider, OAuthBrowser, OAuthSecrets};
 pub use rmcp::model;
+pub use rmcp::transport::auth as oauth_protocol;
 pub use server::{Authenticator, BearerAuth, McpServer, ServerOptions};
 
 /// Frozen from @modelcontextprotocol/sdk 1.30.0 dist/esm/types.js.
