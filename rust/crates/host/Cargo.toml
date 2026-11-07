@@ -16,6 +16,14 @@ exclude = ["tests/fixtures/**/*.sqlite"]
 default = []
 http = ["dep:agentkit-transport-http", "dep:axum"]
 
+# The HTTP teammates conformance lane compiles only with `http`; without the
+# required-features declaration `cargo test --test http_teammates` reports a
+# vacuous green "0 passed". Run it as:
+#   cargo test --locked -p agentkit-host --features http --test http_teammates
+[[test]]
+name = "http_teammates"
+required-features = ["http"]
+
 [dependencies]
 agentkit-store = { path = "../store", version = "0.1.0" }
 agentkit-core = { path = "../core", version = "0.1.0" }
