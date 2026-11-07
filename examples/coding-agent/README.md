@@ -95,7 +95,11 @@ cannot write, and a plan is still needed to leave plan mode.
 
 ## Profiles
 
-`--list-profiles` prints the registry. The built-ins:
+`--list-profiles` queries `listNativeProfiles()` from Rust without opening a
+store or contacting a provider. `CodingAgentApp.open({ profiles })` passes the
+same native overrides to queries and session creation. Rust resolves inheritance,
+validates tool/role ceilings, and freezes the profile digest and instructions in
+the session. TypeScript holds no competing profile registry. The built-ins:
 
 | profile | tools | mode | role | use |
 | --- | --- | --- | --- | --- |
@@ -127,6 +131,23 @@ bun run src/main.ts --repo ~/code/app --base-url http://localhost:1234/v1 --mode
 # Ollama
 bun run src/main.ts --repo ~/code/app --base-url http://localhost:11434/v1 --model qwen2.5-coder:7b --task "..."
 ```
+
+The CLI deliberately uses the fixed `registerProviderConnection` + `providerConfig`
+extension: Rust owns HTTP/SSE, but the process supplies one endpoint and credential.
+It does not compose managed dynamic-provider CRUD or a durable host vault, and it
+starts no hidden HTTP listener. `providerFactory` remains an explicit custom-host
+callback extension. Its adapter forwards cancellation, reasoning effort, selected
+native content, usage, and the dispatch authority check; custom clients must honor
+`beforeRequest` after their own waits before sending.
+
+`reasoningEffort` and `contentSelection` are passed atomically to native
+`createSession`, with explicit input taking precedence over native profile defaults.
+Embedding hosts can publish templates/skills through `NativeManagedContent`, then
+open an app with a `contentSelection` of exact IDs and revisions.
+`contentAuthority` supplies current host-selected connector grants and optional
+account-scoped identity; missing authority grants none. Rust assembles
+and freezes that selection; changing selection requires a new session. The CLI
+keeps content selection as an embedding option rather than inventing a new UI.
 
 ## State
 
@@ -165,7 +186,7 @@ repository and the real tools — no network, no model:
 
 ## What is deliberately not here
 
-- **No agent loop.** `@agentkit/core`'s run loop owns iteration, tool steps and
+- **No agent loop.** The Rust runtime owns iteration, tool steps and
   cancellation. A second loop is the thing this example must not contain.
 - **No scheduler.** Tasks, leases and recovery belong to `TaskStore` and the
   task runner; `CodingAgentApp.recover()` only parks crashed turns as

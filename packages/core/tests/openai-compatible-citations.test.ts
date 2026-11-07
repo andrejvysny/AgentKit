@@ -27,8 +27,7 @@ async function collect(chunks: unknown[]): Promise<AiRunEvent[]> {
     id: "test",
     kind: "openai-compatible",
     baseUrl: "http://localhost:9/v1",
-    fetchImpl: (async () =>
-      sseResponse(chunks)) as unknown as typeof fetch,
+    fetchImpl: (async () => sseResponse(chunks)) as unknown as typeof fetch,
   });
   const out: AiRunEvent[] = [];
   for await (const e of client.streamChat({
@@ -104,8 +103,7 @@ describe("openai-compatible citations", () => {
     // Text still flows as an ordinary content delta.
     expect(
       events.some(
-        (e) =>
-          e.type === "run.message.delta" && e.data.delta === "Paris.",
+        (e) => e.type === "run.message.delta" && e.data.delta === "Paris.",
       ),
     ).toBe(true);
     const completed = events.find((e) => e.type === "run.message.completed");

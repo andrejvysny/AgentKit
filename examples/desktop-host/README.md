@@ -34,7 +34,7 @@ Env vars, all optional:
 | `AGENTKIT_DB` | `./agentkit.sqlite` | native store file path (the native store's own database identity — the TypeScript adapter's sqlite file is a different store and is not migrated) |
 | `AGENTKIT_HOST` | `127.0.0.1` | bind address. **Loopback on purpose** — see the warning below |
 | `AGENTKIT_PORT` | `8787` | HTTP port |
-| `AGENTKIT_PROVIDER_KIND` | `openai-compatible` | a kind from `@agentkit/core`'s `AI_PROVIDER_PRESETS` (`openai`, `openrouter`, `lmstudio`, `omlx`, `ollama`, `openai-compatible`) — only read on first boot, when no provider is seeded yet |
+| `AGENTKIT_PROVIDER_KIND` | `openai-compatible` | a kind from `@agentkit/core`'s `AI_PROVIDER_PRESETS` (`openai`, `openrouter`, `lmstudio`, `omlx`, `ollama`, `openai-compatible`) — read on each legacy boot; first-boot bootstrap only in managed mode |
 | `AGENTKIT_BASE_URL` | the kind's preset `defaultBaseUrl` | provider base URL |
 | `AGENTKIT_MODEL` | the kind's preset `defaultModel` | model id |
 | `AGENTKIT_API_KEY` | unset | provider API key — crosses into the Rust provider lane exactly once via `NativeSessionService.registerProviderConnection` (the service options only ever carry the connection id, never the key) |
@@ -57,9 +57,53 @@ To point it at a local [Ollama](https://ollama.com):
 AGENTKIT_PROVIDER_KIND=ollama AGENTKIT_MODEL=llama3.2 bun run start
 ```
 
-The provider is seeded **once** — on the first boot against a given
-`AGENTKIT_DB`. Deleting the store file resets everything (the seeded provider,
-chats, runs) and the next boot seeds fresh from whatever env is set then.
+The legacy provider display reflects this process's environment on every boot.
+Managed mode seeds native provider metadata only when its repository is empty;
+later boots preserve provider CRUD changes and host-vault references.
+
+## Managed embedding and extension lanes
+
+`buildApp` defaults to managed mode and refuses to boot without explicit host
+ports. The runnable `main.ts` visibly chooses `providerMode: "legacy"` so the
+zero-setup demonstration remains usable without pretending to supply a durable
+vault or consent UI. That fixed extension uses `registerProviderConnection` +
+`providerConfig`: credentials live only for the process, and its process-local
+provider display is not dynamic-provider CRUD. A `providerFactory` explicitly
+selects the custom callback extension; combining it with managed mode is refused.
+
+A real embedding supplies its own vault and consent decision:
+
+```ts
+import { buildApp } from "./src/wiring.js";
+import type { ProviderSecretStore, ProviderConsentHandler } from "@agentkit/native";
+
+declare const hostVault: ProviderSecretStore;
+declare const approveExactRequest: ProviderConsentHandler;
+const app = await buildApp({
+  providerMode: "managed",
+  providerPorts: { secrets: hostVault, consent: approveExactRequest },
+});
+```
+
+Managed mode installs `setProviderSecretStore` and `setProviderConsent`, then
+starts native HTTP with `providerSecrets: "callback"` and
+`providerOperations: "native"`. Provider CRUD, discovery, probe, and inference use
+one native metadata repository and the same host ports. First boot seeds native
+metadata through that HTTP contract; later boots retain it and the vault's opaque
+references. Keys never enter the settings display or SQLite. The host must provide
+a durable vault, honor abort signals, and approve exact destination, payload,
+capability, model, account, and generation. This recipe does not qualify an OS
+keychain adapter or a browser consent implementation.
+
+Every REST chat uses an explicit native `desktop-host` profile override derived
+from `automation`. Its allowed tools are exactly the descriptors registered by
+this host, including optional MCP tools. Rust resolves and freezes the profile;
+there is no TypeScript profile registry. Optional `contentAuthority` preserves
+host-selected connector grants and account identity; missing authority grants none.
+Templates, skills, reasoning effort, and
+selected-content references remain native REST/session inputs. The callback
+extension forwards those fields and cancellation; custom clients must honor the
+`beforeRequest` authority check immediately before their own network send.
 
 ## curl walkthrough
 
@@ -161,9 +205,10 @@ Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
 | --- | --- | --- |
 | Storage, sessions, durable queue, worker, governance | `@agentkit/native` (`NativeStore`, `NativeSessionService`) | `src/wiring.ts` |
 | REST v1 + SSE | `@agentkit/native` (`service.startHttpServer` — the Rust transport) | `src/wiring.ts` (started) / `src/main.ts` (façade mounted on the public port) |
-| Provider lane (real boot) | `@agentkit/native` (`registerProviderConnection` + `providerConfig` — HTTP/SSE in Rust) | `src/wiring.ts` |
+| Provider lane (explicit legacy entry) | `@agentkit/native` (`registerProviderConnection` + `providerConfig` — HTTP/SSE in Rust) | `src/wiring.ts` |
 | Provider lane (tests) | `@agentkit/core` client interface + `@agentkit/testing` (`MockProviderClient`) over the JS `setProvider` callback | `src/wiring.ts` |
-| Provider presets | `@agentkit/core` (`getPresetByKind`) | `src/wiring.ts` |
+| Provider managed mode | native metadata and operations + host vault/consent callbacks | `src/wiring.ts`, `src/providers.ts` |
+| Provider preset bootstrap | `@agentkit/core` (`getPresetByKind`), configuration only | `src/providers.ts` |
 | Sample tools | this example's own descriptors + `registerTool` runs | `src/tools.ts` |
 | MCP bridge (optional) | `@agentkit/native` (`store.mcpConnect` + `registerMcpTools`) | `src/wiring.ts` |
 | MCP server (optional) | `@agentkit/native` (`service.startMcpServer`) | `src/wiring.ts` (started) / `src/main.ts` (façade mounted at `/mcp`) |
@@ -193,6 +238,12 @@ agent session in one insertion), submit a message with an `Idempotency-Key`, fol
 stream to `run.completed`, read the answer back, and (separately) round-trip
 the `example_echo` tool. It cleans up its temp directory and server on every
 run.
+
+`tests/managed-provider.test.ts` uses a real native provider and loopback HTTP to
+check managed metadata, selected native profile/tool authority, consent refusal,
+model discovery, and reopening the store with the same external host vault. Its
+in-memory test vault survives service restarts only; it does not qualify encrypted
+disk persistence or an OS keychain.
 
 ## Node fake-provider counterpart
 

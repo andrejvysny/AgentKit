@@ -63,17 +63,11 @@ export const HARD_BANNED = new Set([
  * configuration metadata and acceptance harnesses for legs the native
  * binding has not claimed yet (each reason mirrors docs/rust/parity.md). */
 const ALLOWLIST = {
-  "examples/coding-agent/src/app.ts": {
-    "@agentkit/host": {
-      symbols: ["defaultProfileRegistry", "readSessionDescriptor"],
-      reason:
-        "profile/descriptor configuration helpers — documented carve-out (docs/rust/parity.md), not an execution engine",
-    },
-  },
   "examples/coding-agent/src/main.ts": {
     "@agentkit/host": {
-      symbols: ["defaultProfileRegistry", "REASONING_EFFORTS"],
-      reason: "same carve-out as app.ts; REASONING_EFFORTS is a static enum",
+      symbols: ["REASONING_EFFORTS"],
+      reason:
+        "static effort enum for CLI argument parsing; profiles resolve natively",
     },
   },
   "examples/coding-agent/src/commands.ts": {
@@ -82,11 +76,11 @@ const ALLOWLIST = {
       reason: "static effort enum for CLI argument parsing, no runtime backend",
     },
   },
-  "examples/desktop-host/src/wiring.ts": {
+  "examples/desktop-host/src/providers.ts": {
     "@agentkit/core": {
       symbols: ["getPresetByKind"],
       reason:
-        "provider preset metadata (static config table); the provider transport itself runs in Rust",
+        "provider bootstrap metadata only (static config table); native metadata is authoritative after creation and Rust owns provider operations and dispatch",
     },
   },
   "examples/desktop-host/src/managed-connector-acceptance.ts": {

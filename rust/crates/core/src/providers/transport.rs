@@ -96,6 +96,22 @@ pub(crate) async fn dispatch_guarded(
     guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
     cancellation: CancellationToken,
 ) -> Result<reqwest::Response, CoreError> {
+    match dispatch_status(transport, identity, operation, body, guard, cancellation).await? {
+        Ok(response) => Ok(response),
+        Err((status, payload)) => Err(failure(status, &payload)),
+    }
+}
+
+/// Like [`dispatch_guarded`], but hands a non-success status back with its
+/// (bounded, best-effort) JSON payload so the caller may retry.
+pub(crate) async fn dispatch_status(
+    transport: &dyn TrustedTransport,
+    identity: &ConnectionIdentity,
+    operation: &str,
+    body: Option<Value>,
+    guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
+    cancellation: CancellationToken,
+) -> Result<Result<reqwest::Response, (u16, Value)>, CoreError> {
     transport.check_authority().await?;
     if transport.identity() != *identity {
         return Err(CoreError::responses("connection_changed"));
@@ -105,12 +121,16 @@ pub(crate) async fn dispatch_guarded(
         value=transport.request_guarded(identity,operation,body,guard,cancellation.clone())=>value?,
     };
     if response.status().is_success() {
-        return Ok(response);
+        return Ok(Ok(response));
     }
     let status = response.status().as_u16();
     let payload = read_json(response, cancellation)
         .await
         .unwrap_or(Value::Null);
+    Ok(Err((status, payload)))
+}
+
+pub(crate) fn failure(status: u16, payload: &Value) -> CoreError {
     let code = classify(payload["error"]["code"].as_str().unwrap_or(""));
     let code = if code != "provider_error" {
         code
@@ -123,7 +143,7 @@ pub(crate) async fn dispatch_guarded(
             _ => "provider_error",
         }
     };
-    Err(CoreError::responses(code))
+    CoreError::responses(code)
 }
 pub(crate) fn classify(code: &str) -> &'static str {
     match code {

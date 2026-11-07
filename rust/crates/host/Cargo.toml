@@ -55,6 +55,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [dev-dependencies]
+agentkit-mcp = { path = "../mcp", version = "0.1.0" }
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"
 # The imported-receipt acceptance tests drive the TypeScript importer

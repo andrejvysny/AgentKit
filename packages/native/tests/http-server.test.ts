@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * The Rust REST v1 + SSE engine, served from the NAPI binding over the
  * service's own host and store. This package contains NO TypeScript HTTP
@@ -47,7 +48,7 @@ async function withService(
   provider = true,
 ): Promise<{ store: NativeStore; service: NativeSessionService }> {
   const store = await NativeStore.inMemory();
-  const service = await store.createService();
+  const service = await store.createService(testServiceOptions());
   if (provider)
     service.setProvider(() => ({
       content: "the answer",

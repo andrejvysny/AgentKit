@@ -115,17 +115,20 @@ async fn deliver(
     if !account_backed || request.max_output_tokens.is_some() {
         payload["maxOutputTokens"] = request.max_output_tokens.into();
     }
-    // The descriptor's reasoning effort travels on BOTH lanes: the reference
-    // request builder carries it OUTSIDE the account-parameter gate
-    // (`packages/core/src/providers/responses-request.ts` sets
-    // `reasoning.effort` for a chatgpt-account client too), so it is not an
-    // undeclared sampling parameter an account adapter would reject. An
-    // absent effort means an OMITTED key, never a present-null parameter.
     if let Some(effort) = request.reasoning_effort {
-        payload["reasoningEffort"] = json!(effort);
+        payload["reasoningEffort"] = serde_json::to_value(effort).expect("enum serialization");
+    }
+    if !request.selected_content.is_empty() {
+        payload["runContent"] = json!({"messages":request.selected_content});
     }
     let result = match Arc::clone(bridge)
-        .request(PendingKind::Provider, &call_id, &payload, cancellation)
+        .request_guarded(
+            PendingKind::Provider,
+            &call_id,
+            &payload,
+            request.request_guard.clone(),
+            cancellation,
+        )
         .await
     {
         Ok(value) => value,
@@ -185,4 +188,38 @@ async fn deliver(
         finish_reason,
     }));
     events
+}
+
+/// Connector grants come only from the host callback, never the user request.
+pub(crate) struct JsContentAuthority(pub Arc<JsBridge>);
+#[async_trait::async_trait]
+impl agentkit_host::ContentAuthority for JsContentAuthority {
+    async fn authorized_connectors(
+        &self,
+        chat_id: &str,
+        cancel: CancellationToken,
+    ) -> agentkit_host::HostResult<Vec<String>> {
+        let value = self
+            .0
+            .clone()
+            .request(
+                PendingKind::ContentAuthority,
+                &uuid::Uuid::new_v4().to_string(),
+                &json!({"chatId":chat_id}),
+                &cancel,
+            )
+            .await
+            .map_err(agentkit_host::HostError::Execution)?;
+        serde_json::from_value(value).map_err(|e| {
+            agentkit_host::HostError::Execution(format!("invalid_content_authority: {e}"))
+        })
+    }
+    async fn authority_identity(
+        &self,
+        chat_id: &str,
+        required_connectors: &[String],
+        cancel: CancellationToken,
+    ) -> agentkit_host::HostResult<Value> {
+        self.0.clone().request(PendingKind::ContentAuthority, &uuid::Uuid::new_v4().to_string(), &json!({"operation":"identity","chatId":chat_id,"requiredConnectors":required_connectors}), &cancel).await.map_err(agentkit_host::HostError::Execution)
+    }
 }

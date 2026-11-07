@@ -254,6 +254,20 @@ pub enum ReasoningEffort {
     High,
 }
 
+/// Public reasoning summaries requested from the Responses API
+/// (`reasoning.summary`). Without one, OpenAI streams no
+/// `response.reasoning_summary_text.delta` and a long reasoning phase is
+/// silent. `Off` omits the parameter. Other protocols ignore it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningSummary {
+    #[default]
+    Auto,
+    Concise,
+    Detailed,
+    Off,
+}
+
 #[derive(Clone, Default)]
 pub struct ChatRequest {
     pub run_id: String,
@@ -262,6 +276,9 @@ pub struct ChatRequest {
     pub tools: Vec<ToolDefinition>,
     pub temperature: Option<f64>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Responses lane only. A provider that rejects the summary parameter is
+    /// retried once without it and remembered per provider and model.
+    pub reasoning_summary: ReasoningSummary,
     /// Selected managed instructions travel outside the durable transcript.
     pub selected_content: Vec<ChatMessage>,
     /// Admission digest includes selected revisions, resolved text, and host authority.
@@ -300,6 +317,18 @@ pub enum ProviderEvent {
     Usage(Value),
     Continuation(Value),
     Activity,
+    /// A tool call is being streamed and is not complete yet: `id` is the
+    /// call id `run.tool.requested` will carry, `args_bytes` the UTF-8 bytes
+    /// of arguments received so far. Providers (built-in or external) may
+    /// emit it on every argument fragment; the run loop persists it as
+    /// `run.tool.preparing`, first sight immediately and then throttled per
+    /// call. Informational only: it never authorizes or starts the tool and
+    /// counts as provider activity for the idle watchdog.
+    ToolCallProgress {
+        id: String,
+        name: String,
+        args_bytes: u64,
+    },
     RequestStarted,
     RetryBackoff(Arc<tokio::sync::Notify>),
     Event {

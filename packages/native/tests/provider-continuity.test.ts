@@ -97,6 +97,9 @@ interface TurnResult {
   turnId: string;
   status: string;
   error: string | null;
+  errorCode?: string;
+  taskCountBefore?: number;
+  taskCountAfter?: number;
 }
 
 interface TurnOptions {
@@ -107,6 +110,7 @@ interface TurnOptions {
   chatId: string;
   connectionKey?: string;
   providerId?: string;
+  expectAdmissionError?: "unknown_provider";
   revokeAndReRegister?: boolean;
   restoreContinuity?: {
     expectedGeneration: number;
@@ -313,7 +317,7 @@ nativeTest(
       });
       expect(first.status).toBe("completed");
       // The durable identity does NOT weaken the provider binding: the
-      // session's provider stamp is checked before anything is sent.
+      // session's provider stamp is checked before a new task or request exists.
       const foreign = await runTurn({
         storePath,
         baseUrl: provider.baseUrl,
@@ -322,9 +326,14 @@ nativeTest(
         chatId,
         connectionKey,
         providerId: "not-continuity",
+        expectAdmissionError: "unknown_provider",
       });
-      expect(foreign.status).toBe("failed");
-      expect(foreign.error ?? "").toInclude("provider_binding_mismatch");
+      expect(foreign.status).toBe("rejected");
+      expect(foreign.turnId).toBe("");
+      expect(foreign.error).toBe("unknown_provider");
+      expect(foreign.errorCode).toBe("invalid_input");
+      expect(foreign.taskCountBefore).toBe(1);
+      expect(foreign.taskCountAfter).toBe(foreign.taskCountBefore);
       expect(provider.requests()).toBe(1);
     } finally {
       provider.kill();

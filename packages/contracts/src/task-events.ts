@@ -56,13 +56,9 @@ export const TaskEventUsageSchema = Type.Object(
     callId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     promptTokens: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
-    completionTokens: Type.Optional(
-      Type.Union([Type.Number(), Type.Null()]),
-    ),
+    completionTokens: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     totalTokens: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
-    cachedPromptTokens: Type.Optional(
-      Type.Union([Type.Number(), Type.Null()]),
-    ),
+    cachedPromptTokens: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     reasoningTokens: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
   },
   { additionalProperties: true },

@@ -106,12 +106,10 @@ if (mode === "run") {
     closeTimeoutMs: 5000,
     profiles: [
       {
-        id: "p1",
-        kind: "automation",
-        instructions: "",
+        id: "package-consumer",
+        extends: "coding",
         tools: ["run_cmd", "run_slow"],
-        permissionMode: "auto_edit",
-        limits: { maxToolIterations: 30 },
+        limits: { maxToolIterations: 4, maxToolCallsPerIteration: 8 },
       },
     ],
   });
@@ -187,9 +185,19 @@ if (mode === "run") {
     },
   );
   try {
+    let unknownRefused = false;
+    try {
+      await service.createSession({
+        profileId: "unregistered-consumer-profile",
+      });
+    } catch (error) {
+      unknownRefused =
+        error instanceof Error && error.message.includes("unknown profile");
+    }
+    assert(unknownRefused, "an unregistered profile bypassed native admission");
     await service.createSession({
       sessionId: "pack-sess",
-      profileId: "p1",
+      profileId: "package-consumer",
       model: "test-model",
       executionMode: "auto_edit",
     });

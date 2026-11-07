@@ -261,7 +261,10 @@ export const REST_ROUTES = {
   cancelAgentTask: { method: "POST", path: "/v1/agent-tasks/:taskId/cancel" },
   /** A BOUNDED page of the task's durable event log, ordered by `seq`,
    * paged by `?after=<seq>&limit=`. Pure read; replays create nothing. */
-  listAgentTaskEvents: { method: "GET", path: "/v1/agent-tasks/:taskId/events" },
+  listAgentTaskEvents: {
+    method: "GET",
+    path: "/v1/agent-tasks/:taskId/events",
+  },
   /** SSE over the same durable log. Resumes on `Last-Event-ID` (an
    * `eventId`); an unknown cursor replays from the start — never
    * silently: `agentkit.stream.resync` says so. */

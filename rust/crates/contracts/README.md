@@ -1,7 +1,7 @@
 # AgentKit contracts for Rust
 
-This crate exposes the wire DTOs from `packages/contracts/src`, all 18 run-event
-variants, and the 48 REST v1 operations. The TypeBox schemas remain authoritative.
+This crate exposes the wire DTOs from `packages/contracts/src`, all 20 run-event
+variants, and the 63 REST v1 operations. The TypeBox schemas remain authoritative.
 The embedded schema bundle is compared with the independently exported TypeScript
 fixtures by the parity tests.
 
@@ -32,10 +32,16 @@ Against `f64c21e355e6f86a1d60024b45c2906cdade9758`, the schema delta is exactly
 one optional `reasoningEffort` property on each of `SubmitMessageRequestSchema`
 and `RegenerateMessageRequestSchema`. Each accepts only the string literals
 `minimal`, `low`, `medium`, and `high`; omission remains valid, while null and
-other values are rejected. No required fields, existing properties, routes, event
-variants, or golden traces change. The inventories remain 101 schemas, 48 routes,
-and 18 event variants. The optionality and closed value set have a dedicated
-Rust parity regression for both turn routes.
+other values are rejected. Two event variants are added:
+`run.tool.preparing` (`AiRunToolPreparingEventSchema`), informational progress
+while a provider streams a tool call's arguments, and `run.progress`
+(`AiRunProgressEventSchema`), the phase a streaming provider is busy with. The
+teammate additions (persistent agents, teammate admission and mailbox, run
+profiles, and the teammate HTTP routes and schemas) extend the schema and route
+inventories. No required fields, existing properties, or golden traces change.
+The inventories are 130 schemas, 63 routes, and 20 event variants. The
+optionality and closed value set have a dedicated Rust parity regression for
+both turn routes.
 
 ## Deserialization and validation
 

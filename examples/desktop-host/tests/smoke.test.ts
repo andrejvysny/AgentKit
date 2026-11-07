@@ -255,7 +255,7 @@ describe("examples/desktop-host — HTTP smoke", () => {
     expect(page.items[0]?.role).toBe("user");
   });
 
-  it("boots the REAL composition (Rust provider lane) and streams verbatim deltas", async () => {
+  it("boots the explicit legacy composition (Rust provider lane) and streams verbatim deltas", async () => {
     // The `bun run start` path: no `providerFactory`, so buildApp takes the
     // Rust-native provider lane (`registerProviderConnection` +
     // `createService({providerConfig})`) and provider HTTP runs in Rust.
@@ -302,6 +302,7 @@ describe("examples/desktop-host — HTTP smoke", () => {
     cleanups.push(cleanup);
     const app = await buildApp({
       dbPath: join(dir, "agentkit.sqlite"),
+      providerMode: "legacy",
       env: {
         AGENTKIT_BASE_URL: `http://127.0.0.1:${providerServer.port}/v1`,
         AGENTKIT_MODEL: "loopback-model",

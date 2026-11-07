@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * Binding hardening: credential isolation across stores, mid-run credential
  * rotation, the MCP write gate's stricter-of classification, loopback-only
@@ -111,7 +112,7 @@ nativeTest(
   "HTTP and MCP servers refuse non-loopback binds unless allowNonLoopback",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       for (const host of ["0.0.0.0", "::", "example.invalid"]) {
         expect(
@@ -178,7 +179,7 @@ nativeTest(
   "MCP server hides and refuses exec/write tools whatever mix of effect and capability they declare",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     const calls: string[] = [];
     try {
       for (const definition of [SAFE_READ, READ_EXEC, WRITE_FS_READ])
@@ -321,7 +322,7 @@ nativeTest(
   async () => {
     const store = await NativeStore.inMemory();
     const started = await (async () => {
-      const service = await store.createService();
+      const service = await store.createService(testServiceOptions());
       const info = await service.startHttpServer({ bearerToken: TOKEN });
       // The only reference to `service` ends with this scope.
       return info;

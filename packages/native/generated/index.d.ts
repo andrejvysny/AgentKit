@@ -26,6 +26,10 @@ export declare class NativeStore {
    * routing policy); an unsupported shape fails with `invalid_input`.
    */
   createTeammates(optionsJson?: string | undefined | null): Promise<NativeTeammates>
+  mcpConnectWithOAuth(configJson: string, oauthOptionsJson: string, deliver: ((err: Error | null, arg: string) => any)): Promise<string>
+  mcpCompleteOAuth(oauthOptionsJson: string, callbackUrl: string, deliver: ((err: Error | null, arg: string) => any)): Promise<void>
+  mcpRevokeOAuth(oauthOptionsJson: string, deliver: ((err: Error | null, arg: string) => any)): Promise<void>
+  mcpConfigureSecrets(deliver: ((err: Error | null, arg: string) => any)): Promise<void>
   /**
    * Connect one MCP server. `configJson` is the crate's `ServerConfig`
    * shape: `{alias, transport: {kind:"stdio", command, args?, env?} |
@@ -38,11 +42,12 @@ export declare class NativeStore {
    * descriptor.remoteName, args)` from the tool lane to invoke. Fails
    * with `mcp_invalid_config` for a bad declaration or remote identity,
    * `mcp_connect_failed`/`mcp_*` for transport problems, and
-   * `mcp_secret_missing` if the config carries `secretRefs` (the
-   * binding has no secret resolver yet). Connecting an already-known
-   * alias fails with `invalid_input`; disconnect it first.
+   * `mcp_secret_missing` if referenced host-vault values are unavailable.
+   * Connecting an already-connected alias fails with `invalid_input`;
+   * durable disconnected aliases retain their declarations.
    */
   mcpConnect(configJson: string): Promise<string>
+  mcpConnectWithCallbacks(configJson: string, deliver: ((err: Error | null, arg: string) => any)): Promise<string>
   /**
    * Invoke one tool on a connected MCP server. `toolName` accepts the
    * remote's original name, the configured alias target, or the full
@@ -91,6 +96,7 @@ export declare class NativeStore {
    * alias is a no-op success.
    */
   mcpDisconnect(alias: string): Promise<void>
+  mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>
   /**
    * Every MCP server declared on this store: `{alias, kind, enabled,
    * readOnly, connected, tools}`. `connected` is the crate manager's
@@ -545,6 +551,9 @@ export declare class SubscriptionHandle {
   get done(): boolean
 }
 
+/** The in-flight callback must still own the host's request authority. */
+export declare function assertProviderAuthority(callId: string): Promise<void>
+
 /**
  * Load-time identity probe: proves the addon, its runtime, and the error
  * contract are all present before any session call is attempted.
@@ -565,6 +574,8 @@ export declare function endRunProvider(callId: string): boolean
 
 export declare function isRunCallbackActive(callId: string): boolean
 
+export declare function listNativeProfiles(overridesJson?: string | undefined | null): string
+
 export declare function pushRunProviderEvent(callId: string, eventJson: string): Promise<boolean>
 
 /**
@@ -583,6 +594,8 @@ export declare function reserveRunProviderRequest(callId: string): Promise<void>
  * resolve is ignored, never an exception, and never a double-settle.
  */
 export declare function resolveCall(callId: string, payload?: string | undefined | null, error?: string | undefined | null): boolean
+
+export declare function resolveNativeProfile(profileId: string, overridesJson?: string | undefined | null): string
 
 /** Revocation fences existing transports immediately and persists off-thread. */
 export declare function revokeProviderConnection(connectionId: string): Promise<boolean>

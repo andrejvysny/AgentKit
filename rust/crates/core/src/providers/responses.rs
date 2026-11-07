@@ -2,14 +2,17 @@ use super::{
     chat_completions::usage_data,
     responses_request::{build_responses_request_with_warnings, make_continuation},
     responses_state::{ResponsesResult, ResponsesState},
-    transport::{dispatch, dispatch_guarded, read_json},
+    transport::{dispatch, dispatch_status, failure, read_json},
     AuthKind, ConnectionIdentity, TrustedTransport,
 };
 use crate::{sse::SseDecoder, ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex, OnceLock, PoisonError},
+};
 use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct ResponsesProvider {
@@ -47,18 +50,8 @@ impl ResponsesProvider {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning { code: "tool_schema_unsupported".into(), message };
             }
-            if let Some(budget) = &input.budget {
-                budget.consume("providerRequests").await?;
-            }
-            let response = dispatch_guarded(
-                provider.transport.as_ref(),
-                &provider.identity,
-                "responses",
-                Some(body.clone()),
-                input.request_guard.clone(),
-                cancellation.clone(),
-            )
-            .await?;
+            let mut body = body;
+            let response = provider.send(&input, &mut body, cancellation.clone()).await?;
             provider.transport.check_authority().await?;
             let mut bytes = response.bytes_stream();
             let mut decoder = SseDecoder::new();
@@ -112,6 +105,10 @@ impl ResponsesProvider {
                                         data: json!({"delta": reasoning}),
                                     };
                                 }
+                                if let Some(progress) = state.take_tool_progress() {
+                                    provider.transport.check_authority().await?;
+                                    yield progress;
+                                }
                             }
                             Err(error) => {
                                 failure = Some(error);
@@ -150,6 +147,10 @@ impl ResponsesProvider {
                                             kind: "run.message.reasoning-delta".into(),
                                             data: json!({"delta": reasoning}),
                                         };
+                                    }
+                                    if let Some(progress) = state.take_tool_progress() {
+                                        provider.transport.check_authority().await?;
+                                        yield progress;
                                     }
                                 }
                                 Err(error) => {
@@ -235,6 +236,51 @@ impl ResponsesProvider {
                 data,
             };
         })
+    }
+    /// Dispatch once; a 400 that blames the reasoning summary (unverified
+    /// organization, model without summaries) is retried once without it,
+    /// and the provider+model pair omits it for the rest of the process.
+    async fn send(
+        &self,
+        input: &ChatRequest,
+        body: &mut Value,
+        cancellation: CancellationToken,
+    ) -> Result<reqwest::Response, CoreError> {
+        let key = (self.identity.provider_id.clone(), input.model.clone());
+        if summary_rejected(&key) {
+            strip_summary(body);
+        }
+        for attempt in 0..2 {
+            if let Some(budget) = &input.budget {
+                budget.consume("providerRequests").await?;
+            }
+            let outcome = dispatch_status(
+                self.transport.as_ref(),
+                &self.identity,
+                "responses",
+                Some(body.clone()),
+                input.request_guard.clone(),
+                cancellation.clone(),
+            )
+            .await?;
+            let (status, payload) = match outcome {
+                Ok(response) => return Ok(response),
+                Err(rejection) => rejection,
+            };
+            let summary_only = body["reasoning"]
+                .as_object()
+                .is_some_and(|reasoning| reasoning.len() == 1 && reasoning.contains_key("summary"));
+            if attempt == 0
+                && status == 400
+                && blames_summary(&payload, summary_only)
+                && strip_summary(body)
+            {
+                remember_summary_rejection(key.clone());
+                continue;
+            }
+            return Err(failure(status, &payload));
+        }
+        unreachable!("the retry either returns or fails")
     }
     async fn persist(
         &self,
@@ -333,6 +379,45 @@ impl ChatProvider for ResponsesProvider {
         }
         Ok(output)
     }
+}
+/// Provider+model pairs whose provider rejected `reasoning.summary`. Process
+/// memory only: a later process (or a newly verified organization) tries again.
+fn summary_rejections() -> &'static Mutex<HashSet<(String, String)>> {
+    static REJECTED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
+    REJECTED.get_or_init(Default::default)
+}
+fn summary_rejected(key: &(String, String)) -> bool {
+    summary_rejections()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(key)
+}
+fn remember_summary_rejection(key: (String, String)) {
+    summary_rejections()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(key);
+}
+/// Removes `reasoning.summary` (and an emptied `reasoning`); true when the
+/// body carried one.
+fn strip_summary(body: &mut Value) -> bool {
+    let Some(reasoning) = body.get_mut("reasoning").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let removed = reasoning.remove("summary").is_some();
+    if reasoning.is_empty() {
+        body.as_object_mut().map(|body| body.remove("reasoning"));
+    }
+    removed
+}
+/// OpenAI names the parameter (`error.param`) or the feature in the message;
+/// the ChatGPT backend answers `{detail}`. A summary mention counts; so does
+/// any `reasoning` mention when the summary is all `reasoning` carries (a
+/// model without reasoning support rejects the whole object). An error about
+/// a requested effort is not the summary's fault.
+fn blames_summary(payload: &Value, summary_only: bool) -> bool {
+    let text = payload.to_string().to_ascii_lowercase();
+    text.contains("summar") || (summary_only && text.contains("reasoning"))
 }
 fn response_usage(
     usage: &Value,

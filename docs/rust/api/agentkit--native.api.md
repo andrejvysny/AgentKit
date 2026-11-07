@@ -447,7 +447,17 @@ class CallbackRouter {
     get pendingEffects(): number;
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): void;
     // (undocumented)
+    setContentAuthority(authority: ((chatId: string, signal: AbortSignal) => readonly string[] | Promise<readonly string[]>) | null, identity?: ((chatId: string, requiredConnectors: readonly string[], signal: AbortSignal) => unknown | Promise<unknown>) | null): void;
+    // (undocumented)
+    setMcpElicitation(handler: McpElicitationHandler | null): void;
+    // (undocumented)
+    setMcpOAuth(callbacks: McpOAuthCallbacks | null): void;
+    // (undocumented)
     setProvider(provider: ProviderFunction | null): void;
+    // (undocumented)
+    setProviderConsent(handler: ProviderConsentHandler | null): void;
+    // (undocumented)
+    setProviderSecretStore(store: ProviderSecretStore | null): void;
 }
 
 // @public
@@ -484,6 +494,9 @@ interface ClaimNextInput {
     ownerId: string;
     scopesBusy: string[];
 }
+
+// @public (undocumented)
+export function completeMcpOAuth(store: NativeMcpOAuthStore, options: NativeManagedOAuthOptions, callbackUrl: string, callbacks: McpOAuthCallbacks): Promise<void>;
 
 // @public (undocumented)
 type ConnectionRecord = Omit<Static<typeof ConnectionRecordSchema>, "status"> & {
@@ -535,6 +548,18 @@ const ConnectionRecordSchema: TObject<    {
 
 // @public (undocumented)
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "needs_authentication" | "failed";
+
+// @public
+export function connectMcpWithCallbacks(store: NativeMcpCallbackStore, config: NativeMcpClientConfig, elicitation: McpElicitationHandler): Promise<NativeMcpConnection & {
+    disconnect(): Promise<void>;
+}>;
+
+// @public (undocumented)
+export function connectMcpWithOAuth(store: NativeMcpOAuthStore, config: NativeMcpClientConfig, options: NativeManagedOAuthOptions, callbacks: McpOAuthCallbacks & {
+    elicitation?: McpElicitationHandler;
+}): Promise<NativeMcpConnection & {
+    disconnect(): Promise<void>;
+}>;
 
 // @public (undocumented)
 interface ContextSummaryRecord {
@@ -683,7 +708,7 @@ interface CreateProposalInput {
 // @public (undocumented)
 export interface CreateSessionInputJson {
     // (undocumented)
-    contentSelection?: Record<string, unknown>;
+    contentSelection?: RunContentSelection;
     // (undocumented)
     context?: unknown;
     // (undocumented)
@@ -917,6 +942,9 @@ interface ListMessagesOptions {
 }
 
 // @public (undocumented)
+export function listNativeProfiles(overrides?: readonly NativeAgentProfile[]): Promise<NativeResolvedAgentProfile[]>;
+
+// @public (undocumented)
 interface ListProposalsOptions {
     // (undocumented)
     limit?: number;
@@ -971,6 +999,69 @@ interface ManagementBinding {
     setModel(id: string, input: string): Promise<string>;
     // (undocumented)
     unarchiveChat(id: string): Promise<string>;
+}
+
+// @public (undocumented)
+export type McpElicitationHandler = (request: McpElicitationRequest) => McpElicitationResult | Promise<McpElicitationResult>;
+
+// @public
+export interface McpElicitationRequest {
+    // (undocumented)
+    alias: string;
+    // (undocumented)
+    params: unknown;
+    // (undocumented)
+    signal: AbortSignal;
+}
+
+// @public (undocumented)
+export interface McpElicitationResult {
+    // (undocumented)
+    action: "accept" | "decline" | "cancel";
+    // (undocumented)
+    content?: Record<string, unknown>;
+}
+
+// @public (undocumented)
+export interface McpOAuthCallbacks {
+    http?(request: McpOAuthHttpRequest): McpOAuthHttpResponse | Promise<McpOAuthHttpResponse>;
+    // (undocumented)
+    redirect(request: {
+        alias: string;
+        url: string;
+        signal: AbortSignal;
+    }): void | Promise<void>;
+    // (undocumented)
+    secrets: {
+        get(key: string, signal: AbortSignal): string | null | Promise<string | null>;
+        set(key: string, value: string, signal: AbortSignal): void | Promise<void>;
+        delete(key: string, signal: AbortSignal): void | Promise<void>;
+    };
+}
+
+// @public
+export interface McpOAuthHttpRequest {
+    // (undocumented)
+    body: string;
+    // (undocumented)
+    headers: Record<string, string>;
+    // (undocumented)
+    method: string;
+    redirect: "error";
+    // (undocumented)
+    signal: AbortSignal;
+    // (undocumented)
+    url: string;
+}
+
+// @public (undocumented)
+export interface McpOAuthHttpResponse {
+    // (undocumented)
+    body: string;
+    // (undocumented)
+    headers?: Record<string, string>;
+    // (undocumented)
+    status: number;
 }
 
 // @public
@@ -1110,13 +1201,14 @@ export class NativeAgentError extends Error {
 
 // @public
 export interface NativeAgentProfile {
+    // (undocumented)
     extends?: string;
     // (undocumented)
     id: string;
     // (undocumented)
-    instructions: string;
+    instructions?: string;
     // (undocumented)
-    kind: "chat" | "coding" | "research" | "automation";
+    kind?: "chat" | "coding" | "research" | "automation";
     // (undocumented)
     label?: string;
     // (undocumented)
@@ -1130,22 +1222,22 @@ export interface NativeAgentProfile {
     // (undocumented)
     model?: string;
     // (undocumented)
-    permissionMode: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+    permissionMode?: string;
     // (undocumented)
     reasoningEffort?: "minimal" | "low" | "medium" | "high";
     // (undocumented)
     resources?: {
-        skills?: ReadonlyArray<{
+        skills?: readonly {
             id: string;
             revision: string;
-        }>;
+        }[];
         projectInstructions?: boolean;
-        resources?: ReadonlyArray<string>;
+        resources?: readonly string[];
     };
     // (undocumented)
     role?: "implementer" | "reviewer" | "supervisor";
     // (undocumented)
-    tools: ReadonlyArray<string>;
+    tools?: readonly string[];
 }
 
 // @public
@@ -1284,7 +1376,8 @@ export interface NativeHttpServerOptions {
     maxBodyBytes?: number;
     maxQueryBytes?: number;
     port?: number;
-    providerSecrets?: "memory";
+    providerOperations?: "native";
+    providerSecrets?: "memory" | "callback";
     sessionProfileId?: string;
 }
 
@@ -1345,10 +1438,48 @@ export interface NativeManagedContentOptions {
     store?: NativeStore;
 }
 
+// @public (undocumented)
+export interface NativeManagedOAuthOptions {
+    // (undocumented)
+    accountId: string;
+    // (undocumented)
+    allowedOrigins: string[];
+    appNamespace: string;
+    // (undocumented)
+    clientId?: string;
+    // (undocumented)
+    clientName: string;
+    clientSecret?: string;
+    // (undocumented)
+    connectionId: string;
+    generation: number;
+    httpCallback?: boolean;
+    // (undocumented)
+    redirectUrl: string;
+    // (undocumented)
+    resourceUrl: string;
+    // (undocumented)
+    scopes: string[];
+}
+
+// @public (undocumented)
+export interface NativeMcpCallbackStore {
+    // (undocumented)
+    mcpConnectWithCallbacks(configJson: string, deliver: (error: Error | null, payload: string) => void): Promise<string>;
+    // (undocumented)
+    mcpDisconnect(alias: string): Promise<void>;
+    // (undocumented)
+    mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>;
+}
+
 // @public
 export interface NativeMcpClientConfig {
     alias: string;
     enabled?: boolean;
+    modelContentCapabilities?: {
+        image?: boolean;
+        audio?: boolean;
+    };
     readOnly?: boolean;
     resilience?: Record<string, unknown>;
     secretRefs?: Record<string, string>;
@@ -1362,6 +1493,8 @@ export interface NativeMcpConnection {
     // (undocumented)
     alias: string;
     // (undocumented)
+    handle?: string;
+    // (undocumented)
     tools: NativeMcpToolDescriptor[];
 }
 
@@ -1373,6 +1506,18 @@ export interface NativeMcpHttpTransport {
     kind: "http";
     // (undocumented)
     url: string;
+}
+
+// @public (undocumented)
+export interface NativeMcpOAuthStore {
+    // (undocumented)
+    mcpCompleteOAuth(oauthOptionsJson: string, callbackUrl: string, deliver: (error: Error | null, payload: string) => void): Promise<void>;
+    // (undocumented)
+    mcpConnectWithOAuth(configJson: string, oauthOptionsJson: string, deliver: (error: Error | null, payload: string) => void): Promise<string>;
+    // (undocumented)
+    mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>;
+    // (undocumented)
+    mcpRevokeOAuth(oauthOptionsJson: string, deliver: (error: Error | null, payload: string) => void): Promise<void>;
 }
 
 // @public
@@ -1487,6 +1632,47 @@ export interface NativeProviderConnectionOptions {
     storePath: string;
 }
 
+// @public
+export interface NativeResolvedAgentProfile {
+    // (undocumented)
+    digest: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    instructions: string;
+    // (undocumented)
+    kind: "chat" | "coding" | "research" | "automation";
+    // (undocumented)
+    label: string | null;
+    // (undocumented)
+    limits: {
+        maxToolIterations: number | null;
+        maxToolCallsPerIteration: number | null;
+        historyLimit: number | null;
+        attemptBudgetMs: number | null;
+        maxOutputTokens: number | null;
+    };
+    // (undocumented)
+    model: string | null;
+    // (undocumented)
+    permissionMode: string;
+    // (undocumented)
+    reasoningEffort: "minimal" | "low" | "medium" | "high" | null;
+    // (undocumented)
+    resources: {
+        skills: readonly {
+            id: string;
+            revision: string;
+        }[];
+        projectInstructions: boolean | null;
+        resources: readonly string[];
+    };
+    // (undocumented)
+    role: "implementer" | "reviewer" | "supervisor" | null;
+    // (undocumented)
+    tools: readonly string[];
+}
+
 // @public (undocumented)
 export interface NativeRunContent {
     listResources(skillId?: string): Promise<RunContentResourceRecord[]>;
@@ -1507,7 +1693,7 @@ export const NativeRunHandle: {
     start(optionsJson: string, callback: (error: Error | null, payload: string) => void): Promise<RawRunHandle>;
 };
 
-// @public
+// @public (undocumented)
 export interface NativeServiceOptions {
     additionalProviders?: ReadonlyArray<NativeProviderConfig>;
     closeTimeoutMs?: number;
@@ -1517,7 +1703,7 @@ export interface NativeServiceOptions {
         planToolNames?: string[];
         planGrantMode?: "read_only" | "ask" | "auto_edit" | "full_auto";
     };
-    profiles?: ReadonlyArray<NativeAgentProfile>;
+    profiles?: readonly NativeAgentProfile[];
     providerAuthKind?: "api-key" | "chatgpt-account";
     providerConfig?: NativeProviderConfig;
     subagentMaxConcurrency?: number;
@@ -1556,7 +1742,7 @@ class NativeSessionManagement {
 
 // @public (undocumented)
 export class NativeSessionService extends NativeSessionManagement {
-    constructor(raw: SessionService, router: CallbackRouter, store: NativeStore, providerConfig?: NativeProviderConfig);
+    constructor(raw: SessionService, router: CallbackRouter, store: NativeStore);
     advisorConfig(): Promise<NativeAdvisorConfig | null>;
     advisorFindings(sessionId: string, limit?: number): Promise<NativeAdvisorFinding[]>;
     advisorReview(sessionId: string, focus: string, options?: NativeCallOptions): Promise<NativeAdvisorReport>;
@@ -1602,8 +1788,11 @@ export class NativeSessionService extends NativeSessionManagement {
     static revokeProviderConnection(connectionId: string): Promise<boolean>;
     // (undocumented)
     send(sessionId: string, input: SendInputJson, options?: NativeCallOptions): Promise<SendResultJson>;
+    setContentAuthority(authority: ((chatId: string, signal: AbortSignal) => readonly string[] | Promise<readonly string[]>) | null, identity?: ((chatId: string, requiredConnectors: readonly string[], signal: AbortSignal) => unknown | Promise<unknown>) | null): void;
     // (undocumented)
     setProvider(provider: ProviderFunction | null): void;
+    setProviderConsent(handler: ProviderConsentHandler | null): void;
+    setProviderSecretStore(store: ProviderSecretStore | null): void;
     startHttpServer(options: NativeHttpServerOptions): Promise<NativeHttpServerInfo>;
     startMcpServer(options: NativeMcpServerOptions): Promise<NativeMcpServerInfo>;
     // (undocumented)
@@ -1638,9 +1827,26 @@ export class NativeStore {
     // (undocumented)
     static inMemory(): Promise<NativeStore>;
     mcpCallTool(alias: string, toolName: string, args: unknown, handle?: string, signal?: AbortSignal): Promise<ToolResultJson>;
+    // (undocumented)
+    mcpCompleteOAuth(options: NativeManagedOAuthOptions, callbackUrl: string, callbacks: McpOAuthCallbacks): Promise<void>;
+    mcpConfigureSecrets(secrets: McpOAuthCallbacks["secrets"]): Promise<void>;
+    // (undocumented)
     mcpConnect(config: NativeMcpClientConfig): Promise<NativeMcpConnection>;
+    mcpConnectWithCallbacks(config: NativeMcpClientConfig, elicitation: McpElicitationHandler): Promise<NativeMcpConnection & {
+        disconnect(): Promise<void>;
+    }>;
+    // (undocumented)
+    mcpConnectWithOAuth(config: NativeMcpClientConfig, options: NativeManagedOAuthOptions, callbacks: McpOAuthCallbacks & {
+        elicitation?: McpElicitationHandler;
+    }): Promise<NativeMcpConnection & {
+        disconnect(): Promise<void>;
+    }>;
     mcpDisconnect(alias: string): Promise<void>;
+    // (undocumented)
+    mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>;
     mcpListServers(): Promise<NativeMcpServerStatus[]>;
+    // (undocumented)
+    mcpRevokeOAuth(options: NativeManagedOAuthOptions, callbacks: McpOAuthCallbacks): Promise<void>;
     // (undocumented)
     static open(path: string): Promise<NativeStore>;
     setTaskAging(options: {
@@ -1661,11 +1867,24 @@ class NativeStore_2 {
     callStore(operation: string, inputJson: string): Promise<string>
     close(): Promise<void>
     createService(onEvent: ((err: Error | null, arg: string) => any), optionsJson?: string | undefined | null): Promise<SessionService>
+    createTeammates(optionsJson?: string | undefined | null): Promise<NativeTeammates>
     mcpCallTool(alias: string, toolName: string, argsJson: string, handle?: string | undefined | null, cancellationKey?: string | undefined | null): Promise<string>
     mcpCancelCall(cancellationKey: string): Promise<void>
+    // (undocumented)
+    mcpCompleteOAuth(oauthOptionsJson: string, callbackUrl: string, deliver: ((err: Error | null, arg: string) => any)): Promise<void>
+    // (undocumented)
+    mcpConfigureSecrets(deliver: ((err: Error | null, arg: string) => any)): Promise<void>
     mcpConnect(configJson: string): Promise<string>
+    // (undocumented)
+    mcpConnectWithCallbacks(configJson: string, deliver: ((err: Error | null, arg: string) => any)): Promise<string>
+    // (undocumented)
+    mcpConnectWithOAuth(configJson: string, oauthOptionsJson: string, deliver: ((err: Error | null, arg: string) => any)): Promise<string>
     mcpDisconnect(alias: string): Promise<void>
+    // (undocumented)
+    mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>
     mcpListServers(): Promise<string>
+    // (undocumented)
+    mcpRevokeOAuth(oauthOptionsJson: string, deliver: ((err: Error | null, arg: string) => any)): Promise<void>
     static memory(): NativeStore_2
     static open(path: string): NativeStore_2
     setTaskAging(intervalMs?: number | undefined | null, bonus?: number | undefined | null, maxBonus?: number | undefined | null): void
@@ -1751,6 +1970,25 @@ export interface NativeSubagentView {
     updatedAt: number;
     // (undocumented)
     waiting: boolean;
+}
+
+// @public
+class NativeTeammates {
+    archiveAgent(agentId: string): Promise<string>
+    cancelAgentTask(taskId: string): Promise<string>
+    close(): void
+    createAgent(scope: string, ownerId: string, definitionJson: string): Promise<string>
+    getAgent(agentId: string): Promise<string>
+    getAgentTaskProjection(taskId: string, window?: number | undefined | null): Promise<string>
+    getAgentTaskRunProfile(taskId: string): Promise<string | null>
+    listAgentRevisions(agentId: string): Promise<string>
+    listAgents(scope: string): Promise<string>
+    listAgentTaskEvents(taskId: string, after?: number | undefined | null, limit?: number | undefined | null): Promise<string>
+    listAgentTasks(agentId: string): Promise<string>
+    restoreAgent(agentId: string): Promise<string>
+    setAgentModel(agentId: string, expectedRevision: number, model?: string | undefined | null, reasoningEffort?: string | undefined | null): Promise<string>
+    submitTeammateTask(admissionJson: string): Promise<string>
+    updateAgent(agentId: string, expectedRevision: number, definitionJson: string): Promise<string>
 }
 
 // @public (undocumented)
@@ -1960,6 +2198,38 @@ interface ProposalStore {
     transition(proposalId: string, from: ProposalStatus[], to: ProposalStatus, patch?: ProposalPatch): Promise<ProposalRecord>;
 }
 
+// @public (undocumented)
+export type ProviderConsentHandler = (request: ProviderConsentRequest) => {
+    approved: boolean;
+} | Promise<{
+    approved: boolean;
+}>;
+
+// @public (undocumented)
+export interface ProviderConsentRequest {
+    // (undocumented)
+    account: string;
+    // (undocumented)
+    actorId: string;
+    // (undocumented)
+    capability: string;
+    // (undocumented)
+    connectionId: string;
+    // (undocumented)
+    destination: string;
+    // (undocumented)
+    disclosedData: readonly string[];
+    // (undocumented)
+    generation: number;
+    // (undocumented)
+    model?: string | null;
+    payloadJson: string;
+    // (undocumented)
+    providerKind: string;
+    // (undocumented)
+    signal: AbortSignal;
+}
+
 // @public
 interface ProviderContinuationRecord {
     // (undocumented)
@@ -1988,13 +2258,17 @@ export type ProviderFunction = (request: ProviderRequest) => Promise<ProviderRes
 
 // @public
 export interface ProviderRequest {
+    checkAuthority?: () => Promise<void>;
     // (undocumented)
     maxOutputTokens?: number | null;
     // (undocumented)
     messages: unknown[];
     // (undocumented)
     model: string;
-    reasoningEffort?: "minimal" | "low" | "medium" | "high";
+    reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
+    runContent?: {
+        messages: readonly unknown[];
+    };
     // (undocumented)
     runId: string;
     signal?: AbortSignal;
@@ -2014,6 +2288,16 @@ export interface ProviderResult {
     toolCalls?: ProviderToolCall[];
     // (undocumented)
     usage?: Record<string, unknown> | null;
+}
+
+// @public
+export interface ProviderSecretStore {
+    // (undocumented)
+    delete(reference: string, signal: AbortSignal): void | Promise<void>;
+    // (undocumented)
+    get(reference: string, signal: AbortSignal): string | null | Promise<string | null>;
+    // (undocumented)
+    put(reference: string, value: string, signal: AbortSignal): void | Promise<void>;
 }
 
 // @public
@@ -2105,6 +2389,9 @@ export function reserveRunProviderRequest(callId: string): Promise<void>;
 // @public (undocumented)
 export function resolveCall(callId: string, payload: string | null, error: string | null): boolean;
 
+// @public (undocumented)
+export function resolveNativeProfile(id: string, overrides?: readonly NativeAgentProfile[]): Promise<NativeResolvedAgentProfile>;
+
 // @public
 export interface ResolveUncertainExecutionForChatInput {
     // (undocumented)
@@ -2135,6 +2422,9 @@ export interface ResolveUncertainExecutionInput {
     sessionId: string;
 }
 
+// @public (undocumented)
+export function revokeMcpOAuth(store: NativeMcpOAuthStore, options: NativeManagedOAuthOptions, callbacks: McpOAuthCallbacks): Promise<void>;
+
 // @public
 type RiskLevel = "low" | "medium" | "high" | "destructive";
 
@@ -2152,6 +2442,7 @@ export interface RunContentBlock {
 
 // @public
 export interface RunContentResolution {
+    authorizedConnectors: string[];
     // (undocumented)
     blocks: RunContentBlock[];
     // (undocumented)
@@ -2413,6 +2704,33 @@ const TaskEventEnvelopeSchema: TObject<    {
     timestamp: TString;
     contractVersion: TString;
     attemptId: TOptional<TString>;
+    agentId: TOptional<TString>;
+    taskId: TOptional<TString>;
+    definitionRevision: TOptional<TNumber>;
+    status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+    approval: TOptional<TObject<    {
+        state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+        approvalId: TOptional<TString>;
+        toolName: TOptional<TString>;
+    }>>;
+    usage: TOptional<TObject<    {
+        callId: TOptional<TString>;
+        model: TOptional<TString>;
+        promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+    }>>;
+    sourceRefs: TOptional<TArray<TObject<    {
+        id: TString;
+        kind: TString;
+        label: TString;
+        refId: TOptional<TString>;
+        path: TOptional<TString>;
+        excerpt: TOptional<TString>;
+        metadata: TOptional<TRecord<TString, TUnknown>>;
+    }>>>;
 }>;
 
 // @public

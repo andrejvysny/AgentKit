@@ -461,7 +461,7 @@ type: TLiteral<"run.context.compacted">;
 }>;
 
 // @public
-type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
+type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolPreparingEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunProgressEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
 
 // @public (undocumented)
 type AiRunFailedEvent = Static<typeof AiRunFailedEventSchema>;
@@ -515,6 +515,10 @@ argumentsJson: TString;
 }>>>;
 reasoningContent: TOptional<TString>;
 finishReason: TOptional<TString>;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -532,6 +536,10 @@ type AiRunMessageDeltaEvent = Static<typeof AiRunMessageDeltaEventSchema>;
 const AiRunMessageDeltaEventSchema: TObject<    {
 data: TObject<    {
 delta: TString;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -557,6 +565,24 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.message.reasoning-delta">;
+}>;
+
+// @public (undocumented)
+type AiRunProgressEvent = Static<typeof AiRunProgressEventSchema>;
+
+// @public
+const AiRunProgressEventSchema: TObject<    {
+data: TObject<    {
+phase: TUnion<[TLiteral<"reasoning">, TLiteral<"generating">, TLiteral<"tool_args">]>;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.progress">;
 }>;
 
 // @public (undocumented)
@@ -597,6 +623,26 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.tool.failed">;
+}>;
+
+// @public (undocumented)
+type AiRunToolPreparingEvent = Static<typeof AiRunToolPreparingEventSchema>;
+
+// @public
+const AiRunToolPreparingEventSchema: TObject<    {
+data: TObject<    {
+toolCallId: TString;
+toolName: TString;
+argsBytes: TNumber;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.tool.preparing">;
 }>;
 
 // @public (undocumented)
@@ -1983,6 +2029,33 @@ eventId: TString;
 timestamp: TString;
 contractVersion: TString;
 attemptId: TOptional<TString>;
+agentId: TOptional<TString>;
+taskId: TOptional<TString>;
+definitionRevision: TOptional<TNumber>;
+status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>>;
+usage: TOptional<TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>>;
+sourceRefs: TOptional<TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>>;
 }>;
 
 // @public

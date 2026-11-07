@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,7 +105,7 @@ nativeTest(
       expect(() => service.setProvider(null)).toThrow();
       await store.close();
       store = await NativeStore.open(path);
-      service = await store.createService();
+      service = await store.createService(testServiceOptions());
       const state = await service.getState("s1");
       expect((state.descriptor as { model: string }).model).toBe("new");
       expect((await service.getExecution("s1"))?.mode).toBe("plan");

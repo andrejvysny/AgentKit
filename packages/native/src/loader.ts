@@ -196,3 +196,11 @@ export function isRunCallbackActive(callId: string): boolean {
 export async function reserveRunProviderRequest(callId: string): Promise<void> {
   await (await loadBinding()).reserveRunProviderRequest(callId);
 }
+
+/** Recheck a still-live provider callback's native task/content authority. */
+export async function assertProviderAuthority(callId: string): Promise<void> {
+  const binding = (await loadBinding()) as unknown as {
+    assertProviderAuthority(callId: string): Promise<void>;
+  };
+  await binding.assertProviderAuthority(callId);
+}

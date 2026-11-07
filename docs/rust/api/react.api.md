@@ -216,7 +216,7 @@ type: TLiteral<"run.context.compacted">;
 }>;
 
 // @public
-type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
+type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolPreparingEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunProgressEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
 
 // @public (undocumented)
 type AiRunFailedEvent = Static<typeof AiRunFailedEventSchema>;
@@ -270,6 +270,10 @@ argumentsJson: TString;
 }>>>;
 reasoningContent: TOptional<TString>;
 finishReason: TOptional<TString>;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -287,6 +291,10 @@ type AiRunMessageDeltaEvent = Static<typeof AiRunMessageDeltaEventSchema>;
 const AiRunMessageDeltaEventSchema: TObject<    {
 data: TObject<    {
 delta: TString;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -312,6 +320,24 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.message.reasoning-delta">;
+}>;
+
+// @public (undocumented)
+type AiRunProgressEvent = Static<typeof AiRunProgressEventSchema>;
+
+// @public
+const AiRunProgressEventSchema: TObject<    {
+data: TObject<    {
+phase: TUnion<[TLiteral<"reasoning">, TLiteral<"generating">, TLiteral<"tool_args">]>;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.progress">;
 }>;
 
 // @public (undocumented)
@@ -352,6 +378,26 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.tool.failed">;
+}>;
+
+// @public (undocumented)
+type AiRunToolPreparingEvent = Static<typeof AiRunToolPreparingEventSchema>;
+
+// @public
+const AiRunToolPreparingEventSchema: TObject<    {
+data: TObject<    {
+toolCallId: TString;
+toolName: TString;
+argsBytes: TNumber;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.tool.preparing">;
 }>;
 
 // @public (undocumented)
@@ -1321,6 +1367,410 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         description: string;
         inputSchema: AiJsonSchemaObject;
     }[]>;
+    createAgent: (body: CreateAgentRequest, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }>;
+    listAgents: (params?: {
+        limit?: number;
+    }, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }[]>;
+    getAgent: (params: {
+        agentId: string;
+    }, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }>;
+    updateAgent: (params: {
+        agentId: string;
+    }, body: UpdateAgentRequest, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }>;
+    setAgentModel: (params: {
+        agentId: string;
+    }, body: SetAgentModelRequest, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }>;
+    archiveAgent: (params: {
+        agentId: string;
+    }, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }>;
+    restoreAgent: (params: {
+        agentId: string;
+    }, opts?: RequestOptions) => Promise<{
+        definition: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        createdAt: number;
+        updatedAt: number;
+        agentId: string;
+        scope: string;
+        ownerId: string;
+        lifecycle: "archived" | "active";
+        currentRevision: number;
+    }>;
+    listAgentRevisions: (params: {
+        agentId: string;
+        limit?: number;
+    }, opts?: RequestOptions) => Promise<{
+        revision: number;
+        createdAt: number;
+        agentId: string;
+        snapshot: {
+            reasoningEffort?: string | undefined;
+            model?: string | undefined;
+            avatar?: string | undefined;
+            secretRefs: string[];
+            name: string;
+            purpose: string;
+            instructions: string;
+            resources: string[];
+            skills: {
+                id: string;
+                revision: string;
+            }[];
+            permissionMode: string;
+            allowedTools: string[];
+            budgets: {
+                maxToolIterations?: number | undefined;
+                maxToolCallsPerIteration?: number | undefined;
+                maxOutputTokens?: number | undefined;
+                attemptBudgetMs?: number | undefined;
+            };
+        };
+        source: "create" | "edit" | "model_change" | "restore";
+    }[]>;
+    submitTeammateTask: (params: {
+        agentId: string;
+    }, body: SubmitTeammateTaskRequest, opts?: RequestOptions) => Promise<{
+        task: {
+            parentTaskId?: string | undefined;
+            startedAt?: number | undefined;
+            finishedAt?: number | undefined;
+            error?: string | undefined;
+            runProfileDigest?: string | undefined;
+            status: "failed" | "queued" | "running" | "waiting_approval" | "interrupted" | "completed" | "cancelled" | "waiting_child" | "uncertain";
+            kind: string;
+            taskId: string;
+            admissionKey: string;
+            priority: number;
+            dependsOn: string[];
+            agentId: string;
+            agentRevision: number;
+            enqueuedAt: number;
+            availableAt: number;
+            attemptCount: number;
+            cancelRequested: boolean;
+        };
+        replayed: boolean;
+    }>;
+    listAgentTasks: (params: {
+        agentId: string;
+        limit?: number;
+    }, opts?: RequestOptions) => Promise<{
+        parentTaskId?: string | undefined;
+        startedAt?: number | undefined;
+        finishedAt?: number | undefined;
+        error?: string | undefined;
+        runProfileDigest?: string | undefined;
+        status: "failed" | "queued" | "running" | "waiting_approval" | "interrupted" | "completed" | "cancelled" | "waiting_child" | "uncertain";
+        kind: string;
+        taskId: string;
+        admissionKey: string;
+        priority: number;
+        dependsOn: string[];
+        agentId: string;
+        agentRevision: number;
+        enqueuedAt: number;
+        availableAt: number;
+        attemptCount: number;
+        cancelRequested: boolean;
+    }[]>;
+    getAgentTask: (params: {
+        taskId: string;
+    }, opts?: RequestOptions) => Promise<{
+        parentTaskId?: string | undefined;
+        startedAt?: number | undefined;
+        finishedAt?: number | undefined;
+        error?: string | undefined;
+        runProfileDigest?: string | undefined;
+        status: "failed" | "queued" | "running" | "waiting_approval" | "interrupted" | "completed" | "cancelled" | "waiting_child" | "uncertain";
+        kind: string;
+        taskId: string;
+        admissionKey: string;
+        priority: number;
+        dependsOn: string[];
+        agentId: string;
+        agentRevision: number;
+        enqueuedAt: number;
+        availableAt: number;
+        attemptCount: number;
+        cancelRequested: boolean;
+    }>;
+    cancelAgentTask: (params: {
+        taskId: string;
+    }, opts?: RequestOptions) => Promise<{
+        parentTaskId?: string | undefined;
+        startedAt?: number | undefined;
+        finishedAt?: number | undefined;
+        error?: string | undefined;
+        runProfileDigest?: string | undefined;
+        status: "failed" | "queued" | "running" | "waiting_approval" | "interrupted" | "completed" | "cancelled" | "waiting_child" | "uncertain";
+        kind: string;
+        taskId: string;
+        admissionKey: string;
+        priority: number;
+        dependsOn: string[];
+        agentId: string;
+        agentRevision: number;
+        enqueuedAt: number;
+        availableAt: number;
+        attemptCount: number;
+        cancelRequested: boolean;
+    }>;
+    listAgentTaskEvents: (params: {
+        taskId: string;
+        after?: number;
+        limit?: number;
+    }, opts?: RequestOptions) => Promise<{
+        nextCursor?: string | undefined;
+        events: {
+            status?: "failed" | "queued" | "running" | "waiting_approval" | "interrupted" | "completed" | "cancelled" | "waiting_child" | "uncertain" | undefined;
+            attemptId?: string | undefined;
+            taskId?: string | undefined;
+            agentId?: string | undefined;
+            definitionRevision?: number | undefined;
+            approval?: {
+                toolName?: string | undefined;
+                approvalId?: string | undefined;
+                state: "requested" | "granted" | "denied";
+            } | undefined;
+            usage?: {
+                model?: string | undefined;
+                callId?: string | undefined;
+                promptTokens?: number | null | undefined;
+                completionTokens?: number | null | undefined;
+                totalTokens?: number | null | undefined;
+                cachedPromptTokens?: number | null | undefined;
+                reasoningTokens?: number | null | undefined;
+            } | undefined;
+            sourceRefs?: {
+                metadata?: {
+                    [x: string]: unknown;
+                } | undefined;
+                path?: string | undefined;
+                refId?: string | undefined;
+                excerpt?: string | undefined;
+                id: string;
+                label: string;
+                kind: string;
+            }[] | undefined;
+            type: string;
+            timestamp: string;
+            contractVersion: string;
+            eventId: string;
+            seq: number;
+        }[];
+    }>;
+    streamAgentTask: (params: {
+        taskId: string;
+    }, opts?: RequestOptions) => Promise<Response>;
+    getAgentTaskRunProfile: (params: {
+        taskId: string;
+    }, opts?: RequestOptions) => Promise<{
+        digest?: string | undefined;
+        profile?: {
+            [x: string]: unknown;
+        } | undefined;
+        taskId: string;
+    }>;
     getVersion: (opts?: RequestOptions) => Promise<{
         packages?: {
             [x: string]: string;
@@ -1329,6 +1779,35 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         restApiVersion: string;
     }>;
 };
+
+// @public (undocumented)
+type CreateAgentRequest = Static<typeof CreateAgentRequestSchema>;
+
+// @public
+const CreateAgentRequestSchema: TObject<    {
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+}>;
 
 // @public (undocumented)
 export function createChangeEmitter(): ChangeEmitter;
@@ -1636,6 +2115,16 @@ type SaveConnectionRequest = Omit<ConnectionRecord, "status" | "errorCode"> & {
 };
 
 // @public (undocumented)
+type SetAgentModelRequest = Static<typeof SetAgentModelRequestSchema>;
+
+// @public
+const SetAgentModelRequestSchema: TObject<    {
+expectedRevision: TNumber;
+model: TOptional<TUnion<[TString, TNull]>>;
+reasoningEffort: TOptional<TUnion<[TString, TNull]>>;
+}>;
+
+// @public (undocumented)
 interface StreamRunOptions extends RequestOptions {
     lastEventId?: string;
     maxRetries?: number;
@@ -1710,12 +2199,88 @@ export interface SubmitOptions {
 }
 
 // @public (undocumented)
+type SubmitTeammateTaskRequest = Static<typeof SubmitTeammateTaskRequestSchema>;
+
+// @public
+const SubmitTeammateTaskRequestSchema: TObject<    {
+taskId: TOptional<TString>;
+admissionKey: TString;
+kind: TString;
+payload: TRecord<TString, TUnknown>;
+priority: TOptional<TNumber>;
+dependsOn: TOptional<TArray<TString>>;
+parentTaskId: TOptional<TString>;
+taskProfile: TOptional<TObject<    {
+providerId: TOptional<TString>;
+model: TOptional<TString>;
+tools: TOptional<TArray<TString>>;
+requiresVision: TOptional<TBoolean>;
+requiresContinuation: TOptional<TBoolean>;
+permissionMode: TOptional<TString>;
+budgets: TOptional<TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>>;
+truncation: TOptional<TObject<    {
+mode: TLiteral<"explicit">;
+}>>;
+}>>;
+projectSources: TOptional<TArray<TObject<    {
+id: TString;
+kind: TUnion<[TLiteral<"skill">, TLiteral<"resource">]>;
+units: TArray<TObject<    {
+kind: TUnion<[TLiteral<"text">, TLiteral<"toolPair">]>;
+text: TString;
+citations: TArray<TString>;
+required: TBoolean;
+}>>;
+}>>>;
+approvals: TOptional<TArray<TObject<    {
+sessionId: TString;
+grantId: TString;
+digest: TString;
+}>>>;
+}>;
+
+// @public (undocumented)
 type TestProviderResponse = Static<typeof TestProviderResponseSchema>;
 
 // @public
 const TestProviderResponseSchema: TObject<    {
 ok: TBoolean;
 error: TOptional<TString>;
+}>;
+
+// @public (undocumented)
+type UpdateAgentRequest = Static<typeof UpdateAgentRequestSchema>;
+
+// @public
+const UpdateAgentRequestSchema: TObject<    {
+expectedRevision: TNumber;
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
 }>;
 
 // @public (undocumented)
