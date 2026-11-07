@@ -106,17 +106,51 @@ pub struct TaskRecord {
     /// this copy is the readable receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission_key: Option<String>,
+    /// AGENTKIT-89: the ONE immutable effective run profile, pinned inside
+    /// the same admission transaction as the binding above. `None` is an
+    /// unbound or pre-89 admission. A later edit never rewrites it; the
+    /// dispatch-time check re-validates what it REFERENCES, never the pin
+    /// itself. Boxed: the pin is the biggest payload a task row can carry
+    /// and most rows never have one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_profile: Option<Box<PinnedRunProfile>>,
+}
+
+/// AGENTKIT-89: the ONE immutable effective run profile pinned to an
+/// admitted task — the resolved union of host defaults, the agent
+/// definition revision, the project's context selection, and the task's
+/// overrides, frozen at admission with the digest that seals it. Later
+/// definition or setting edits never rewrite it; revocation of anything
+/// it references fences NEW dispatch (checked at use), not the pin.
+/// Contains no secret material by construction: values never enter, only
+/// opaque references and digests.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedRunProfile {
+    /// sha256 over the canonical (key-sorted) serialization of
+    /// `profile`; every reader recomputes it and fails closed.
+    pub digest: String,
+    /// The resolved profile document (grammar: [`crate::run_profile_digest`]
+    /// module docs). Stored verbatim so the pinned meaning survives any
+    /// later edit to the services that resolved it.
+    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
+    pub profile: Value,
+    /// Clock reading at the admission that pinned it (provenance).
+    pub pinned_at: i64,
 }
 
 /// The agent binding an admitted task carries: identity plus the
 /// immutable definition revision plus the idempotency key that admitted
-/// it. Written once, inside the admission transaction, never again.
+/// it — and, for AGENTKIT-89 admissions, the pinned effective run
+/// profile. Written once, inside the admission transaction, never again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskBinding {
     pub agent_id: String,
     pub agent_revision: i64,
     pub admission_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_profile: Option<PinnedRunProfile>,
 }
 
 #[derive(Clone, Debug)]

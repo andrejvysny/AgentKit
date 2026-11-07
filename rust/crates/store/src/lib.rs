@@ -17,6 +17,7 @@ mod models;
 mod proposals;
 mod provider_catalog;
 mod provider_connections;
+mod run_profiles;
 mod schema;
 mod session_ops;
 mod settings_commit;
@@ -48,6 +49,7 @@ pub use provider_connections::{
     register_scoped_provider_connection, restore_provider_continuity,
     revoke_persisted_provider_connection,
 };
+pub use run_profiles::run_profile_digest;
 pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};

@@ -92,6 +92,7 @@ impl Fixture {
             priority: 0,
             depends_on: vec![],
             parent_task_id: None,
+            run_profile: None,
         }
     }
 
@@ -446,6 +447,7 @@ async fn single_worker_parent_wait_releases_capacity_then_resumes_same_task() {
             priority: 0,
             depends_on: vec![],
             parent_task_id: None,
+            run_profile: None,
         })
         .await
         .unwrap();
@@ -548,6 +550,7 @@ async fn the_runner_never_gives_one_agent_two_active_writers() {
                 priority: 0,
                 depends_on: vec![],
                 parent_task_id: None,
+                run_profile: None,
             })
             .await
             .unwrap();

@@ -79,6 +79,7 @@ fn admit(agent_id: &str, key: &str, marker: &str) -> AdmitTeammateTask {
         available_at: None,
         depends_on: vec![],
         parent_task_id: None,
+        run_profile: None,
     }
 }
 
@@ -1058,6 +1059,7 @@ fn bare(task_id: &str, status: TaskStatus) -> TaskRecord {
         agent_id: Some("alice".into()),
         agent_revision: Some(1),
         admission_key: None,
+        run_profile: None,
     }
 }
 
