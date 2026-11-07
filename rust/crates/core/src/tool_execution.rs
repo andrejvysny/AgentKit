@@ -60,6 +60,11 @@ pub(crate) async fn execute(
             call.name,
             errors.join("; ")
         );
+        // Audit symmetry (the durable-host gap): a wrapper that records
+        // receipts for this tool records the pre-body refusal too, so the
+        // execution ledger has a row for it. The model-facing outcome is
+        // exactly the unchanged `schema_invalid` failure below.
+        tool.record_schema_refusal(&context, &args, &message).await;
         return failed(
             call,
             &CoreError::new("schema_invalid", &message),
