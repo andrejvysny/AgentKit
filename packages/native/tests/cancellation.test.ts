@@ -15,7 +15,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NativeSessionService, NativeStore } from "../src/index.js";
+import type { NativeAgentProfile } from "../src/index.js";
 import { available } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 const nativeTest = available ? test : test.skip;
 
@@ -145,6 +147,7 @@ async function openService(
     | "auto_edit"
     | "full_auto"
     | "plan" = "full_auto",
+  profiles?: readonly NativeAgentProfile[],
 ) {
   const store = await NativeStore.open(
     join(mkdtempSync(join(tmpdir(), "agentkit-cancel-")), "store.sqlite"),
@@ -161,6 +164,9 @@ async function openService(
       connectionId,
       model: "loopback-model",
     },
+    // `profiles` is `undefined` for the scenarios that run on the
+    // built-in policy verbatim; `JSON.stringify` drops the key.
+    profiles,
   });
   return { store, service };
 }
@@ -197,7 +203,16 @@ nativeTest(
       { kind: "toolCall", name: "probe_block", args: {} },
       { kind: "content", text: "unreachable" },
     ]);
-    const { store, service } = await openService(provider);
+    // The scenario's only tool is the JS probe that must observe the
+    // abort; the built-in `coding` allow-list would filter it out before
+    // staging, and its `ask` seed would park the call before user code.
+    const { store, service } = await openService(provider, "full_auto", [
+      testProfile("coding", {
+        kind: "coding",
+        tools: ["probe_block"],
+        permissionMode: "full_auto",
+      }),
+    ]);
     try {
       let sawAbort = false;
       let observedAttemptId: string | null | undefined;
@@ -287,7 +302,16 @@ nativeTest(
       { kind: "toolCall", name: "probe_stubborn", args: {} },
       { kind: "content", text: "unreachable" },
     ]);
-    const { store, service } = await openService(provider);
+    // The stubborn JS probe must actually be staged and dispatched — the
+    // built-in `coding` allow-list does not list it, so register a policy
+    // carrying exactly that tool, running without an approval gate.
+    const { store, service } = await openService(provider, "full_auto", [
+      testProfile("coding", {
+        kind: "coding",
+        tools: ["probe_stubborn"],
+        permissionMode: "full_auto",
+      }),
+    ]);
     try {
       let releaseResolve!: () => void;
       const release = new Promise<void>((resolve) => {

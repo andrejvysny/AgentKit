@@ -64,18 +64,22 @@ async fn non_session_chats_answer_absence_never_error() {
             .unwrap(),
         None
     );
-    // A real session keeps its behavior: no execution state yet is absence.
+    // A session inherits its profile permission mode.
     service
         .create_session(&CreateSessionInput {
             session_id: Some("session-1".into()),
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             ..CreateSessionInput::default()
         })
         .await
         .unwrap();
     assert_eq!(
-        authority.mode_of(&context("session-1")).await.unwrap(),
-        None
+        authority
+            .mode_of(&context("session-1"))
+            .await
+            .unwrap()
+            .map(|mode| mode.as_str().to_owned()),
+        Some("ask".to_owned())
     );
 }
 
@@ -86,7 +90,7 @@ async fn a_session_durable_mode_answers_and_malformed_state_stays_an_error() {
     service
         .create_session(&CreateSessionInput {
             session_id: Some("session-1".into()),
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             ..CreateSessionInput::default()
         })
         .await

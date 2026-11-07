@@ -133,6 +133,15 @@ fn event(seq: u64) -> Value {
     json!({"seq":seq,"eventId":format!("e{seq}"),"type":"run.message.delta","runId":"r",
         "timestamp":"2026-01-01T00:00:00Z","contractVersion":"0.7.0","data":{"delta":format!("{seq}")}})
 }
+async fn stream(client: &reqwest::Client, base: &str, cursor: Option<&str>) -> reqwest::Response {
+    let mut request = client
+        .get(format!("{base}/v1/runs/r/stream"))
+        .header("authorization", "one");
+    if let Some(cursor) = cursor {
+        request = request.header("last-event-id", cursor);
+    }
+    request.send().await.unwrap()
+}
 fn body(operation: &str) -> Value {
     match operation {
         "submitMessage" => json!({"content":"hello"}),
@@ -305,6 +314,99 @@ async fn replay_unknown_cursor_and_final_drain() {
         assert_eq!(actual, ids);
         assert!(text.ends_with("event: agentkit.stream.settled\ndata: {}\n\n"));
     }
+    // The boundary is read-only in both directions. `dispatch` is the backend's
+    // only write path (`events`/`run_status` are the read paths), so an empty
+    // call log proves neither a resumed nor an unknown cursor admitted, resumed
+    // or submitted work: reconnect observes the durable log, it never starts it.
+    assert!(
+        fake.calls.lock().unwrap().is_empty(),
+        "a reconnect must never dispatch work: {:?}",
+        *fake.calls.lock().unwrap()
+    );
+    assert!(
+        fake.event_reads.load(Ordering::SeqCst) > 0,
+        "both cursors must have read the durable log"
+    );
+    task.abort();
+}
+
+/// AGENTKIT-81: the full replay a unknown `Last-Event-ID` earns must be
+/// announced, not silent. The response carries the machine-readable
+/// `x-agentkit-stream-resync` header AND an `agentkit.stream.resync` control
+/// frame before any replayed event; a resumed or fresh stream carries
+/// neither, so a client can always tell "the tail you missed" apart from
+/// "everything, because your cursor was unknown".
+#[tokio::test]
+async fn unknown_last_event_id_announces_the_full_replay() {
+    let fake = Arc::new(Fake::default());
+    *fake.log.lock().unwrap() = (0..5).map(event).collect();
+    fake.settled.store(true, Ordering::SeqCst);
+    let (base, task) = serve(fake.clone(), Config::default()).await;
+    let client = reqwest::Client::new();
+
+    let response = stream(&client, &base, Some("from-another-run")).await;
+    assert_eq!(
+        response.headers()["x-agentkit-stream-resync"],
+        "unknown_last_event_id",
+        "a full replay caused by an unknown cursor must announce itself in the headers"
+    );
+    let text = response.text().await.unwrap();
+    let frames: Vec<&str> = text.split("\n\n").collect();
+    assert!(
+        frames[0].starts_with("retry:"),
+        "the reconnect hint still precedes everything: {frames:?}"
+    );
+    let lines: Vec<&str> = frames[1].lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "event: agentkit.stream.resync",
+            "data: {\"reason\":\"unknown_last_event_id\"}"
+        ],
+        "the resync control frame must be the first frame after the hint"
+    );
+    let ids: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("id: "))
+        .collect();
+    assert_eq!(
+        ids,
+        ["e0", "e1", "e2", "e3", "e4"],
+        "the replay itself is unchanged"
+    );
+    assert!(text.ends_with("event: agentkit.stream.settled\ndata: {}\n\n"));
+
+    let response = stream(&client, &base, Some("e2")).await;
+    assert!(
+        response.headers().get("x-agentkit-stream-resync").is_none(),
+        "a honoured cursor is not a resync"
+    );
+    let text = response.text().await.unwrap();
+    assert!(!text.contains("agentkit.stream.resync"));
+    let ids: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("id: "))
+        .collect();
+    assert_eq!(ids, ["e3", "e4"]);
+
+    let response = stream(&client, &base, None).await;
+    assert!(
+        response.headers().get("x-agentkit-stream-resync").is_none(),
+        "a fresh stream is not a resync"
+    );
+    let text = response.text().await.unwrap();
+    assert!(!text.contains("agentkit.stream.resync"));
+    let ids: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("id: "))
+        .collect();
+    assert_eq!(ids, ["e0", "e1", "e2", "e3", "e4"]);
+
+    // A blank cursor is no cursor (same rule as the TypeScript transport).
+    let response = stream(&client, &base, Some("   ")).await;
+    assert!(response.headers().get("x-agentkit-stream-resync").is_none());
+    let text = response.text().await.unwrap();
+    assert!(!text.contains("agentkit.stream.resync"));
     task.abort();
 }
 

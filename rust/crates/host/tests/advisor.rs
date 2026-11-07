@@ -228,8 +228,10 @@ impl Harness {
             .create_session(&CreateSessionInput {
                 session_id: Some("parent".into()),
                 title: None,
-                profile_id: "p1".into(),
+                profile_id: "coding".into(),
                 profile_digest: None,
+                reasoning_effort: None,
+                content_selection: None,
                 provider_id: None,
                 model: Some("model".into()),
                 workspace: None,
@@ -891,8 +893,10 @@ async fn critical_finding_never_starts_a_turn_on_an_idle_session() {
         .create_session(&CreateSessionInput {
             session_id: Some("idle".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,

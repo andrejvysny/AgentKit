@@ -242,6 +242,13 @@ impl Row {
         }
     }
 
+    fn identity(&self, column: &str) -> Option<String> {
+        match self.get(column)? {
+            Value::String(text) if !text.is_empty() => Some(text.clone()),
+            _ => None,
+        }
+    }
+
     fn integer(&self, column: &str) -> Option<i64> {
         match self.get(column)? {
             // A REAL is accepted only when it is a whole number a binary64
@@ -873,8 +880,8 @@ impl<'a> Importer<'a> {
 
     fn import_chats(&mut self) -> Result<()> {
         for row in self.rows("chats")? {
-            let Some(id) = Row::text(&row, "id") else {
-                self.report.warnings.push("chats: a row has no id".into());
+            let Some(id) = Row::identity(&row, "id") else {
+                self.ignore("chats: a row has no id")?;
                 continue;
             };
             let Some(metadata) = self.json_column("chat", &id, &row, "metadata")? else {
@@ -917,9 +924,7 @@ impl<'a> Importer<'a> {
         for index in parents_first(&rows) {
             let row = &rows[index];
             let Some(id) = Row::text(row, "id") else {
-                self.report
-                    .warnings
-                    .push("messages: a row has no id".into());
+                self.ignore("messages: a row has no id")?;
                 continue;
             };
             let chat_ready = match Row::text(row, "chat_id") {
@@ -1093,10 +1098,8 @@ impl<'a> Importer<'a> {
 
     fn import_tasks(&mut self) -> Result<()> {
         for row in self.rows("tasks")? {
-            let Some(task_id) = Row::text(&row, "task_id") else {
-                self.report
-                    .warnings
-                    .push("tasks: a row has no task_id".into());
+            let Some(task_id) = Row::identity(&row, "task_id") else {
+                self.ignore("tasks: a row has no task_id")?;
                 continue;
             };
             let Some(status) = self.status::<TaskStatus>("task", &task_id, "status", &row)? else {
@@ -1189,13 +1192,11 @@ impl<'a> Importer<'a> {
 impl<'a> Importer<'a> {
     fn import_attempts(&mut self) -> Result<()> {
         for row in self.rows("task_attempts")? {
-            let Some(attempt_id) = Row::text(&row, "attempt_id") else {
-                self.report
-                    .warnings
-                    .push("task_attempts: a row has no attempt_id".into());
+            let Some(attempt_id) = Row::identity(&row, "attempt_id") else {
+                self.ignore("task_attempts: a row has no attempt_id")?;
                 continue;
             };
-            let Some(task_id) = Row::text(&row, "task_id") else {
+            let Some(task_id) = Row::identity(&row, "task_id") else {
                 self.ignore(format!("attempt {attempt_id}: task_id is not there"))?;
                 continue;
             };
@@ -1248,16 +1249,14 @@ impl<'a> Importer<'a> {
     /// answer for itself is rebuilt from the columns, and that is reported.
     fn import_events(&mut self) -> Result<()> {
         for row in self.rows("task_events")? {
-            let Some(task_id) = Row::text(&row, "task_id") else {
-                self.report
-                    .warnings
-                    .push("task_events: a row has no task_id".into());
+            let Some(task_id) = Row::identity(&row, "task_id") else {
+                self.ignore("task_events: a row has no task_id")?;
                 continue;
             };
-            let Some(event_id) = Row::text(&row, "event_id") else {
-                self.report.warnings.push(format!(
+            let Some(event_id) = Row::identity(&row, "event_id") else {
+                self.ignore(format!(
                     "task_events: a row of task {task_id} has no event_id"
-                ));
+                ))?;
                 continue;
             };
             if !self.exists("tasks", "id", &task_id)? {
@@ -1313,10 +1312,8 @@ impl<'a> Importer<'a> {
     fn import_leases(&mut self) -> Result<()> {
         let mut highest = 0_i64;
         for row in self.rows("leases")? {
-            let Some(task_id) = Row::text(&row, "task_id") else {
-                self.report
-                    .warnings
-                    .push("leases: a row has no task_id".into());
+            let Some(task_id) = Row::identity(&row, "task_id") else {
+                self.ignore("leases: a row has no task_id")?;
                 continue;
             };
             if !self.exists("tasks", "id", &task_id)? {
@@ -1352,7 +1349,7 @@ impl<'a> Importer<'a> {
             };
             let lease = Lease {
                 task_id: task_id.clone(),
-                attempt_id: Row::text(&row, "attempt_id").unwrap_or_default(),
+                attempt_id: Row::identity(&row, "attempt_id").unwrap_or_default(),
                 owner_id: Row::text(&row, "owner_id").unwrap_or_default(),
                 lease_token: Row::text(&row, "lease_token").unwrap_or_default(),
                 fencing_token: fencing_token as u64,
@@ -1398,10 +1395,8 @@ impl<'a> Importer<'a> {
     fn import_bindings(&mut self) -> Result<()> {
         if self.table_exists("provider_run_scopes")? {
             for row in self.rows("provider_run_scopes")? {
-                let Some(run_id) = Row::text(&row, "run_id") else {
-                    self.report
-                        .warnings
-                        .push("provider_run_scopes: a row has no run_id".into());
+                let Some(run_id) = Row::identity(&row, "run_id") else {
+                    self.ignore("provider_run_scopes: a row has no run_id")?;
                     continue;
                 };
                 if !self.exists("tasks", "id", &run_id)? {
@@ -1437,10 +1432,8 @@ impl<'a> Importer<'a> {
         }
         if self.table_exists("provider_continuations")? {
             for row in self.rows("provider_continuations")? {
-                let Some(run_id) = Row::text(&row, "run_id") else {
-                    self.report
-                        .warnings
-                        .push("provider_continuations: a row has no run_id".into());
+                let Some(run_id) = Row::identity(&row, "run_id") else {
+                    self.ignore("provider_continuations: a row has no run_id")?;
                     continue;
                 };
                 let Some(anchor_id) = Row::text(&row, "anchor_message_id") else {
@@ -1544,8 +1537,8 @@ impl<'a> Importer<'a> {
             "SELECT execution_id, run_id, approval_request_id, record \
              FROM tool_executions ORDER BY rowid",
         )? {
-            let execution_id = Row::text(&row, "execution_id");
-            let run_id = Row::text(&row, "run_id");
+            let execution_id = Row::identity(&row, "execution_id");
+            let run_id = Row::identity(&row, "run_id");
             // Best-effort field read first: even a row that cannot be
             // PLACED must still be able to name its tool and arguments in a
             // barrier.
@@ -1612,7 +1605,7 @@ impl<'a> Importer<'a> {
                 if let Some(barrier) = seed(reason) {
                     self.record_barrier(barrier)?;
                 }
-                self.report.warnings.push(reason.into());
+                self.ignore(reason)?;
                 continue;
             };
             let Some(run_id) = run_id.clone() else {
@@ -1831,10 +1824,8 @@ impl<'a> Importer<'a> {
             return Ok(());
         }
         for row in self.rows("proposals")? {
-            let Some(id) = Row::text(&row, "id") else {
-                self.report
-                    .warnings
-                    .push("proposals: a row has no id".into());
+            let Some(id) = Row::identity(&row, "id") else {
+                self.ignore("proposals: a row has no id")?;
                 continue;
             };
             let Some(status) = self.status::<ProposalStatus>("proposal", &id, "status", &row)?
@@ -1886,7 +1877,7 @@ impl<'a> Importer<'a> {
             let record = ProposalRecord {
                 id: id.clone(),
                 chat_id: Row::text(&row, "chat_id").unwrap_or_default(),
-                run_id: Row::text(&row, "run_id"),
+                run_id: Row::identity(&row, "run_id"),
                 scope_key: Row::text(&row, "scope_key").unwrap_or_default(),
                 action_id: Row::text(&row, "action_id"),
                 tool_name: Row::text(&row, "tool_name").unwrap_or_default(),
@@ -1898,7 +1889,7 @@ impl<'a> Importer<'a> {
                 warnings,
                 truncated: Row::flag(&row, "truncated").unwrap_or(false),
                 revision_at_create: Row::text(&row, "revision_at_create"),
-                operation_id: Row::text(&row, "operation_id"),
+                operation_id: Row::identity(&row, "operation_id"),
                 decision: self.optional_json("proposal", &id, &row, "decision")?,
                 reason: Row::text(&row, "reason"),
                 created_at,
@@ -1936,10 +1927,8 @@ impl<'a> Importer<'a> {
             return Ok(());
         }
         for row in self.rows("proposal_outcomes")? {
-            let Some(operation_id) = Row::text(&row, "operation_id") else {
-                self.report
-                    .warnings
-                    .push("proposal_outcomes: a row has no operation_id".into());
+            let Some(operation_id) = Row::identity(&row, "operation_id") else {
+                self.ignore("proposal_outcomes: a row has no operation_id")?;
                 continue;
             };
             let Some(status) = Row::text(&row, "status") else {
@@ -2040,8 +2029,8 @@ impl<'a> Importer<'a> {
             return Ok(());
         }
         for row in self.rows("outbox")? {
-            let Some(id) = Row::text(&row, "id") else {
-                self.report.warnings.push("outbox: a row has no id".into());
+            let Some(id) = Row::identity(&row, "id") else {
+                self.ignore("outbox: a row has no id")?;
                 continue;
             };
             let Some(payload) = self.json_column("outbox", &id, &row, "payload")? else {
@@ -2059,7 +2048,7 @@ impl<'a> Importer<'a> {
             let record = OutboxRecord {
                 id: id.clone(),
                 topic: Row::text(&row, "topic").unwrap_or_default(),
-                run_id: Row::text(&row, "run_id"),
+                run_id: Row::identity(&row, "run_id"),
                 payload,
                 created_at,
                 available_at,
@@ -2093,10 +2082,8 @@ impl<'a> Importer<'a> {
     fn import_providers(&mut self) -> Result<()> {
         if self.table_exists("providers")? {
             for row in self.rows("providers")? {
-                let Some(id) = Row::text(&row, "id") else {
-                    self.report
-                        .warnings
-                        .push("providers: a row has no id".into());
+                let Some(id) = Row::identity(&row, "id") else {
+                    self.ignore("providers: a row has no id")?;
                     continue;
                 };
                 let Some(record) = self.provider_record(&id, &row)? else {
@@ -2156,10 +2143,8 @@ impl<'a> Importer<'a> {
         }
         let mut grouped: HashMap<String, Vec<Value>> = HashMap::new();
         for row in self.rows("provider_models")? {
-            let Some(provider_id) = Row::text(&row, "provider_id") else {
-                self.report
-                    .warnings
-                    .push("provider_models: a row has no provider_id".into());
+            let Some(provider_id) = Row::identity(&row, "provider_id") else {
+                self.ignore("provider_models: a row has no provider_id")?;
                 continue;
             };
             let Some(model_id) = Row::text(&row, "model_id") else {
@@ -2220,10 +2205,8 @@ impl<'a> Importer<'a> {
             return Ok(());
         }
         for row in self.rows("provider_capabilities")? {
-            let Some(provider_id) = Row::text(&row, "provider_id") else {
-                self.report
-                    .warnings
-                    .push("provider_capabilities: a row has no provider_id".into());
+            let Some(provider_id) = Row::identity(&row, "provider_id") else {
+                self.ignore("provider_capabilities: a row has no provider_id")?;
                 continue;
             };
             let mut record = Map::new();
@@ -2294,10 +2277,8 @@ impl<'a> Importer<'a> {
         }
         let mut servers = Vec::new();
         for row in self.rows("mcp_servers")? {
-            let Some(id) = Row::text(&row, "id") else {
-                self.report
-                    .warnings
-                    .push("mcp_servers: a row has no id".into());
+            let Some(id) = Row::identity(&row, "id") else {
+                self.ignore("mcp_servers: a row has no id")?;
                 continue;
             };
             let Some(alias) = Row::text(&row, "alias") else {
@@ -2538,9 +2519,7 @@ impl<'a> Importer<'a> {
         let mut highest = 0_i64;
         for row in self.rows("agent_inputs")? {
             let Some(id) = Row::text(&row, "input_id") else {
-                self.report
-                    .warnings
-                    .push("agent_inputs: a row has no id".into());
+                self.ignore("agent_inputs: a row has no id")?;
                 continue;
             };
             let mut record = Map::new();
@@ -2631,9 +2610,7 @@ impl<'a> Importer<'a> {
         }
         for row in self.rows("context_summaries")? {
             let Some(id) = Row::text(&row, "summary_id") else {
-                self.report
-                    .warnings
-                    .push("context_summaries: a row has no id".into());
+                self.ignore("context_summaries: a row has no id")?;
                 continue;
             };
             let mut record = Map::new();
@@ -2675,7 +2652,7 @@ impl<'a> Importer<'a> {
             if missing {
                 continue;
             }
-            if let Some(provider_id) = Row::text(&row, "provider_id") {
+            if let Some(provider_id) = Row::identity(&row, "provider_id") {
                 record.insert("providerId".into(), Value::String(provider_id));
             }
             let Some(details) = self.json_column("context summary", &id, &row, "details")? else {

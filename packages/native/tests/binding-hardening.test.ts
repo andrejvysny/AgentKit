@@ -12,6 +12,7 @@ import { StreamableHTTPClientTransport as LegacyTransport } from "mcp-sdk-v1/cli
 import { NativeSessionService, NativeStore } from "../src/index.js";
 import type { ToolDefinitionJson } from "../src/index.js";
 import { available, missing, required } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 if (required && !available)
   throw new Error(`native binding missing: ${missing.join(", ")}`);
@@ -239,7 +240,10 @@ nativeTest(
   "integer arguments reject non-finite, fractional, and out-of-range numbers",
   async () => {
     const store = await openStore();
-    const service = await store.createService();
+    const service = await store.createService({
+      // The provider only ever returns a final answer; no tool is staged.
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     try {
       for (const bad of [Number.NaN, 1.5, -1, 0, 2 ** 40, Infinity])
         expect(
@@ -275,7 +279,10 @@ nativeTest(
   "cancel() wakes a parked poll at once and close() leaves no live subscription",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // The provider never settles; the turn stages no tools.
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     service.setProvider(() => new Promise(() => undefined));
     try {
       await service.createSession({

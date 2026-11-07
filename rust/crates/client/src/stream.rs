@@ -56,6 +56,17 @@ impl Client {
                         if frame.data.as_deref() != Some("{}") { Err(protocol("Invalid settlement marker"))?; }
                         settled = true; continue;
                     }
+                    // Transport control frame (AGENTKIT-81): announces that a
+                    // real `Last-Event-ID` was not recognised and this stream
+                    // replays the whole log. Consumed, never yielded: like
+                    // `settled`, it carries no `eventId`/`seq` and is not a
+                    // durable run event.
+                    if frame.event.as_deref() == Some("agentkit.stream.resync") {
+                        if frame.data.as_deref() != Some("{\"reason\":\"unknown_last_event_id\"}") {
+                            Err(protocol("Invalid resync marker"))?;
+                        }
+                        continue;
+                    }
                     let Some(data) = frame.data else { continue; };
                     if settled { Err(protocol("Event received after settlement marker"))?; }
                     let event: Value = agentkit_contracts::parse_javascript_json(&data).map_err(|_| protocol("Invalid event JSON"))?;

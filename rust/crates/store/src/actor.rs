@@ -77,6 +77,9 @@ pub struct SqliteStore {
     pub(crate) scope: Option<Arc<TransactionScope>>,
     pub(crate) gate_timeout: Duration,
     pub(crate) aging: crate::TaskAging,
+    /// Application-provided secret for sealing `connector_connections`
+    /// credential values (AGENTKIT-72). `None` selects the store-local key.
+    pub(crate) connector_credential_key: Option<Arc<Vec<u8>>>,
 }
 
 /// Opaque identity that does not keep a SQLite actor or its file lock alive.
@@ -122,12 +125,17 @@ impl SqliteStore {
             ));
         }
         let (mut connection, lock) = schema::open(path.as_ref())?;
+        // Durability fault plan: unset environment means all-zero and this
+        // thread-local bind plus the atomic counter are the whole cost.
+        let faults = std::sync::Arc::new(crate::faults::StoreFaults::from_env());
+        crate::faults::apply_synchronous(&connection, &faults)?;
         let deadlines = Deadlines::new()?;
         let (sender, mut receiver) = mpsc::unbounded_channel::<Job>();
         let (ambient, _) = watch::channel(false);
         let thread = std::thread::Builder::new()
             .name("agentkit-sqlite".into())
             .spawn(move || {
+                crate::faults::bind(faults);
                 let _ownership = lock;
                 while let Some(job) = receiver.blocking_recv() {
                     // `call` jobs catch their own panics to answer the caller;
@@ -149,6 +157,7 @@ impl SqliteStore {
             scope: None,
             gate_timeout: Duration::from_secs(30),
             aging: crate::TaskAging::default(),
+            connector_credential_key: None,
         })
     }
     pub fn memory(capacity: usize) -> Result<Self> {
@@ -162,6 +171,15 @@ impl SqliteStore {
     /// Opts `claim` into priority aging; the default store never ages.
     pub fn with_task_aging(mut self, aging: crate::TaskAging) -> Self {
         self.aging = aging;
+        self
+    }
+    /// Supplies the application secret used to seal `connector_connections`
+    /// credential values at rest (AGENTKIT-72). Production compositions keep
+    /// this secret outside the database file (OS-keychain custody behind the
+    /// `agentkit-connections` SecretStore port is the reference mechanism);
+    /// without it the store falls back to a generated store-local key row.
+    pub fn with_connector_credential_key(mut self, secret: impl Into<Vec<u8>>) -> Self {
+        self.connector_credential_key = Some(Arc::new(secret.into()));
         self
     }
     pub(crate) async fn lock_root(&self) -> Result<tokio::sync::OwnedMutexGuard<()>> {

@@ -152,7 +152,7 @@ are never used as a credential fallback.
 | `listProviders` | Real secret-free projection; unchanged client/React suites check credential leakage. Snapshot restore and durability regressions preserve committed metadata across reopen. | Reads during a reserved mutation fail closed; no claim of linearizable multi-route reads. |
 | `createProvider` | Real create/schema checks, typed duplicate-provider 409, secret-free responses and explicit external-HTTP opt-in. Failed metadata commits leave no visible ghost; failed secret writes retain recoverable durable metadata. | Successful platform keychain access remains unqualified; failed/cancelled secret work can leave obsolete slots. |
 | `updateProvider` | Real label/enabled/credential changes and missing-provider 404. Durability tests cover atomic selected-model persistence, stale authorities, generation limits and cancellation before/after commit. | Application-owned secret adapters must report failures accurately; unknown commits require reopen. |
-| `deleteProvider` | Real deletion/204 and secret cleanup; rejected metadata transactions retain connection, selected model and catalogue together. Generation high-water marks survive deletion/reopen. | Secret deletion failures can leave obsolete slots; no automatic old-credential fallback. |
+| `deleteProvider` | Real deletion/204 and secret cleanup; rejected metadata transactions retain connection, selected model and catalogue together. Generation high-water marks survive deletion/reopen. Secret-first teardown (AGENTKIT-37): a failed secret deletion aborts the reservation with an explicit error and the config row intact (retry finishes the job); a rolled-back durable commit restores the captured credential — a live credential is never silently orphaned. | Failed secret deletion on a platform vault is qualified on the in-memory store only; no automatic old-credential fallback. |
 | `listModels` | Real native empty/catalogue reads; unchanged client/React suites load the seeded catalogue and place it under the requested provider ID. | Missing-provider/cache-expiry/concurrent-refresh matrix and live catalogue qualification. |
 | `refreshProviderModels` | Real native route invokes the configured fixture operation, validates a model result and persists the returned catalogue; unchanged React suite observes 501 when the port is absent. | Concrete consent-backed external discovery is separately tested at the connections layer; this HTTP fixture does not qualify live discovery or every refresh race/error. |
 | `testProvider` | Real native route invokes a configured probe and returns `ok:true`; unchanged React suite handles the absent-port 501. | Live consent-backed probing, bounded failure/latency cases and HTTP 200/`ok:false` combinations. |
@@ -684,6 +684,57 @@ were re-qualified locally with Node v22.20.0 installed.
   removed packages and the refreshed native wrapper surface
   (`bun run update:api`, reviewed diff — only typebox internals moved from
   import headers into the inlined flattened-d.ts report, no surface change).
+
+### M0 fault matrix (2026-11-06)
+
+The Hybrid M0 gate requires that injected failures be executable checks, not
+prose: "replay does not start work, stale approval cannot authorize,
+cancellation settles truthfully, and uncertain effects are not replayed", with
+faults injected before and after admission, approval persistence, tool dispatch,
+effect-receipt commit, event publication and client acknowledgment. The schedule
+is the shared [`runner-faults-v1.json`](../../rust/crates/contracts/tests/fixtures/conformance/runner-faults-v1.json);
+each boundary has one authored profile and one Rust test that reads the outcome
+back through the durable store. [Runner fault conformance notes](../../rust/crates/contracts/tests/fixtures/conformance/runner-faults.md)
+record which layer executes each profile.
+
+| Gate property | Profile | Executable check |
+| --- | --- | --- |
+| History/replay never admits work | `m0_replay_no_admission` | [`history_replay_never_admits_work`](../../rust/crates/host/tests/m0_fault_admission.rs) |
+| A stale approval can never authorize a dispatch | `m0_approval_stale_dispatch` | [`a_stale_approval_can_never_authorize_a_dispatch`](../../rust/crates/host/tests/m0_fault_approval.rs) |
+| Cancellation settles truthfully, never assumes rollback | `m0_cancel_uncertain_effect` | [`cancellation_settles_truthfully_and_never_assumes_rollback`](../../rust/crates/host/tests/m0_fault_cancellation.rs) |
+| An uncertain effect is never replayed | `m0_receipt_uncertain` | [`an_uncertain_effect_is_never_replayed`](../../rust/crates/host/tests/m0_fault_effect_receipt.rs) |
+
+| Boundary | Profile | Executable check |
+| --- | --- | --- |
+| Before admission (refusal leaves no row) | `m0_admission_refused` | [`a_refused_admission_leaves_no_durable_row`](../../rust/crates/host/tests/m0_fault_admission.rs) |
+| After admission (duplicate request) | `m0_admission_duplicate` | [`a_duplicate_request_admits_exactly_one_task`](../../rust/crates/host/tests/m0_fault_admission.rs) |
+| Before/after approval persistence | `m0_approval_persisted_replay` | [`an_approval_answered_before_dispatch_survives_the_restart`](../../rust/crates/host/tests/m0_fault_approval.rs) |
+| Before effect-receipt commit (crash between write and result) | `m0_receipt_uncertain` | [`an_uncertain_effect_is_never_replayed`](../../rust/crates/host/tests/m0_fault_effect_receipt.rs) |
+| After effect-receipt commit | `m0_receipt_committed` | [`a_committed_effect_is_recorded_once_and_never_re_executed`](../../rust/crates/host/tests/m0_fault_effect_receipt.rs) |
+| Before event publication (regression, duplicate id) | `m0_publish_gap` | [`a_rejected_publication_commits_nothing`](../../rust/crates/host/tests/m0_fault_publication.rs) |
+| Before/after client acknowledgment | `m0_ack_delivery` | [`a_late_acknowledgment_after_the_claim_expired_is_refused`](../../rust/crates/host/tests/m0_fault_publication.rs) |
+| Restart/reconnect with an old cursor | `m0_old_cursor_reconnect` | [`reconnecting_with_an_old_cursor_serves_only_unseen_events`](../../rust/crates/host/tests/m0_fault_publication.rs) |
+| Cancellation before dispatch | `m0_cancel_queued` | [`a_queued_task_cancels_without_an_attempt_or_effect`](../../rust/crates/host/tests/m0_fault_cancellation.rs) |
+| Corrupted or incompatible record | `m0_record_corrupted` | [`an_unreadable_record_is_an_error_never_an_absence`](../../rust/crates/host/tests/m0_fault_corrupt_record.rs) |
+
+Approval staleness at the answer boundary, uncertainty parking, lease fencing of
+a superseded worker, cancellation after a committed effect, crash recovery and
+classified retry stay covered by the pre-existing focused suites
+([`answer_stale.rs`](../../rust/crates/host/tests/answer_stale.rs),
+[`session_approvals.rs`](../../rust/crates/host/tests/session_approvals.rs),
+[`uncertain_resolution.rs`](../../rust/crates/host/tests/uncertain_resolution.rs)
+and the six differential profiles in
+[`runner_conformance/`](../../rust/crates/host/tests/runner_conformance/));
+the M0 profiles above do not duplicate them, they add the receipt, approval,
+publication, acknowledgment, cursor and corruption edges those six do not
+reach.
+
+Four matrix edges are **not** executable at the public API and are recorded as
+open rather than waived: storage reported full or unavailable, subprocess
+descendant termination with PID reuse, a deadline expiring while a real
+subprocess continues, and a slow MCP `call_tool`. Each needs a source-level
+seam; none may be simulated by weakening a guard, and none is asserted as
+qualified anywhere in this document.
 
 ## Remaining release gates
 

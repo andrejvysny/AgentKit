@@ -557,6 +557,13 @@ impl SessionService {
         )
         .await
         .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
+        // One registry per service: `sessionProfileId` below is resolved at
+        // chat creation by the same admission `createSession` uses, so the
+        // boundary resolves against the profiles THIS service was given
+        // (`createService({ profiles })`, or the host built-ins) — never a
+        // second, narrower built-in-only registry that would 400 on a
+        // profile the service itself admits.
+        backend = backend.with_profiles(core.service.profiles());
         if let Some(profile_id) = &options.session_profile_id {
             backend = backend
                 .with_session_profile(profile_id)

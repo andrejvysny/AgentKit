@@ -148,7 +148,12 @@ impl SessionService {
     /// `optionsJson` (optional): `{closeTimeoutMs?, jsToolAuthority?:
     /// {configuredMode?, planToolNames?, planGrantMode?}, providerConfig?:
     /// {protocol, providerId, connectionId, model, temperature?,
-    /// maxTokens?}, providerAuthKind?: "api-key"|"chatgpt-account"}`.
+    /// maxTokens?}, providerAuthKind?: "api-key"|"chatgpt-account",
+    /// profiles?: AgentProfile[]}`.
+    /// With `profiles`, the host profile registry is the built-ins with those
+    /// definitions merged over them (same id overrides, `extends` inherits),
+    /// exactly as `ProfileRegistry::new` merges; absent, it is the built-ins
+    /// alone. Sessions admit only profiles that registry knows.
     /// With `providerConfig`, provider HTTP/SSE executes in
     /// Rust over a connection registered via `registerProviderConnection`
     /// (keys never appear in `optionsJson`); without it, the JS callback
@@ -313,7 +318,12 @@ impl SessionService {
             plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
             wake: Some(host.wake_handle()),
         })
-        .with_gate(host.admission_gate());
+        .with_gate(host.admission_gate())
+        // Admission resolves every session profile against THIS registry, so
+        // the binding's profile surface is exactly the built-ins plus what
+        // `profiles` declared — never an ad-hoc default invented for an
+        // unknown id.
+        .with_profiles(Arc::new(options.profiles.clone().unwrap_or_default()));
         host.set_session_flush_planner(Arc::new(service.clone()))
             .await;
         // Bound before the worker exists: a run can never query an unbound
@@ -1573,6 +1583,14 @@ struct ServiceOptions {
     /// hold a slot while awaiting children) and is the ceiling later
     /// `configureSubagents` calls are clamped to.
     subagent_max_concurrency: i64,
+    /// Host-owned profiles this service may resolve (`profiles`). `None` is
+    /// the crate's built-in registry, verbatim; a present registry is the
+    /// built-ins with the supplied definitions merged over them (same id
+    /// overrides, `extends` inherits), exactly as `ProfileRegistry::new`
+    /// merges. Sessions admit ONLY profiles this registry knows, so a
+    /// consumer that exercises tools outside the built-in sets describes the
+    /// profile it needs instead of the binding inventing a default.
+    profiles: Option<agentkit_host::ProfileRegistry>,
 }
 
 /// The Rust-native provider lane selected by `providerConfig`. A
@@ -1623,6 +1641,7 @@ impl Default for ServiceOptions {
             subagent_max_concurrency: agentkit_host::SubagentConfig::default()
                 .limits
                 .max_concurrency,
+            profiles: None,
         }
     }
 }
@@ -1711,6 +1730,21 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
             ));
         }
         options.account_backed_provider = kind == "chatgpt-account";
+    }
+    // Host-owned profiles: the same `ProfileRegistry` merge the HTTP boundary
+    // installs (`Server::with_profiles`). Definitions are validated by the
+    // host — identity, kind, permission mode, tool uniqueness, role/tool
+    // matrix, limit bounds — so a malformed profile fails construction with
+    // `invalid_input`, never a session that silently runs on a different
+    // policy than the caller described.
+    if let Some(value) = object.get("profiles") {
+        let items = value
+            .as_array()
+            .ok_or_else(|| errors::invalid("profiles must be an array when present"))?;
+        options.profiles = Some(
+            agentkit_host::ProfileRegistry::new(items)
+                .map_err(|error| errors::invalid(format!("profiles: {error}")))?,
+        );
     }
     Ok(options)
 }
@@ -1931,10 +1965,35 @@ fn parse_create_session(text: &str) -> Result<CreateSessionInput> {
         Some(value) if value.is_object() => Some(value.clone()),
         Some(_) => return Err(errors::invalid("metadata must be an object when present")),
     };
+    // Same grammar as `setModel`: absent is "leave the profile default",
+    // explicit null clears it, and an unknown effort is a refusal, never a
+    // silent downgrade.
+    let reasoning_effort = match object.get("reasoningEffort") {
+        None => None,
+        Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(
+            serde_json::from_value::<agentkit_core::ReasoningEffort>(Value::String(value.clone()))
+                .map_err(|_| errors::invalid(format!("unknown reasoningEffort \"{value}\"")))?,
+        ),
+        Some(_) => return Err(errors::invalid("reasoningEffort must be a string or null")),
+    };
+    // The selection crosses as JSON so the portable contract stays the single
+    // schema: a malformed-present selection refuses here, exactly as the
+    // internal path refuses it at descriptor validation time.
+    let content_selection = match object.get("contentSelection") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            serde_json::from_value::<agentkit_host::RunContentSelection>(value.clone()).map_err(
+                |error| errors::invalid(format!("contentSelection is invalid: {error}")),
+            )?,
+        ),
+    };
     Ok(CreateSessionInput {
         session_id: optional_string(&object, "sessionId")?,
         title: optional_string(&object, "title")?,
         profile_id,
+        reasoning_effort,
+        content_selection,
         profile_digest: optional_string_strict(&object, "profileDigest")?,
         provider_id: optional_string_strict(&object, "providerId")?,
         model: optional_string_strict(&object, "model")?,
@@ -2231,6 +2290,58 @@ mod tests {
             let error = options_with(json!({"additionalProviders": bad.clone()}))
                 .err()
                 .unwrap_or_else(|| panic!("{bad} accepted"));
+            invalid_input(error);
+        }
+    }
+
+    #[test]
+    fn declared_profiles_extend_the_registry_and_malformed_ones_fail_construction() {
+        // Absent, the registry is the built-ins verbatim: the option is an
+        // extension, so it cannot become a way around profile enforcement.
+        assert!(parse_service_options(None).unwrap().profiles.is_none());
+        let registry = options_with(json!({"profiles": [
+            {"id": "custom", "extends": "coding", "limits": {"maxToolIterations": 3}}
+        ]}))
+        .unwrap()
+        .profiles
+        .expect("the declared registry");
+        let custom = registry.resolve("custom").expect("declared profile");
+        assert_eq!(custom.limits.max_tool_iterations, Some(3));
+        // `extends` inherits the parent's allow-list verbatim...
+        assert_eq!(
+            custom.tools,
+            registry.resolve("coding").expect("built-in").tools
+        );
+        // ...and the built-ins stay admissible beside it, while an
+        // undeclared id still has nothing to resolve against.
+        assert!(registry.resolve("automation").is_ok());
+        assert!(registry.resolve("undeclared").is_err());
+        // The host's own validation runs at construction: a definition it
+        // rejects never reaches a session that could run on a looser policy.
+        let definition = |extra: Value| {
+            let mut base = json!({
+                "id": "case",
+                "kind": "coding",
+                "instructions": "",
+                "tools": [],
+                "permissionMode": "ask",
+            });
+            for (key, value) in extra.as_object().expect("entry") {
+                base[key] = value.clone();
+            }
+            json!([base])
+        };
+        for rejected in [
+            definition(json!({"kind": "wizard"})),
+            definition(json!({"permissionMode": "sometimes"})),
+            definition(json!({"tools": ["a", "a"]})),
+            definition(json!({"tools": ["write_file"], "role": "reviewer"})),
+            definition(json!({"limits": {"maxToolIterations": 0}})),
+            json!({"id": "not-an-array"}),
+        ] {
+            let error = options_with(json!({"profiles": rejected.clone()}))
+                .err()
+                .unwrap_or_else(|| panic!("{rejected} accepted"));
             invalid_input(error);
         }
     }

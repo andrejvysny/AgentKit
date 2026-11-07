@@ -38,6 +38,29 @@ export interface RunContentSelection {
   skills?: SkillSelection[];
 }
 
+/**
+ * How much hidden reasoning the provider may spend on one turn.
+ *
+ * A closed set, and an unrecognised level is a refusal rather than a rounding:
+ * a caller that asked for more thinking and silently got less cannot tell from
+ * the transcript, and the answer it got may be the one it was trying to avoid.
+ * Absent means "the provider's own default", which is not the same thing as the
+ * lowest level — a host that fills in a default here has answered a question the
+ * caller never asked.
+ *
+ * Deliberately NOT re-exported from the `schemas.ts` barrel: it is a member
+ * schema, and the two turn requests inline it, so the frozen public schema
+ * surface is unchanged and a consumer that needs the set reads it off
+ * `SubmitMessageRequestSchema.properties.reasoningEffort`.
+ */
+export const RunReasoningEffortSchema = Type.Union([
+  Type.Literal("minimal"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+]);
+export type RunReasoningEffort = Static<typeof RunReasoningEffortSchema>;
+
 export const RunContentSelectionSchema = Type.Object({
   template: Type.Optional(
     Type.Object({

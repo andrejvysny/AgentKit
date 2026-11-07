@@ -247,6 +247,11 @@ itself) creates real pressure for them.
   between those two awaits leaves exactly the orphaned-secret state the
   route's own docstring names as "the worst combination a credential can
   have." The order should invert: delete the secret first, then the config.
+  **Native lane fixed (AGENTKIT-37):** `rust/crates/host/src/http/providers.rs`
+  now retires the secret before committing the row deletion (failed deletion
+  aborts the reservation with the row intact and is retryable; a rolled-back
+  commit restores the captured values). The TypeScript reference route above
+  is the remaining lane.
 - **`sse.ts`'s heartbeat reads `Date.now()` directly**, four call sites in
   `packages/transport-http/src/sse.ts`, rather than through the injected
   `Clock` port every other time-dependent decision in this codebase goes

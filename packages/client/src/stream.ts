@@ -252,6 +252,17 @@ async function* connect(
       settled = true;
       continue;
     }
+    if (frame.event === "agentkit.stream.resync") {
+      // AGENTKIT-81: the server announces a full replay (an unknown
+      // `Last-Event-ID` earned it) with this control frame. It is consumed
+      // here — never surfaced as a run event; dedupe by seq already keeps the
+      // replay idempotent. Anything other than the exact marker is protocol
+      // drift.
+      if (frame.data !== '{"reason":"unknown_last_event_id"}') {
+        throw new Error("Run event stream carried an invalid resync marker.");
+      }
+      continue;
+    }
     yield frame;
   }
   if (!settled) {

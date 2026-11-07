@@ -13,9 +13,12 @@
 //! are thin arms over these methods.
 //!
 //! `connector_connections` DOES hold secrets: `transport.env`/
-//! `transport.headers` values are stored in plaintext in the record JSON and
-//! are masked (`***`) only on read paths. Saving a record whose value is the
+//! `transport.headers` values are sealed with AES-256-GCM at rest
+//! (`connector_crypto`, AGENTKIT-72 — plaintext is refused on every write)
+//! and masked (`***`) on read paths. Saving a record whose value is the
 //! mask keeps the stored value, so a get -> save round trip is lossless.
+//! Rows written before the sealing fix still read (fail-closed on foreign
+//! envelopes) and are lazily re-encrypted in place on first read.
 //! `secretRefs` entries are refused outright on save —
 //! the binding's deny-all posture (`docs/rust/native-binding-milestone.md`
 //! "Open gaps": no OAuth, deny-all secret resolution) never accepts a
@@ -730,6 +733,107 @@ pub fn validate_connection_config(config: &Value) -> Result<String> {
 /// Placeholder every read path shows in place of a credential-shaped value.
 const REDACTED: &str = "***";
 
+/// Visit every `transport.env` / `transport.headers` string value of a
+/// config with a fallible transform (seal on write, open on read).
+fn for_each_credential(
+    config: &mut Map<String, Value>,
+    visit: &mut impl FnMut(&mut Value) -> Result<()>,
+) -> Result<()> {
+    let Some(transport) = config.get_mut("transport").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    for field in ["env", "headers"] {
+        let Some(bag) = transport.get_mut(field).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for entry in bag.values_mut() {
+            if entry.is_string() {
+                visit(entry)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// AGENTKIT-72 write path: every credential value of a record about to be
+/// persisted is sealed; a new write never stores plaintext. Values already
+/// sealed (restored from the stored record toward the same endpoint) are
+/// left alone so a get -> save round trip does not nest envelopes.
+fn seal_credentials(
+    crypto: &crate::connector_crypto::ConnectorCrypto,
+    config: &mut Map<String, Value>,
+) -> Result<()> {
+    for_each_credential(config, &mut |entry| {
+        let text = entry.as_str().expect("string values only");
+        if !crate::connector_crypto::ConnectorCrypto::is_sealed(text) {
+            *entry = Value::String(crypto.seal(text)?);
+        }
+        Ok(())
+    })
+}
+
+/// Reject client-supplied values that already carry the store envelope
+/// marker: only this module produces envelopes, and a forged one would
+/// poison the record against every later read.
+fn refuse_forged_envelopes(config: &Value) -> Result<()> {
+    let mut config = config.as_object().expect("validated").clone();
+    for_each_credential(&mut config, &mut |entry| {
+        if crate::connector_crypto::ConnectorCrypto::is_sealed(entry.as_str().expect("string")) {
+            return Err(StoreError::InvalidInput(
+                "credential values must not carry the store envelope prefix".into(),
+            ));
+        }
+        Ok(())
+    })
+}
+
+/// AGENTKIT-72 read path: open every sealed credential value (fail-closed:
+/// a foreign or corrupt envelope is an error, never silent ciphertext).
+/// Returns true when a legacy plaintext value was found and lazily
+/// re-sealed — the caller persists the upgraded record in the same call,
+/// so pre-fix rows migrate credential by credential on first read.
+fn open_credentials(
+    crypto: &crate::connector_crypto::ConnectorCrypto,
+    record: &mut Value,
+) -> Result<bool> {
+    let Some(config) = record.get_mut("config").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    let mut upgraded = false;
+    for_each_credential(config, &mut |entry| {
+        let text = entry.as_str().expect("string values only").to_owned();
+        if crate::connector_crypto::ConnectorCrypto::is_sealed(&text) {
+            *entry = Value::String(crypto.open(&text)?);
+        } else {
+            *entry = Value::String(crypto.seal(&text)?);
+            upgraded = true;
+        }
+        Ok(())
+    })?;
+    Ok(upgraded)
+}
+
+/// True when a config carries at least one credential value that is not
+/// already sealed — the trigger for resolving the record key lazily so
+/// credential-free saves never pay for (or create) key material.
+fn has_unsealed_credentials(config: &Value) -> bool {
+    let Some(transport) = config.get("transport").and_then(Value::as_object) else {
+        return false;
+    };
+    ["env", "headers"].iter().any(|field| {
+        transport
+            .get(*field)
+            .and_then(Value::as_object)
+            .is_some_and(|bag| {
+                bag.values().any(|entry| {
+                    entry.as_str().is_some_and(|text| {
+                        !crate::connector_crypto::ConnectorCrypto::is_sealed(text)
+                    })
+                })
+            })
+    })
+}
+
 /// A client that read a record back (values masked) and saves it again sends
 /// the mask, not the secret. Any `transport.env` / `transport.headers` value
 /// equal to the mask keeps the value already stored under the same key, so a
@@ -1044,6 +1148,7 @@ impl SqliteStore {
         record: Value,
         expected_revision: Option<i64>,
     ) -> Result<Value> {
+        let injected = self.connector_credential_key.clone();
         self.call(move |db| {
             let transaction = atomic(db)?;
             // The reference's exact order: compare-and-swap first, then the
@@ -1130,6 +1235,7 @@ impl SqliteStore {
                 ));
             }
             validate_connection_config(&record["config"])?;
+            refuse_forged_envelopes(&record["config"])?;
             let mut draft = record
                 .as_object()
                 .expect("validated")
@@ -1144,6 +1250,15 @@ impl SqliteStore {
             config.insert("alias".into(), Value::String(alias));
             if let Some((_, text)) = existing.as_ref() {
                 keep_redacted_secrets(&read_stored(text)?, &mut config)?;
+            }
+            // AGENTKIT-72: seal before serializing — the row never holds a
+            // plaintext credential value.
+            if has_unsealed_credentials(&Value::Object(config.clone())) {
+                let crypto = crate::connector_crypto::ConnectorCrypto::resolve(
+                    &transaction,
+                    injected.as_deref().map(Vec::as_slice),
+                )?;
+                seal_credentials(&crypto, &mut config)?;
             }
             draft.insert("config".into(), Value::Object(config));
             draft.insert("status".into(), Value::String("disconnected".into()));
@@ -1171,25 +1286,47 @@ impl SqliteStore {
     }
 
     /// `ConnectionStore.list`: records by id (the shared adapter's order),
-    /// credential-shaped values redacted.
+    /// credential-shaped values redacted. Sealed values are opened (fail
+    /// closed); legacy plaintext values are lazily re-sealed durably.
     pub async fn list_connections(&self) -> Result<Vec<Value>> {
+        let injected = self.connector_credential_key.clone();
         self.call(move |db| {
-            let mut statement =
-                db.prepare("SELECT record FROM connector_connections ORDER BY id")?;
-            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-            rows.map(|row| {
-                let mut record = read_stored(&row?)?;
+            let rows: Vec<(String, String)> = {
+                let mut statement =
+                    db.prepare("SELECT id, record FROM connector_connections ORDER BY id")?;
+                let rows = statement.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                rows.collect::<std::result::Result<_, _>>()?
+            };
+            let mut records = Vec::new();
+            for (id, text) in rows {
+                let mut record = read_stored(&text)?;
+                if open_credentials(
+                    &crate::connector_crypto::ConnectorCrypto::resolve(
+                        db,
+                        injected.as_deref().map(Vec::as_slice),
+                    )?,
+                    &mut record,
+                )? {
+                    db.execute(
+                        "UPDATE connector_connections SET record = ?2 WHERE id = ?1",
+                        params![id, persisted(db, &record)?],
+                    )?;
+                }
                 redact_connection(&mut record);
-                Ok(record)
-            })
-            .collect()
+                records.push(record);
+            }
+            Ok(records)
         })
         .await
     }
 
     /// `ConnectionStore.get`: the record or absence, credential-shaped
-    /// values redacted.
+    /// values redacted. Sealed values are opened (fail closed); legacy
+    /// plaintext values are lazily re-sealed durably.
     pub async fn get_connection(&self, id: String) -> Result<Option<Value>> {
+        let injected = self.connector_credential_key.clone();
         self.call(move |db| {
             let row: Option<String> = db
                 .query_row(
@@ -1200,6 +1337,18 @@ impl SqliteStore {
                 .optional()?;
             let Some(text) = row else { return Ok(None) };
             let mut record = read_stored(&text)?;
+            if open_credentials(
+                &crate::connector_crypto::ConnectorCrypto::resolve(
+                    db,
+                    injected.as_deref().map(Vec::as_slice),
+                )?,
+                &mut record,
+            )? {
+                db.execute(
+                    "UPDATE connector_connections SET record = ?2 WHERE id = ?1",
+                    params![id, persisted(db, &record)?],
+                )?;
+            }
             redact_connection(&mut record);
             Ok(Some(record))
         })
@@ -1207,7 +1356,7 @@ impl SqliteStore {
     }
 
     /// `ConnectionService.remove` (the store leg): local deletion always
-    /// takes effect; deleting the row drops its plaintext env/header values and
+    /// takes effect; deleting the row drops its sealed env/header values and
     /// remote revocation is the documented OAuth reduction refused above
     /// this layer. Unknown ids are a no-op, exactly like the adapter.
     pub async fn delete_connection(&self, id: String) -> Result<()> {
@@ -1301,6 +1450,7 @@ impl SqliteStore {
             let mut messages = Vec::new();
             let mut blocks = Vec::new();
             let mut unavailable = Vec::new();
+            let mut used_connectors = std::collections::BTreeSet::new();
             if let Some(template) = selection.get("template").filter(|v| !v.is_null()) {
                 let rendered = render_prompt_template(&fetch_template(db, template)?, template)?;
                 messages = rendered["messages"].as_array().expect("shape").clone();
@@ -1359,6 +1509,7 @@ impl SqliteStore {
                             "Skill changed during activation.".into(),
                         ));
                     }
+                    used_connectors.extend(requirements.into_iter().map(str::to_owned));
                     blocks.push(json!({
                         "id": format!("skill:{}@{}", record["id"].as_str().expect("stored"), revision),
                         "title": format!("Skill: {}", record["name"].as_str().expect("stored")),
@@ -1374,7 +1525,7 @@ impl SqliteStore {
                     unavailable.push(json!({ "id": id, "reason": error.to_string() }));
                 }
             }
-            Ok(json!({ "blocks": blocks, "messages": messages, "unavailable": unavailable }))
+            Ok(json!({ "blocks": blocks, "messages": messages, "unavailable": unavailable, "authorizedConnectors": used_connectors }))
         })
         .await
     }
@@ -1428,6 +1579,7 @@ fn select_skill(db: &Connection, id: &str) -> Result<Option<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connector_crypto::ENVELOPE_PREFIX;
 
     fn template(id: &str, revision: &str, content: &str) -> Value {
         json!({
@@ -1791,9 +1943,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("stored connection");
+        // AGENTKIT-72: the on-disk record never keeps the literal; the
+        // credential is sealed at rest and only reads surface (masked).
         assert!(
-            stored.contains("secret"),
-            "durable record keeps the literal"
+            !stored.contains("secret"),
+            "durable record must not keep the credential plaintext"
+        );
+        assert!(
+            stored.contains(ENVELOPE_PREFIX),
+            "durable record must keep the sealed envelope"
         );
         assert!(
             !stored.contains("***"),
@@ -1865,9 +2023,227 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("stored connection");
-        assert!(stored.contains("real-secret"), "{stored}");
-        assert!(stored.contains("changed"), "{stored}");
+        assert!(
+            !stored.contains("real-secret"),
+            "AGENTKIT-72: sealed at rest, never plaintext"
+        );
+        assert!(!stored.contains("changed"), "{stored}");
+        assert!(stored.contains(ENVELOPE_PREFIX), "{stored}");
         assert!(!stored.contains("***"), "{stored}");
+        // Losslessness: the sealed envelopes decrypt back to the values the
+        // masked round trip promised to keep.
+        let crypto =
+            crate::connector_crypto::ConnectorCrypto::resolve(&raw, None).expect("store-local key");
+        let durable: Value = serde_json::from_str(&stored).expect("stored json");
+        assert_eq!(
+            crypto
+                .open(
+                    durable["config"]["transport"]["env"]["TOKEN"]
+                        .as_str()
+                        .expect("sealed")
+                )
+                .expect("open"),
+            "real-secret"
+        );
+        assert_eq!(
+            crypto
+                .open(
+                    durable["config"]["transport"]["env"]["OTHER"]
+                        .as_str()
+                        .expect("sealed")
+                )
+                .expect("open"),
+            "changed"
+        );
+    }
+
+    #[tokio::test]
+    async fn connector_connection_credentials_are_encrypted_at_rest() {
+        // AGENTKIT-72 regression: env/header values must never sit plaintext
+        // in the connector_connections column; the masked round trip must
+        // stay lossless through the seal.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("sealed.db");
+        let store = SqliteStore::open(&path, 4).expect("open");
+        let record = |revision: i64| {
+            json!({
+                "id": "c1",
+                "connectorId": "github",
+                "accountId": "acc",
+                "revision": revision,
+                "config": {
+                    "alias": "github",
+                    "transport": {
+                        "kind": "http",
+                        "url": "https://connector.example.invalid/mcp",
+                        "headers": { "Authorization": "Bearer super-secret-token" },
+                        "env": { "CONNECTOR_KEY": "env-secret-value" },
+                    },
+                },
+            })
+        };
+        store
+            .save_connection(record(1), None)
+            .await
+            .expect("create");
+        let raw = rusqlite::Connection::open(&path).expect("raw open");
+        let read_column = || -> String {
+            raw.query_row(
+                "SELECT record FROM connector_connections WHERE id = 'c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored connection")
+        };
+        let stored = read_column();
+        assert!(
+            !stored.contains("super-secret-token"),
+            "credential plaintext at rest: {stored}"
+        );
+        assert!(
+            !stored.contains("env-secret-value"),
+            "credential plaintext at rest: {stored}"
+        );
+        assert!(
+            stored.contains(ENVELOPE_PREFIX),
+            "no sealed envelope at rest: {stored}"
+        );
+        // Masked read, masked re-save: lossless, and never writes the mask
+        // or a plaintext over the credential.
+        let mut echoed = store
+            .get_connection("c1".into())
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(
+            echoed["config"]["transport"]["headers"]["Authorization"],
+            json!("***")
+        );
+        echoed["revision"] = json!(2);
+        store
+            .save_connection(echoed, Some(1))
+            .await
+            .expect("resave");
+        let stored = read_column();
+        assert!(!stored.contains("super-secret-token"), "{stored}");
+        assert!(!stored.contains("***"), "{stored}");
+        let crypto =
+            crate::connector_crypto::ConnectorCrypto::resolve(&raw, None).expect("store key");
+        let durable: Value = serde_json::from_str(&stored).expect("stored json");
+        assert_eq!(
+            crypto
+                .open(
+                    durable["config"]["transport"]["headers"]["Authorization"]
+                        .as_str()
+                        .expect("sealed")
+                )
+                .expect("open"),
+            "Bearer super-secret-token"
+        );
+        assert_eq!(
+            crypto
+                .open(
+                    durable["config"]["transport"]["env"]["CONNECTOR_KEY"]
+                        .as_str()
+                        .expect("sealed")
+                )
+                .expect("open"),
+            "env-secret-value"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreign_connector_key_fails_closed_never_plaintext() {
+        // AGENTKIT-72 fail-closed policy: a sealed record read under the
+        // wrong key is an error — never ciphertext-as-plaintext, never a
+        // silent fallback.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("foreign.db");
+        let store = SqliteStore::open(&path, 4).expect("open");
+        store
+            .save_connection(
+                json!({
+                    "id": "c1",
+                    "connectorId": "github",
+                    "accountId": "acc",
+                    "revision": 1,
+                    "config": {
+                        "alias": "github",
+                        "transport": { "kind": "stdio", "command": "x",
+                            "env": { "TOKEN": "sealed-value" } },
+                    },
+                }),
+                None,
+            )
+            .await
+            .expect("create");
+        drop(store);
+        let foreign = SqliteStore::open(&path, 4)
+            .expect("reopen")
+            .with_connector_credential_key(b"a completely different application secret");
+        let error = foreign
+            .get_connection("c1".into())
+            .await
+            .expect_err("foreign key must not open the seal");
+        assert!(
+            matches!(error, StoreError::RecoveryUnreadable(_)),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_plaintext_credentials_are_lazily_re_sealed_on_read() {
+        // AGENTKIT-72 migration policy (documented in `connector_crypto`):
+        // pre-fix plaintext rows still read, and the first read seals them
+        // durably in place.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("legacy.db");
+        let store = SqliteStore::open(&path, 4).expect("open");
+        store
+            .save_connection(
+                json!({
+                    "id": "c1", "connectorId": "github", "accountId": "acc", "revision": 1,
+                    "config": { "alias": "github",
+                        "transport": { "kind": "stdio", "command": "x",
+                            "env": { "TOKEN": "legacy-plaintext" } } },
+                }),
+                None,
+            )
+            .await
+            .expect("create");
+        // Forge the pre-fix state: a plaintext value in the column.
+        let raw = rusqlite::Connection::open(&path).expect("raw open");
+        raw.execute(
+            "UPDATE connector_connections SET record = ?2 WHERE id = 'c1'",
+            rusqlite::params![
+                "c1",
+                r#"{"id":"c1","connectorId":"github","accountId":"acc","revision":1,
+                    "config":{"alias":"github","transport":{"kind":"stdio","command":"x",
+                    "env":{"TOKEN":"legacy-plaintext"}}},"status":"disconnected"}"#
+            ],
+        )
+        .expect("forge legacy row");
+        let connection = store
+            .get_connection("c1".into())
+            .await
+            .expect("legacy read")
+            .expect("present");
+        assert_eq!(
+            connection["config"]["transport"]["env"]["TOKEN"],
+            json!("***")
+        );
+        let stored: String = raw
+            .query_row(
+                "SELECT record FROM connector_connections WHERE id = 'c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("column");
+        assert!(
+            !stored.contains("legacy-plaintext"),
+            "read must have re-sealed the legacy value: {stored}"
+        );
+        assert!(stored.contains(ENVELOPE_PREFIX), "{stored}");
     }
 
     async fn store_records_of(store: &SqliteStore) -> Vec<String> {

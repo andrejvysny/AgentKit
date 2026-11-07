@@ -221,6 +221,13 @@ export declare class SessionService {
   listUncertainExecutions(sessionId: string): Promise<string>
   resolveUncertainExecution(inputJson: string): Promise<string>
   /**
+   * AGENTKIT-73: close one uncertain receipt of a sessionless (static
+   * fast path) chat. Same outcomes and result rules as
+   * [`Self::resolve_uncertain_execution`], keyed by the receipt's chat;
+   * never executes, re-admits, or replays the effect.
+   */
+  resolveUncertainExecutionForChat(inputJson: string): Promise<string>
+  /**
    * Register a JS-executed tool. `definitionJson` is the portable tool
    * definition: `{name, version?, effect?, capability?, description?,
    * inputSchema, outputSchema?, timeoutMs?}`.

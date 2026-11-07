@@ -638,10 +638,20 @@ impl SubagentService {
                         let head: String = request.prompt.chars().take(72).collect();
                         format!("[{}] {head}", role.id)
                     })),
-                    profile_id: "agentkit.subagent".into(),
-                    profile_digest: None,
+                    profile_id: descriptor["profile"]["id"]
+                        .as_str()
+                        .unwrap_or("coding")
+                        .into(),
+                    profile_digest: descriptor["profile"]["digest"].as_str().map(str::to_owned),
                     provider_id: provider_id.clone(),
                     model: child_model.clone(),
+                    reasoning_effort: descriptor
+                        .get("reasoningEffort")
+                        .cloned()
+                        .map(serde_json::from_value)
+                        .transpose()
+                        .map_err(|_| HostError::Execution("invalid_reasoning_effort".into()))?,
+                    content_selection: None,
                     workspace: workspace.clone(),
                     context: descriptor
                         .get("context")

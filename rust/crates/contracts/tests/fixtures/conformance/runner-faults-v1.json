@@ -735,6 +735,832 @@
           }
         ]
       }
+    },
+    {
+      "name": "m0_admission_refused",
+      "schedule": [
+        "admit a runnable task and a task of a kind the host registered no executor for",
+        "assert the refused admission left no task, attempt, event or publication row",
+        "execute the admitted task"
+      ],
+      "delta": "Rust-only boundary profile: admission is refused before any row lands, so the TypeScript runner has no comparable checkpoint.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "refused",
+            "status": "queued",
+            "attemptCount": 0,
+            "attempts": [],
+            "effects": 0,
+            "events": [],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "ghostRow": false,
+            "taskRows": 1
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "ghostRow": false,
+            "taskRows": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_admission_duplicate",
+      "schedule": [
+        "admit the identical request twice and a conflicting request under the same id",
+        "assert one task row, the original scope preserved, the conflict refused",
+        "execute once"
+      ],
+      "delta": "Rust-only boundary profile: duplicate admission is a host/store gate the frozen TypeScript runner does not expose.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "deduplicated",
+            "status": "queued",
+            "attemptCount": 0,
+            "attempts": [],
+            "effects": 0,
+            "events": [],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "taskRows": 1,
+            "conflictRefused": true
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "taskRows": 1,
+            "conflictRefused": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_replay_no_admission",
+      "schedule": [
+        "execute a task to completion on a file store",
+        "reopen the same database with a fresh host at 3000",
+        "recover and run once; assert no attempt, event or publication appeared"
+      ],
+      "delta": "Rust-only boundary profile: the gate property 'replay does not start work' is asserted against durable rows after a real reopen.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "attemptRows": 1,
+            "eventRows": 2,
+            "publicationRows": 2
+          },
+          {
+            "label": "replayed",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "attemptRows": 1,
+            "eventRows": 2,
+            "publicationRows": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_approval_stale_dispatch",
+      "schedule": [
+        "execute a task to completion",
+        "mint a dispatch fence and try to admit the same effect under a pending, an expired, a cancelled and a consumed approval, and under an answered approval whose generation the execution does not name",
+        "admit it once under the answered approval"
+      ],
+      "delta": "Rust-only boundary profile: the gate property 'a stale approval cannot authorize' is asserted at the dispatch boundary, where the TypeScript runner never admits a receipt.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "admitted": 1,
+            "refused": 5,
+            "receiptStatuses": [
+              "admitted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_approval_persisted_replay",
+      "schedule": [
+        "queue a task and persist its approval answer before any dispatch",
+        "drop the host and reopen at 2000",
+        "assert restart neither dispatched nor lost the work, then resume and dispatch it once"
+      ],
+      "delta": "Rust-only boundary profile: manual recovery interrupts queued work instead of running it, and the durable approval outlives the process.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "persisted",
+            "status": "queued",
+            "attemptCount": 0,
+            "attempts": [],
+            "effects": 0,
+            "events": [],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "approvalStatus": "answered",
+            "attemptRows": 0
+          },
+          {
+            "label": "after_restart",
+            "status": "interrupted",
+            "attemptCount": 0,
+            "attempts": [],
+            "effects": 0,
+            "events": [],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "approvalStatus": "answered",
+            "attemptRows": 0
+          },
+          {
+            "label": "dispatched",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "approvalStatus": "answered",
+            "attemptRows": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_receipt_uncertain",
+      "schedule": [
+        "suspend an attempt after its effect and commit event are durable",
+        "admit a second effect under the live attempt lease and drop the process before its result is recorded",
+        "reopen at 2100, recover, and try to admit the identical effect again"
+      ],
+      "delta": "Rust-only boundary profile: the gate property 'an uncertain effect is not replayed'. The frozen TypeScript runner classifies the same residue as retryable and repeats it.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "uncertain",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "receiptCount": 1,
+            "receiptStatuses": [
+              "admitted"
+            ],
+            "resolutionRecorded": false
+          },
+          {
+            "label": "restarted",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "abandoned"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 1,
+            "deadLetter": false,
+            "failureReason": null,
+            "receiptCount": 1,
+            "receiptStatuses": [
+              "admitted"
+            ],
+            "resolutionRecorded": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_receipt_committed",
+      "schedule": [
+        "suspend an attempt after its effect and commit event are durable",
+        "admit a second effect and record its result under the live lease",
+        "settle, reopen at 3000 and assert the recorded effect is neither repeated nor re-recorded"
+      ],
+      "delta": "Rust-only boundary profile: a completed receipt is durable evidence; reopening serves it instead of executing it again.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "receiptCount": 1,
+            "receiptStatuses": [
+              "completed"
+            ],
+            "resolutionRecorded": false
+          },
+          {
+            "label": "restarted",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "receiptCount": 1,
+            "receiptStatuses": [
+              "completed"
+            ],
+            "resolutionRecorded": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_publish_gap",
+      "schedule": [
+        "suspend an attempt after its commit event",
+        "append a gapped sequence number, then a regressing one and a repeated event id",
+        "release the gate and settle"
+      ],
+      "delta": "Rust-only boundary profile: the publication layer refuses a regressing sequence and a repeated event id, and commits nothing for either.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "gapped",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              },
+              {
+                "seq": 7,
+                "type": "fault.gap",
+                "data": {
+                  "gap": true
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "gapPublished": true,
+            "rejected": 2
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              },
+              {
+                "seq": 7,
+                "type": "fault.gap",
+                "data": {
+                  "gap": true
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "gapPublished": true,
+            "rejected": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_ack_delivery",
+      "schedule": [
+        "suspend an attempt after its commit event and claim its publications",
+        "let the claim window expire and acknowledge late",
+        "reclaim, acknowledge once, and settle"
+      ],
+      "delta": "Rust-only boundary profile: a late acknowledgment under an expired claim is refused, and the record is delivered exactly once by the holder that still owns the claim.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "delivered",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "published": 2,
+            "unpublished": 0,
+            "lateAckRefused": true
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "published": 2,
+            "unpublished": 0,
+            "lateAckRefused": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_old_cursor_reconnect",
+      "schedule": [
+        "execute a task to completion on a file store",
+        "reopen at 3000 and reconnect a client holding the cursor it had before the restart",
+        "run once and assert the replay served only unseen durable events"
+      ],
+      "delta": "Rust-only boundary profile: reconnecting with a stale cursor is a durable read, not a request to execute anything.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "reconnected",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "cursor": 0,
+            "suffix": 1,
+            "replayStartedWork": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_cancel_queued",
+      "schedule": [
+        "admit a task and cancel it before any worker claims it",
+        "assert the durable task settled cancelled with no attempt, effect, event or publication"
+      ],
+      "delta": "Rust-only boundary profile: owned work that never started is settled as never started, with nothing to roll back.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "cancelled",
+            "status": "cancelled",
+            "attemptCount": 0,
+            "attempts": [],
+            "effects": 0,
+            "events": [],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "attemptRows": 0,
+            "publicationRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_cancel_uncertain_effect",
+      "schedule": [
+        "suspend an attempt after its effect is durable and admit a second effect under the live lease",
+        "cancel the running task, release the gate, and let the attempt settle cancelled",
+        "reopen at 3000 and try to admit the identical effect again"
+      ],
+      "delta": "Rust-only boundary profile: the gate property 'cancellation settles truthfully'. The committed effect keeps its evidence, the admitted-without-result effect stays uncertain, and neither is reported as rolled back.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "settled",
+            "status": "cancelled",
+            "attemptCount": 1,
+            "attempts": [
+              "cancelled"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "receiptCount": 1,
+            "receiptStatuses": [
+              "admitted"
+            ],
+            "resolutionRecorded": false
+          },
+          {
+            "label": "restarted",
+            "status": "cancelled",
+            "attemptCount": 1,
+            "attempts": [
+              "cancelled"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "receiptCount": 1,
+            "receiptStatuses": [
+              "admitted"
+            ],
+            "resolutionRecorded": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "m0_record_corrupted",
+      "schedule": [
+        "execute a task and admit one effect under a dispatch fence",
+        "close the store and corrupt the receipt record on disk",
+        "reopen and assert the unreadable record is a hard error for both the read and a fresh admission"
+      ],
+      "delta": "Rust-only boundary profile: an unreadable durable record is never read as absence and never lets the identical effect run again.",
+      "expected": {
+        "typescript": [],
+        "rust": [
+          {
+            "label": "corrupted",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "readFailed": true,
+            "admitFailed": true
+          }
+        ]
+      }
     }
   ]
 }

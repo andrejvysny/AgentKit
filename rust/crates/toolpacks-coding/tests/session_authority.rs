@@ -194,8 +194,10 @@ async fn fixture_opts(
         .create_session(&CreateSessionInput {
             session_id: Some("s1".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,

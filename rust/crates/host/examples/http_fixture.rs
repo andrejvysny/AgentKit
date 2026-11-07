@@ -1,5 +1,8 @@
 //! Test server backed by the real native host and SQLite. Domain I/O is scripted.
 #[cfg(feature = "http")]
+#[path = "http_fixture/mcp_secrets.rs"]
+mod mcp_secrets;
+#[cfg(feature = "http")]
 #[path = "http_fixture/ports.rs"]
 mod ports;
 
@@ -38,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .ok_or("SQLite path argument is required")?;
     let token = std::env::var("AGENTKIT_TEST_TOKEN")?;
-    let store = agentkit_store::SqliteStore::open(path, 64)?;
+    let store = agentkit_store::SqliteStore::open(&path, 64)?;
     let scripted = Arc::new(provider::Scripted::default());
     let provider: Arc<dyn agentkit_core::ChatProvider> =
         if let Ok(url) = std::env::var("AGENTKIT_TEST_PROVIDER_URL") {
@@ -103,11 +106,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         secrets.clone(),
         Arc::new(UnavailableNetwork),
     ));
-    let mcp = Arc::new(agentkit_host::McpConfigRepository::new(
-        store.clone(),
-        "fixture-actor",
-        Arc::new(SystemRuntime),
-    )?);
+    let mcp = Arc::new(
+        agentkit_host::McpConfigRepository::new(
+            store.clone(),
+            "fixture-actor",
+            Arc::new(SystemRuntime),
+        )?
+        .with_ports(
+            Some(Arc::new(mcp_secrets::FixtureVault::open(
+                std::path::Path::new(&path),
+            )?)),
+            None,
+        )?,
+    );
+    mcp.initialize().await?;
     let mut backend = DesktopBackend::open(host.clone(), actor, &token, "m1")
         .await
         .map_err(|e| format!("{}: {}", e.code, e.detail))?

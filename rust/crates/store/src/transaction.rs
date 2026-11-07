@@ -38,6 +38,16 @@ impl Atomic<'_> {
     pub(crate) fn commit(mut self) -> rusqlite::Result<()> {
         let inner = self.inner.take().expect("active atomic operation");
         let nested = matches!(inner, AtomicInner::Savepoint(_));
+        // The durability choke point: a root commit is where an acknowledged
+        // write either reaches storage or the caller is told the truth. A
+        // savepoint release is not a durability point, so only root commits
+        // consult the (production-inert) fault plan. Dropping the inner
+        // transaction here rolls the whole batch back; nothing partial can
+        // persist and the worker stays usable.
+        if !nested && crate::faults::take_commit_refusal() {
+            drop(inner);
+            return Err(crate::faults::injected_commit_refusal());
+        }
         let result = match inner {
             AtomicInner::Transaction(tx) => tx.commit(),
             AtomicInner::Savepoint(tx) => tx.commit(),
@@ -210,6 +220,11 @@ fn finish_sql(db: &Connection, worker: &Worker, commit: bool) -> Result<()> {
         Err(StoreError::RecoveryUnreadable(
             "atomic operation cleanup failed".into(),
         ))
+    } else if commit && crate::faults::take_commit_refusal() {
+        // The ambient commit is the other durability choke point; the refusal
+        // keeps the still-open transaction available for the rollback below,
+        // so the worker is not poisoned and later work can proceed.
+        Err(crate::faults::injected_write_refusal())
     } else {
         db.execute_batch("COMMIT").map_err(StoreError::from)
     };

@@ -144,7 +144,8 @@ async fn fixture() -> Fixture {
         runtime,
         plan_approval: None,
         wake: Some(host.wake_handle()),
-    });
+    })
+    .with_profiles(test_profiles());
     host.set_session_flush_planner(Arc::new(service.clone()))
         .await;
     for id in ["s1", "s2"] {
@@ -152,8 +153,10 @@ async fn fixture() -> Fixture {
             .create_session(&CreateSessionInput {
                 session_id: Some(id.into()),
                 title: None,
-                profile_id: "p1".into(),
+                profile_id: "coding".into(),
                 profile_digest: None,
+                reasoning_effort: None,
+                content_selection: None,
                 provider_id: None,
                 model: Some("model".into()),
                 workspace: None,
@@ -187,16 +190,24 @@ impl Fixture {
     /// A claimed run of `s1` with an admitted `mutate` receipt for `call`.
     /// `settle` ends the run as a crash would, declaring the call in history.
     async fn seed_admitted(&self, run_id: &str, call: &str, settle: bool) -> String {
-        self.host
-            .submit_chat(SubmitChat {
-                task_id: run_id.into(),
-                chat_id: "s1".into(),
-                model: "model".into(),
-                content: json!("work"),
-                parent_message_id: None,
-            })
+        let result = self
+            .service
+            .send(
+                "s1",
+                &SendInput {
+                    content: json!("work"),
+                    input_id: Some(format!("crash:{run_id}")),
+                    when_busy: WhenBusy::Reject,
+                    turn_id: None,
+                    on_settled: None,
+                },
+            )
             .await
             .unwrap();
+        let AgentSendResult::Turn { turn_id, .. } = result else {
+            panic!("an idle session starts the crash fixture turn");
+        };
+        let run_id = turn_id.as_str();
         let claimed = self
             .store
             .claim(ClaimInput {
@@ -210,6 +221,7 @@ impl Fixture {
             .await
             .unwrap()
             .expect("queued run");
+        assert_eq!(claimed.task.task_id, run_id);
         let fence = claimed.lease.fence();
         let execution = agentkit_host::execution_id(run_id, call, None);
         let args = serde_json::from_str::<Value>(ARGS).unwrap();
@@ -508,4 +520,13 @@ async fn resolution_is_refused_while_the_receipts_run_is_active() {
         .unwrap_err();
     assert_eq!(refused.code, RECEIPT_RUN_ACTIVE);
     assert_eq!(f.uncertain().await.len(), 1);
+}
+
+fn test_profiles() -> Arc<agentkit_host::ProfileRegistry> {
+    Arc::new(
+        agentkit_host::ProfileRegistry::new(&[
+            json!({"id":"coding","instructions":"","tools":["mutate"]}),
+        ])
+        .unwrap(),
+    )
 }

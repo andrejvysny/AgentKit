@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { available, missing, required } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 import type {
   NativeAgentError,
   NativeSessionService,
@@ -156,7 +157,16 @@ suite(
   "plan mode never runs a JS write callback without an approval",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // Plan mode: the write tool is staged so the guard is what parks
+      // (and denies) it, not a missing-tool filter.
+      profiles: [
+        testProfile("authority", {
+          tools: ["write_back"],
+          permissionMode: "plan",
+        }),
+      ],
+    });
     const { provider } = scripted(
       toolCall("call-write", "write_back", { path: "a.txt" }),
       final("done"),
@@ -203,6 +213,14 @@ suite(
     const store = await NativeStoreCtor.open(path);
     const service = await store.createService({
       jsToolAuthority: { planToolNames: ["submit_plan"] },
+      // Plan mode: submit_plan routes the proposal to the human; after
+      // the grant escalates to ask, write_back earns its own approval.
+      profiles: [
+        testProfile("authority", {
+          tools: ["submit_plan", "write_back"],
+          permissionMode: "plan",
+        }),
+      ],
     });
     let writes = 0;
     const { provider } = scripted(
@@ -318,7 +336,16 @@ suite(
     // run unapproved in auto_edit because the binding guard branched on
     // effect. The shared matrix classifies by capability: commands ask.
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // auto_edit allows writes but an exec-classified command still
+      // asks; one approval then runs the callback exactly once.
+      profiles: [
+        testProfile("authority", {
+          tools: ["run_cmd"],
+          permissionMode: "auto_edit",
+        }),
+      ],
+    });
     const { provider } = scripted(
       toolCall("call-cmd", "run_cmd", { command: "ls -la" }),
       final("done"),
@@ -390,6 +417,14 @@ suite(
         planToolNames: ["submit_plan"],
         planGrantMode: "auto_edit",
       },
+      // Plan mode: only the read-effect plan tool is staged; its body
+      // may run solely as the approved, resumed call after escalation.
+      profiles: [
+        testProfile("authority", {
+          tools: ["submit_plan"],
+          permissionMode: "plan",
+        }),
+      ],
     });
     let planBodies = 0;
     const { provider } = scripted(
@@ -461,7 +496,17 @@ suite(
 
 suite("close dispatches no new callbacks and always completes", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService({ closeTimeoutMs: 2_000 });
+  const service = await store.createService({
+    closeTimeoutMs: 2_000,
+    // The read-effect hang callback must genuinely dispatch and stay in
+    // flight across close(); nothing else is staged.
+    profiles: [
+      testProfile("authority", {
+        tools: ["hang"],
+        permissionMode: "full_auto",
+      }),
+    ],
+  });
   let providerCalls = 0;
   // Deliberately never settles — the executor form is required because
   // this promise is the in-flight callback under test, never resolved.
@@ -518,7 +563,11 @@ suite("close dispatches no new callbacks and always completes", async () => {
 
 suite("close hard-stops a never-resolving provider within bound", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService({ closeTimeoutMs: 300 });
+  const service = await store.createService({
+    closeTimeoutMs: 300,
+    // The provider never settles; no tool is ever staged.
+    profiles: [testProfile("authority", { permissionMode: "read_only" })],
+  });
   let providerCalls = 0;
   service.setProvider(async () => {
     providerCalls += 1;
@@ -545,7 +594,10 @@ suite("close hard-stops a never-resolving provider within bound", async () => {
 
 suite("concurrent close callers share one completion", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService();
+  const service = await store.createService({
+    // Only a session is created and closed; no tool is staged.
+    profiles: [testProfile("authority", { permissionMode: "read_only" })],
+  });
   const created = await service.createSession({
     profileId: "authority",
     model: "test-model",
@@ -567,7 +619,17 @@ suite(
     const dir = disposableDir();
     const path = join(dir, "paused-callback.db");
     const store = await NativeStoreCtor.open(path);
-    const service = await store.createService({ closeTimeoutMs: 3_000 });
+    const service = await store.createService({
+      closeTimeoutMs: 3_000,
+      // full_auto: the write callback dispatches without approval and is
+      // paused mid-effect; only it is staged.
+      profiles: [
+        testProfile("authority", {
+          tools: ["pause_me"],
+          permissionMode: "full_auto",
+        }),
+      ],
+    });
     let effects = 0;
     let dispatches = 0;
     let release!: () => void;
@@ -643,7 +705,11 @@ suite(
   "the binding parser preserves malformed-present values natively reject",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // The malformed calls must die in the parser, not in unknown-profile
+      // admission; the one good session runs no tools.
+      profiles: [testProfile("authority", { permissionMode: "read_only" })],
+    });
     for (const key of ["workspace", "context", "skills"]) {
       const bad: Record<string, unknown> = {
         profileId: "authority",

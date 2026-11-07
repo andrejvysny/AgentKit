@@ -1,6 +1,10 @@
 //! Optional desktop HTTP boundary. One immutable actor owns one local store.
 mod chats;
 mod managed_content;
+mod native_provider_factory;
+mod native_provider_operations;
+pub use native_provider_factory::NativeProviderFactory;
+pub use native_provider_operations::{NativeProviderOperations, ProviderConsentPort};
 mod management;
 mod ports;
 pub use ports::*;
@@ -26,6 +30,8 @@ pub struct DesktopBackend {
     token: String,
     default_model: String,
     session_profile: Option<String>,
+    content_authority: Option<Arc<dyn crate::ContentAuthority>>,
+    profiles: Arc<crate::ProfileRegistry>,
     pinned_provider_id: Option<String>,
     allow_insecure_http: bool,
     write_gate: Mutex<()>,
@@ -37,6 +43,7 @@ pub struct DesktopBackend {
     mcp_configuration: Option<Arc<dyn McpConfigurationPort>>,
     tool_catalog: Option<Arc<dyn ToolCatalogPort>>,
     provider_operations: Option<Arc<dyn ProviderOperations>>,
+    provider_factory: Option<Arc<dyn crate::ChatProviderFactory>>,
 }
 
 impl DesktopBackend {
@@ -62,6 +69,8 @@ impl DesktopBackend {
             token: token.into(),
             default_model: default_model.into(),
             session_profile: None,
+            content_authority: None,
+            profiles: Arc::new(crate::ProfileRegistry::default()),
             write_gate: Mutex::new(()),
             pinned_provider_id: None,
             allow_insecure_http: false,
@@ -73,6 +82,7 @@ impl DesktopBackend {
             mcp_configuration: None,
             tool_catalog: None,
             provider_operations: None,
+            provider_factory: None,
         })
     }
 
@@ -157,6 +167,22 @@ impl DesktopBackend {
         self
     }
     /// Create REST chats as validated agent sessions with one durable insert.
+    pub fn with_profiles(mut self, profiles: Arc<crate::ProfileRegistry>) -> Self {
+        self.profiles = profiles;
+        self
+    }
+
+    pub fn with_content_authority(mut self, authority: Arc<dyn crate::ContentAuthority>) -> Self {
+        self.content_authority = Some(authority);
+        self
+    }
+
+    /// The explicit factory validates selected provider identities before admission.
+    pub fn with_provider_factory(mut self, factory: Arc<dyn crate::ChatProviderFactory>) -> Self {
+        self.provider_factory = Some(factory);
+        self
+    }
+
     pub fn with_session_profile(mut self, profile_id: &str) -> Result<Self, Problem> {
         if profile_id.trim().is_empty() {
             return Err(Problem::new(

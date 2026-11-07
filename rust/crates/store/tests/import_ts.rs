@@ -2014,3 +2014,41 @@ INSERT INTO agent_inputs VALUES ('input-frac','chat-1','steer','pending','{}','h
     }
     assert!(store.get_input("input-big".into()).await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn missing_required_identity_refuses_strict_import_without_partial_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("missing-id.db");
+    ts_database(&source);
+    Connection::open(&source)
+        .unwrap()
+        .execute(
+            "INSERT INTO chats(id,title,created_at,updated_at) VALUES(NULL,'broken',?1,?1)",
+            [T0],
+        )
+        .unwrap();
+    let destination = SqliteStore::memory(16).unwrap();
+    let error = destination
+        .import_from_ts_schema(&source, &ImportOptions::default())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("chats: a row has no id"));
+    assert!(destination.list_chats(true).await.unwrap().is_empty());
+    let report = destination
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                abort_on_error: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|message| message.contains("chats: a row has no id"))
+    );
+    assert!(!destination.list_chats(true).await.unwrap().is_empty());
+}

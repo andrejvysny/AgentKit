@@ -133,12 +133,34 @@ impl DesktopBackend {
             super::provider_commit::setting("http.provider-model", id.as_str(), None),
             super::provider_commit::setting("http.provider-catalog", id.as_str(), None),
         ];
-        let mutation = self
+        // AGENTKIT-37: the secret is retired BEFORE the config-row deletion
+        // commits (mirroring the create/update fix, inverted). A failed
+        // retirement compensates the slots it already deleted, aborts the
+        // reservation and reports an explicit error, so the row — and with
+        // it the retry that finishes the deletion — survives: a credential
+        // can never be orphaned silently. If the durable commit then fails,
+        // the captured values are put back, keeping the observed failure
+        // all-or-nothing. A crash between the two awaits can only leave the
+        // harmless direction: the row present, the credential gone, and a
+        // retryable DELETE to finish the job.
+        let retired = match self.retire_provider_secrets_capturing(keys).await {
+            Ok(retired) => retired,
+            Err(error) => {
+                mutation.abort().map_err(connection_error)?;
+                return Err(error);
+            }
+        };
+        let mutation = match self
             .commit_provider_mutation(mutation, expected, writes)
-            .await?;
-        let result = self.retire_provider_secrets(keys).await;
+            .await
+        {
+            Ok(mutation) => mutation,
+            Err(error) => {
+                self.restore_provider_secrets(retired).await;
+                return Err(error);
+            }
+        };
         mutation.finish().map_err(connection_error)?;
-        result?;
         Ok(output(204, Value::Null))
     }
 

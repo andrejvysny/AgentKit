@@ -2,6 +2,7 @@
 mod actor;
 mod advisor;
 mod agent_inputs;
+mod connector_crypto;
 mod context_summaries;
 mod conversations;
 mod data;
@@ -9,6 +10,7 @@ mod deadline;
 mod execution_no_start;
 mod execution_receipts;
 mod execution_resolution;
+mod faults;
 mod managed_content;
 mod models;
 mod proposals;

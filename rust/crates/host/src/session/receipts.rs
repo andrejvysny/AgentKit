@@ -122,4 +122,58 @@ impl AgentSessionService {
             .await
             .map_err(map_store_error)
     }
+
+    /// Chat-keyed twin of [`Self::resolve_uncertain_execution`] for the
+    /// static fast path (AGENTKIT-73): a chat the host serves without a
+    /// session has no park slot, so `require_session` can never be satisfied
+    /// and the session surface above is a permanent dead end for its
+    /// receipts. Same decision record, same result rules — delegated to the
+    /// governance route, which keys ownership on the receipt's chat and never
+    /// executes, re-admits, or replays anything.
+    pub async fn resolve_uncertain_execution_for_chat(
+        &self,
+        chat_id: &str,
+        execution_id: &str,
+        outcome: ResolutionOutcome,
+        result: Option<Value>,
+        note: Option<String>,
+        resolved_by: Option<String>,
+    ) -> SessionResult<ExecutionReceiptRecord> {
+        crate::governance::resolve_uncertain_execution(
+            self.store(),
+            chat_id,
+            execution_id,
+            outcome,
+            result,
+            note,
+            resolved_by,
+            self.now_ms(),
+        )
+        .await
+        .map_err(map_governance_error)
+    }
+}
+
+/// Governance errors carry their stable code as a `"<code>: <message>"`
+/// prefix; the store's refusal codes (`receipt_run_active`,
+/// `receipt_not_uncertain`) keep their full messages, and anything
+/// unrecognised surfaces as `internal` rather than being re-labelled.
+fn map_governance_error(error: crate::HostError) -> SessionError {
+    match error {
+        crate::HostError::Store(error) => map_store_error(error),
+        other => {
+            let text = other.to_string();
+            match text.split_once(": ") {
+                Some((code, message))
+                    if !code.is_empty()
+                        && code
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte == b'_') =>
+                {
+                    SessionError::new(code, message)
+                }
+                _ => SessionError::new("internal", text),
+            }
+        }
+    }
 }

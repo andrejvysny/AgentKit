@@ -683,6 +683,8 @@ interface CreateProposalInput {
 // @public (undocumented)
 export interface CreateSessionInputJson {
     // (undocumented)
+    contentSelection?: Record<string, unknown>;
+    // (undocumented)
     context?: unknown;
     // (undocumented)
     executionMode?: string;
@@ -696,6 +698,8 @@ export interface CreateSessionInputJson {
     profileId: string;
     // (undocumented)
     providerId?: string;
+    // (undocumented)
+    reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
     // (undocumented)
     sessionId?: string;
     // (undocumented)
@@ -1105,6 +1109,46 @@ export class NativeAgentError extends Error {
 }
 
 // @public
+export interface NativeAgentProfile {
+    extends?: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    instructions: string;
+    // (undocumented)
+    kind: "chat" | "coding" | "research" | "automation";
+    // (undocumented)
+    label?: string;
+    // (undocumented)
+    limits?: {
+        maxToolIterations?: number;
+        maxToolCallsPerIteration?: number;
+        historyLimit?: number;
+        attemptBudgetMs?: number;
+        maxOutputTokens?: number;
+    };
+    // (undocumented)
+    model?: string;
+    // (undocumented)
+    permissionMode: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+    // (undocumented)
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
+    // (undocumented)
+    resources?: {
+        skills?: ReadonlyArray<{
+            id: string;
+            revision: string;
+        }>;
+        projectInstructions?: boolean;
+        resources?: ReadonlyArray<string>;
+    };
+    // (undocumented)
+    role?: "implementer" | "reviewer" | "supervisor";
+    // (undocumented)
+    tools: ReadonlyArray<string>;
+}
+
+// @public
 export class NativeAssistantStore implements AssistantStore {
     constructor(options: NativeAssistantStoreOptions);
     // (undocumented)
@@ -1473,6 +1517,7 @@ export interface NativeServiceOptions {
         planToolNames?: string[];
         planGrantMode?: "read_only" | "ask" | "auto_edit" | "full_auto";
     };
+    profiles?: ReadonlyArray<NativeAgentProfile>;
     providerAuthKind?: "api-key" | "chatgpt-account";
     providerConfig?: NativeProviderConfig;
     subagentMaxConcurrency?: number;
@@ -1551,6 +1596,7 @@ export class NativeSessionService extends NativeSessionManagement {
     static registerProviderConnection(baseUrl: string, apiKey?: string | null, options?: NativeProviderConnectionOptions): Promise<string>;
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
     resolveUncertainExecution(input: ResolveUncertainExecutionInput): Promise<ExecutionReceiptJson>;
+    resolveUncertainExecutionForChat(input: ResolveUncertainExecutionForChatInput): Promise<ExecutionReceiptJson>;
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>;
     static revokeProviderConnection(connectionId: string): Promise<boolean>;
@@ -1948,6 +1994,7 @@ export interface ProviderRequest {
     messages: unknown[];
     // (undocumented)
     model: string;
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
     // (undocumented)
     runId: string;
     signal?: AbortSignal;
@@ -2057,6 +2104,21 @@ export function reserveRunProviderRequest(callId: string): Promise<void>;
 
 // @public (undocumented)
 export function resolveCall(callId: string, payload: string | null, error: string | null): boolean;
+
+// @public
+export interface ResolveUncertainExecutionForChatInput {
+    // (undocumented)
+    chatId: string;
+    // (undocumented)
+    executionId: string;
+    // (undocumented)
+    note?: string;
+    // (undocumented)
+    outcome: ExecutionResolutionOutcome;
+    // (undocumented)
+    resolvedBy?: string;
+    result?: unknown;
+}
 
 // @public (undocumented)
 export interface ResolveUncertainExecutionInput {
@@ -2226,6 +2288,7 @@ class SessionService {
     registerTool(definitionJson: string): Promise<void>
     // (undocumented)
     resolveUncertainExecution(inputJson: string): Promise<string>
+    resolveUncertainExecutionForChat(inputJson: string): Promise<string>
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>
     // (undocumented)

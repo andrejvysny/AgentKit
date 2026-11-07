@@ -99,7 +99,9 @@ import {
   NativeStore,
   bindingId,
   registerMcpTools,
+  type NativeAgentProfile,
   type NativeHttpServerInfo,
+  type NativeMcpConnection,
   type NativeMcpServerInfo,
   type NativeServiceOptions,
   type ProviderFunction,
@@ -323,6 +325,48 @@ async function seedProviderIfEmpty(
   return [record];
 }
 
+/** The profile every chat this example creates runs as — declared by
+ * `buildApp` and handed to `startHttpServer` as `sessionProfileId`. One
+ * constant, so the declared definition and the server's id cannot drift. */
+const DESKTOP_HOST_PROFILE_ID = "desktop-host";
+
+/**
+ * The one host-owned profile this example's sessions resolve to.
+ *
+ * The native REST server creates each `POST /v1/chats` as an agent session
+ * of `sessionProfileId`, and admission resolves that id against the
+ * SERVICE's registry (`createService({ profiles })`, merged onto the host's
+ * built-ins) — so the example declares the policy its runs actually execute
+ * instead of hoping a built-in knows its tools:
+ *
+ * - `tools` is the exact allow-list a turn may stage: the two read-only
+ *   sample tools plus every descriptor the optional MCP bridge contributes
+ *   (the bridge connects on the STORE, before the service, precisely so its
+ *   descriptor names can be part of this list).
+ * - `permissionMode: "full_auto"` is the native equivalent of the allow-all
+ *   JS authority chain this example has always run with (see `authority`),
+ *   so admitting it changes nothing about what a run may do.
+ * - No `limits`: this example never bounded a tool loop, and adopting
+ *   profiles is not a licence to start.
+ */
+function desktopHostProfile(
+  exampleToolNames: readonly string[],
+  mcpConnection: NativeMcpConnection | undefined,
+): NativeAgentProfile {
+  return {
+    id: DESKTOP_HOST_PROFILE_ID,
+    kind: "chat",
+    label: "Desktop host chat",
+    instructions:
+      "Answer the user's question directly. Use the available tools when they help, and never invent tool output.",
+    tools: [
+      ...exampleToolNames,
+      ...(mcpConnection?.tools.map((tool) => tool.name) ?? []),
+    ],
+    permissionMode: "full_auto",
+  };
+}
+
 /**
  * The JS callback lane's bridge: one `AiProviderClient.streamChat` per
  * provider request, its event stream aggregated into the single
@@ -343,6 +387,10 @@ function createProviderCallback(client: AiProviderClient): ProviderFunction {
       tools: request.tools as AiToolDefinition[] | undefined,
       temperature: request.temperature ?? undefined,
       maxOutputTokens: request.maxOutputTokens ?? undefined,
+      // The session descriptor's effort travels on the callback payload for
+      // both lanes; forwarding it is what makes the run actually carry the
+      // effort the session was created with.
+      reasoningEffort: request.reasoningEffort,
     })) {
       switch (event.type) {
         case "run.message.delta":
@@ -462,6 +510,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
       ? await NativeStore.inMemory()
       : await NativeStore.open(dbPath);
 
+  // The sample tools are created once: the same array is what step 4
+  // registers AND what the session profile names as admissible, so the two
+  // can never disagree about what a run may stage.
+  const exampleTools = createExampleTools(clock);
+  // The optional MCP bridge connects on the STORE, which is why it can be
+  // opened BEFORE the service exists: its contributed descriptor names are
+  // part of the session profile, and a service's registry is fixed at
+  // construction. Registration itself still happens in step 4, through the
+  // same authority lane as the sample tools.
+  const mcpConnection: NativeMcpConnection | undefined =
+    env.AGENTKIT_MCP_COMMAND
+      ? await store.mcpConnect({
+          alias: "local",
+          transport: {
+            kind: "stdio",
+            command: env.AGENTKIT_MCP_COMMAND,
+            args: (env.AGENTKIT_MCP_ARGS ?? "").split(" ").filter(Boolean),
+          },
+        })
+      : undefined;
+
   // 3. Provider config, then the lane. The JS callback lane exists for the
   // scripted client; every real boot takes the Rust-native lane.
   const provider = resolveProvider(env);
@@ -475,6 +544,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     // just admits, as before. The two example tools are `effect: "read"` and
     // unaffected by the choice.
     jsToolAuthority: { configuredMode: "full_auto" },
+    // Step 5's `sessionProfileId` is resolved against THIS registry at chat
+    // creation, so the profile it names is declared right here — both lanes,
+    // since both build the service from these options.
+    profiles: [
+      desktopHostProfile(
+        exampleTools.map((tool) => tool.definition.name),
+        mcpConnection,
+      ),
+    ],
   };
   let service: NativeSessionService;
   if (options.providerFactory) {
@@ -505,27 +583,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
   // one array, so what the route shows and what a run receives cannot drift
   // (the exact invariant the old `createContributorToolCatalog` carried).
   const catalogue: ToolDefinitionJson[] = [];
-  for (const tool of createExampleTools(clock)) {
+  for (const tool of exampleTools) {
     await service.registerTool(tool.definition, tool.run);
     catalogue.push(tool.definition);
   }
   let mcpEnabled = false;
-  if (env.AGENTKIT_MCP_COMMAND) {
-    // The Rust `agentkit-mcp` client manager: stdio transport, resilient,
-    // descriptors registered through the SAME authority lane as the sample
-    // tools. `readOnly` stays at its false default — the old contributor
-    // declared remote tools `effect: "write"` too.
-    const connection = await store.mcpConnect({
-      alias: "local",
-      transport: {
-        kind: "stdio",
-        command: env.AGENTKIT_MCP_COMMAND,
-        args: (env.AGENTKIT_MCP_ARGS ?? "").split(" ").filter(Boolean),
-      },
-    });
-    const descriptors = await registerMcpTools(service, store, connection);
+  if (mcpConnection !== undefined) {
+    // The descriptors join the SAME authority lane as the sample tools;
+    // `readOnly` stays at its false default — the old contributor declared
+    // remote tools `effect: "write"` too.
+    const descriptors = await registerMcpTools(service, store, mcpConnection);
     logger?.info("mcp bridge connected", {
-      alias: connection.alias,
+      alias: mcpConnection.alias,
       tools: descriptors.length,
     });
     for (const descriptor of descriptors) {
@@ -557,7 +626,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     basePath: BASE_PATH,
     bearerToken,
     defaultModel: provider.defaultModel,
-    sessionProfileId: "desktop-host",
+    sessionProfileId: DESKTOP_HOST_PROFILE_ID,
     // The same two origins the retired TypeScript transport was given:
     // the Rust engine enforces CORS itself for everything it serves, and
     // the façade adds the decoration for its own mount-path routes.

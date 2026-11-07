@@ -29,6 +29,21 @@ pub trait TrustedTransport: Send + Sync {
     }
     fn identity(&self) -> ConnectionIdentity;
     fn auth_kind(&self) -> AuthKind;
+    /// Custom transports that await consent or credentials must override this and
+    /// check the guard after those waits, immediately before their network send.
+    async fn request_guarded(
+        &self,
+        identity: &ConnectionIdentity,
+        operation: &str,
+        body: Option<Value>,
+        guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
+        cancellation: CancellationToken,
+    ) -> Result<reqwest::Response, CoreError> {
+        if let Some(guard) = guard {
+            guard.check().await?;
+        }
+        self.request(identity, operation, body, cancellation).await
+    }
     async fn request(
         &self,
         identity: &ConnectionIdentity,
@@ -70,13 +85,24 @@ pub(crate) async fn dispatch(
     body: Option<Value>,
     cancellation: CancellationToken,
 ) -> Result<reqwest::Response, CoreError> {
+    dispatch_guarded(transport, identity, operation, body, None, cancellation).await
+}
+
+pub(crate) async fn dispatch_guarded(
+    transport: &dyn TrustedTransport,
+    identity: &ConnectionIdentity,
+    operation: &str,
+    body: Option<Value>,
+    guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
+    cancellation: CancellationToken,
+) -> Result<reqwest::Response, CoreError> {
     transport.check_authority().await?;
     if transport.identity() != *identity {
         return Err(CoreError::responses("connection_changed"));
     }
     let response = tokio::select! { biased;
         _=cancellation.cancelled()=>return Err(CoreError::new("cancelled","aborted")),
-        value=transport.request(identity,operation,body,cancellation.clone())=>value?,
+        value=transport.request_guarded(identity,operation,body,guard,cancellation.clone())=>value?,
     };
     if response.status().is_success() {
         return Ok(response);

@@ -397,6 +397,79 @@ describe("runs", () => {
     );
   });
 
+  it("(k3) announces an unknown-cursor replay in the headers and the first frame", async () => {
+    // AGENTKIT-81 at the route boundary: the client learns about the full
+    // replay twice — before the body (header) and inside it (control frame) —
+    // and learns NOTHING when the cursor resumed or there was none.
+    const { handler, store } = await createHandlerFixture({
+      streaming: { readBatchSize: 3, pollIntervalMs: 2 },
+    });
+    const runId = "task-resync";
+    await store.tasks.createTask({
+      taskId: runId,
+      kind: "chat.turn",
+      scopeId: TEST_CHAT_ID,
+      payload: { chatId: TEST_CHAT_ID },
+    });
+    const lease = await store.tasks.acquireLease({
+      taskId: runId,
+      attemptId: "att-1",
+      ownerId: "owner",
+      ttlMs: 60_000,
+    });
+    await store.tasks.appendEvents(
+      runId,
+      Array.from({ length: 12 }, (_, seq) => ({
+        type: seq === 11 ? "run.completed" : "run.message.delta",
+        runId,
+        seq,
+        eventId: `evt-${seq}`,
+        timestamp: new Date(seq * 1000).toISOString(),
+        contractVersion: CONTRACT_VERSION,
+        data: {},
+      })) as never,
+      { leaseToken: lease.leaseToken },
+    );
+    await store.tasks.transitionTask(runId, ["queued"], "running");
+    await store.tasks.transitionTask(runId, ["running"], "completed");
+
+    const replay = await handler(
+      request("GET", `/v1/runs/${runId}/stream`, {
+        headers: { "last-event-id": "evt-from-another-run" },
+      }),
+    );
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get("x-agentkit-stream-resync")).toBe(
+      "unknown_last_event_id",
+    );
+    const blocks = (await replay.text())
+      .split("\n\n")
+      .filter((block) => block.trim() !== "");
+    // retry hint, then the announcement, then ALL twelve events, then settled.
+    expect(blocks[1]).toBe(
+      'event: agentkit.stream.resync\ndata: {"reason":"unknown_last_event_id"}',
+    );
+    expect(blocks.filter((block) => block.startsWith("id: evt-")).length).toBe(
+      12,
+    );
+    expect(blocks.at(-1)).toContain("event: agentkit.stream.settled");
+
+    const resume = await handler(
+      request("GET", `/v1/runs/${runId}/stream`, {
+        headers: { "last-event-id": "evt-5" },
+      }),
+    );
+    expect(resume.headers.get("x-agentkit-stream-resync")).toBeNull();
+    const resumed = await resume.text();
+    expect(resumed).not.toContain("agentkit.stream.resync");
+    expect(resumed).toContain("id: evt-6");
+    expect(resumed).not.toContain("id: evt-5\n");
+
+    const fresh = await handler(request("GET", `/v1/runs/${runId}/stream`));
+    expect(fresh.headers.get("x-agentkit-stream-resync")).toBeNull();
+    expect(await fresh.text()).not.toContain("agentkit.stream.resync");
+  });
+
   it("(k2) pages the stream's resume scan at the configured readBatchSize", async () => {
     const { handler, store } = await createHandlerFixture({
       streaming: { readBatchSize: 3, pollIntervalMs: 2 },

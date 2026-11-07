@@ -10,7 +10,12 @@ import { jsonResponse } from "../http.js";
 import { notFound, notImplemented, problemResponse } from "../problem.js";
 import { chatIdOfTask, runDto } from "../projections.js";
 import { resolveStreamOptions } from "../deps.js";
-import { createRunEventStream, resolveStartSeq, SSE_HEADERS } from "../sse.js";
+import {
+  createRunEventStream,
+  resolveStreamStart,
+  SSE_HEADERS,
+  STREAM_RESYNC_HEADER,
+} from "../sse.js";
 import { pathParam, type RouteContext } from "./context.js";
 
 export async function getRun(ctx: RouteContext): Promise<Response> {
@@ -79,7 +84,7 @@ export async function streamRun(ctx: RouteContext): Promise<Response> {
   // `readBatchSize` down tunes the pre-first-frame cost too. Left off, the scan
   // silently used the default while the stream used the configured value.
   const options = resolveStreamOptions(ctx.deps.streaming);
-  const startSeq = await resolveStartSeq(
+  const start = await resolveStreamStart(
     tasks,
     runId,
     ctx.req.headers.get("last-event-id"),
@@ -88,12 +93,26 @@ export async function streamRun(ctx: RouteContext): Promise<Response> {
   const stream = createRunEventStream({
     tasks,
     taskId: runId,
-    startSeq,
+    startSeq: start.startSeq,
+    ...(start.resyncReason === null
+      ? {}
+      : { resyncReason: start.resyncReason }),
     options,
     ...(ctx.req.signal === undefined ? {} : { signal: ctx.req.signal }),
     ...(ctx.deps.logger === undefined ? {} : { logger: ctx.deps.logger }),
   });
-  return new Response(stream, { status: 200, headers: { ...SSE_HEADERS } });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      ...SSE_HEADERS,
+      // AGENTKIT-81: the replay is announced twice over — once in the headers
+      // (visible before the body) and once as the first frame — so a client
+      // can tell a fresh stream from a full replay either way.
+      ...(start.resyncReason === null
+        ? {}
+        : { [STREAM_RESYNC_HEADER]: start.resyncReason }),
+    },
+  });
 }
 
 /** The run projection, or null when the id names no run of this contract. */

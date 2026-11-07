@@ -9,6 +9,8 @@ fn problem(error: McpConfigError) -> Problem {
         McpConfigError::Invalid => (400, "invalid_request"),
         McpConfigError::Conflict => (409, "conflict"),
         McpConfigError::Store(_) => (500, "internal_error"),
+        McpConfigError::SecretStore => (501, "secret_store_unavailable"),
+        McpConfigError::Runtime => (503, "mcp_runtime_unavailable"),
     };
     Problem::new(status, code, "MCP configuration operation failed.")
 }

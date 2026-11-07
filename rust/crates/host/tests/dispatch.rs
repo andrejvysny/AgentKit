@@ -68,22 +68,30 @@ impl ProposalApplier for Domain {
         Ok(None)
     }
 }
-struct RunTool(Arc<GovernedProposalTool>);
+struct RunTool {
+    tool: Arc<GovernedProposalTool>,
+    capture: Mutex<Option<tokio::sync::oneshot::Sender<ExecutionContext>>>,
+}
 #[async_trait]
 impl TaskExecutor for RunTool {
     async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+        let capture = self.capture.lock().unwrap().take();
+        if let Some(capture) = capture {
+            let _ = capture.send(context);
+            return std::future::pending().await;
+        }
         let mut tool_context = support::context();
         tool_context.run_id = context.task.task_id.clone();
         tool_context.cancellation = context.cancellation.clone();
         tool_context.dispatch_guard = Some(context.dispatch_guard());
-        self.0
+        self.tool
             .execute(tool_context, json!({"action_id":"edit_item_document"}))
             .await
             .map_err(|error| HostError::Execution(error.to_string()))?;
         Ok(())
     }
 }
-async fn setup(expire: bool, supersede: bool) -> (AgentHost, Arc<Domain>) {
+async fn setup(expire: bool, supersede: bool) -> (AgentHost, Arc<Domain>, Arc<RunTool>) {
     let fixture = support::fixture(WriteExecutionMode::DirectWhenAuthorized, false).await;
     let clock = Arc::new(Clock(AtomicI64::new(1000)));
     let domain = Arc::new(Domain {
@@ -119,11 +127,15 @@ async fn setup(expire: bool, supersede: bool) -> (AgentHost, Arc<Domain>) {
         },
     )
     .unwrap();
+    let executor = Arc::new(RunTool {
+        tool: Arc::new(tool),
+        capture: Mutex::new(None),
+    });
     let host = AgentHost::new(
         fixture.store,
         std::collections::HashMap::from([(
             "test".into(),
-            Arc::new(RunTool(Arc::new(tool))) as Arc<dyn TaskExecutor>,
+            executor.clone() as Arc<dyn TaskExecutor>,
         )]),
         clock,
         HostOptions {
@@ -133,7 +145,7 @@ async fn setup(expire: bool, supersede: bool) -> (AgentHost, Arc<Domain>) {
     )
     .unwrap();
     host.submit(task()).await.unwrap();
-    (host, domain)
+    (host, domain, executor)
 }
 fn task() -> SubmitTask {
     SubmitTask {
@@ -149,24 +161,48 @@ fn task() -> SubmitTask {
         exclusive_scope: false,
     }
 }
+async fn claimed_context(host: &AgentHost, executor: &RunTool) -> ExecutionContext {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    *executor.capture.lock().unwrap() = Some(send);
+    let running = host.clone();
+    let runner = tokio::spawn(async move { running.run_once().await });
+    let context = receive
+        .await
+        .expect("runner supplies its real claimed context");
+    runner.abort();
+    assert!(runner.await.unwrap_err().is_cancelled());
+    context
+}
 #[tokio::test]
 async fn expiry_during_final_revision_read_prevents_domain_dispatch() {
-    let (host, domain) = setup(true, false).await;
-    assert!(host.run_once().await.is_err());
+    let (host, domain, executor) = setup(true, false).await;
+    let context = claimed_context(&host, &executor).await;
+    // Isolate the final revision fence from the runner's competing heartbeat cancellation.
+    context.check_dispatch().await.unwrap();
+    executor.execute(context.clone()).await.unwrap();
+    assert_eq!(host.runtime().now_ms(), 10000);
+    assert!(context.cancellation.is_cancelled());
+    assert_eq!(
+        context.dispatch_guard().check().await.unwrap_err().code,
+        "lease_lost"
+    );
     assert_eq!(domain.calls.load(Ordering::SeqCst), 0);
     assert!(domain.identities.lock().unwrap().is_empty());
-    let proposals = host.store().proposals(None, None).await.unwrap();
+    let proposal = host.store().proposals(None, None).await.unwrap().remove(0);
+    assert_eq!(proposal.status, agentkit_store::ProposalStatus::Failed);
     let receipt = host
         .store()
-        .receipt(proposals[0].operation_id.as_deref().unwrap())
+        .receipt(proposal.operation_id.as_deref().unwrap())
         .await
         .unwrap()
-        .unwrap();
+        .expect("a finished no-dispatch refusal records its outcome");
+    assert_eq!(receipt.outcome.status, "failed");
     assert_eq!(receipt.outcome.applied_ops, 0);
+    assert_eq!(receipt.outcome.failed_ops.len(), proposal.operations.len());
 }
 #[tokio::test]
 async fn durable_governed_apply_carries_task_attempt_and_monotonic_fence() {
-    let (host, domain) = setup(false, false).await;
+    let (host, domain, _) = setup(false, false).await;
     assert!(host.run_once().await.unwrap());
     assert_eq!(domain.calls.load(Ordering::SeqCst), 1);
     let attempts = host.store().attempts("run").await.unwrap();
@@ -178,7 +214,7 @@ async fn durable_governed_apply_carries_task_attempt_and_monotonic_fence() {
 }
 #[tokio::test]
 async fn domain_atomic_fence_rejects_superseded_dispatch_after_local_check() {
-    let (host, domain) = setup(false, true).await;
+    let (host, domain, _) = setup(false, true).await;
     assert!(host.run_once().await.unwrap());
     assert_eq!(domain.calls.load(Ordering::SeqCst), 0);
     assert_eq!(domain.identities.lock().unwrap().len(), 1);

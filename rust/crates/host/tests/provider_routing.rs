@@ -253,8 +253,10 @@ async fn parent_store() -> SqliteStore {
         .create_session(&CreateSessionInput {
             session_id: Some("parent".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: Some("a".into()),
             model: Some("model-a".into()),
             workspace: None,

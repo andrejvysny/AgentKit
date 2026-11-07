@@ -1,9 +1,25 @@
+// Shared driver scenarios, mounted by path into every target that needs them;
+// each target exercises a subset of what is here.
+#![allow(dead_code)]
 use super::support::*;
 use agentkit_host::*;
 use agentkit_store::{SqliteStore, StoreError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::{Arc, atomic::Ordering};
+
+/// Scenarios whose executor suspends AFTER its effect and its committed event
+/// are durable, so the driver can act on the live attempt lease — admit a
+/// receipt, append a publication, cancel — before the attempt ends.
+/// `cancel_after_commit` holds at the same boundary and is driven separately by
+/// the six-profile differential gate.
+pub const M0_GATED: [&str; 5] = [
+    "m0_publish_gap",
+    "m0_ack_delivery",
+    "m0_receipt_uncertain",
+    "m0_receipt_committed",
+    "m0_cancel_uncertain_effect",
+];
 
 pub struct Script {
     pub scenario: String,
@@ -36,6 +52,20 @@ impl TaskExecutor for Script {
             }
             assert!(result.is_err(), "stale worker published event");
             return result;
+        }
+        if M0_GATED.contains(&self.scenario.as_str()) {
+            let effect = self.witness.effects.fetch_add(1, Ordering::SeqCst) + 1;
+            context
+                .emit("fault.committed", json!({"effect": effect}))
+                .await?;
+            self.witness.entered.notify_one();
+            self.witness.release.notified().await;
+            // The effect happened and its evidence is durable. What follows —
+            // a dropped process, a cancellation, or a receipt the driver never
+            // completes — is the boundary under test, and none of it may
+            // pretend this effect did not happen.
+            context.check_cancelled()?;
+            return Ok(());
         }
         self.witness.effects.fetch_add(1, Ordering::SeqCst);
         if self.scenario == "cancel_after_commit" {
@@ -103,6 +133,16 @@ pub async fn run(store: SqliteStore, scenario: &str) -> Vec<Value> {
     };
     transcript.push(snapshot(&env, "settled", extra).await);
     transcript
+}
+
+/// Start one attempt and suspend it at the gate, so the driver can act on the
+/// live attempt lease (admit a receipt, append a publication, cancel) before
+/// the attempt ends.
+pub async fn suspend(env: &Environment) -> tokio::task::JoinHandle<HostResult<bool>> {
+    let host = env.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    entered(env).await;
+    running
 }
 
 async fn supersede(env: &Environment) {

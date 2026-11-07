@@ -25,6 +25,8 @@ struct Secrets {
     fail_put: AtomicBool,
     block_put: AtomicBool,
     puts: AtomicUsize,
+    fail_delete: AtomicBool,
+    deletes: AtomicUsize,
     started: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -47,6 +49,10 @@ impl SecretStore for Secrets {
         }
     }
     async fn delete(&self, key: &SecretKey) -> Result<(), ConnectionError> {
+        self.deletes.fetch_add(1, Ordering::SeqCst);
+        if self.fail_delete.load(Ordering::SeqCst) {
+            return Err(ConnectionError::SecretUnavailable);
+        }
         self.inner.delete(key).await
     }
 }

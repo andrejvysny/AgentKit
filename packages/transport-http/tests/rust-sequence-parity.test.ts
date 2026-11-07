@@ -60,10 +60,15 @@ function baseline(
   });
 }
 function sequences(wire: string): number[] {
-  return wire
-    .split("\n")
-    .filter((line) => line.startsWith("data: ") && line !== "data: {}")
-    .map((line) => (JSON.parse(line.slice(6)) as AiRunEvent).seq);
+  return (
+    wire
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => (JSON.parse(line.slice(6)) as Partial<AiRunEvent>).seq)
+      // Control frames (settlement `{}`, AGENTKIT-81 resync `{"reason":…}`)
+      // carry no `seq` and are not run events.
+      .filter((seq) => typeof seq === "number")
+  );
 }
 
 // These expectations freeze a reference defect; native numeric cursors correct it.
@@ -199,6 +204,66 @@ test.skipIf(!nativeBackendAvailable)(
       }))
         replay.push(event.seq);
       expect(replay).toEqual(source.map((event) => event.seq));
+    } finally {
+      await native.stop();
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!nativeBackendAvailable)(
+  "native SSE announces an unknown-cursor replay exactly like the TypeScript route",
+  async () => {
+    // AGENTKIT-81 wire parity: the header value, the control frame's exact
+    // bytes, and the silence on genuine resumes must match the TypeScript
+    // transport byte for byte — clients cannot branch per backend.
+    const native = await startNativeServer();
+    const source = events([0, 1, 2, 3]);
+    try {
+      const seeded = await fetch(`${native.controlUrl}/tasks`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${native.controlToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          operation: "seedNumericRun",
+          taskId: "numeric",
+          events: source,
+        }),
+      });
+      expect(seeded.status).toBe(200);
+      const stream = (lastEventId?: string) =>
+        fetch(`${native.baseUrl}/v1/runs/numeric/stream`, {
+          headers: {
+            authorization: `Bearer ${native.token}`,
+            ...(lastEventId === undefined
+              ? {}
+              : { "last-event-id": lastEventId }),
+          },
+        });
+
+      const replay = await stream("evt-from-another-run");
+      expect(replay.status).toBe(200);
+      expect(replay.headers.get("x-agentkit-stream-resync")).toBe(
+        "unknown_last_event_id",
+      );
+      const replayWire = await replay.text();
+      expect(replayWire).toContain(
+        'event: agentkit.stream.resync\ndata: {"reason":"unknown_last_event_id"}\n\n',
+      );
+      expect(sequences(replayWire)).toEqual([0, 1, 2, 3]);
+      expect(replayWire).toContain("agentkit.stream.settled");
+
+      const resume = await stream("numeric-1");
+      expect(resume.headers.get("x-agentkit-stream-resync")).toBeNull();
+      const resumeWire = await resume.text();
+      expect(resumeWire).not.toContain("agentkit.stream.resync");
+      expect(sequences(resumeWire)).toEqual([2, 3]);
+
+      const fresh = await stream();
+      expect(fresh.headers.get("x-agentkit-stream-resync")).toBeNull();
+      expect(await fresh.text()).not.toContain("agentkit.stream.resync");
     } finally {
       await native.stop();
     }

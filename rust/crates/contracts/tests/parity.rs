@@ -16,6 +16,26 @@ fn schemas_match_frozen_typescript_exports_and_compile() {
 }
 
 #[test]
+fn reasoning_effort_migration_is_optional_and_closed_for_both_turn_routes() {
+    for (operation, base) in [
+        (RestOperation::SubmitMessage, json!({"content":"hello"})),
+        (RestOperation::RegenerateMessage, json!({})),
+    ] {
+        assert!(validate_request(operation, &base).is_ok());
+        for effort in ["minimal", "low", "medium", "high"] {
+            let mut input = base.clone();
+            input["reasoningEffort"] = json!(effort);
+            assert!(validate_request(operation, &input).is_ok(), "{effort}");
+        }
+        for effort in [Value::Null, json!("future"), json!(1), json!(true)] {
+            let mut input = base.clone();
+            input["reasoningEffort"] = effort;
+            assert!(validate_request(operation, &input).is_err(), "{input}");
+        }
+    }
+}
+
+#[test]
 fn all_routes_match_typescript() {
     let frozen = fixture("routes.json");
     let rows = frozen["routes"].as_array().unwrap();

@@ -1,4 +1,7 @@
-import { RunContentSelectionSchema } from "./prompt.js";
+import {
+  RunContentSelectionSchema,
+  RunReasoningEffortSchema,
+} from "./prompt.js";
 /**
  * The versioned HTTP surface — types and JSON Schemas only.
  *
@@ -733,6 +736,14 @@ export type CreateChatRequest = Static<typeof CreateChatRequestSchema>;
 export const SubmitMessageRequestSchema = Type.Object({
   contentSelection: Type.Optional(RunContentSelectionSchema),
   /**
+   * How much hidden reasoning THIS turn may ask the provider for — the same
+   * field {@link RegenerateMessageRequestSchema} carries, so "answer that again,
+   * with more thinking" is one request rather than a session edit. Omit it and
+   * the session's own effort stands; there is deliberately no implicit lowest
+   * level, and an unrecognised level is refused at validation.
+   */
+  reasoningEffort: Type.Optional(RunReasoningEffortSchema),
+  /**
    * The turn's body: a plain string, or content parts for a multimodal turn.
    *
    * An image part may name a host attachment (`source.kind: "ref"`) instead of
@@ -851,6 +862,13 @@ export type UpdateChatRequest = Static<typeof UpdateChatRequestSchema>;
  */
 export const RegenerateMessageRequestSchema = Type.Object({
   contentSelection: Type.Optional(RunContentSelectionSchema),
+  /**
+   * How much hidden reasoning THIS attempt may ask the provider for. A
+   * regenerate exists to ask the same question differently, and "with more (or
+   * less) thinking" is one of the ways a caller asks that — omit it and the
+   * session's own effort stands.
+   */
+  reasoningEffort: Type.Optional(RunReasoningEffortSchema),
   /** Overrides the provider's default model for this attempt only. */
   model: Type.Optional(Type.String()),
   /** Answer with a DIFFERENT provider than the one that answered first. */

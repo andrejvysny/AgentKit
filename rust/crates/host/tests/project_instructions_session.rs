@@ -116,8 +116,10 @@ async fn a_symlinked_agents_md_skips_with_a_durable_warning_and_never_leaks() {
         .create_session(&CreateSessionInput {
             session_id: Some("s1".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: Some(json!({ "root": dir.path().display().to_string(), "trusted": true })),

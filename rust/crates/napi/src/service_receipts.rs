@@ -7,8 +7,16 @@ use agentkit_store::{ExecutionReceiptRecord, ResolutionOutcome};
 use napi::bindgen_prelude::*;
 use serde_json::Value;
 
-const RESOLVE_KEYS: [&str; 6] = [
+const SESSION_RESOLVE_KEYS: [&str; 6] = [
     "sessionId",
+    "executionId",
+    "outcome",
+    "result",
+    "note",
+    "resolvedBy",
+];
+const CHAT_RESOLVE_KEYS: [&str; 6] = [
+    "chatId",
     "executionId",
     "outcome",
     "result",
@@ -18,8 +26,11 @@ const RESOLVE_KEYS: [&str; 6] = [
 
 const MAX_RESULT_BYTES: usize = agentkit_store::MAX_RESOLUTION_RESULT_BYTES;
 
+#[derive(Debug)]
 pub(super) struct ResolveInput {
-    pub session_id: String,
+    /// The owner the surface keys on: the session for the session route, the
+    /// chat for the static-fast-path route.
+    pub scope_id: String,
     pub execution_id: String,
     pub outcome: ResolutionOutcome,
     pub result: Option<Value>,
@@ -33,11 +44,11 @@ fn required_string(object: &Value, key: &str) -> Result<String> {
         .ok_or_else(|| errors::invalid(format!("{key} is required")))
 }
 
-pub(super) fn parse_resolve(text: &str) -> Result<ResolveInput> {
+fn parse_resolve_scoped(text: &str, scope_key: &str, keys: &[&str; 6]) -> Result<ResolveInput> {
     let object = parse_object(text, "the resolve input")?;
     if let Some(unknown) = object
         .as_object()
-        .and_then(|map| map.keys().find(|key| !RESOLVE_KEYS.contains(&key.as_str())))
+        .and_then(|map| map.keys().find(|key| !keys.contains(&key.as_str())))
     {
         return Err(errors::invalid(format!("unknown field \"{unknown}\"")));
     }
@@ -81,13 +92,23 @@ pub(super) fn parse_resolve(text: &str) -> Result<ResolveInput> {
         return Err(errors::invalid("resolvedBy exceeds 200 characters"));
     }
     Ok(ResolveInput {
-        session_id: required_string(&object, "sessionId")?,
+        scope_id: required_string(&object, scope_key)?,
         execution_id: required_string(&object, "executionId")?,
         outcome,
         result,
         note: optional_string(&object, "note")?,
         resolved_by,
     })
+}
+
+pub(super) fn parse_resolve(text: &str) -> Result<ResolveInput> {
+    parse_resolve_scoped(text, "sessionId", &SESSION_RESOLVE_KEYS)
+}
+
+/// The static fast path's twin (AGENTKIT-73): identical rules, keyed by the
+/// receipt's chat because no session owns such chats.
+pub(super) fn parse_resolve_for_chat(text: &str) -> Result<ResolveInput> {
+    parse_resolve_scoped(text, "chatId", &CHAT_RESOLVE_KEYS)
 }
 
 fn records_json(records: &[ExecutionReceiptRecord]) -> Result<String> {
@@ -120,7 +141,34 @@ impl SessionService {
         let record = core
             .service
             .resolve_uncertain_execution(
-                &input.session_id,
+                &input.scope_id,
+                &input.execution_id,
+                input.outcome,
+                input.result,
+                input.note,
+                input.resolved_by,
+            )
+            .await
+            .map_err(errors::session)?;
+        serde_json::to_string(&record)
+            .map_err(|_| errors::internal("serializing execution receipt"))
+    }
+
+    /// AGENTKIT-73: close one uncertain receipt of a sessionless (static
+    /// fast path) chat. Same outcomes and result rules as
+    /// [`Self::resolve_uncertain_execution`], keyed by the receipt's chat;
+    /// never executes, re-admits, or replays the effect.
+    #[napi]
+    pub async fn resolve_uncertain_execution_for_chat(&self, input_json: String) -> Result<String> {
+        let guard = self.core.lock().await;
+        let core = guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let input = parse_resolve_for_chat(&input_json)?;
+        let record = core
+            .service
+            .resolve_uncertain_execution_for_chat(
+                &input.scope_id,
                 &input.execution_id,
                 input.outcome,
                 input.result,
@@ -146,6 +194,36 @@ mod tests {
 
     fn parse(body: Value) -> Result<ResolveInput> {
         parse_resolve(&body.to_string())
+    }
+
+    fn parse_chat(body: Value) -> Result<ResolveInput> {
+        parse_resolve_for_chat(&body.to_string())
+    }
+
+    #[test]
+    fn the_chat_surface_swaps_only_the_scope_key() {
+        let body = json!({
+            "chatId": "c", "executionId": "e", "outcome": "acknowledged", "resolvedBy": "op"
+        });
+        let parsed = parse_chat(body.clone()).unwrap();
+        assert_eq!(parsed.scope_id, "c");
+        assert_eq!(parsed.resolved_by.as_deref(), Some("op"));
+        // A session-scoped body is not a chat-scoped body, and vice versa:
+        // the wrong key is an unknown field, the missing one is required.
+        let session_body = json!({
+            "sessionId": "s", "executionId": "e", "outcome": "acknowledged"
+        });
+        assert_eq!(
+            code_of(parse_chat(session_body).unwrap_err()),
+            "invalid_input"
+        );
+        assert_eq!(code_of(parse(body.clone()).unwrap_err()), "invalid_input");
+        let mut missing = body.as_object().unwrap().clone();
+        missing.remove("chatId");
+        assert_eq!(
+            code_of(parse_chat(Value::Object(missing)).unwrap_err()),
+            "invalid_input"
+        );
     }
 
     #[test]

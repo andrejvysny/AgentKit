@@ -46,7 +46,10 @@ worker's `shutdown()` before releasing the database owner.
 a subscription does not cancel execution. Use `RunHandle::cancel()` explicitly.
 Provider terminal events leave the logical run settling; `RunUpdate::Settled`
 and the HTTP `agentkit.stream.settled` frame follow durable settlement and the
-final event drain, including verification.
+final event drain, including verification. A stream asked to resume from an
+unknown `Last-Event-ID` announces its full replay — the
+`x-agentkit-stream-resync` header and an opening `agentkit.stream.resync`
+control frame — byte-for-byte as the TypeScript transport does.
 
 `ChatExecutor` uses the core's awaited event-persistence hook. Failed persistence
 prevents the next tool/provider operation. Completed tool effects still need

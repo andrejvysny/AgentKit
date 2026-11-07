@@ -8,6 +8,7 @@ fixtures by the parity tests.
 Generate DTOs and routes after an intentional TypeScript contract change:
 
 ```sh
+bun scripts/export-rust-fixtures.ts
 bun rust/crates/contracts/codegen/generate.mjs
 cargo fmt --manifest-path rust/Cargo.toml -p agentkit-contracts
 ```
@@ -15,6 +16,26 @@ cargo fmt --manifest-path rust/Cargo.toml -p agentkit-contracts
 The generator imports the TypeScript source directly. It requires Bun, installed
 repository dependencies, and Rust 1.97.0 with rustfmt. Generated code is checked
 in; consumers do not run a TypeScript build.
+
+## Current export fixtures and migration delta
+
+`rust/fixtures/schemas.json` and its packaged copy in `tests/fixtures` describe
+current TypeScript exports. They are regenerated together with their manifests
+through the exporter and code generator above. The Rust parity test compares the
+entire embedded schema bundle with these exports, without migration exceptions;
+exporter checks and release projection also reject any drift. Historical contract
+snapshots remain available through Git rather than replacing this current check.
+The manifest's `baselineSha` identifies the exporter lineage; its current payload
+hashes identify the checked exports.
+
+Against `f64c21e355e6f86a1d60024b45c2906cdade9758`, the schema delta is exactly
+one optional `reasoningEffort` property on each of `SubmitMessageRequestSchema`
+and `RegenerateMessageRequestSchema`. Each accepts only the string literals
+`minimal`, `low`, `medium`, and `high`; omission remains valid, while null and
+other values are rejected. No required fields, existing properties, routes, event
+variants, or golden traces change. The inventories remain 101 schemas, 48 routes,
+and 18 event variants. The optionality and closed value set have a dedicated
+Rust parity regression for both turn routes.
 
 ## Deserialization and validation
 

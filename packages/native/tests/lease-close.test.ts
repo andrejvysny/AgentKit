@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NativeAgentError, NativeStore } from "../src/index.js";
+import { testProfile } from "./helpers/profiles.js";
 
 interface Receipt {
   status: string;
@@ -51,6 +52,14 @@ async function windowsCommandRefusal(): Promise<void> {
   const store = await NativeStore.open(path);
   const service = await store.createService({
     jsToolAuthority: { configuredMode: "full_auto" },
+    // The refusal scenario still has to stage the native command tool it
+    // expects the pack to refuse; full_auto so nothing else gates it.
+    profiles: [
+      testProfile("windows-refusal", {
+        tools: ["run_command"],
+        permissionMode: "full_auto",
+      }),
+    ],
   });
   try {
     try {
@@ -139,6 +148,15 @@ test("native close drains no-start receipt while external workspace lease stays 
   const service = await store.createService({
     closeTimeoutMs: 100,
     jsToolAuthority: { configuredMode: "full_auto" },
+    // The turn stages exactly the native command tool whose dispatch the
+    // held external lease blocks; full_auto so the coordination wait — not
+    // an approval — is what parks it.
+    profiles: [
+      testProfile("lease-close", {
+        tools: ["run_command"],
+        permissionMode: "full_auto",
+      }),
+    ],
   });
   try {
     await service.registerCodingTools({

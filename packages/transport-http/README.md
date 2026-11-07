@@ -446,6 +446,14 @@ serialize an errored body as clean HTTP EOF, so clients must require the marker
 and reconnect on unmarked EOF. Deploy matching client/transport versions;
 provider-pass terminal events alone never establish final settlement.
 
+When a real `Last-Event-ID` names no event of this run, the full replay that
+follows is announced, never silent: the response carries
+`x-agentkit-stream-resync: unknown_last_event_id` and the body opens with
+`event: agentkit.stream.resync` / `data: {"reason":"unknown_last_event_id"}` —
+a transport control frame like the settlement marker, with no `id` or `seq` and
+no place in the durable log — before the first replayed event. A fresh stream
+and a genuine resume carry neither the header nor the frame.
+
 **Liveness and cancellation.** A `: hb` comment goes out after every
 `heartbeatIntervalMs` of idleness, so proxies do not reap a connection that is
 legitimately quiet during a long tool call. Aborting the request (or cancelling

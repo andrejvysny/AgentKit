@@ -60,7 +60,7 @@ async fn aliases_are_atomic_across_repository_handles_and_scopes_are_isolated() 
     ));
     let record = first.list().await.unwrap().remove(0);
     let patch: UpdateMcpServerRequest =
-        serde_json::from_value(json!({"secretRefs":{},"id":"malicious","createdAt":"changed"}))
+        serde_json::from_value(json!({"secretRefs":{},"transport":{"kind":"stdio","command":"explicit-host-tool","env":{}},"id":"malicious","createdAt":"changed"}))
             .unwrap();
     let updated = second.update(&record.id, patch).await.unwrap();
     assert_eq!(updated.id, record.id);
@@ -102,7 +102,7 @@ async fn declarations_survive_reopen_without_resolved_credentials() {
             .unwrap();
         assert_eq!(records.len(), 1);
         let value = serde_json::to_value(&records[0]).unwrap();
-        assert_eq!(value["transport"]["env"]["TOKEN"], "${token}");
+        assert_eq!(value["transport"]["env"]["TOKEN"], "***");
         assert_eq!(value["secretRefs"]["token"], "keychain-ref");
     }
     std::fs::remove_file(path).unwrap();

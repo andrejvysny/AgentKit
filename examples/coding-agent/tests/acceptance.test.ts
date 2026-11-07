@@ -696,13 +696,14 @@ describe("coding agent — the session lifecycle", () => {
     await h.app.close();
   });
 
-  it("records a changed reasoning effort; the native executor refuses to run on it", async () => {
-    // Native truth (rust/crates/host/src/session/mod.rs turn_payload_base):
-    // a session descriptor with a reasoning effort stages no turn — the
-    // binding has not wired provider effort, and it says so with
-    // `not_implemented` instead of silently dropping the request the user
-    // asked for. The effort itself is durable and visible, exactly as the
-    // old stack recorded it; only the silent-obey path became a refusal.
+  it("records a changed reasoning effort and dispatches the next turn with it", async () => {
+    // Delivered contract (`rust/crates/host/src/session/mod.rs` carries
+    // `reasoningEffort` on the descriptor; the native executor forwards it to
+    // provider dispatch): a session effort is NOT a refusal. `setModel`
+    // changes it durably, and the very next turn runs and carries the new
+    // value on the wire. The recorded requests are the only witness — the
+    // effort is a request field, never stored transcript text — so the
+    // assertion is made against `h.efforts`, not the answer text.
     const h = await open({
       mode: "full_auto",
       script: [say("first"), say("second")],
@@ -712,10 +713,10 @@ describe("coding agent — the session lifecycle", () => {
     expect(h.efforts).toEqual([undefined]);
     await h.app.setModel("mock-model", "high");
     expect((await h.app.state()).descriptor.reasoningEffort).toBe("high");
-    await expect(h.app.send("two")).rejects.toMatchObject({
-      code: "not_implemented",
-    });
-    expect(h.efforts).toHaveLength(1); // no second request was ever made
+    // The turn is admitted, executed, and completes — no `not_implemented`.
+    expect(await run(h, "two")).toBe("second");
+    // The changed effort reached the provider on exactly that second request.
+    expect(h.efforts).toEqual([undefined, "high"]);
     await h.app.close();
   });
 

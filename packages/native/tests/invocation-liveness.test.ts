@@ -21,7 +21,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NativeSessionService, NativeStore } from "../src/index.js";
+import type { NativeAgentProfile } from "../src/index.js";
 import { available } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 const nativeTest = available ? test : test.skip;
 
@@ -73,7 +75,10 @@ async function startFixtureProvider(): Promise<FixtureProvider> {
   };
 }
 
-async function openService(provider: FixtureProvider): Promise<{
+async function openService(
+  provider: FixtureProvider,
+  profiles?: readonly NativeAgentProfile[],
+): Promise<{
   store: NativeStore;
   service: NativeSessionService;
 }> {
@@ -92,6 +97,9 @@ async function openService(provider: FixtureProvider): Promise<{
       connectionId,
       model: "loopback-model",
     },
+    // `profiles` is `undefined` for the scenario that runs on the
+    // built-in policy verbatim; `JSON.stringify` drops the key.
+    profiles,
   });
   return { store, service };
 }
@@ -129,10 +137,14 @@ interface TurnOutcome {
 
 /** Drive one `probe_liveness` invocation with a 100ms tool timeout,
  * optionally busy-blocking the JS thread for `blockMs` right after the
- * turn starts. */
-async function driveBlockedTurn(blockMs: number): Promise<TurnOutcome> {
+ * turn starts. `profiles` overrides the service's profile registry for
+ * scenarios that must stage the probe. */
+async function driveBlockedTurn(
+  blockMs: number,
+  profiles?: readonly NativeAgentProfile[],
+): Promise<TurnOutcome> {
   const provider = await startFixtureProvider();
-  const { store, service } = await openService(provider);
+  const { store, service } = await openService(provider, profiles);
   let entries = 0;
   try {
     await service.registerTool(
@@ -205,7 +217,16 @@ nativeTest(
 nativeTest(
   "control: without blocking, the same 100ms-timeout callback is claimed and executes exactly once",
   async () => {
-    const outcome = await driveBlockedTurn(0);
+    // The control proves the callback is claimed and runs: the probe must
+    // be in the profile allow-list (the built-in `coding` pack list would
+    // filter it out) and full_auto so the JS guard executes it.
+    const outcome = await driveBlockedTurn(0, [
+      testProfile("coding", {
+        kind: "coding",
+        tools: ["probe_liveness"],
+        permissionMode: "full_auto",
+      }),
+    ]);
     expect(outcome.terminal).toBe(true);
     expect(outcome.entries).toBe(1);
   },

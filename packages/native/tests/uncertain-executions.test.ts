@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { NativeStore } from "../src/index.js";
 import { available, missing, required } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 if (required && !available)
   throw new Error(`native binding missing: ${missing.join(", ")}`);
@@ -10,7 +11,11 @@ nativeTest(
   "uncertain execution surface lists, validates and refuses explicitly",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // The surface under test is receipt bookkeeping: the session never
+      // runs a turn, so no tool is admitted.
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     try {
       await service.createSession({ sessionId: "s1", profileId: "p1" });
       expect(await service.listUncertainExecutions("s1")).toEqual([]);

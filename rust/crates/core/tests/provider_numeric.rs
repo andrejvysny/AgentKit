@@ -230,6 +230,7 @@ async fn responses_server_failure_details_stay_redacted_before_host_projection()
 async fn responses_parse_rounding_and_private_marker_objects_survive_callback_and_replay() {
     let saved = Arc::new(Saved(Mutex::new(None)));
     let mut request = ChatRequest {
+        run_id: "numeric-run".into(),
         model: "model".into(),
         messages: vec![ChatMessage::text("user", "question")],
         continuation_scope: Some(ContinuationScope {
@@ -250,6 +251,7 @@ async fn responses_parse_rounding_and_private_marker_objects_survive_callback_an
         .await;
     assert!(events.iter().all(Result::is_ok));
     let state = saved.0.lock().unwrap().clone().unwrap();
+    assert_eq!(state["runContent"]["runId"], "numeric-run");
     let reasoning = &state["inputItems"][1];
     assert_eq!(reasoning["rounded"], json!(9007199254740992u64));
     assert_eq!(

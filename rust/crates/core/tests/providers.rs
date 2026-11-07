@@ -67,6 +67,7 @@ fn sse(values: &[Value]) -> String {
 }
 fn request() -> ChatRequest {
     ChatRequest {
+        run_id: "provider-run".into(),
         model: "m".into(),
         messages: vec![ChatMessage::text("user", "hi")],
         ..Default::default()

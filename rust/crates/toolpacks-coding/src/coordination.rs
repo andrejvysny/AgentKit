@@ -1558,6 +1558,168 @@ fn restore_tombstone(tomb: &std::path::Path, path: &std::path::Path) {
     }
 }
 
+/// Grace window before a `.retiring.*` tombstone becomes sweep-eligible
+/// (AGENTKIT-74 hygiene): fresh tombstones belong to a retirement that
+/// may still be resolving.
+const RETIRING_GRACE_MS: i64 = 60 * 60 * 1_000;
+
+/// Legacy shared-journal records age far longer before sweeping: they are
+/// honored as unresolved-cleanup evidence on every read, so only records
+/// that are BOTH ancient and name only dead processes are litter.
+const LEGACY_JOURNAL_GRACE_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+
+/// AGENTKIT-74 cleanup sweep for retirement tombstones. A failed
+/// quarantine retirement (a republished record won the name) keeps the
+/// displaced record at `<record>.retiring.<uuid>` "for an operator" —
+/// nothing ever revisited them. The sweep removes tombstones past a grace
+/// window whose record names only DEAD processes (evidence of a holder
+/// that can no longer be contending anything); a tombstone naming a live
+/// pid, an empty (explicit-recovery-blocked) pid set, or an unparseable
+/// record stays, and each candidate is flocked before removal so a
+/// retirement in flight is never raced.
+fn sweep_retiring_tombstones_sync(
+    dir: std::path::PathBuf,
+    min_age_ms: i64,
+) -> Vec<std::path::PathBuf> {
+    let mut swept = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return swept;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.contains(".retiring.") || name.starts_with(".tmp-") {
+            continue;
+        }
+        let age_ms = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .map_or(0, |age| age.as_millis() as i64);
+        if age_ms < min_age_ms {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(handle) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        else {
+            continue;
+        };
+        if handle.try_lock().is_err() {
+            continue; // someone else is looking at it: never race
+        }
+        let evidence_of_live_owner = match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|value| quarantine_from_json("", &value))
+                .is_some_and(|record| {
+                    record.pids.is_empty()
+                        || record
+                            .pids
+                            .iter()
+                            .any(|pid| crate::process::owner_alive(i64::from(*pid)))
+                }),
+            // An unreadable tombstone proves nothing about who it named:
+            // fail closed and keep it.
+            Err(_) => true,
+        };
+        if evidence_of_live_owner || std::fs::remove_file(&path).is_err() {
+            continue;
+        }
+        swept.push(path);
+    }
+    swept
+}
+
+/// AGENTKIT-74 cleanup sweep for the world-shared legacy journal
+/// directory (`$TMP/agentkit-exec-intents/`, superseded by the per-user
+/// `agentkit-exec-intents-<uid>/`). Records there are honored on read
+/// forever, but an abandoned root's records — every pid they name dead,
+/// the leaf older than the grace window — are litter in a shared temp
+/// directory. Leaf-granular and fail-closed: a leaf is removed only when
+/// EVERY record in it parses to a non-empty pid set that is entirely
+/// dead; any live pid, any empty (explicit-recovery-blocked) quarantine,
+/// any unreadable or unparseable record, keeps the whole leaf. Only a
+/// real directory owned by this user is ever entered or removed.
+#[cfg(unix)]
+fn sweep_legacy_journal(min_age_ms: i64) {
+    use std::os::unix::fs::MetadataExt;
+    let base = std::env::temp_dir().join("agentkit-exec-intents");
+    let Ok(meta) = std::fs::symlink_metadata(&base) else {
+        return;
+    };
+    if !meta.file_type().is_dir() || meta.uid() != current_uid() {
+        return; // foreign or not-a-directory: never touched (as on read)
+    }
+    let Ok(leaves) = std::fs::read_dir(&base) else {
+        return;
+    };
+    for leaf in leaves.flatten() {
+        let Ok(meta) = leaf.metadata() else {
+            continue;
+        };
+        if !meta.file_type().is_dir() || meta.uid() != current_uid() {
+            continue;
+        }
+        let age_ms = meta
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .map_or(0, |age| age.as_millis() as i64);
+        if age_ms < min_age_ms {
+            continue;
+        }
+        let dir = leaf.path();
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut doomed = Vec::new();
+        let mut keep_leaf = false;
+        for file in files.flatten() {
+            let name = file.file_name().to_string_lossy().into_owned();
+            if name.starts_with(".tmp-") || !name.ends_with(".json") {
+                continue;
+            }
+            let path = file.path();
+            let pids: Option<Vec<i64>> = match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            {
+                None => None,
+                Some(value) if name == QUARANTINE_FILE_NAME => quarantine_from_json("", &value)
+                    .map(|record| record.pids.iter().map(|pid| i64::from(*pid)).collect()),
+                Some(value) => value
+                    .get("ownerPid")
+                    .and_then(|pid| pid.as_i64())
+                    // A corrupt (absurd/absent) owner pid is the unknown-
+                    // survivor kind on read: fail closed, keep the leaf.
+                    .filter(|pid| *pid > 0)
+                    .map(|pid| vec![pid]),
+            };
+            let dead_set = pids.is_some_and(|pids| {
+                !pids.is_empty() && pids.iter().all(|pid| !crate::process::owner_alive(*pid))
+            });
+            if !dead_set {
+                keep_leaf = true;
+                break;
+            }
+            doomed.push(path);
+        }
+        if keep_leaf || doomed.is_empty() {
+            continue;
+        }
+        for path in doomed {
+            let _ = std::fs::remove_file(&path);
+        }
+        let _ = std::fs::remove_dir(&dir); // only succeeds when now empty
+    }
+}
+
+#[cfg(not(unix))]
+fn sweep_legacy_journal(_min_age_ms: i64) {}
+
 /// Read the root's durable quarantine record. An unparseable record is NOT
 /// dropped: it reconciles as an unknown-survivor quarantine (empty pids
 /// never "positively exit"), fail closed until explicit recovery.
@@ -2198,6 +2360,18 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             // this intent: keep the intent so its identity is never
             // discarded, and so a later reopen can still see it.
         }
+        // AGENTKIT-74 cleanup sweeps (best-effort hygiene; correctness
+        // never depends on them): retirement tombstones this root's
+        // journal leaves kept for an operator, and abandoned records in
+        // the world-shared legacy journal directory, are swept only once
+        // every pid they name is provably gone (see the sweep docs).
+        if let Ok(dirs) = existing_journal_dirs(&root).await {
+            for dir in dirs {
+                sweep_retiring_tombstones_sync(dir, RETIRING_GRACE_MS);
+            }
+        }
+        static LEGACY_SWEEPED: std::sync::Once = std::sync::Once::new();
+        LEGACY_SWEEPED.call_once(|| sweep_legacy_journal(LEGACY_JOURNAL_GRACE_MS));
         Ok(())
     }
 }
@@ -3561,5 +3735,151 @@ mod tests {
                 .is_none()
         );
         let _ = std::fs::remove_dir_all(intent_dir_for(&root_key));
+    }
+
+    /// A pid that can never be alive (far above any pid_max) and can
+    /// never be recycled by a concurrent test's spawn.
+    fn certainly_dead() -> i32 {
+        2_000_000_001
+    }
+
+    #[tokio::test]
+    async fn retiring_tombstone_litter_is_swept_and_live_evidence_survives() {
+        // AGENTKIT-74 cleanup sweep: a retirement tombstone naming only
+        // dead processes is litter; live-pid evidence and an explicit-
+        // recovery (empty-pid) record stay; a tombstone another task
+        // holds the flock on is never raced.
+        let dir = std::path::PathBuf::from(temp_dir("retiring-sweep"));
+        let dead = certainly_dead();
+        let write = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).expect("tomb");
+            path
+        };
+        let gone = write(
+            "quarantine.json.retiring.dead",
+            &serde_json::json!({"pids": [dead], "quarantinedAtMs": 9,
+                                "runId": "r", "tool": "command", "label": "x"})
+            .to_string(),
+        );
+        let litter = write("quarantine.json.retiring.broken", "not json");
+        let live = write(
+            "quarantine.json.retiring.alive",
+            &serde_json::json!({"pids": [std::process::id() as i32], "quarantinedAtMs": 9,
+                                "runId": "r", "tool": "command", "label": "x"})
+            .to_string(),
+        );
+        let blocked = write(
+            "quarantine.json.retiring.empty",
+            &serde_json::json!({"pids": [], "quarantinedAtMs": 9,
+                                "runId": "r", "tool": "command", "label": "x"})
+            .to_string(),
+        );
+        let unreadable = write("quarantine.json.retiring.unreadable", "[]");
+        let held = write(
+            "quarantine.json.retiring.held",
+            &serde_json::json!({"pids": [dead], "quarantinedAtMs": 9,
+                                "runId": "r", "tool": "command", "label": "x"})
+            .to_string(),
+        );
+        let _hold = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&held)
+            .expect("open held");
+        assert!(_hold.try_lock().is_ok(), "flock the candidate");
+        // Grace window first: nothing is eligible before it lapses.
+        assert!(
+            sweep_retiring_tombstones_sync(dir.clone(), i64::MAX / 2).is_empty(),
+            "grace"
+        );
+        let swept = sweep_retiring_tombstones_sync(dir.clone(), 0);
+        assert!(
+            swept.contains(&gone) && swept.contains(&litter),
+            "dead-only and unparseable tombstones swept: {swept:?}"
+        );
+        for keep in [&live, &blocked, &held, &unreadable] {
+            assert!(keep.exists(), "{keep:?} must survive the sweep");
+        }
+        drop(_hold);
+        // After the flock releases, the dead-only tombstone goes too.
+        assert!(sweep_retiring_tombstones_sync(dir.clone(), 0).contains(&held));
+        assert!(!held.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abandoned_legacy_journal_leaves_are_swept_live_leaves_are_not() {
+        // AGENTKIT-74 cleanup sweep: the world-shared legacy journal
+        // directory keeps only leaves whose records name exclusively dead
+        // processes; any live pid, empty quarantine, or unparseable
+        // record keeps its whole leaf. A foreign (other-uid) base is
+        // never entered.
+        use std::os::unix::fs::MetadataExt;
+        let base = std::env::temp_dir().join("agentkit-exec-intents");
+        if let Ok(meta) = std::fs::symlink_metadata(&base)
+            && (meta.uid() != current_uid() || !meta.file_type().is_dir())
+        {
+            return; // a foreign legacy dir is (correctly) never touched
+        }
+        std::fs::create_dir_all(&base).expect("legacy base");
+        let dead = certainly_dead();
+        let abandoned = base.join("abandoned-leaf");
+        std::fs::create_dir_all(&abandoned).expect("leaf");
+        std::fs::write(
+            abandoned.join(QUARANTINE_FILE_NAME),
+            serde_json::json!({"pids": [dead], "quarantinedAtMs": 9,
+                               "runId": "old", "tool": "command", "label": "clear"})
+            .to_string(),
+        )
+        .expect("write");
+        std::fs::write(
+            abandoned.join("11-abc.json"),
+            serde_json::json!({"executionId": "11:abc", "ownerPid": dead,
+                               "runId": "old", "tool": "command", "label": "clear"})
+            .to_string(),
+        )
+        .expect("write");
+        let live_root = base.join("live-leaf");
+        std::fs::create_dir_all(&live_root).expect("leaf 2");
+        std::fs::write(
+            live_root.join(QUARANTINE_FILE_NAME),
+            serde_json::json!({"pids": [std::process::id() as i32], "quarantinedAtMs": 9,
+                               "runId": "run", "tool": "command", "label": "clear"})
+            .to_string(),
+        )
+        .expect("write");
+        sweep_legacy_journal(0);
+        assert!(
+            !abandoned.exists(),
+            "every pid dead: the abandoned legacy leaf is swept"
+        );
+        assert!(
+            live_root.join(QUARANTINE_FILE_NAME).exists(),
+            "a live pid keeps the whole leaf"
+        );
+        // Fail-closed shapes: empty-pid quarantine and an unparseable
+        // intent each pin their leaf.
+        let blocked = base.join("blocked-leaf");
+        std::fs::create_dir_all(&blocked).expect("leaf 3");
+        std::fs::write(
+            blocked.join(QUARANTINE_FILE_NAME),
+            serde_json::json!({"pids": [], "quarantinedAtMs": 9,
+                               "runId": "b", "tool": "command", "label": "clear"})
+            .to_string(),
+        )
+        .expect("write");
+        sweep_legacy_journal(0);
+        assert!(blocked.exists(), "empty pids block until explicit recovery");
+        let corrupt = base.join("corrupt-leaf");
+        std::fs::create_dir_all(&corrupt).expect("leaf 4");
+        std::fs::write(corrupt.join("intent.json"), "not json").expect("write");
+        sweep_legacy_journal(0);
+        assert!(corrupt.exists(), "unparseable records reconcile as unknown");
+        for leaf in [live_root, blocked, corrupt] {
+            let _ = std::fs::remove_dir_all(leaf);
+        }
+        let _ = std::fs::remove_dir(&base);
     }
 }

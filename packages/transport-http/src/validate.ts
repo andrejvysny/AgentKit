@@ -26,7 +26,11 @@
  * is a knob nothing will ever read, and silently storing it tells the operator
  * a timeout is in force that is not.
  */
-import { IMAGE_URL_PATTERN, MEDIA_TYPE_PATTERN } from "@agentkit/contracts";
+import {
+  IMAGE_URL_PATTERN,
+  MEDIA_TYPE_PATTERN,
+  SubmitMessageRequestSchema,
+} from "@agentkit/contracts";
 import type {
   ApplyProposalRequest,
   CreateChatRequest,
@@ -200,12 +204,40 @@ export function validateCreateChatRequest(
   return { ok: true, value: body as CreateChatRequest };
 }
 
+/**
+ * The reasoning levels the contract admits, read off the contract's own request
+ * schema rather than restated here: a level added to the union becomes
+ * admissible through these two validators without this file being touched
+ * again, and one removed stops being accepted the same day. Explicit null is
+ * refused, as it is on the Rust host — "no opinion" is an omitted field, and a
+ * caller that sent `null` said something this server cannot interpret.
+ *
+ * The empty-set guard is what makes this safe to derive: a contract edit that
+ * reshapes the field into something this code no longer understands fails at
+ * module load, rather than leaving the validator with no levels to check
+ * against and every value admitted.
+ */
+const reasoningEffortField = (
+  SubmitMessageRequestSchema.properties as Record<string, unknown>
+)["reasoningEffort"] as { anyOf?: { const?: unknown }[] } | undefined;
+const RUN_REASONING_EFFORTS: readonly string[] = (
+  reasoningEffortField?.anyOf ?? []
+)
+  .map((member) => member.const)
+  .filter((level): level is string => typeof level === "string");
+if (RUN_REASONING_EFFORTS.length === 0) {
+  throw new Error(
+    "contracts drift: `submitMessage.reasoningEffort` is no longer a closed union of string levels",
+  );
+}
+
 export function validateSubmitMessageRequest(
   body: Record<string, unknown>,
 ): ValidationResult<SubmitMessageRequest> {
   const issue = first(
     checkMessageContent(body),
     checkContentSelection(body["contentSelection"]),
+    checkOptionalEnum(body, "reasoningEffort", RUN_REASONING_EFFORTS),
     checkOptionalString(body, "model"),
     checkOptionalString(body, "providerId"),
     body["parentMessageId"] === null
@@ -399,6 +431,7 @@ export function validateRegenerateMessageRequest(
 ): ValidationResult<RegenerateMessageRequest> {
   const issue = first(
     checkContentSelection(body["contentSelection"]),
+    checkOptionalEnum(body, "reasoningEffort", RUN_REASONING_EFFORTS),
     checkOptionalString(body, "model"),
     checkOptionalString(body, "providerId"),
     checkOptionalMetadata(body, "metadata"),

@@ -237,6 +237,15 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError>;
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
 #[derive(Clone, Default)]
 pub struct ChatRequest {
     pub run_id: String,
@@ -244,6 +253,13 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDefinition>,
     pub temperature: Option<f64>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Selected managed instructions travel outside the durable transcript.
+    pub selected_content: Vec<ChatMessage>,
+    /// Admission digest includes selected revisions, resolved text, and host authority.
+    pub content_binding_digest: Option<String>,
+    /// Recheck after all awaited provider preparation, immediately before network dispatch.
+    pub request_guard: Option<Arc<dyn crate::DispatchGuard>>,
     pub max_output_tokens: Option<u64>,
     pub continuation: Option<Value>,
     pub continuation_scope: Option<ContinuationScope>,
