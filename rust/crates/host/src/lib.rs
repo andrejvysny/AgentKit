@@ -2,6 +2,7 @@
 //! subscriber does not cancel the task that produced them.
 
 mod advisor;
+mod agents;
 mod budget;
 mod chat;
 mod connection_transport;
@@ -26,6 +27,7 @@ mod subagents;
 mod subscription;
 
 pub use advisor::*;
+pub use agents::*;
 pub use budget::{RoleTaskOverrides, parse_budget_limits, restore_execution_budget};
 pub use chat::*;
 pub use connection_transport::*;

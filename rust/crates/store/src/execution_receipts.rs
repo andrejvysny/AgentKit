@@ -343,6 +343,18 @@ pub(crate) fn select_run(
     rows.map(|row| read_row(&row?)).collect()
 }
 
+/// The store's single active-receipt query: receipts still admitted
+/// without a durable result (the honest `admitted` uncertainty status).
+/// Retention gates — e.g. the agent-deletion refusal — consult THIS count
+/// on this table; no second receipt notion may be invented beside it.
+pub(crate) fn count_admitted(db: &Connection) -> Result<i64, StoreError> {
+    Ok(db.query_row(
+        "SELECT count(*) FROM tool_executions WHERE json_extract(record,'$.status')='admitted'",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
 /// Read one barrier row, refusing a malformed one as recovery evidence
 /// unreadable — a corrupt barrier must block, never read as absence.
 fn read_barrier(

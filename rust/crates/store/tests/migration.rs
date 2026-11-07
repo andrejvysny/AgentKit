@@ -24,6 +24,8 @@ fn version_one(path: &Path) {
         DROP TABLE subagents;
         DROP TABLE advisor_findings;
         DROP TABLE advisor_reviews;
+        DROP TABLE agents;
+        DROP TABLE agent_config_revisions;
         DROP INDEX tasks_status;
         DROP INDEX tasks_parent;
         DROP TRIGGER messages_search_insert;
