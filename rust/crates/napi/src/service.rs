@@ -64,6 +64,13 @@ const MAX_SUBAGENT_POOL: i64 = 64;
 
 struct Core {
     host: AgentHost,
+    content_authority: Arc<dyn agentkit_host::ContentAuthority>,
+    native_provider_factory: Arc<agentkit_host::http::NativeProviderFactory>,
+    provider_ports: Arc<crate::provider_connection::ports::BridgeProviderPorts>,
+    provider_memory_secrets: Arc<agentkit_connections::MemorySecretStore>,
+    mcp_config_runtime: Arc<dyn agentkit_host::McpConfigRuntime>,
+    mcp_config_secrets: Arc<dyn agentkit_host::McpConfigSecrets>,
+    profiles: Arc<agentkit_host::ProfileRegistry>,
     service: AgentSessionService,
     contributor: Arc<JsToolContributor>,
     lane: Arc<CodingLane>,
@@ -170,6 +177,10 @@ impl SessionService {
         store_handle: agentkit_store::SqliteStore,
         on_event: ThreadsafeFunction<String>,
         options_json: Option<String>,
+        mcp_ports: (
+            Arc<dyn agentkit_host::McpConfigRuntime>,
+            Arc<dyn agentkit_host::McpConfigSecrets>,
+        ),
     ) -> Result<Self> {
         let options = parse_service_options(options_json.as_deref())?;
         let bridge = Arc::new(JsBridge::new(on_event));
@@ -221,11 +232,25 @@ impl SessionService {
         // Immutable for the service lifetime: a durable payload's providerId
         // must resolve identically before and after a restart.
         let registry = Arc::new(agentkit_host::ProviderRegistry::new(routable));
+        let provider_ports = Arc::new(crate::provider_connection::ports::BridgeProviderPorts::new(
+            bridge.clone(),
+        ));
+        let provider_memory_secrets = Arc::new(agentkit_connections::MemorySecretStore::default());
+        let native_provider_factory = Arc::new(
+            agentkit_host::http::NativeProviderFactory::default()
+                .with_static_provider_ids(registry.ids().map(str::to_owned).collect()),
+        );
+        let content_authority: Arc<dyn agentkit_host::ContentAuthority> =
+            Arc::new(crate::provider::JsContentAuthority(Arc::clone(&bridge)));
+        let profiles =
+            Arc::new(agentkit_host::ProfileRegistry::new(&options.profiles).map_err(errors::host)?);
         let advisor_provider = Arc::clone(&provider);
         let executor: Arc<dyn TaskExecutor> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
                     providers: Some(Arc::clone(&registry)),
+                    provider_factory: Some(native_provider_factory.clone()),
+                    content_authority: Some(content_authority.clone()),
                     tool_contributors: vec![
                         Arc::clone(&contributor) as Arc<dyn ToolContributor>,
                         // The Rust coding toolpack, once registered, joins
@@ -318,12 +343,20 @@ impl SessionService {
             plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
             wake: Some(host.wake_handle()),
         })
-        .with_gate(host.admission_gate())
-        // Admission resolves every session profile against THIS registry, so
-        // the binding's profile surface is exactly the built-ins plus what
-        // `profiles` declared — never an ad-hoc default invented for an
-        // unknown id.
-        .with_profiles(Arc::new(options.profiles.clone().unwrap_or_default()));
+        .with_profiles(profiles.clone())
+        .with_defaults(
+            options
+                .provider
+                .as_ref()
+                .map(|provider| provider.provider_id.clone()),
+            options
+                .provider
+                .as_ref()
+                .map(|provider| provider.model.clone()),
+        )
+        .with_content_authority(content_authority.clone())
+        .with_provider_factory(native_provider_factory.clone())
+        .with_gate(host.admission_gate());
         host.set_session_flush_planner(Arc::new(service.clone()))
             .await;
         // Bound before the worker exists: a run can never query an unbound
@@ -365,6 +398,13 @@ impl SessionService {
         let service = Self {
             core: Arc::new(Mutex::new(Some(Core {
                 host,
+                content_authority,
+                native_provider_factory,
+                provider_ports,
+                provider_memory_secrets,
+                mcp_config_runtime: mcp_ports.0,
+                mcp_config_secrets: mcp_ports.1,
+                profiles,
                 service,
                 contributor,
                 lane,
@@ -1564,6 +1604,7 @@ fn optional_string_strict(object: &Value, key: &str) -> Result<Option<String>> {
 /// silently ignored, so the binding never advertises a policy it cannot
 /// enforce.
 struct ServiceOptions {
+    profiles: Vec<Value>,
     close_timeout: Duration,
     configured_mode: CodingMode,
     plan: PlanConfiguration,
@@ -1583,14 +1624,6 @@ struct ServiceOptions {
     /// hold a slot while awaiting children) and is the ceiling later
     /// `configureSubagents` calls are clamped to.
     subagent_max_concurrency: i64,
-    /// Host-owned profiles this service may resolve (`profiles`). `None` is
-    /// the crate's built-in registry, verbatim; a present registry is the
-    /// built-ins with the supplied definitions merged over them (same id
-    /// overrides, `extends` inherits), exactly as `ProfileRegistry::new`
-    /// merges. Sessions admit ONLY profiles this registry knows, so a
-    /// consumer that exercises tools outside the built-in sets describes the
-    /// profile it needs instead of the binding inventing a default.
-    profiles: Option<agentkit_host::ProfileRegistry>,
 }
 
 /// The Rust-native provider lane selected by `providerConfig`. A
@@ -1629,6 +1662,7 @@ impl ProviderProtocol {
 impl Default for ServiceOptions {
     fn default() -> Self {
         Self {
+            profiles: vec![],
             close_timeout: Duration::from_millis(DEFAULT_CLOSE_TIMEOUT_MS),
             configured_mode: CodingMode::Ask,
             plan: PlanConfiguration {
@@ -1641,7 +1675,6 @@ impl Default for ServiceOptions {
             subagent_max_concurrency: agentkit_host::SubagentConfig::default()
                 .limits
                 .max_concurrency,
-            profiles: None,
         }
     }
 }
@@ -1652,6 +1685,16 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
     };
     let object = parse_object(text, "the service options")?;
     let mut options = ServiceOptions::default();
+    if let Some(value) = object.get("profiles") {
+        options.profiles = value
+            .as_array()
+            .cloned()
+            .ok_or_else(|| errors::invalid("profiles must be an array when present"))?;
+        // Validated at construction by the host's own rules; a rejected
+        // definition is a caller error (`invalid_input`), never an internal one.
+        agentkit_host::ProfileRegistry::new(&options.profiles)
+            .map_err(|error| errors::invalid(format!("profiles: {error}")))?;
+    }
     if let Some(value) = object.get("closeTimeoutMs") {
         let millis = value
             .as_u64()
@@ -1730,21 +1773,6 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
             ));
         }
         options.account_backed_provider = kind == "chatgpt-account";
-    }
-    // Host-owned profiles: the same `ProfileRegistry` merge the HTTP boundary
-    // installs (`Server::with_profiles`). Definitions are validated by the
-    // host — identity, kind, permission mode, tool uniqueness, role/tool
-    // matrix, limit bounds — so a malformed profile fails construction with
-    // `invalid_input`, never a session that silently runs on a different
-    // policy than the caller described.
-    if let Some(value) = object.get("profiles") {
-        let items = value
-            .as_array()
-            .ok_or_else(|| errors::invalid("profiles must be an array when present"))?;
-        options.profiles = Some(
-            agentkit_host::ProfileRegistry::new(items)
-                .map_err(|error| errors::invalid(format!("profiles: {error}")))?,
-        );
     }
     Ok(options)
 }
@@ -2298,13 +2326,14 @@ mod tests {
     fn declared_profiles_extend_the_registry_and_malformed_ones_fail_construction() {
         // Absent, the registry is the built-ins verbatim: the option is an
         // extension, so it cannot become a way around profile enforcement.
-        assert!(parse_service_options(None).unwrap().profiles.is_none());
-        let registry = options_with(json!({"profiles": [
+        assert!(parse_service_options(None).unwrap().profiles.is_empty());
+        let declared = options_with(json!({"profiles": [
             {"id": "custom", "extends": "coding", "limits": {"maxToolIterations": 3}}
         ]}))
         .unwrap()
-        .profiles
-        .expect("the declared registry");
+        .profiles;
+        let registry =
+            agentkit_host::ProfileRegistry::new(&declared).expect("the declared registry");
         let custom = registry.resolve("custom").expect("declared profile");
         assert_eq!(custom.limits.max_tool_iterations, Some(3));
         // `extends` inherits the parent's allow-list verbatim...

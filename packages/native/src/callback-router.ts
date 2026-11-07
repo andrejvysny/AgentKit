@@ -1,5 +1,11 @@
-import { claimCall, resolveCall } from "./loader.js";
+import { claimCall, resolveCall, assertProviderAuthority } from "./loader.js";
 import type {
+  McpElicitationHandler,
+  McpOAuthCallbacks,
+  McpOAuthHttpRequest,
+  ProviderSecretStore,
+  ProviderConsentHandler,
+  ProviderConsentRequest,
   ProviderFunction,
   ProviderRequest,
   ToolCallRequest,
@@ -42,6 +48,23 @@ function parseEnvelope(raw: string): CallbackEnvelope | undefined {
  */
 export class CallbackRouter {
   private provider: ProviderFunction | null = null;
+  private providerSecrets: ProviderSecretStore | null = null;
+  private providerConsent: ProviderConsentHandler | null = null;
+  private mcpOAuth: McpOAuthCallbacks | null = null;
+  private mcpElicitation: McpElicitationHandler | null = null;
+  private contentIdentity:
+    | ((
+        chatId: string,
+        requiredConnectors: readonly string[],
+        signal: AbortSignal,
+      ) => unknown | Promise<unknown>)
+    | null = null;
+  private contentAuthority:
+    | ((
+        chatId: string,
+        signal: AbortSignal,
+      ) => readonly string[] | Promise<readonly string[]>)
+    | null = null;
   private tools = new Map<string, RegisteredTool>();
   private closed = false;
   /** Per-call abort controllers for dispatched provider/tool callbacks. */
@@ -59,6 +82,40 @@ export class CallbackRouter {
 
   get pendingEffects(): number {
     return this.inFlight;
+  }
+
+  setProviderSecretStore(store: ProviderSecretStore | null): void {
+    this.providerSecrets = store;
+  }
+  setProviderConsent(handler: ProviderConsentHandler | null): void {
+    this.providerConsent = handler;
+  }
+
+  setMcpOAuth(callbacks: McpOAuthCallbacks | null): void {
+    this.mcpOAuth = callbacks;
+  }
+
+  setMcpElicitation(handler: McpElicitationHandler | null): void {
+    this.mcpElicitation = handler;
+  }
+
+  setContentAuthority(
+    authority:
+      | ((
+          chatId: string,
+          signal: AbortSignal,
+        ) => readonly string[] | Promise<readonly string[]>)
+      | null,
+    identity:
+      | ((
+          chatId: string,
+          requiredConnectors: readonly string[],
+          signal: AbortSignal,
+        ) => unknown | Promise<unknown>)
+      | null = null,
+  ): void {
+    this.contentAuthority = authority;
+    this.contentIdentity = identity;
   }
 
   setProvider(provider: ProviderFunction | null): void {
@@ -84,6 +141,12 @@ export class CallbackRouter {
   close(): void {
     this.closed = true;
     this.provider = null;
+    this.providerSecrets = null;
+    this.providerConsent = null;
+    this.mcpElicitation = null;
+    this.mcpOAuth = null;
+    this.contentAuthority = null;
+    this.contentIdentity = null;
     for (const controller of this.controllers.values()) controller.abort();
     this.controllers.clear();
     this.tools.clear();
@@ -121,10 +184,171 @@ export class CallbackRouter {
     // must not run a callback the runtime abandoned. The per-call
     // AbortController below remains a mid-execution stop signal only; it
     // is not the liveness gate.
-    if (envelope.kind === "provider" || envelope.kind === "tool") {
+    if (
+      envelope.kind === "provider" ||
+      envelope.kind === "tool" ||
+      envelope.kind === "contentAuthority" ||
+      envelope.kind === "mcp.elicit" ||
+      envelope.kind === "mcp.oauth.secret" ||
+      envelope.kind === "mcp.oauth.redirect" ||
+      envelope.kind === "mcp.oauth.http" ||
+      envelope.kind === "providerSecret" ||
+      envelope.kind === "providerConsent"
+    ) {
       if (!claimCall(callId)) return;
     }
     try {
+      if (envelope.kind === "mcp.oauth.http") {
+        const http = this.mcpOAuth?.http;
+        if (http === undefined) {
+          resolveCall(callId, null, "MCP OAuth HTTP callback unavailable");
+          return;
+        }
+        const request = envelope.request as Omit<McpOAuthHttpRequest, "signal">;
+        await this.dispatchUser(async () => {
+          const response = await this.withAbort(callId, (signal) =>
+            http({ ...request, signal }),
+          );
+          resolveCall(callId, JSON.stringify(response), null);
+        });
+        return;
+      }
+      if (
+        envelope.kind === "mcp.oauth.secret" ||
+        envelope.kind === "mcp.oauth.redirect"
+      ) {
+        const callbacks = this.mcpOAuth;
+        if (callbacks === null) {
+          resolveCall(callId, null, "MCP OAuth callbacks unavailable");
+          return;
+        }
+        const request = envelope.request as {
+          operation?: string;
+          key?: string;
+          value?: string;
+          alias?: string;
+          url?: string;
+        };
+        await this.dispatchUser(async () => {
+          const result = await this.withAbort(callId, async (signal) => {
+            if (
+              envelope.kind === "mcp.oauth.redirect" &&
+              typeof request.alias === "string" &&
+              typeof request.url === "string"
+            ) {
+              await callbacks.redirect({
+                alias: request.alias,
+                url: request.url,
+                signal,
+              });
+              return null;
+            }
+            if (typeof request.key !== "string")
+              throw new Error("invalid OAuth secret request");
+            if (request.operation === "get")
+              return callbacks.secrets.get(request.key, signal);
+            if (
+              request.operation === "set" &&
+              typeof request.value === "string"
+            ) {
+              await callbacks.secrets.set(request.key, request.value, signal);
+              return null;
+            }
+            if (request.operation === "delete") {
+              await callbacks.secrets.delete(request.key, signal);
+              return null;
+            }
+            throw new Error("invalid OAuth callback operation");
+          });
+          resolveCall(callId, JSON.stringify(result), null);
+        });
+        return;
+      }
+      if (envelope.kind === "providerSecret") {
+        const request = envelope.request as {
+          operation: string;
+          reference: string;
+          value?: string;
+        };
+        const store = this.providerSecrets;
+        if (store === null) {
+          resolveCall(callId, null, "provider secret store unavailable");
+          return;
+        }
+        await this.dispatchUser(async () => {
+          const result = await this.withAbort(callId, async (signal) => {
+            if (request.operation === "get")
+              return { value: await store.get(request.reference, signal) };
+            if (
+              request.operation === "put" &&
+              typeof request.value === "string"
+            ) {
+              await store.put(request.reference, request.value, signal);
+              return { ok: true };
+            }
+            if (request.operation === "delete") {
+              await store.delete(request.reference, signal);
+              return { ok: true };
+            }
+            throw new Error("invalid secret store operation");
+          });
+          resolveCall(callId, JSON.stringify(result), null);
+        });
+        return;
+      }
+      if (envelope.kind === "providerConsent") {
+        const request = envelope.request as Omit<
+          ProviderConsentRequest,
+          "signal"
+        >;
+        await this.dispatchUser(async () => {
+          const result = await this.withAbort(
+            callId,
+            (signal) =>
+              this.providerConsent?.({ ...request, signal }) ?? {
+                approved: false,
+              },
+          );
+          resolveCall(callId, JSON.stringify(result), null);
+        });
+        return;
+      }
+      if (envelope.kind === "mcp.elicit") {
+        const request = envelope.request as { alias: string; params: unknown };
+        await this.dispatchUser(async () => {
+          const value = await this.withAbort(
+            callId,
+            (signal) =>
+              this.mcpElicitation?.({ ...request, signal }) ?? {
+                action: "decline",
+              },
+          );
+          resolveCall(callId, JSON.stringify(value), null);
+        });
+        return;
+      }
+      if (envelope.kind === "contentAuthority") {
+        const request = envelope.request as {
+          chatId: string;
+          operation?: string;
+          requiredConnectors?: readonly string[];
+        };
+        await this.dispatchUser(async () => {
+          const value = await this.withAbort(callId, (signal) =>
+            request.operation === "identity"
+              ? (this.contentIdentity?.(
+                  request.chatId,
+                  request.requiredConnectors ?? [],
+                  signal,
+                ) ??
+                request.requiredConnectors ??
+                [])
+              : (this.contentAuthority?.(request.chatId, signal) ?? []),
+          );
+          resolveCall(callId, JSON.stringify(value), null);
+        });
+        return;
+      }
       if (envelope.kind === "provider") {
         const provider = this.provider;
         if (provider === null) {
@@ -138,7 +362,11 @@ export class CallbackRouter {
         const request = envelope.request as ProviderRequest;
         const outcome = await this.dispatchUser(async () => {
           const result = await this.withAbort(callId, (signal) =>
-            provider({ ...request, signal }),
+            provider({
+              ...request,
+              signal,
+              checkAuthority: () => assertProviderAuthority(callId),
+            }),
           );
           resolveCall(callId, JSON.stringify(result ?? {}), null);
         });

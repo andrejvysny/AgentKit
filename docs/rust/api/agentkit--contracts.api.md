@@ -20,6 +20,216 @@ import { TUnknown } from '@sinclair/typebox';
 import { TUnsafe } from '@sinclair/typebox';
 
 // @public (undocumented)
+export type AgentBudgetsDto = Static<typeof AgentBudgetsDtoSchema>;
+
+// @public
+export const AgentBudgetsDtoSchema: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+
+// @public (undocumented)
+export type AgentDefinitionDto = Static<typeof AgentDefinitionDtoSchema>;
+
+// @public
+export const AgentDefinitionDtoSchema: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+
+// @public (undocumented)
+export type AgentDto = Static<typeof AgentDtoSchema>;
+
+// @public
+export const AgentDtoSchema: TObject<    {
+agentId: TString;
+scope: TString;
+ownerId: TString;
+lifecycle: TUnion<[TLiteral<"active">, TLiteral<"archived">]>;
+currentRevision: TNumber;
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+createdAt: TNumber;
+updatedAt: TNumber;
+}>;
+
+// @public (undocumented)
+export type AgentLifecycleDto = Static<typeof AgentLifecycleDtoSchema>;
+
+// @public
+export const AgentLifecycleDtoSchema: TUnion<[TLiteral<"active">, TLiteral<"archived">]>;
+
+// @public (undocumented)
+export type AgentRevisionDto = Static<typeof AgentRevisionDtoSchema>;
+
+// @public
+export const AgentRevisionDtoSchema: TObject<    {
+agentId: TString;
+revision: TNumber;
+snapshot: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+source: TUnion<[TLiteral<"create">, TLiteral<"edit">, TLiteral<"model_change">, TLiteral<"restore">]>;
+createdAt: TNumber;
+}>;
+
+// @public (undocumented)
+export type AgentRevisionSourceDto = Static<typeof AgentRevisionSourceDtoSchema>;
+
+// @public
+export const AgentRevisionSourceDtoSchema: TUnion<[TLiteral<"create">, TLiteral<"edit">, TLiteral<"model_change">, TLiteral<"restore">]>;
+
+// @public (undocumented)
+export type AgentSkillSelectionDto = Static<typeof AgentSkillSelectionDtoSchema>;
+
+// @public
+export const AgentSkillSelectionDtoSchema: TObject<    {
+id: TString;
+revision: TString;
+}>;
+
+// @public (undocumented)
+export type AgentTaskDto = Static<typeof AgentTaskDtoSchema>;
+
+// @public
+export const AgentTaskDtoSchema: TObject<    {
+taskId: TString;
+agentId: TString;
+agentRevision: TNumber;
+admissionKey: TString;
+kind: TString;
+status: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+priority: TNumber;
+enqueuedAt: TNumber;
+availableAt: TNumber;
+startedAt: TOptional<TNumber>;
+finishedAt: TOptional<TNumber>;
+error: TOptional<TString>;
+attemptCount: TNumber;
+cancelRequested: TBoolean;
+dependsOn: TArray<TString>;
+parentTaskId: TOptional<TString>;
+runProfileDigest: TOptional<TString>;
+}>;
+
+// @public (undocumented)
+export type AgentTaskProjectionDto = Static<typeof AgentTaskProjectionDtoSchema>;
+
+// @public
+export const AgentTaskProjectionDtoSchema: TObject<    {
+task: TObject<    {
+taskId: TString;
+agentId: TString;
+agentRevision: TNumber;
+admissionKey: TString;
+kind: TString;
+status: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+priority: TNumber;
+enqueuedAt: TNumber;
+availableAt: TNumber;
+startedAt: TOptional<TNumber>;
+finishedAt: TOptional<TNumber>;
+error: TOptional<TString>;
+attemptCount: TNumber;
+cancelRequested: TBoolean;
+dependsOn: TArray<TString>;
+parentTaskId: TOptional<TString>;
+runProfileDigest: TOptional<TString>;
+}>;
+attemptId: TOptional<TString>;
+lastSeq: TOptional<TNumber>;
+eventCount: TNumber;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+seq: TNumber;
+}>>;
+usage: TObject<    {
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+usageEvents: TNumber;
+}>;
+sourceRefs: TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>;
+}>;
+
+// @public (undocumented)
+export type AgentTaskStatusDto = Static<typeof AgentTaskStatusDtoSchema>;
+
+// @public
+export const AgentTaskStatusDtoSchema: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+
+// @public (undocumented)
 export type AiAudioPart = Static<typeof AiAudioPartSchema>;
 
 // @public
@@ -72,6 +282,15 @@ export type AiChatRole = Static<typeof AiChatRoleSchema>;
 
 // @public (undocumented)
 export const AiChatRoleSchema: TUnion<[TLiteral<"system">, TLiteral<"user">, TLiteral<"assistant">, TLiteral<"tool">]>;
+
+// @public (undocumented)
+export type AiCitation = Static<typeof AiCitationSchema>;
+
+// @public
+export const AiCitationSchema: TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>;
 
 // @public (undocumented)
 export type AiContentPart = Static<typeof AiContentPartSchema>;
@@ -431,7 +650,7 @@ type: TLiteral<"run.context.compacted">;
 }>;
 
 // @public
-export type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
+export type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolPreparingEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunProgressEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
 
 // @public (undocumented)
 export type AiRunEventBase = Static<typeof AiRunEventBaseSchema>;
@@ -444,7 +663,7 @@ contractVersion: TString;
 eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
-type: TUnion<[TLiteral<"run.started">, TLiteral<"run.message.delta">, TLiteral<"run.message.reasoning-delta">, TLiteral<"run.message.completed">, TLiteral<"run.tool.requested">, TLiteral<"run.tool.running">, TLiteral<"run.tool.succeeded">, TLiteral<"run.tool.failed">, TLiteral<"run.warning">, TLiteral<"run.usage">, TLiteral<"run.context.compacted">, TLiteral<"run.context.admitted">, TLiteral<"run.verification">, TLiteral<"run.input.applied">, TLiteral<"run.waiting">, TLiteral<"run.completed">, TLiteral<"run.failed">, TLiteral<"run.cancelled">]>;
+type: TUnion<[TLiteral<"run.started">, TLiteral<"run.message.delta">, TLiteral<"run.message.reasoning-delta">, TLiteral<"run.message.completed">, TLiteral<"run.tool.preparing">, TLiteral<"run.tool.requested">, TLiteral<"run.tool.running">, TLiteral<"run.tool.succeeded">, TLiteral<"run.tool.failed">, TLiteral<"run.warning">, TLiteral<"run.usage">, TLiteral<"run.context.compacted">, TLiteral<"run.context.admitted">, TLiteral<"run.verification">, TLiteral<"run.progress">, TLiteral<"run.input.applied">, TLiteral<"run.waiting">, TLiteral<"run.completed">, TLiteral<"run.failed">, TLiteral<"run.cancelled">]>;
 }>;
 
 // @public (undocumented)
@@ -463,6 +682,10 @@ type: TLiteral<"run.started">;
 }>, TObject<    {
 data: TObject<    {
 delta: TString;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -493,6 +716,10 @@ argumentsJson: TString;
 }>>>;
 reasoningContent: TOptional<TString>;
 finishReason: TOptional<TString>;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -501,6 +728,20 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.message.completed">;
+}>, TObject<    {
+data: TObject<    {
+toolCallId: TString;
+toolName: TString;
+argsBytes: TNumber;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.tool.preparing">;
 }>, TObject<    {
 data: TObject<    {
 toolCallId: TString;
@@ -654,6 +895,18 @@ attemptId: TOptional<TString>;
 type: TLiteral<"run.verification">;
 }>, TObject<    {
 data: TObject<    {
+phase: TUnion<[TLiteral<"reasoning">, TLiteral<"generating">, TLiteral<"tool_args">]>;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.progress">;
+}>, TObject<    {
+data: TObject<    {
 inputId: TString;
 kind: TString;
 step: TNumber;
@@ -731,7 +984,7 @@ type: TLiteral<"run.cancelled">;
 export type AiRunEventType = Static<typeof AiRunEventTypeSchema>;
 
 // @public (undocumented)
-export const AiRunEventTypeSchema: TUnion<[TLiteral<"run.started">, TLiteral<"run.message.delta">, TLiteral<"run.message.reasoning-delta">, TLiteral<"run.message.completed">, TLiteral<"run.tool.requested">, TLiteral<"run.tool.running">, TLiteral<"run.tool.succeeded">, TLiteral<"run.tool.failed">, TLiteral<"run.warning">, TLiteral<"run.usage">, TLiteral<"run.context.compacted">, TLiteral<"run.context.admitted">, TLiteral<"run.verification">, TLiteral<"run.input.applied">, TLiteral<"run.waiting">, TLiteral<"run.completed">, TLiteral<"run.failed">, TLiteral<"run.cancelled">]>;
+export const AiRunEventTypeSchema: TUnion<[TLiteral<"run.started">, TLiteral<"run.message.delta">, TLiteral<"run.message.reasoning-delta">, TLiteral<"run.message.completed">, TLiteral<"run.tool.preparing">, TLiteral<"run.tool.requested">, TLiteral<"run.tool.running">, TLiteral<"run.tool.succeeded">, TLiteral<"run.tool.failed">, TLiteral<"run.warning">, TLiteral<"run.usage">, TLiteral<"run.context.compacted">, TLiteral<"run.context.admitted">, TLiteral<"run.verification">, TLiteral<"run.progress">, TLiteral<"run.input.applied">, TLiteral<"run.waiting">, TLiteral<"run.completed">, TLiteral<"run.failed">, TLiteral<"run.cancelled">]>;
 
 // @public (undocumented)
 export type AiRunFailedEvent = Static<typeof AiRunFailedEventSchema>;
@@ -785,6 +1038,10 @@ argumentsJson: TString;
 }>>>;
 reasoningContent: TOptional<TString>;
 finishReason: TOptional<TString>;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -802,6 +1059,10 @@ export type AiRunMessageDeltaEvent = Static<typeof AiRunMessageDeltaEventSchema>
 export const AiRunMessageDeltaEventSchema: TObject<    {
 data: TObject<    {
 delta: TString;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -827,6 +1088,24 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.message.reasoning-delta">;
+}>;
+
+// @public (undocumented)
+export type AiRunProgressEvent = Static<typeof AiRunProgressEventSchema>;
+
+// @public
+export const AiRunProgressEventSchema: TObject<    {
+data: TObject<    {
+phase: TUnion<[TLiteral<"reasoning">, TLiteral<"generating">, TLiteral<"tool_args">]>;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.progress">;
 }>;
 
 // @public (undocumented)
@@ -867,6 +1146,26 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.tool.failed">;
+}>;
+
+// @public (undocumented)
+export type AiRunToolPreparingEvent = Static<typeof AiRunToolPreparingEventSchema>;
+
+// @public
+export const AiRunToolPreparingEventSchema: TObject<    {
+data: TObject<    {
+toolCallId: TString;
+toolName: TString;
+argsBytes: TNumber;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.tool.preparing">;
 }>;
 
 // @public (undocumented)
@@ -1245,6 +1544,16 @@ operationId: TString;
 }>;
 
 // @public (undocumented)
+export type ApprovalGrantRefDto = Static<typeof ApprovalGrantRefDtoSchema>;
+
+// @public
+export const ApprovalGrantRefDtoSchema: TObject<    {
+sessionId: TString;
+grantId: TString;
+digest: TString;
+}>;
+
+// @public (undocumented)
 export type ChatDto = Static<typeof ChatDtoSchema>;
 
 // @public
@@ -1312,8 +1621,48 @@ export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "ne
 // @public (undocumented)
 export const ConnectionStatusSchema: TUnion<TLiteral<string>[]>;
 
+// @public (undocumented)
+export type ContextUnitDto = Static<typeof ContextUnitDtoSchema>;
+
+// @public
+export const ContextUnitDtoSchema: TObject<    {
+kind: TUnion<[TLiteral<"text">, TLiteral<"toolPair">]>;
+text: TString;
+citations: TArray<TString>;
+required: TBoolean;
+}>;
+
 // @public
 export const CONTRACT_VERSION = "0.7.0";
+
+// @public (undocumented)
+export type CreateAgentRequest = Static<typeof CreateAgentRequestSchema>;
+
+// @public
+export const CreateAgentRequestSchema: TObject<    {
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+}>;
 
 // @public (undocumented)
 export type CreateChatRequest = Static<typeof CreateChatRequestSchema>;
@@ -1972,6 +2321,66 @@ export const REST_ROUTES: {
         readonly method: "GET";
         readonly path: "/v1/tools";
     };
+    readonly createAgent: {
+        readonly method: "POST";
+        readonly path: "/v1/agents";
+    };
+    readonly listAgents: {
+        readonly method: "GET";
+        readonly path: "/v1/agents";
+    };
+    readonly getAgent: {
+        readonly method: "GET";
+        readonly path: "/v1/agents/:agentId";
+    };
+    readonly updateAgent: {
+        readonly method: "PATCH";
+        readonly path: "/v1/agents/:agentId";
+    };
+    readonly setAgentModel: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/model";
+    };
+    readonly archiveAgent: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/archive";
+    };
+    readonly restoreAgent: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/restore";
+    };
+    readonly listAgentRevisions: {
+        readonly method: "GET";
+        readonly path: "/v1/agents/:agentId/revisions";
+    };
+    readonly submitTeammateTask: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/tasks";
+    };
+    readonly listAgentTasks: {
+        readonly method: "GET";
+        readonly path: "/v1/agents/:agentId/tasks";
+    };
+    readonly getAgentTask: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId";
+    };
+    readonly cancelAgentTask: {
+        readonly method: "POST";
+        readonly path: "/v1/agent-tasks/:taskId/cancel";
+    };
+    readonly listAgentTaskEvents: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId/events";
+    };
+    readonly streamAgentTask: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId/stream";
+    };
+    readonly getAgentTaskRunProfile: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId/run-profile";
+    };
     readonly getVersion: {
         readonly method: "GET";
         readonly path: "/v1/version";
@@ -2052,6 +2461,10 @@ type: TLiteral<"run.started">;
 }>, TObject<    {
 data: TObject<    {
 delta: TString;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -2082,6 +2495,10 @@ argumentsJson: TString;
 }>>>;
 reasoningContent: TOptional<TString>;
 finishReason: TOptional<TString>;
+citations: TOptional<TArray<TObject<    {
+url: TString;
+title: TOptional<TString>;
+}>>>;
 }>;
 runId: TString;
 timestamp: TString;
@@ -2090,6 +2507,20 @@ eventId: TString;
 seq: TNumber;
 attemptId: TOptional<TString>;
 type: TLiteral<"run.message.completed">;
+}>, TObject<    {
+data: TObject<    {
+toolCallId: TString;
+toolName: TString;
+argsBytes: TNumber;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.tool.preparing">;
 }>, TObject<    {
 data: TObject<    {
 toolCallId: TString;
@@ -2243,6 +2674,18 @@ attemptId: TOptional<TString>;
 type: TLiteral<"run.verification">;
 }>, TObject<    {
 data: TObject<    {
+phase: TUnion<[TLiteral<"reasoning">, TLiteral<"generating">, TLiteral<"tool_args">]>;
+step: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.progress">;
+}>, TObject<    {
+data: TObject<    {
 inputId: TString;
 kind: TString;
 step: TNumber;
@@ -2317,6 +2760,16 @@ type: TLiteral<"run.cancelled">;
 }>]>;
 
 // @public (undocumented)
+export type RunProfileExplanationDto = Static<typeof RunProfileExplanationDtoSchema>;
+
+// @public
+export const RunProfileExplanationDtoSchema: TObject<    {
+taskId: TString;
+digest: TOptional<TString>;
+profile: TOptional<TRecord<TString, TUnknown>>;
+}>;
+
+// @public (undocumented)
 export type RunReasoningEffort = Static<typeof RunReasoningEffortSchema>;
 
 // @public
@@ -2332,6 +2785,31 @@ export const RunStatusDtoSchema: TUnion<[TLiteral<"queued">, TLiteral<"running">
 export type SaveConnectionRequest = Omit<ConnectionRecord, "status" | "errorCode"> & {
     expectedRevision: number | null;
 };
+
+// @public (undocumented)
+export type SelectedSourceDto = Static<typeof SelectedSourceDtoSchema>;
+
+// @public
+export const SelectedSourceDtoSchema: TObject<    {
+id: TString;
+kind: TUnion<[TLiteral<"skill">, TLiteral<"resource">]>;
+units: TArray<TObject<    {
+kind: TUnion<[TLiteral<"text">, TLiteral<"toolPair">]>;
+text: TString;
+citations: TArray<TString>;
+required: TBoolean;
+}>>;
+}>;
+
+// @public (undocumented)
+export type SetAgentModelRequest = Static<typeof SetAgentModelRequestSchema>;
+
+// @public
+export const SetAgentModelRequestSchema: TObject<    {
+expectedRevision: TNumber;
+model: TOptional<TUnion<[TString, TNull]>>;
+reasoningEffort: TOptional<TUnion<[TString, TNull]>>;
+}>;
 
 // @public (undocumented)
 export type SettingsDto = Static<typeof SettingsDtoSchema>;
@@ -2413,6 +2891,89 @@ assistantMessageId: TString;
 }>;
 
 // @public (undocumented)
+export type SubmitTeammateTaskRequest = Static<typeof SubmitTeammateTaskRequestSchema>;
+
+// @public
+export const SubmitTeammateTaskRequestSchema: TObject<    {
+taskId: TOptional<TString>;
+admissionKey: TString;
+kind: TString;
+payload: TRecord<TString, TUnknown>;
+priority: TOptional<TNumber>;
+dependsOn: TOptional<TArray<TString>>;
+parentTaskId: TOptional<TString>;
+taskProfile: TOptional<TObject<    {
+providerId: TOptional<TString>;
+model: TOptional<TString>;
+tools: TOptional<TArray<TString>>;
+requiresVision: TOptional<TBoolean>;
+requiresContinuation: TOptional<TBoolean>;
+permissionMode: TOptional<TString>;
+budgets: TOptional<TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>>;
+truncation: TOptional<TObject<    {
+mode: TLiteral<"explicit">;
+}>>;
+}>>;
+projectSources: TOptional<TArray<TObject<    {
+id: TString;
+kind: TUnion<[TLiteral<"skill">, TLiteral<"resource">]>;
+units: TArray<TObject<    {
+kind: TUnion<[TLiteral<"text">, TLiteral<"toolPair">]>;
+text: TString;
+citations: TArray<TString>;
+required: TBoolean;
+}>>;
+}>>>;
+approvals: TOptional<TArray<TObject<    {
+sessionId: TString;
+grantId: TString;
+digest: TString;
+}>>>;
+}>;
+
+// @public (undocumented)
+export type SubmitTeammateTaskResponse = Static<typeof SubmitTeammateTaskResponseSchema>;
+
+// @public
+export const SubmitTeammateTaskResponseSchema: TObject<    {
+task: TObject<    {
+taskId: TString;
+agentId: TString;
+agentRevision: TNumber;
+admissionKey: TString;
+kind: TString;
+status: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+priority: TNumber;
+enqueuedAt: TNumber;
+availableAt: TNumber;
+startedAt: TOptional<TNumber>;
+finishedAt: TOptional<TNumber>;
+error: TOptional<TString>;
+attemptCount: TNumber;
+cancelRequested: TBoolean;
+dependsOn: TArray<TString>;
+parentTaskId: TOptional<TString>;
+runProfileDigest: TOptional<TString>;
+}>;
+replayed: TBoolean;
+}>;
+
+// @public (undocumented)
+export type TaskEventApproval = Static<typeof TaskEventApprovalSchema>;
+
+// @public
+export const TaskEventApprovalSchema: TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>;
+
+// @public (undocumented)
 export type TaskEventEnvelope = Static<typeof TaskEventEnvelopeSchema>;
 
 // @public
@@ -2423,6 +2984,142 @@ eventId: TString;
 timestamp: TString;
 contractVersion: TString;
 attemptId: TOptional<TString>;
+agentId: TOptional<TString>;
+taskId: TOptional<TString>;
+definitionRevision: TOptional<TNumber>;
+status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>>;
+usage: TOptional<TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>>;
+sourceRefs: TOptional<TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>>;
+}>;
+
+// @public (undocumented)
+export type TaskEventPageDto = Static<typeof TaskEventPageDtoSchema>;
+
+// @public
+export const TaskEventPageDtoSchema: TObject<    {
+events: TArray<TObject<    {
+type: TString;
+seq: TNumber;
+eventId: TString;
+timestamp: TString;
+contractVersion: TString;
+attemptId: TOptional<TString>;
+agentId: TOptional<TString>;
+taskId: TOptional<TString>;
+definitionRevision: TOptional<TNumber>;
+status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>>;
+usage: TOptional<TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>>;
+sourceRefs: TOptional<TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>>;
+}>>;
+nextCursor: TOptional<TString>;
+}>;
+
+// @public (undocumented)
+export type TaskEventStatus = Static<typeof TaskEventStatusSchema>;
+
+// @public
+export const TaskEventStatusSchema: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+
+// @public (undocumented)
+export type TaskEventUsage = Static<typeof TaskEventUsageSchema>;
+
+// @public
+export const TaskEventUsageSchema: TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>;
+
+// @public (undocumented)
+export type TaskEventUsageTotalsDto = Static<typeof TaskEventUsageTotalsDtoSchema>;
+
+// @public
+export const TaskEventUsageTotalsDtoSchema: TObject<    {
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+usageEvents: TNumber;
+}>;
+
+// @public (undocumented)
+export type TaskProfileOverridesDto = Static<typeof TaskProfileOverridesDtoSchema>;
+
+// @public
+export const TaskProfileOverridesDtoSchema: TObject<    {
+providerId: TOptional<TString>;
+model: TOptional<TString>;
+tools: TOptional<TArray<TString>>;
+requiresVision: TOptional<TBoolean>;
+requiresContinuation: TOptional<TBoolean>;
+permissionMode: TOptional<TString>;
+budgets: TOptional<TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>>;
+truncation: TOptional<TObject<    {
+mode: TLiteral<"explicit">;
+}>>;
+}>;
+
+// @public (undocumented)
+export type TaskProjectionApprovalDto = Static<typeof TaskProjectionApprovalDtoSchema>;
+
+// @public
+export const TaskProjectionApprovalDtoSchema: TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+seq: TNumber;
 }>;
 
 // @public (undocumented)
@@ -2487,6 +3184,36 @@ metadata: TOptional<TRecord<TString, TUnknown>>;
 warnings: TOptional<TArray<TString>>;
 truncated: TOptional<TBoolean>;
 createdAt: TString;
+}>;
+
+// @public (undocumented)
+export type UpdateAgentRequest = Static<typeof UpdateAgentRequestSchema>;
+
+// @public
+export const UpdateAgentRequestSchema: TObject<    {
+expectedRevision: TNumber;
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
 }>;
 
 // @public (undocumented)

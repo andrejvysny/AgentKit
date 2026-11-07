@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -319,7 +320,7 @@ suite(
     await service.close();
     await store.close();
     const reopened = await NativeStoreCtor.open(path);
-    const second = await reopened.createService();
+    const second = await reopened.createService(testServiceOptions());
     const replay = await second.getState(sessionId);
     expect(replay.sessionId).toBe(sessionId);
     expect(writes).toBe(1);
@@ -682,7 +683,7 @@ suite(
 
     // Fresh-process-equivalent reopen: no re-dispatch, no fabricated result.
     const reopened = await NativeStoreCtor.open(path);
-    const second = await reopened.createService();
+    const second = await reopened.createService(testServiceOptions());
     const state = await second.getState(sessionId);
     expect(state.sessionId).toBe(sessionId);
     expect(effects).toBe(1);
@@ -827,15 +828,17 @@ suite(
           `http://127.0.0.1:${provider.port}`,
           "sk-loopback",
         );
-      service = await store.createService({
-        jsToolAuthority: { configuredMode: "full_auto" },
-        providerConfig: {
-          protocol: "responses",
-          providerId: "rest-minted",
-          connectionId,
-          model: "model",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          jsToolAuthority: { configuredMode: "full_auto" },
+          providerConfig: {
+            protocol: "responses",
+            providerId: "rest-minted",
+            connectionId,
+            model: "model",
+          },
+        }),
+      );
       await service.registerTool(
         {
           name: "rest_write",

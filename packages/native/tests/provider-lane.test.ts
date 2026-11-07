@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 
 import { available, missing, required } from "./helpers/binding.js";
@@ -655,15 +656,17 @@ suite(
     try {
       for (const bad of [18014398509481984, -5, 0, Number.NaN, 1.5]) {
         await expect(
-          store.createService({
-            providerConfig: {
-              protocol: "responses",
-              providerId: "cap",
-              connectionId: "cap-conn",
-              model: "cap-model",
-              maxTokens: bad,
-            },
-          }),
+          store.createService(
+            testServiceOptions({
+              providerConfig: {
+                protocol: "responses",
+                providerId: "cap",
+                connectionId: "cap-conn",
+                model: "cap-model",
+                maxTokens: bad,
+              },
+            }),
+          ),
         ).rejects.toThrow(
           /providerConfig\.maxTokens must be a positive safe integer/,
         );

@@ -122,9 +122,7 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   approval with zero remote calls. Documented reduction: remote calls
   carry no run-scoped plan-mode/ask guard or durable execution receipt
   (task-lease-bound layers; the engine has no standalone tool-dispatch
-  entry point). Open gaps: no OAuth, no elicitation/sampling,
-  in-memory configs, deny-all secret resolution (a `secretRefs` entry
-  fails connect, never a fake lookup).
+  entry point). Native OAuth, elicitation, rich projection and durable HTTP config now use explicit fenced host ports. Secret references require a configured vault; browser redirects remain a host responsibility. Sampling remains unsupported. See [native admission and MCP ports](native-admission.md) for current APIs, fences, migration and qualification limits.
 - `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
   references, reject maps to the normal tool/provider failure path
   (`tool_execution_failed`, `provider: <reason>`), no panic, and the full
@@ -385,10 +383,9 @@ test-written first, covering:
    documented single-chunk provider-completion semantics.
 2. Native context compaction (ADR 0017 part 2 — `compact` stays refused
    until a native turn consumes/clears the marker).
-3. Provider configuration/reasoning/output-reserve parity and selected
-   instruction (skill) resolution — currently explicit refusals
-   (`contentSelection`/`reasoningEffort` gates); the binding exposes the
-   refusal, not a silently weaker behavior.
+3. Native profiles, reasoning, output ceilings, and selected managed instructions
+   are implemented through immutable admission snapshots. See
+   [native admission](native-admission.md) for migration and validation boundaries.
 4. Managed services and platform-specific coding execution beyond the
    Unix-only scope currently qualified; the lock-dir coordinator is the
    Windows story and needs its own qualification.

@@ -176,7 +176,17 @@ async function start(path) {
   // "the same provider server", not a weakening.
   // `full_auto` is the native equivalent of the old guard-less composition:
   // the Rust authority still judges every JS tool call, it just admits.
+  const proposals = proposalFixture(port, path);
+  const fixtureTools = [tool(), ...proposals.tools];
   const service = await store.createService({
+    profiles: [
+      {
+        id: "responses-smoke",
+        extends: "coding",
+        tools: fixtureTools.map((tool) => tool.definition.name),
+        limits: { maxToolIterations: 4, maxToolCallsPerIteration: 8 },
+      },
+    ],
     jsToolAuthority: { configuredMode: "full_auto" },
     providerConfig: {
       protocol: "responses",
@@ -185,12 +195,11 @@ async function start(path) {
       model: "model",
     },
   });
-  const proposals = proposalFixture(port, path);
   // The chat is created through REST after this function returns, so the
   // tool execution context closes over a late-bound chat id (the proposal
   // builders stage their proposals against it).
   const chat = { id: undefined };
-  for (const t of [tool(), ...proposals.tools]) {
+  for (const t of fixtureTools) {
     await service.registerTool(t.definition, (input, request) =>
       t.execute(
         {
@@ -345,6 +354,7 @@ try {
   await app.service.createSession({
     sessionId: chatId,
     profileId: "responses-smoke",
+    executionMode: "full_auto",
     model: "model",
   });
   app.proposals.policy.allow({

@@ -127,7 +127,7 @@ impl NativeTeammates {
             })
             .await
             .map_err(map_host)?;
-        Ok(serialized(&record, "agent")?)
+        serialized(&record, "agent")
     }
 
     /// The live agents (active and archived) of one scope. Other scopes are
@@ -155,7 +155,7 @@ impl NativeTeammates {
     pub async fn get_agent(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let record = s.agents.get(&agent_id).await.map_err(map_host)?;
-        Ok(serialized(&record, "agent")?)
+        serialized(&record, "agent")
     }
 
     /// Replace the effective definition under optimistic concurrency: the
@@ -176,7 +176,7 @@ impl NativeTeammates {
             .update(&agent_id, expected_revision, definition)
             .await
             .map_err(map_host)?;
-        Ok(serialized(&record, "agent")?)
+        serialized(&record, "agent")
     }
 
     /// Move only the model preference of an existing agent; identity,
@@ -198,7 +198,7 @@ impl NativeTeammates {
             .set_model(&agent_id, expected_revision, model, reasoning_effort)
             .await
             .map_err(map_host)?;
-        Ok(serialized(&record, "agent")?)
+        serialized(&record, "agent")
     }
 
     /// Archive an agent: new admission refuses, history stays readable,
@@ -207,7 +207,7 @@ impl NativeTeammates {
     pub async fn archive_agent(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let record = s.agents.archive(&agent_id).await.map_err(map_host)?;
-        Ok(serialized(&record, "agent")?)
+        serialized(&record, "agent")
     }
 
     /// Restore an archived agent to active, recording a `restore` revision.
@@ -216,7 +216,7 @@ impl NativeTeammates {
     pub async fn restore_agent(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let record = s.agents.restore(&agent_id).await.map_err(map_host)?;
-        Ok(serialized(&record, "agent")?)
+        serialized(&record, "agent")
     }
 
     /// The append-only configuration ledger of one agent, oldest first.
@@ -387,7 +387,7 @@ impl NativeTeammates {
                     "agent task {task_id}"
                 )))
             })?;
-        Ok(serialized(&projection, "projection")?)
+        serialized(&projection, "projection")
     }
 
     /// Request cancellation: a queued, parked, or backoff-parked task
@@ -398,7 +398,7 @@ impl NativeTeammates {
     pub async fn cancel_agent_task(&self, task_id: String) -> Result<String> {
         let s = self.services()?;
         let task = s.teammates.cancel(&task_id).await.map_err(map_host)?;
-        Ok(serialized(&task, "task")?)
+        serialized(&task, "task")
     }
 
     /// One page of a task's durable event log, REDACTED: credential-named

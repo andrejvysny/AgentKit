@@ -20,6 +20,8 @@ mod coding_lane;
 mod errors;
 mod jsbridge;
 mod lsp_lane;
+mod profiles;
+pub use profiles::{list_native_profiles, resolve_native_profile};
 mod provider;
 mod provider_connection;
 mod run;
@@ -103,4 +105,18 @@ pub fn binding_smoke() -> Result<String> {
         ));
     }
     Ok("agentkit-native".to_owned())
+}
+
+/// The in-flight callback must still own the host's request authority.
+#[napi]
+pub async fn assert_provider_authority(call_id: String) -> napi::Result<()> {
+    jsbridge::check_provider_authority(&call_id)
+        .await
+        .map_err(|error| {
+            errors::stable(
+                "callback_rejected",
+                "Provider request authority is no longer valid.",
+                Some(serde_json::json!({"inactive":error.code == "callback_not_active"})),
+            )
+        })
 }

@@ -499,7 +499,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         toolCalls: calls,
         reasoningContent: aggregatedReasoning || undefined,
         finishReason,
-        citations: aggregatedCitations.length > 0 ? aggregatedCitations : undefined,
+        citations:
+          aggregatedCitations.length > 0 ? aggregatedCitations : undefined,
       },
     });
 
@@ -954,11 +955,11 @@ function acceptCitations(
   seen: Set<string>,
 ): AiCitation[] {
   const fresh: AiCitation[] = [];
-  const offer = (candidate: {
-    url?: string;
-    title?: string;
-  }): void => {
-    const url = typeof candidate.url === "string" && candidate.url.length > 0 ? candidate.url : undefined;
+  const offer = (candidate: { url?: string; title?: string }): void => {
+    const url =
+      typeof candidate.url === "string" && candidate.url.length > 0
+        ? candidate.url
+        : undefined;
     if (!url || seen.has(url)) return;
     seen.add(url);
     const title =

@@ -28,11 +28,8 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { AiRunEvent } from "@agentkit/contracts";
-import {
-  REASONING_EFFORTS,
-  defaultProfileRegistry,
-  type SessionReasoningEffort,
-} from "@agentkit/host";
+import { REASONING_EFFORTS, type SessionReasoningEffort } from "@agentkit/host";
+import { listNativeProfiles } from "@agentkit/native";
 import {
   CodingAgentApp,
   type CodingMode,
@@ -278,7 +275,7 @@ async function main(): Promise<void> {
   const cli = parse(process.argv.slice(2));
   if (cli.listProfiles) {
     // No app, no database, no model: a profile list is a fact about the runtime.
-    for (const profile of defaultProfileRegistry().list())
+    for (const profile of await listNativeProfiles())
       console.log(
         `${profile.id.padEnd(20)} ${profile.kind.padEnd(10)} ${
           profile.role ?? "-"

@@ -1381,6 +1381,33 @@ eventId: TString;
 timestamp: TString;
 contractVersion: TString;
 attemptId: TOptional<TString>;
+agentId: TOptional<TString>;
+taskId: TOptional<TString>;
+definitionRevision: TOptional<TNumber>;
+status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>>;
+usage: TOptional<TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>>;
+sourceRefs: TOptional<TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>>;
 }>;
 
 // @public

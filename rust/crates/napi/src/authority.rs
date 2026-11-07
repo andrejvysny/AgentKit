@@ -66,6 +66,16 @@ impl CodingPermissionAuthority for BindingAuthority {
         }
     }
 
+    async fn role_of(
+        &self,
+        ctx: &PermissionContext,
+    ) -> HostResult<Option<agentkit_core::permission::CodingRole>> {
+        match self.inner() {
+            Some(authority) => authority.role_of(ctx).await,
+            None => Ok(None),
+        }
+    }
+
     async fn plan_approved(
         &self,
         chat_id: Option<&str>,

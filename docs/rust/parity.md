@@ -163,21 +163,7 @@ decorated. Pinned by 5 unit + 6 socket-level tests
 in `packages/native/tests/http-server.test.ts`; malformed `cors`/
 `providerSecrets` values fail `startHttpServer` with `invalid_input`
 rather than being ignored. **Provider-management credential writes** are
-wired through `DesktopBackend::with_provider_secrets`
-(`rust/crates/host/src/http/mod.rs`): the decision recorded here is that
-the binding's only vault option is `providerSecrets: "memory"` — a
-volatile in-process `MemorySecretStore`, mirroring the desktop example's
-own `MemorySecretStore` consumer — because durable credential storage is
-a host-side port decision (OS keychain lives in `agentkit-connections`
-behind its feature gate, and no shipped composition asked the binding for
-one). Omitted, `createProvider`/`updateProvider` with `apiKey`/
-`extraHeaders` answer 501 `not_implemented` exactly like the TypeScript
-transport without a `SecretStore` — no silent accept-and-drop. Network
-stays `UnavailableNetwork` on this path, so the probe routes still require
-a real `ProviderOperations` port via `with_provider_operations`; starting
-the server never opens an egress path on its own. Evidence: full provider
-CRUD over REST with key rotation, duplicate-409, secret-ref stability and
-no plaintext echo in `packages/native/tests/http-server.test.ts`.
+wired through `DesktopBackend::with_provider_secrets`. The binding supports explicit `providerSecrets: "callback"` backed by `setProviderSecretStore`, or explicit process-local `"memory"`. Omission refuses credential writes. Only opaque references persist; applications own vault durability, and OS keychain integration is not qualified by this port. Explicit `providerOperations: "native"` uses the same connection repository, vault and consent handles for management and execution. It requires `setProviderConsent` for each exact destination/account/model/payload. Discovery and probe are bounded; denied or cancelled consent sends no request. The service retains authority identity across HTTP restart and rejects replacement handles. Static/custom callbacks remain available only for explicitly registered ids. Native session and HTTP admission freeze connection identity before durable turn rows; dispatch rechecks generation. See [native admission](native-admission.md) and the native provider factory/operations tests.
 
 Managed-integrations recipe (2026-11-01, external review §5; DELIVERED).
 The shipped composition executes no TypeScript backend: `main.ts`/
@@ -203,16 +189,13 @@ and `createRunContentProvider` imports are gone from the recipe; the
 desktop backend's nine managed-content routes are served by the same
 engine (`rust/crates/host/src/http/managed_content.rs`), no longer by
 `management.rs`'s "Native managed content services are not configured."
-stub. The ONE honest gap remains the MCP-OAuth lifecycle leg, verbatim:
-`ConnectionService`'s OAuth leg needs MCP OAuth, which the Rust MCP client
-does not have at all (`docs/rust/native-binding-milestone.md` "Open gaps":
-no OAuth, deny-all `secretRefs`). The wrapper therefore exposes
+stub. The generic managed-content connection-action API remains a separate limitation:
+Its generic `ConnectionService` lifecycle is not implicitly mapped to the explicit native MCP OAuth composition. The wrapper still exposes
 `connect`/`reconnect`/`test`/`disconnect`/`action` as the reduction they
 are: each crosses the port surface and is refused `not_implemented`, and
 the REST `connectionAction` answers 501 (`connect`/`test →
 not_implemented` is the binding's documented answer, never a silent
-success); there is no OAuth transport factory or secret vault to hand to,
-because the binding honors none.
+success). Use the explicit native MCP callback/OAuth APIs described below; this generic action port is not their alias.
 
 MCP client dispatch authority (2026-11-01). The Rust MCP client no
 longer trusts the remote `readOnlyHint`: tool effect comes only from the
@@ -226,11 +209,7 @@ material is now scrubbed (`[redacted]`, bounded, no regexes) from
 tool-result text, embedded resources, structured content and the
 JSON-RPC peer error message, which previously was dropped entirely.
 Pinned by `rust/crates/mcp/tests/authority.rs` (6 cases, incl. an
-end-to-end Bun stdio-wire redaction check). Remaining client-surface
-gaps before the MCP binding can claim the acceptance bar: OAuth,
-elicitation/server→client requests, rich model content projection,
-config/connection persistence ports, and an outcome-uncertain error
-class — each listed, none silently dropped.
+end-to-end Bun stdio-wire redaction check). Current native MCP additions include explicit OAuth vault/redirect/HTTP ports, elicitation callbacks, bounded rich-content projection and durable configuration reconciliation. Sampling remains unsupported. The explicit ports and their limits are described below.
 
 Native assistant store (2026-11-01, AGENTKIT-55 backbone). The napi
 binding now exposes every `AssistantStore` sub-port operation — 67 ops
@@ -283,8 +262,7 @@ remote write tool parks with ZERO remote calls until approved.
 Documented reductions, not silent gaps: remote calls carry no run-scoped
 plan-mode guard or durable execution receipt (the engine has no
 standalone tool-dispatch entry point — evidence in the module header);
-OAuth, elicitation, config persistence and the secret resolver remain
-open (deny-all: `secretRefs` fails connect).
+OAuth and elicitation now use explicit fenced callback APIs. Durable HTTP config uses the same native manager and a configured vault; absent secret authority fails closed. See the current qualification boundary below.
 
 Invocation authority for JS tools (2026-11-01), two reproduced defects
 closed at the public binding boundary:
@@ -397,11 +375,11 @@ each TypeScript backend package is NOW:
 | Package | Production role | Note |
 | --- | --- | --- |
 | `core` | runtimes | `runChat`/`runAgentLoop` execute on Rust only; the TS loop engine is deleted. |
-| `host` | frozen library | Production consumers are only the coding-agent CLI's profile/descriptor configuration helpers (`defaultProfileRegistry`, `readSessionDescriptor`, `REASONING_EFFORTS`) — no execution or storage runs through them; the carve-out is mechanically pinned by `scripts/check-composition-ownership.mjs`. `TurnRunner`/`ConversationService`/`TaskService` remain as frozen exports (removal is a breaking API change requiring approval); the package's own suites continue to pin their frozen behavior. |
+| `host` | frozen library | Production value imports are only the coding-agent CLI's static `REASONING_EFFORTS` metadata for argument parsing; profiles resolve through native `listNativeProfiles`, and no execution or storage runs through the TypeScript helpers. The carve-out is mechanically pinned by `scripts/check-composition-ownership.mjs`. `TurnRunner`/`ConversationService`/`TaskService` remain as frozen exports (removal is a breaking API change requiring approval); the package's own suites continue to pin their frozen behavior. |
 | `transport-http` | frozen library | Production REST/SSE = binding `startHttpServer` (Rust engine). The 223-suite TS server remains the behavioral authority the Rust route table is proven against — the client/react lane proof is that proof. |
 | `adapters-memory` / `adapters-sqlite` | frozen library | Production storage = Rust `SqliteStore` via `NativeStore`/`NativeAssistantStore` (shared conformance passed). TS adapters stay for frozen consumers. |
 | `runner-local` | frozen library | The queue/worker/lease engine lives in Rust; TS runner stays exported frozen. |
-| `mcp-client` | frozen library + feature holdout | Production MCP = binding: server hosting is Rust `agentkit-mcp` via `startMcpServer` (`packages/mcp-server` is deleted), client management is native. The TS `mcp-client` remains the ONLY implementation of OAuth, elicitation, rich content projection and the config/connection persistence layer — features the binding documents as open, not as parity. |
+| `mcp-client` | frozen library | Production MCP uses the Rust client/server binding. Native OAuth, elicitation, rich projection and durable config now have explicit host ports and regression tests; sampling and generic managed-content connection actions remain unqualified. |
 | `contracts` | shared DTO/validation authority | Client-side and wire-level; not backend logic. |
 | `scripts/live`, `scripts/qualification` | developer tools | App-shaped compositions (both examples, the smoke drivers) run on `@agentkit/native`, coding tools included (`registerCodingTools`); the qualification drivers are allowlisted with reasons in `scripts/check-composition-ownership.mjs`, and the TS proposal engine drives the native store in `proposals-smoke.mjs` as a contract witness. |
 
@@ -412,11 +390,11 @@ constraint, exercised by their own suites. No app-shaped composition runs a
 TS backend engine: `scripts/check-composition-ownership.mjs` (CI: lint job)
 rejects backend-implementation imports from `examples/*/src`, the desktop
 Node entries, and the qualification drivers, except an audited allowlist —
-the coding-agent CLI's profile/descriptor config helpers
-(`defaultProfileRegistry`, `REASONING_EFFORTS`, `readSessionDescriptor`; no
-execution or storage runs through them), `getPresetByKind` (static preset
-metadata), the OAuth acceptance harness, and the legacy-seed / conformance
-drivers that deliberately keep the TS implementations as differential
+the coding-agent CLI's `REASONING_EFFORTS` metadata for argument parsing
+(profiles resolve natively; no execution or storage runs through this import),
+`getPresetByKind` (static preset metadata), the OAuth acceptance harness, and the
+legacy-seed / conformance drivers that deliberately keep the TS implementations
+as differential
 witnesses until their replacement is proven.
 
 Working-tree results on macOS arm64 with Bun 1.4.0:
@@ -557,10 +535,12 @@ must replace these statuses with exact test results and remaining limitations.
 
 The historical freeze above remains unchanged. The managed-content contract
 refresh at `3c7ea5f` contains 97 schemas and 48 routes. Native qualification
-repairs preserve the separate SQLite database identity and do not add optional
-native managed-connector, OAuth, prompt-template, or skill services. The native
-desktop backend returns `501 not_implemented` for these absent services and for
-submit/regenerate requests containing `contentSelection`, before turn effects.
+repairs preserve the separate SQLite database identity. Native prompt-template and
+managed-skill selection now resolve before admission into immutable snapshots;
+typed reasoning reaches native and callback provider lanes. See
+[native admission and migration](native-admission.md) for profile ceilings,
+connector authorization, transcript preservation, and Responses content bindings.
+Optional provider and MCP lifecycle ports still require explicit host composition.
 Rich MCP tool-content delivery remains a separate native integration gap; wire
 DTO coverage alone does not qualify that execution pipeline.
 

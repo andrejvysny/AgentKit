@@ -48,6 +48,42 @@ interface ActiveSkill {
 }
 
 // @public (undocumented)
+type AgentDto = Static<typeof AgentDtoSchema>;
+
+// @public
+const AgentDtoSchema: TObject<    {
+agentId: TString;
+scope: TString;
+ownerId: TString;
+lifecycle: TUnion<[TLiteral<"active">, TLiteral<"archived">]>;
+currentRevision: TNumber;
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+createdAt: TNumber;
+updatedAt: TNumber;
+}>;
+
+// @public (undocumented)
 type AgentInputKind = "steer" | "follow_up" | "human_request";
 
 // @public (undocumented)
@@ -120,6 +156,69 @@ interface AgentInputStore {
     listInputs(query: AgentInputQuery): Promise<AgentInputRecord[]>;
     transitionInput(inputId: string, from: readonly AgentInputStatus[], to: AgentInputStatus, patch?: AgentInputPatch): Promise<AgentInputRecord>;
 }
+
+// @public (undocumented)
+type AgentRevisionDto = Static<typeof AgentRevisionDtoSchema>;
+
+// @public
+const AgentRevisionDtoSchema: TObject<    {
+agentId: TString;
+revision: TNumber;
+snapshot: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+source: TUnion<[TLiteral<"create">, TLiteral<"edit">, TLiteral<"model_change">, TLiteral<"restore">]>;
+createdAt: TNumber;
+}>;
+
+// @public (undocumented)
+type AgentTaskDto = Static<typeof AgentTaskDtoSchema>;
+
+// @public
+const AgentTaskDtoSchema: TObject<    {
+taskId: TString;
+agentId: TString;
+agentRevision: TNumber;
+admissionKey: TString;
+kind: TString;
+status: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+priority: TNumber;
+enqueuedAt: TNumber;
+availableAt: TNumber;
+startedAt: TOptional<TNumber>;
+finishedAt: TOptional<TNumber>;
+error: TOptional<TString>;
+attemptCount: TNumber;
+cancelRequested: TBoolean;
+dependsOn: TArray<TString>;
+parentTaskId: TOptional<TString>;
+runProfileDigest: TOptional<TString>;
+}>;
+
+// @public (undocumented)
+type AgentTaskStatusDto = Static<typeof AgentTaskStatusDtoSchema>;
+
+// @public
+const AgentTaskStatusDtoSchema: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
 
 // @public (undocumented)
 type AiContextSizePreference = Static<typeof AiContextSizePreferenceSchema>;
@@ -752,6 +851,35 @@ interface CreateAgentInput {
     // (undocumented)
     toolCallId?: string;
 }
+
+// @public (undocumented)
+type CreateAgentRequest = Static<typeof CreateAgentRequestSchema>;
+
+// @public
+const CreateAgentRequestSchema: TObject<    {
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+}>;
 
 // @public (undocumented)
 interface CreateAttemptInput {
@@ -1583,13 +1711,13 @@ interface RejectProposalInput {
 }
 
 // @public
-export function resolveStartSeq(tasks: TaskStore, taskId: string, lastEventId: string | null, batchSize?: number): Promise<number>;
+export function resolveStartSeq(tasks: TaskEventSource, taskId: string, lastEventId: string | null, batchSize?: number): Promise<number>;
 
 // @public (undocumented)
 export function resolveStreamOptions(options?: RestStreamOptions): Required<RestStreamOptions>;
 
 // @public
-export function resolveStreamStart(tasks: TaskStore, taskId: string, lastEventId: string | null, batchSize?: number): Promise<StreamStart>;
+export function resolveStreamStart(tasks: TaskEventSource, taskId: string, lastEventId: string | null, batchSize?: number): Promise<StreamStart>;
 
 // @public
 export const RESOURCE_BY_OPERATION: {
@@ -1662,6 +1790,21 @@ export const RESOURCE_BY_OPERATION: {
     createMcpServer: (params: RouteParams) => AuthorizationResource;
     updateMcpServer: (params: RouteParams) => AuthorizationResource;
     deleteMcpServer: (params: RouteParams) => AuthorizationResource;
+    createAgent: (params: RouteParams) => AuthorizationResource;
+    listAgents: (params: RouteParams) => AuthorizationResource;
+    getAgent: (params: RouteParams) => AuthorizationResource;
+    updateAgent: (params: RouteParams) => AuthorizationResource;
+    setAgentModel: (params: RouteParams) => AuthorizationResource;
+    archiveAgent: (params: RouteParams) => AuthorizationResource;
+    restoreAgent: (params: RouteParams) => AuthorizationResource;
+    listAgentRevisions: (params: RouteParams) => AuthorizationResource;
+    submitTeammateTask: (params: RouteParams) => AuthorizationResource;
+    listAgentTasks: (params: RouteParams) => AuthorizationResource;
+    getAgentTask: (params: RouteParams) => AuthorizationResource;
+    cancelAgentTask: (params: RouteParams) => AuthorizationResource;
+    listAgentTaskEvents: (params: RouteParams) => AuthorizationResource;
+    streamAgentTask: (params: RouteParams) => AuthorizationResource;
+    getAgentTaskRunProfile: (params: RouteParams) => AuthorizationResource;
     listTools: () => {
         kind: string;
     };
@@ -1861,6 +2004,66 @@ const REST_ROUTES: {
         readonly method: "GET";
         readonly path: "/v1/tools";
     };
+    readonly createAgent: {
+        readonly method: "POST";
+        readonly path: "/v1/agents";
+    };
+    readonly listAgents: {
+        readonly method: "GET";
+        readonly path: "/v1/agents";
+    };
+    readonly getAgent: {
+        readonly method: "GET";
+        readonly path: "/v1/agents/:agentId";
+    };
+    readonly updateAgent: {
+        readonly method: "PATCH";
+        readonly path: "/v1/agents/:agentId";
+    };
+    readonly setAgentModel: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/model";
+    };
+    readonly archiveAgent: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/archive";
+    };
+    readonly restoreAgent: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/restore";
+    };
+    readonly listAgentRevisions: {
+        readonly method: "GET";
+        readonly path: "/v1/agents/:agentId/revisions";
+    };
+    readonly submitTeammateTask: {
+        readonly method: "POST";
+        readonly path: "/v1/agents/:agentId/tasks";
+    };
+    readonly listAgentTasks: {
+        readonly method: "GET";
+        readonly path: "/v1/agents/:agentId/tasks";
+    };
+    readonly getAgentTask: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId";
+    };
+    readonly cancelAgentTask: {
+        readonly method: "POST";
+        readonly path: "/v1/agent-tasks/:taskId/cancel";
+    };
+    readonly listAgentTaskEvents: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId/events";
+    };
+    readonly streamAgentTask: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId/stream";
+    };
+    readonly getAgentTaskRunProfile: {
+        readonly method: "GET";
+        readonly path: "/v1/agent-tasks/:taskId/run-profile";
+    };
     readonly getVersion: {
         readonly method: "GET";
         readonly path: "/v1/version";
@@ -1916,6 +2119,7 @@ export interface RestHandlerDeps {
     streaming?: RestStreamOptions;
     // (undocumented)
     tasks: RunCanceller;
+    teammates?: TeammateApiPort;
     toolCatalog?: ToolCatalog;
     // (undocumented)
     turns: TurnSubmitter;
@@ -2021,8 +2225,18 @@ export interface RunEventStreamInput {
     // (undocumented)
     taskId: string;
     // (undocumented)
-    tasks: TaskStore;
+    tasks: TaskEventSource;
 }
+
+// @public (undocumented)
+type RunProfileExplanationDto = Static<typeof RunProfileExplanationDtoSchema>;
+
+// @public
+const RunProfileExplanationDtoSchema: TObject<    {
+taskId: TString;
+digest: TOptional<TString>;
+profile: TOptional<TRecord<TString, TUnknown>>;
+}>;
 
 // @public
 interface RunWriteFence {
@@ -2064,6 +2278,16 @@ interface SessionContextOptions {
     } | false;
     windowTokens?: number;
 }
+
+// @public (undocumented)
+type SetAgentModelRequest = Static<typeof SetAgentModelRequestSchema>;
+
+// @public
+const SetAgentModelRequestSchema: TObject<    {
+expectedRevision: TNumber;
+model: TOptional<TUnion<[TString, TNull]>>;
+reasoningEffort: TOptional<TUnion<[TString, TNull]>>;
+}>;
 
 // @public (undocumented)
 type SettingsDto = Static<typeof SettingsDtoSchema>;
@@ -2191,6 +2415,79 @@ interface SubmitMessageResult {
 }
 
 // @public (undocumented)
+type SubmitTeammateTaskRequest = Static<typeof SubmitTeammateTaskRequestSchema>;
+
+// @public
+const SubmitTeammateTaskRequestSchema: TObject<    {
+taskId: TOptional<TString>;
+admissionKey: TString;
+kind: TString;
+payload: TRecord<TString, TUnknown>;
+priority: TOptional<TNumber>;
+dependsOn: TOptional<TArray<TString>>;
+parentTaskId: TOptional<TString>;
+taskProfile: TOptional<TObject<    {
+providerId: TOptional<TString>;
+model: TOptional<TString>;
+tools: TOptional<TArray<TString>>;
+requiresVision: TOptional<TBoolean>;
+requiresContinuation: TOptional<TBoolean>;
+permissionMode: TOptional<TString>;
+budgets: TOptional<TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>>;
+truncation: TOptional<TObject<    {
+mode: TLiteral<"explicit">;
+}>>;
+}>>;
+projectSources: TOptional<TArray<TObject<    {
+id: TString;
+kind: TUnion<[TLiteral<"skill">, TLiteral<"resource">]>;
+units: TArray<TObject<    {
+kind: TUnion<[TLiteral<"text">, TLiteral<"toolPair">]>;
+text: TString;
+citations: TArray<TString>;
+required: TBoolean;
+}>>;
+}>>>;
+approvals: TOptional<TArray<TObject<    {
+sessionId: TString;
+grantId: TString;
+digest: TString;
+}>>>;
+}>;
+
+// @public (undocumented)
+type SubmitTeammateTaskResponse = Static<typeof SubmitTeammateTaskResponseSchema>;
+
+// @public
+const SubmitTeammateTaskResponseSchema: TObject<    {
+task: TObject<    {
+taskId: TString;
+agentId: TString;
+agentRevision: TNumber;
+admissionKey: TString;
+kind: TString;
+status: TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>;
+priority: TNumber;
+enqueuedAt: TNumber;
+availableAt: TNumber;
+startedAt: TOptional<TNumber>;
+finishedAt: TOptional<TNumber>;
+error: TOptional<TString>;
+attemptCount: TNumber;
+cancelRequested: TBoolean;
+dependsOn: TArray<TString>;
+parentTaskId: TOptional<TString>;
+runProfileDigest: TOptional<TString>;
+}>;
+replayed: TBoolean;
+}>;
+
+// @public (undocumented)
 type TaskEventEnvelope = Static<typeof TaskEventEnvelopeSchema>;
 
 // @public
@@ -2201,7 +2498,90 @@ eventId: TString;
 timestamp: TString;
 contractVersion: TString;
 attemptId: TOptional<TString>;
+agentId: TOptional<TString>;
+taskId: TOptional<TString>;
+definitionRevision: TOptional<TNumber>;
+status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>>;
+usage: TOptional<TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>>;
+sourceRefs: TOptional<TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>>;
 }>;
+
+// @public (undocumented)
+type TaskEventPageDto = Static<typeof TaskEventPageDtoSchema>;
+
+// @public
+const TaskEventPageDtoSchema: TObject<    {
+events: TArray<TObject<    {
+type: TString;
+seq: TNumber;
+eventId: TString;
+timestamp: TString;
+contractVersion: TString;
+attemptId: TOptional<TString>;
+agentId: TOptional<TString>;
+taskId: TOptional<TString>;
+definitionRevision: TOptional<TNumber>;
+status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+approval: TOptional<TObject<    {
+state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+approvalId: TOptional<TString>;
+toolName: TOptional<TString>;
+}>>;
+usage: TOptional<TObject<    {
+callId: TOptional<TString>;
+model: TOptional<TString>;
+promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+}>>;
+sourceRefs: TOptional<TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>>;
+}>>;
+nextCursor: TOptional<TString>;
+}>;
+
+// @public
+export interface TaskEventSource {
+    // (undocumented)
+    getTask(taskId: string): Promise<{
+        status: string;
+    } | null>;
+    // (undocumented)
+    listEvents(taskId: string, opts?: {
+        afterSeq?: number;
+        limit?: number;
+    }): Promise<TaskEventEnvelope[]>;
+}
 
 // @public
 interface TaskPatch {
@@ -2280,6 +2660,40 @@ interface TaskStore {
     renewLease(leaseToken: string, ttlMs: number): Promise<Lease>;
     transitionTask(taskId: string, from: TaskStatus[], to: TaskStatus, patch?: TaskPatch, opts?: FencedWriteOptions): Promise<TaskRecord>;
     updateProgress(taskId: string, progress: Record<string, unknown>, opts: UpdateProgressOptions): Promise<TaskRecord>;
+}
+
+// @public
+export interface TeammateApiPort {
+    archiveAgent(agentId: string): Promise<AgentDto | null>;
+    cancelAgentTask(taskId: string): Promise<AgentTaskDto | null>;
+    createAgent(request: CreateAgentRequest): Promise<AgentDto>;
+    events(taskId: string, options: {
+        afterSeq?: number;
+        limit?: number;
+    }): Promise<TaskEventEnvelope[]>;
+    // (undocumented)
+    getAgent(agentId: string): Promise<AgentDto | null>;
+    // (undocumented)
+    getAgentTask(taskId: string): Promise<AgentTaskDto | null>;
+    getAgentTaskRunProfile(taskId: string): Promise<RunProfileExplanationDto | null>;
+    listAgentRevisions(agentId: string, query: {
+        limit?: number;
+    }): Promise<AgentRevisionDto[]>;
+    listAgents(query: {
+        limit?: number;
+    }): Promise<AgentDto[]>;
+    listAgentTaskEvents(taskId: string, query: {
+        after?: number;
+        limit?: number;
+    }): Promise<TaskEventPageDto>;
+    listAgentTasks(agentId: string, query: {
+        limit?: number;
+    }): Promise<AgentTaskDto[]>;
+    restoreAgent(agentId: string): Promise<AgentDto | null>;
+    setAgentModel(agentId: string, request: SetAgentModelRequest): Promise<AgentDto | null>;
+    submitTeammateTask(agentId: string, request: SubmitTeammateTaskRequest): Promise<SubmitTeammateTaskResponse | null>;
+    taskStatus(taskId: string): Promise<AgentTaskStatusDto | null>;
+    updateAgent(agentId: string, request: UpdateAgentRequest): Promise<AgentDto | null>;
 }
 
 // @public
@@ -2365,6 +2779,36 @@ export interface TurnSubmitter {
 
 // @public
 export function unprocessable(code: string, detail: string, instance: string): Response;
+
+// @public (undocumented)
+type UpdateAgentRequest = Static<typeof UpdateAgentRequestSchema>;
+
+// @public
+const UpdateAgentRequestSchema: TObject<    {
+expectedRevision: TNumber;
+definition: TObject<    {
+name: TString;
+avatar: TOptional<TString>;
+purpose: TString;
+instructions: TString;
+resources: TArray<TString>;
+skills: TArray<TObject<    {
+id: TString;
+revision: TString;
+}>>;
+model: TOptional<TString>;
+reasoningEffort: TOptional<TString>;
+permissionMode: TString;
+allowedTools: TArray<TString>;
+budgets: TObject<    {
+maxToolIterations: TOptional<TNumber>;
+maxToolCallsPerIteration: TOptional<TNumber>;
+maxOutputTokens: TOptional<TNumber>;
+attemptBudgetMs: TOptional<TNumber>;
+}>;
+secretRefs: TArray<TString>;
+}>;
+}>;
 
 // @public
 interface UpdateChatPatch {

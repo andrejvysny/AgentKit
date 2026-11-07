@@ -2340,6 +2340,10 @@
             "type": "string"
           },
           {
+            "const": "run.tool.preparing",
+            "type": "string"
+          },
+          {
             "const": "run.tool.requested",
             "type": "string"
           },
@@ -2373,6 +2377,10 @@
           },
           {
             "const": "run.verification",
+            "type": "string"
+          },
+          {
+            "const": "run.progress",
             "type": "string"
           },
           {
@@ -2682,6 +2690,73 @@
           },
           "type": {
             "const": "run.message.completed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "argsBytes": {
+                "description": "UTF-8 bytes of arguments streamed so far.",
+                "type": "number"
+              },
+              "step": {
+                "description": "The 1-based provider step.",
+                "type": "number"
+              },
+              "toolCallId": {
+                "description": "The call id `run.tool.requested` will carry.",
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "argsBytes",
+              "step"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.preparing",
             "type": "string"
           }
         },
@@ -3453,6 +3528,76 @@
           },
           "data": {
             "properties": {
+              "phase": {
+                "anyOf": [
+                  {
+                    "const": "reasoning",
+                    "type": "string"
+                  },
+                  {
+                    "const": "generating",
+                    "type": "string"
+                  },
+                  {
+                    "const": "tool_args",
+                    "type": "string"
+                  }
+                ]
+              },
+              "step": {
+                "description": "The 1-based provider step.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "phase",
+              "step"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.progress",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "inputId": {
                 "description": "The durable input's idempotency key (`AgentInputStore`).",
                 "type": "string"
@@ -3808,6 +3953,10 @@
         "type": "string"
       },
       {
+        "const": "run.tool.preparing",
+        "type": "string"
+      },
+      {
         "const": "run.tool.requested",
         "type": "string"
       },
@@ -3841,6 +3990,10 @@
       },
       {
         "const": "run.verification",
+        "type": "string"
+      },
+      {
+        "const": "run.progress",
         "type": "string"
       },
       {
@@ -4213,6 +4366,76 @@
     ],
     "type": "object"
   },
+  "AiRunProgressEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "phase": {
+            "anyOf": [
+              {
+                "const": "reasoning",
+                "type": "string"
+              },
+              {
+                "const": "generating",
+                "type": "string"
+              },
+              {
+                "const": "tool_args",
+                "type": "string"
+              }
+            ]
+          },
+          "step": {
+            "description": "The 1-based provider step.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "phase",
+          "step"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.progress",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
   "AiRunStartedEventSchema": {
     "properties": {
       "attemptId": {
@@ -4334,6 +4557,73 @@
       },
       "type": {
         "const": "run.tool.failed",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunToolPreparingEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "argsBytes": {
+            "description": "UTF-8 bytes of arguments streamed so far.",
+            "type": "number"
+          },
+          "step": {
+            "description": "The 1-based provider step.",
+            "type": "number"
+          },
+          "toolCallId": {
+            "description": "The call id `run.tool.requested` will carry.",
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolCallId",
+          "toolName",
+          "argsBytes",
+          "step"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.tool.preparing",
         "type": "string"
       }
     },
@@ -8195,6 +8485,73 @@
           },
           "data": {
             "properties": {
+              "argsBytes": {
+                "description": "UTF-8 bytes of arguments streamed so far.",
+                "type": "number"
+              },
+              "step": {
+                "description": "The 1-based provider step.",
+                "type": "number"
+              },
+              "toolCallId": {
+                "description": "The call id `run.tool.requested` will carry.",
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "argsBytes",
+              "step"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.preparing",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "argumentsJson": {
                 "type": "string"
               },
@@ -8914,6 +9271,76 @@
           },
           "type": {
             "const": "run.verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "phase": {
+                "anyOf": [
+                  {
+                    "const": "reasoning",
+                    "type": "string"
+                  },
+                  {
+                    "const": "generating",
+                    "type": "string"
+                  },
+                  {
+                    "const": "tool_args",
+                    "type": "string"
+                  }
+                ]
+              },
+              "step": {
+                "description": "The 1-based provider step.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "phase",
+              "step"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.progress",
             "type": "string"
           }
         },

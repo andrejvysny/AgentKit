@@ -170,6 +170,7 @@ struct ServerOptions {
     /// omitted keeps those writes 501 exactly like the TypeScript
     /// transport without a `SecretStore` port.
     provider_secrets: Option<String>,
+    provider_operations: Option<String>,
 }
 
 pub(super) fn optional_u64(object: &Value, key: &str) -> Result<Option<u64>> {
@@ -360,12 +361,23 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
         session_profile_id: optional_text(&object, "sessionProfileId", false)?,
         bearer_token,
         cors: parse_cors(&object)?,
+        provider_operations: match object.get("providerOperations") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(mode)) if mode == "native" => Some(mode.clone()),
+            _ => {
+                return Err(errors::invalid(
+                    "providerOperations must be native or omitted",
+                ));
+            }
+        },
         provider_secrets: match object.get("providerSecrets") {
             None | Some(Value::Null) => None,
-            Some(Value::String(mode)) if mode == "memory" => Some(mode.to_owned()),
+            Some(Value::String(mode)) if mode == "memory" || mode == "callback" => {
+                Some(mode.to_owned())
+            }
             Some(Value::String(mode)) => {
                 return Err(errors::invalid(format!(
-                    "providerSecrets must be \"memory\" (volatile vault) or omitted (provider credential writes stay 501); got {mode:?}"
+                    "providerSecrets must be memory, callback or omitted; got {mode:?}"
                 )));
             }
             Some(_) => {
@@ -546,6 +558,36 @@ impl SessionService {
                 "an HTTP server is already running on this service; call stopHttpServer() first",
             ));
         }
+        let mcp_configuration = agentkit_host::McpConfigRepository::new(
+            core.host.store().clone(),
+            &options.actor_id,
+            core.host.runtime().clone(),
+        )
+        .map_err(|_| {
+            errors::stable(
+                "mcp_invalid_config",
+                "MCP configuration initialization failed.",
+                None,
+            )
+        })?
+        .with_ports(
+            Some(core.mcp_config_secrets.clone()),
+            Some(core.mcp_config_runtime.clone()),
+        )
+        .map_err(|_| {
+            errors::stable(
+                "mcp_invalid_config",
+                "MCP configuration ports are unavailable.",
+                None,
+            )
+        })?;
+        mcp_configuration.initialize().await.map_err(|_| {
+            errors::stable(
+                "mcp_invalid_config",
+                "MCP configuration reconciliation failed.",
+                None,
+            )
+        })?;
         let mut backend = DesktopBackend::open(
             core.host.clone(),
             Actor {
@@ -557,22 +599,29 @@ impl SessionService {
         )
         .await
         .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
-        // One registry per service: `sessionProfileId` below is resolved at
-        // chat creation by the same admission `createSession` uses, so the
-        // boundary resolves against the profiles THIS service was given
-        // (`createService({ profiles })`, or the host built-ins) — never a
-        // second, narrower built-in-only registry that would 400 on a
-        // profile the service itself admits.
-        backend = backend.with_profiles(core.service.profiles());
+        backend = backend.with_mcp_configuration(Arc::new(mcp_configuration));
+        backend = backend
+            .with_content_authority(core.content_authority.clone())
+            .with_profiles(core.profiles.clone())
+            .with_provider_factory(core.native_provider_factory.clone());
         if let Some(profile_id) = &options.session_profile_id {
             backend = backend
                 .with_session_profile(profile_id)
                 .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
         }
         if options.provider_secrets.as_deref() == Some("memory") {
-            backend = backend.with_provider_secrets(Arc::new(
-                agentkit_connections::MemorySecretStore::default(),
-            ));
+            backend = backend.with_provider_secrets(core.provider_memory_secrets.clone());
+        }
+        if options.provider_secrets.as_deref() == Some("callback") {
+            backend = backend.with_provider_secrets(core.provider_ports.clone());
+        }
+        if options.provider_operations.as_deref() == Some("native") {
+            backend = backend
+                .with_native_provider_operations(
+                    core.provider_ports.clone(),
+                    core.native_provider_factory.clone(),
+                )
+                .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
         }
         let gate = Arc::new(ServerGate {
             closed: AtomicBool::new(false),

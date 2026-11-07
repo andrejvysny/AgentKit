@@ -63,7 +63,7 @@ const PORT = Number(process.env.AGENTKIT_PORT ?? 8787);
  */
 const { host: HOST, loopback } = resolveBindHost();
 
-const app = await buildApp({ logger: consoleLogger });
+const app = await buildApp({ logger: consoleLogger, providerMode: "legacy" });
 
 /**
  * The façade owns routing: `/mcp` (when an MCP server was built), the JS-

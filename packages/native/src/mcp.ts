@@ -20,10 +20,178 @@
  */
 
 import type {
+  McpElicitationHandler,
+  McpOAuthCallbacks,
   ToolDefinitionJson,
   ToolResultJson,
   ToolRunFunction,
 } from "./callback-types.js";
+import { CallbackRouter } from "./callback-router.js";
+
+export interface NativeMcpCallbackStore {
+  mcpConnectWithCallbacks(
+    configJson: string,
+    deliver: (error: Error | null, payload: string) => void,
+  ): Promise<string>;
+  mcpDisconnect(alias: string): Promise<void>;
+  mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>;
+}
+
+/** One callback router per connection; closing it aborts outstanding user prompts. */
+export async function connectMcpWithCallbacks(
+  store: NativeMcpCallbackStore,
+  config: NativeMcpClientConfig,
+  elicitation: McpElicitationHandler,
+): Promise<NativeMcpConnection & { disconnect(): Promise<void> }> {
+  const router = new CallbackRouter();
+  router.setMcpElicitation(elicitation);
+  try {
+    const result = await store.mcpConnectWithCallbacks(
+      JSON.stringify(config),
+      (error, payload) => {
+        if (error === null) void router.handle(payload);
+      },
+    );
+    const connection = JSON.parse(result) as NativeMcpConnection;
+    return {
+      ...connection,
+      async disconnect() {
+        try {
+          await store.mcpDisconnectBound(
+            connection.alias,
+            connectionHandle(connection),
+          );
+        } finally {
+          router.close();
+        }
+      },
+    };
+  } catch (error) {
+    router.close();
+    throw error;
+  }
+}
+
+function connectionHandle(connection: NativeMcpConnection): string {
+  const handle = connection.handle ?? connection.tools[0]?.handle;
+  if (!handle)
+    throw new Error("MCP connection is missing its lifecycle handle");
+  return handle;
+}
+
+export interface NativeManagedOAuthOptions {
+  /** Stable, unique application/store namespace; never a global account selection. */
+  appNamespace: string;
+  /** Persisted connection generation. Advance on reauthorization or revocation. */
+  generation: number;
+  connectionId: string;
+  accountId: string;
+  resourceUrl: string;
+  redirectUrl: string;
+  allowedOrigins: string[];
+  clientId?: string;
+  /** Transient input; only the explicit vault port stores it. */
+  clientSecret?: string;
+  clientName: string;
+  scopes: string[];
+  /** Use the explicit trusted HTTP callback for OAuth and resource requests. */
+  httpCallback?: boolean;
+}
+
+export interface NativeMcpOAuthStore {
+  mcpConnectWithOAuth(
+    configJson: string,
+    oauthOptionsJson: string,
+    deliver: (error: Error | null, payload: string) => void,
+  ): Promise<string>;
+  mcpCompleteOAuth(
+    oauthOptionsJson: string,
+    callbackUrl: string,
+    deliver: (error: Error | null, payload: string) => void,
+  ): Promise<void>;
+  mcpRevokeOAuth(
+    oauthOptionsJson: string,
+    deliver: (error: Error | null, payload: string) => void,
+  ): Promise<void>;
+  mcpDisconnectBound(alias: string, expectedHandle: string): Promise<void>;
+}
+
+export async function connectMcpWithOAuth(
+  store: NativeMcpOAuthStore,
+  config: NativeMcpClientConfig,
+  options: NativeManagedOAuthOptions,
+  callbacks: McpOAuthCallbacks & { elicitation?: McpElicitationHandler },
+): Promise<NativeMcpConnection & { disconnect(): Promise<void> }> {
+  const router = new CallbackRouter();
+  router.setMcpOAuth(callbacks);
+  if (callbacks.elicitation) router.setMcpElicitation(callbacks.elicitation);
+  try {
+    const result = await store.mcpConnectWithOAuth(
+      JSON.stringify({
+        ...config,
+        elicitation: callbacks.elicitation !== undefined,
+      }),
+      JSON.stringify(options),
+      (error, payload) => {
+        if (error === null) void router.handle(payload);
+      },
+    );
+    const connection = JSON.parse(result) as NativeMcpConnection;
+    return {
+      ...connection,
+      async disconnect() {
+        try {
+          await store.mcpDisconnectBound(
+            connection.alias,
+            connectionHandle(connection),
+          );
+        } finally {
+          router.close();
+        }
+      },
+    };
+  } catch (error) {
+    router.close();
+    throw error;
+  }
+}
+
+export async function completeMcpOAuth(
+  store: NativeMcpOAuthStore,
+  options: NativeManagedOAuthOptions,
+  callbackUrl: string,
+  callbacks: McpOAuthCallbacks,
+): Promise<void> {
+  const router = new CallbackRouter();
+  router.setMcpOAuth(callbacks);
+  try {
+    await store.mcpCompleteOAuth(
+      JSON.stringify(options),
+      callbackUrl,
+      (error, payload) => {
+        if (error === null) void router.handle(payload);
+      },
+    );
+  } finally {
+    router.close();
+  }
+}
+
+export async function revokeMcpOAuth(
+  store: NativeMcpOAuthStore,
+  options: NativeManagedOAuthOptions,
+  callbacks: McpOAuthCallbacks,
+): Promise<void> {
+  const router = new CallbackRouter();
+  router.setMcpOAuth(callbacks);
+  try {
+    await store.mcpRevokeOAuth(JSON.stringify(options), (error, payload) => {
+      if (error === null) void router.handle(payload);
+    });
+  } finally {
+    router.close();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Server (this service hosts an MCP server; remote clients connect to it)
@@ -87,8 +255,8 @@ export interface NativeMcpServerInfo {
 // Client (this process connects to remote MCP servers)
 // ---------------------------------------------------------------------------
 
-/** Stdio transport: the crate spawns `command` with `args` and a merged
- * environment. */
+/** Stdio transport: the crate spawns `command` with `args` and only the
+ * explicitly supplied environment; inherited variables are not forwarded. */
 export interface NativeMcpStdioTransport {
   kind: "stdio";
   command: string;
@@ -109,19 +277,19 @@ export type NativeMcpTransport =
 
 /**
  * One MCP client declaration (the crate's `ServerConfig` shape; see
- * `rust/crates/mcp/src/manager/config.rs`). Declarations are in-memory
- * only — the store file never carries them, and resolved secret material
- * is never stored. The binding has no secret resolver yet, so any
- * `secretRefs` entry fails the connect with `mcp_secret_missing`.
+ * `rust/crates/mcp/src/manager/config.rs`). Manual declarations are ephemeral;
+ * HTTP management restores durable declarations through the same manager.
+ * Resolved secret material is stored only through the configured host vault.
  */
 export interface NativeMcpClientConfig {
+  /** Host attestation of the selected model's image/audio support. */
+  modelContentCapabilities?: { image?: boolean; audio?: boolean };
   /** Server identity: lowercase ASCII letters, digits and `-`. Used in
    * every tool's canonical capability `mcp.<alias>.<tool>`. */
   alias: string;
   transport: NativeMcpTransport;
-  /** Placeholder → secret reference. UNSUPPORTED in this build: present
-   * entries make `mcpConnect` fail with `mcp_secret_missing` (documented
-   * gap; a host-provided resolver will replace the deny-all). */
+  /** Placeholder to host-vault reference. Missing vault values fail the
+   * connection with `mcp_secret_missing`. */
   secretRefs?: Record<string, string>;
   /** Default true. `mcpConnect` refuses a disabled server outright. */
   enabled?: boolean;
@@ -154,6 +322,7 @@ export interface NativeMcpToolDescriptor extends ToolDefinitionJson {
 /** What one `mcpConnect` established. */
 export interface NativeMcpConnection {
   alias: string;
+  handle?: string;
   tools: NativeMcpToolDescriptor[];
 }
 

@@ -30,9 +30,7 @@ async function openStore(path?: string): Promise<RawNativeStore> {
 }
 
 /** JSON payload in, parsed JSON out — the lane speaks JSON strings. */
-async function call<T = unknown>(
-  promise: Promise<string | null>,
-): Promise<T> {
+async function call<T = unknown>(promise: Promise<string | null>): Promise<T> {
   return JSON.parse((await promise) as string) as T;
 }
 
@@ -182,13 +180,18 @@ nativeTest(
       lifecycle: string;
       scope: string;
       ownerId: string;
-    }>(lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("rev"))));
+    }>(
+      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("rev"))),
+    );
     expect(created.currentRevision).toBe(1);
     expect(created.lifecycle).toBe("active");
     expect(created.scope).toBe("scope-a");
     expect(created.ownerId).toBe("owner-1");
 
-    const updated = await call<{ currentRevision: number; definition: { instructions: string } }>(
+    const updated = await call<{
+      currentRevision: number;
+      definition: { instructions: string };
+    }>(
       lane.updateAgent(
         created.agentId,
         1,
@@ -207,7 +210,9 @@ nativeTest(
     expect(modeled.definition.model).toBe("model");
     expect(modeled.agentId).toBe(created.agentId);
 
-    const archived = await call<{ lifecycle: string }>(lane.archiveAgent(created.agentId));
+    const archived = await call<{ lifecycle: string }>(
+      lane.archiveAgent(created.agentId),
+    );
     expect(archived.lifecycle).toBe("archived");
     const restored = await call<{ lifecycle: string; currentRevision: number }>(
       lane.restoreAgent(created.agentId),
@@ -236,11 +241,23 @@ nativeTest(
     const store = await openStore();
     const lane = await store.createTeammates(null);
     const created = await call<{ agentId: string }>(
-      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("stale"))),
+      lane.createAgent(
+        "scope-a",
+        "owner-1",
+        JSON.stringify(definition("stale")),
+      ),
     );
-    await lane.updateAgent(created.agentId, 1, JSON.stringify(definition("stale-v2")));
+    await lane.updateAgent(
+      created.agentId,
+      1,
+      JSON.stringify(definition("stale-v2")),
+    );
     await expectCode(
-      lane.updateAgent(created.agentId, 1, JSON.stringify(definition("stale-v3"))),
+      lane.updateAgent(
+        created.agentId,
+        1,
+        JSON.stringify(definition("stale-v3")),
+      ),
       "revision_conflict",
     );
     const current = await call<{
@@ -262,7 +279,11 @@ nativeTest(
     const store = await openStore();
     const lane = await store.createTeammates(null);
     const created = await call<{ agentId: string }>(
-      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("arch"))),
+      lane.createAgent(
+        "scope-a",
+        "owner-1",
+        JSON.stringify(definition("arch")),
+      ),
     );
     const admitted = await call<Admitted>(
       lane.submitTeammateTask(submitBody(created.agentId, "k1")),
@@ -274,7 +295,7 @@ nativeTest(
       "invalid_task_transition",
     );
     // The refusal narrows admission only: the earlier task stays readable.
-    const projection = await call<{ task: { status: string } }>(
+    const projection = await call<{ task: { status: string; taskId: string } }>(
       lane.getAgentTaskProjection(admitted.task.taskId, null),
     );
     expect(projection.task.taskId).toBe(admitted.task.taskId);
@@ -289,7 +310,11 @@ nativeTest(
     const store = await openStore();
     const lane = await store.createTeammates(null);
     const created = await call<{ agentId: string }>(
-      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("replay"))),
+      lane.createAgent(
+        "scope-a",
+        "owner-1",
+        JSON.stringify(definition("replay")),
+      ),
     );
     const first = await call<Admitted>(
       lane.submitTeammateTask(submitBody(created.agentId, "same-key")),
@@ -315,8 +340,16 @@ nativeTest(
     const store = await openStore();
     const lane = await store.createTeammates(null);
     for (const name of ["a1", "a2"])
-      await lane.createAgent("scope-a", "owner-1", JSON.stringify(definition(name)));
-    await lane.createAgent("scope-b", "owner-1", JSON.stringify(definition("b1")));
+      await lane.createAgent(
+        "scope-a",
+        "owner-1",
+        JSON.stringify(definition(name)),
+      );
+    await lane.createAgent(
+      "scope-b",
+      "owner-1",
+      JSON.stringify(definition("b1")),
+    );
     const inA = await call<{ agentId: string; scope: string }[]>(
       lane.listAgents("scope-a"),
     );
@@ -340,7 +373,11 @@ nativeTest(
     const store = await openStore();
     const lane = await store.createTeammates(null);
     const created = await call<{ agentId: string }>(
-      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("usage"))),
+      lane.createAgent(
+        "scope-a",
+        "owner-1",
+        JSON.stringify(definition("usage")),
+      ),
     );
     const admitted = await call<Admitted>(
       lane.submitTeammateTask(submitBody(created.agentId, "k1")),
@@ -365,7 +402,11 @@ nativeTest(
     const store = await openStore();
     const lane = await store.createTeammates(null);
     const created = await call<{ agentId: string }>(
-      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("leaky"))),
+      lane.createAgent(
+        "scope-a",
+        "owner-1",
+        JSON.stringify(definition("leaky")),
+      ),
     );
     const admitted = await call<Admitted>(
       lane.submitTeammateTask(submitBody(created.agentId, "k1")),
@@ -413,34 +454,35 @@ nativeTest(
   },
 );
 
-nativeTest(
-  "cancel settles a queued task and is idempotent",
-  async () => {
-    const store = await openStore();
-    const lane = await store.createTeammates(null);
-    const created = await call<{ agentId: string }>(
-      lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("cancel"))),
-    );
-    const admitted = await call<Admitted>(
-      lane.submitTeammateTask(submitBody(created.agentId, "k1")),
-    );
-    const cancelled = await call<{ status: string; cancelRequested: boolean }>(
-      lane.cancelAgentTask(admitted.task.taskId),
-    );
-    expect(cancelled.status).toBe("cancelled");
-    expect(cancelled.cancelRequested).toBe(true);
-    const again = await call<{ status: string }>(
-      lane.cancelAgentTask(admitted.task.taskId),
-    );
-    expect(again.status).toBe("cancelled");
-    const projection = await call<{ task: { status: string } }>(
-      lane.getAgentTaskProjection(admitted.task.taskId, null),
-    );
-    expect(projection.task.status).toBe("cancelled");
-    lane.close();
-    await store.close();
-  },
-);
+nativeTest("cancel settles a queued task and is idempotent", async () => {
+  const store = await openStore();
+  const lane = await store.createTeammates(null);
+  const created = await call<{ agentId: string }>(
+    lane.createAgent(
+      "scope-a",
+      "owner-1",
+      JSON.stringify(definition("cancel")),
+    ),
+  );
+  const admitted = await call<Admitted>(
+    lane.submitTeammateTask(submitBody(created.agentId, "k1")),
+  );
+  const cancelled = await call<{ status: string; cancelRequested: boolean }>(
+    lane.cancelAgentTask(admitted.task.taskId),
+  );
+  expect(cancelled.status).toBe("cancelled");
+  expect(cancelled.cancelRequested).toBe(true);
+  const again = await call<{ status: string }>(
+    lane.cancelAgentTask(admitted.task.taskId),
+  );
+  expect(again.status).toBe("cancelled");
+  const projection = await call<{ task: { status: string } }>(
+    lane.getAgentTaskProjection(admitted.task.taskId, null),
+  );
+  expect(projection.task.status).toBe("cancelled");
+  lane.close();
+  await store.close();
+});
 
 nativeTest(
   "the projection reconstructs identically after a store reopen",
@@ -451,7 +493,11 @@ nativeTest(
       let store = await openStore(path);
       let lane = await store.createTeammates(null);
       const created = await call<{ agentId: string }>(
-        lane.createAgent("scope-a", "owner-1", JSON.stringify(definition("durable"))),
+        lane.createAgent(
+          "scope-a",
+          "owner-1",
+          JSON.stringify(definition("durable")),
+        ),
       );
       const admitted = await call<Admitted>(
         lane.submitTeammateTask(submitBody(created.agentId, "k1")),
@@ -518,7 +564,7 @@ nativeTest(
         }),
       ),
     );
-    const digest = pinned.task.runProfile?.digest;
+    const digest = pinned.task.runProfile?.digest as string;
     expect(typeof digest).toBe("string");
     expect(digest).toHaveLength(64);
     const explained = await call<{

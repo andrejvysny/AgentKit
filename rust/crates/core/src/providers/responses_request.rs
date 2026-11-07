@@ -1,5 +1,5 @@
 use super::{content, ConnectionIdentity};
-use crate::{ChatMessage, ChatRequest, CoreError, ToolCall};
+use crate::{ChatMessage, ChatRequest, CoreError, ReasoningSummary, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -98,8 +98,15 @@ pub fn build_responses_request_with_warnings(
     if !tools.is_empty() {
         body["tools"] = tools.into();
     }
+    let mut reasoning = serde_json::Map::new();
     if let Some(value) = input.reasoning_effort {
-        body["reasoning"] = json!({"effort":value});
+        reasoning.insert("effort".into(), json!(value));
+    }
+    if input.reasoning_summary != ReasoningSummary::Off {
+        reasoning.insert("summary".into(), json!(input.reasoning_summary));
+    }
+    if !reasoning.is_empty() {
+        body["reasoning"] = reasoning.into();
     }
     if let Some(value) = input.temperature {
         body["temperature"] = value.into();

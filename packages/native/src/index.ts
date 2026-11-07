@@ -1,3 +1,4 @@
+import type { RunContentSelection } from "@agentkit/contracts";
 /**
  * Thin TypeScript wrapper over the native AgentKit binding.
  *
@@ -23,6 +24,10 @@ import { loadBinding } from "./loader.js";
 import { CallbackRouter } from "./callback-router.js";
 import type {
   ProviderFunction,
+  McpElicitationHandler,
+  McpOAuthCallbacks,
+  ProviderSecretStore,
+  ProviderConsentHandler,
   ToolDefinitionJson,
   ToolResultJson,
   ToolRunFunction,
@@ -30,12 +35,21 @@ import type {
 export type * from "./callback-types.js";
 import type {
   NativeMcpClientConfig,
+  NativeMcpCallbackStore,
+  NativeMcpOAuthStore,
+  NativeManagedOAuthOptions,
   NativeMcpConnection,
   NativeMcpServerInfo,
   NativeMcpServerOptions,
   NativeMcpServerStatus,
 } from "./mcp.js";
 export * from "./mcp.js";
+import {
+  connectMcpWithCallbacks,
+  connectMcpWithOAuth,
+  completeMcpOAuth,
+  revokeMcpOAuth,
+} from "./mcp.js";
 import {
   NativeSessionManagement,
   waitFor,
@@ -113,7 +127,102 @@ async function lift<T>(run: () => Promise<T>): Promise<T> {
 /** Construction-time service configuration. Every field selects NATIVE
  * behavior — plan-mode blocking, per-call approval, and the plan-approval
  * escalation all run on the Rust coding-pack authority, never in JS. */
+/** Partial overrides inherit built-in defaults; new profiles may use extends. */
+export interface NativeAgentProfile {
+  id: string;
+  extends?: string;
+  kind?: "chat" | "coding" | "research" | "automation";
+  label?: string;
+  instructions?: string;
+  model?: string;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  tools?: readonly string[];
+  permissionMode?: string;
+  role?: "implementer" | "reviewer" | "supervisor";
+  limits?: {
+    maxToolIterations?: number;
+    maxToolCallsPerIteration?: number;
+    historyLimit?: number;
+    attemptBudgetMs?: number;
+    maxOutputTokens?: number;
+  };
+  resources?: {
+    skills?: readonly { id: string; revision: string }[];
+    projectInstructions?: boolean;
+    resources?: readonly string[];
+  };
+}
+
+/** Fully resolved Rust profile authority, including its immutable digest. */
+export interface NativeResolvedAgentProfile {
+  id: string;
+  digest: string;
+  kind: "chat" | "coding" | "research" | "automation";
+  label: string | null;
+  instructions: string;
+  model: string | null;
+  reasoningEffort: "minimal" | "low" | "medium" | "high" | null;
+  tools: readonly string[];
+  permissionMode: string;
+  role: "implementer" | "reviewer" | "supervisor" | null;
+  limits: {
+    maxToolIterations: number | null;
+    maxToolCallsPerIteration: number | null;
+    historyLimit: number | null;
+    attemptBudgetMs: number | null;
+    maxOutputTokens: number | null;
+  };
+  resources: {
+    skills: readonly { id: string; revision: string }[];
+    projectInstructions: boolean | null;
+    resources: readonly string[];
+  };
+}
+interface NativeProfileQueries {
+  listNativeProfiles(overridesJson?: string | null): string;
+  resolveNativeProfile(id: string, overridesJson?: string | null): string;
+}
+export async function listNativeProfiles(
+  overrides: readonly NativeAgentProfile[] = [],
+): Promise<NativeResolvedAgentProfile[]> {
+  return lift(
+    async () =>
+      JSON.parse(
+        (
+          (await loadBinding()) as unknown as NativeProfileQueries
+        ).listNativeProfiles(JSON.stringify(overrides)),
+      ) as NativeResolvedAgentProfile[],
+  );
+}
+export async function resolveNativeProfile(
+  id: string,
+  overrides: readonly NativeAgentProfile[] = [],
+): Promise<NativeResolvedAgentProfile> {
+  return lift(
+    async () =>
+      JSON.parse(
+        (
+          (await loadBinding()) as unknown as NativeProfileQueries
+        ).resolveNativeProfile(id, JSON.stringify(overrides)),
+      ) as NativeResolvedAgentProfile,
+  );
+}
+
 export interface NativeServiceOptions {
+  /** Host-owned agent profiles this service may resolve sessions to
+   * (mirrors `profiles` in `rust/crates/napi/src/service.rs`). Absent, the
+   * registry is the host's built-ins (`chat`, `coding`, `coding/plan`,
+   * `coding/supervisor`, `coding/reviewer`, `research`, `automation`) and
+   * `createSession` refuses any other id with `invalid_input`. Present, the
+   * definitions are merged onto the built-ins exactly as the host merges
+   * them — an entry with an existing `id` overrides that built-in, an entry
+   * with `extends` inherits another profile's fields — so a consumer whose
+   * turns exercise tools outside the built-in sets declares the profile it
+   * actually needs. A definition the host rejects (unknown kind or
+   * permission mode, empty/duplicate tool names, a reviewer or supervisor
+   * holding write tools, a non-positive limit) fails construction with
+   * `invalid_input`, never a session running on a different policy. */
+  profiles?: readonly NativeAgentProfile[];
   /** How long `close()` waits for owned execution to drain before it
    * completes and reports `closeUncertain`. Default 5000. */
   closeTimeoutMs?: number;
@@ -153,54 +262,6 @@ export interface NativeServiceOptions {
    * behavior). Valid only without `providerConfig`, whose Rust lane is
    * always API-key shaped. */
   providerAuthKind?: "api-key" | "chatgpt-account";
-  /** Host-owned agent profiles this service may resolve sessions to
-   * (mirrors `profiles` in `rust/crates/napi/src/service.rs`). Absent, the
-   * registry is the host's built-ins (`chat`, `coding`, `coding/plan`,
-   * `coding/supervisor`, `coding/reviewer`, `research`, `automation`) and
-   * `createSession` refuses any other id with `invalid_input`. Present, the
-   * definitions are merged onto the built-ins exactly as the host merges
-   * them — an entry with an existing `id` overrides that built-in, an entry
-   * with `extends` inherits another profile's fields — so a consumer whose
-   * turns exercise tools outside the built-in sets declares the profile it
-   * actually needs. A definition the host rejects (unknown kind or
-   * permission mode, empty/duplicate tool names, a reviewer or supervisor
-   * holding write tools, a non-positive limit) fails construction with
-   * `invalid_input`, never a session running on a different policy. */
-  profiles?: ReadonlyArray<NativeAgentProfile>;
-}
-
-/** One host-owned profile definition (the `AgentProfile` shape resolved in
- * `rust/crates/host/src/profiles.rs`). `id`, `kind`, `instructions`, `tools`
- * and `permissionMode` are required unless `extends` names a profile that
- * already carries them. `kind` is `chat`, `coding`, `research` or
- * `automation`; `permissionMode` is the coding mode the session starts in
- * (`read_only`, `ask`, `auto_edit`, `full_auto`, `plan`) unless
- * `createSession` overrides it; `tools` is the exact allow-list of tool names
- * the turn may stage. */
-export interface NativeAgentProfile {
-  id: string;
-  kind: "chat" | "coding" | "research" | "automation";
-  /** Another profile id whose fields this definition inherits. */
-  extends?: string;
-  label?: string;
-  instructions: string;
-  model?: string;
-  reasoningEffort?: "minimal" | "low" | "medium" | "high";
-  tools: ReadonlyArray<string>;
-  permissionMode: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
-  role?: "implementer" | "reviewer" | "supervisor";
-  limits?: {
-    maxToolIterations?: number;
-    maxToolCallsPerIteration?: number;
-    historyLimit?: number;
-    attemptBudgetMs?: number;
-    maxOutputTokens?: number;
-  };
-  resources?: {
-    skills?: ReadonlyArray<{ id: string; revision: string }>;
-    projectInstructions?: boolean;
-    resources?: ReadonlyArray<string>;
-  };
 }
 
 /** Construction-time selection of the Rust provider lane (mirrors
@@ -545,7 +606,9 @@ export interface NativeHttpServerOptions {
    * secrets die with the process — durable vaults are a host-side port
    * decision). Omitted, those writes answer 501 exactly like the
    * TypeScript transport running without a `SecretStore`. */
-  providerSecrets?: "memory";
+  providerSecrets?: "memory" | "callback";
+  /** Enables Rust provider operations through the exact-consent callback. */
+  providerOperations?: "native";
 }
 
 /** `cors` member of {@link NativeHttpServerOptions}. */
@@ -578,6 +641,7 @@ const OPEN_SERVICES = new Set<NativeSessionService>();
 export class NativeStore {
   private readonly raw: RawNativeStore;
   private closed = false;
+  private mcpSecretRouter: CallbackRouter | null = null;
 
   private constructor(raw: RawNativeStore) {
     this.raw = raw;
@@ -687,12 +751,7 @@ export class NativeStore {
     // Tag the native service with this Node environment so the addon's
     // environment-cleanup hook only ever stops this env's services.
     raw.bindEnv();
-    const service = new NativeSessionService(
-      raw,
-      router,
-      this,
-      options?.providerConfig,
-    );
+    const service = new NativeSessionService(raw, router, this);
     // Strong reference until `close()`: a service kept only for its effects
     // (an HTTP/MCP listener, the worker) must not be reclaimed by GC when
     // the caller drops the handle. The native Drop is a last resort only.
@@ -711,9 +770,42 @@ export class NativeStore {
    * `registerMcpTools`) so the authority chain keeps judging them;
    * `mcpCallTool(alias, descriptor.remoteName, args)` is the host call for
    * the tool lane. Failures carry the `mcp_*` codes from the error
-   * contract; `secretRefs` entries fail with `mcp_secret_missing` (no
-   * resolver in this build). Configs are in-memory only.
+   * contract. Secret references use the explicitly configured Store vault;
+   * absent secret authority fails closed. Durable HTTP declarations share
+   * this manager; direct connections remain explicit host-owned sessions.
    */
+  /** Supplies the explicit durable vault used by managed MCP secret references. */
+  async mcpConfigureSecrets(
+    secrets: McpOAuthCallbacks["secrets"],
+  ): Promise<void> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const router = new CallbackRouter();
+    router.setMcpOAuth({
+      secrets,
+      redirect: () => {
+        throw new Error("No browser redirect port is configured.");
+      },
+    });
+    try {
+      const raw = this.raw as unknown as {
+        mcpConfigureSecrets(
+          deliver: (error: Error | null, payload: string) => void,
+        ): Promise<void>;
+      };
+      await lift(() =>
+        raw.mcpConfigureSecrets((error, payload) => {
+          if (error === null) void router.handle(payload);
+        }),
+      );
+      this.mcpSecretRouter?.close();
+      this.mcpSecretRouter = router;
+    } catch (error) {
+      router.close();
+      throw error;
+    }
+  }
+
   async mcpConnect(
     config: NativeMcpClientConfig,
   ): Promise<NativeMcpConnection> {
@@ -721,6 +813,90 @@ export class NativeStore {
       throw new NativeAgentError("closed", "the native store is closed");
     const text = await lift(() => this.raw.mcpConnect(JSON.stringify(config)));
     return JSON.parse(text) as NativeMcpConnection;
+  }
+
+  /** Connects with a host-owned elicitation callback; URLs never open automatically. */
+  async mcpConnectWithCallbacks(
+    config: NativeMcpClientConfig,
+    elicitation: McpElicitationHandler,
+  ): Promise<NativeMcpConnection & { disconnect(): Promise<void> }> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const connection = await lift(() =>
+      connectMcpWithCallbacks(
+        this.raw as unknown as NativeMcpCallbackStore,
+        config,
+        elicitation,
+      ),
+    );
+    return {
+      ...connection,
+      disconnect: () => lift(() => connection.disconnect()),
+    };
+  }
+
+  async mcpConnectWithOAuth(
+    config: NativeMcpClientConfig,
+    options: NativeManagedOAuthOptions,
+    callbacks: McpOAuthCallbacks & { elicitation?: McpElicitationHandler },
+  ): Promise<NativeMcpConnection & { disconnect(): Promise<void> }> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const connection = await lift(() =>
+      connectMcpWithOAuth(
+        this.raw as unknown as NativeMcpOAuthStore,
+        config,
+        options,
+        callbacks,
+      ),
+    );
+    return {
+      ...connection,
+      disconnect: () => lift(() => connection.disconnect()),
+    };
+  }
+  async mcpCompleteOAuth(
+    options: NativeManagedOAuthOptions,
+    callbackUrl: string,
+    callbacks: McpOAuthCallbacks,
+  ): Promise<void> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    await lift(() =>
+      completeMcpOAuth(
+        this.raw as unknown as NativeMcpOAuthStore,
+        options,
+        callbackUrl,
+        callbacks,
+      ),
+    );
+  }
+  async mcpRevokeOAuth(
+    options: NativeManagedOAuthOptions,
+    callbacks: McpOAuthCallbacks,
+  ): Promise<void> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    await lift(() =>
+      revokeMcpOAuth(
+        this.raw as unknown as NativeMcpOAuthStore,
+        options,
+        callbacks,
+      ),
+    );
+  }
+  async mcpDisconnectBound(
+    alias: string,
+    expectedHandle: string,
+  ): Promise<void> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    await lift(() =>
+      (this.raw as unknown as NativeMcpOAuthStore).mcpDisconnectBound(
+        alias,
+        expectedHandle,
+      ),
+    );
   }
 
   /**
@@ -814,6 +990,8 @@ export class NativeStore {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.mcpSecretRouter?.close();
+    this.mcpSecretRouter = null;
     await lift(() => this.raw.close());
   }
 }
@@ -936,10 +1114,10 @@ export interface CreateSessionInputJson {
   title?: string;
   profileId: string;
   profileDigest?: string;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
+  contentSelection?: RunContentSelection;
   providerId?: string;
   model?: string;
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
-  contentSelection?: Record<string, unknown>;
   workspace?: unknown;
   context?: unknown;
   skills?: unknown[];
@@ -1003,23 +1181,18 @@ export class NativeSessionService extends NativeSessionManagement {
   /** Kept alive while the service exists: the store clone the worker and
    * session service run on must not be collected under the service. */
   readonly store: NativeStore;
-  /** The Rust provider lane this service was built with, if any. Kept only
-   * so `createSession` can stamp the lane's providerId/model — the Rust
-   * executor enforces task↔provider binding, so a session on the Rust lane
-   * must carry the configured provider id. */
-  private readonly providerConfig?: NativeProviderConfig;
+  private providerSecretIdentity: ProviderSecretStore | null = null;
+  private providerConsentIdentity: ProviderConsentHandler | null = null;
   private closing: Promise<void> | null = null;
 
   constructor(
     raw: RawSessionService,
     router: CallbackRouter,
     store: NativeStore,
-    providerConfig?: NativeProviderConfig,
   ) {
     super(raw, lift);
     this.router = router;
     this.store = store;
-    this.providerConfig = providerConfig;
   }
 
   /** Register a provider connection for the Rust provider lane: the base
@@ -1064,18 +1237,66 @@ export class NativeSessionService extends NativeSessionManagement {
     // whose providerId differs from the installed provider, so a session
     // created without one inherits the lane's provider and model. An
     // explicit caller value is never overridden.
-    const marshaled = this.providerConfig
-      ? {
-          ...input,
-          providerId: input.providerId ?? this.providerConfig.providerId,
-          model: input.model ?? this.providerConfig.model,
-        }
-      : input;
+    const marshaled = input;
     const text = await waitFor(
       () => lift(() => this.raw.createSession(JSON.stringify(marshaled))),
       options,
     );
     return JSON.parse(text) as Record<string, unknown>;
+  }
+
+  /** Supplies one immutable host-owned vault handle. Null clears future access only. */
+  setProviderSecretStore(store: ProviderSecretStore | null): void {
+    if (this.closing !== null)
+      throw new NativeAgentError("closed", "the session service is closed");
+    if (
+      store !== null &&
+      this.providerSecretIdentity !== null &&
+      store !== this.providerSecretIdentity
+    ) {
+      throw new NativeAgentError(
+        "invalid_state",
+        "Provider secret authority already configured; create a new service to replace it.",
+      );
+    }
+    if (store !== null) this.providerSecretIdentity = store;
+    this.router.setProviderSecretStore(store);
+  }
+  /** Supplies one immutable exact-consent callback. Null clears future access only. */
+  setProviderConsent(handler: ProviderConsentHandler | null): void {
+    if (this.closing !== null)
+      throw new NativeAgentError("closed", "the session service is closed");
+    if (
+      handler !== null &&
+      this.providerConsentIdentity !== null &&
+      handler !== this.providerConsentIdentity
+    ) {
+      throw new NativeAgentError(
+        "invalid_state",
+        "Provider consent authority already configured; create a new service to replace it.",
+      );
+    }
+    if (handler !== null) this.providerConsentIdentity = handler;
+    this.router.setProviderConsent(handler);
+  }
+
+  /** Supplies current host-selected connector grants. Missing callback grants none. */
+  setContentAuthority(
+    authority:
+      | ((
+          chatId: string,
+          signal: AbortSignal,
+        ) => readonly string[] | Promise<readonly string[]>)
+      | null,
+    identity:
+      | ((
+          chatId: string,
+          requiredConnectors: readonly string[],
+          signal: AbortSignal,
+        ) => unknown | Promise<unknown>)
+      | null = null,
+  ): void {
+    this.router.setContentAuthority(authority, identity);
   }
 
   setProvider(provider: ProviderFunction | null): void {
@@ -1461,6 +1682,8 @@ export class NativeSessionService extends NativeSessionManagement {
         await lift(() => this.raw.close());
       } finally {
         this.router.close();
+        this.providerSecretIdentity = null;
+        this.providerConsentIdentity = null;
         OPEN_SERVICES.delete(this);
       }
     })();

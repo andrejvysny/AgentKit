@@ -47,20 +47,42 @@ it("rejects the frozen TS execution engines as value imports", () => {
 });
 
 it("rejects a backend value import outside the per-file allowlist", () => {
-  // `defaultProfileRegistry` is allowlisted ONLY for the coding-agent CLI
-  // files; elsewhere it is still a backend value import.
-  const violations = scanSource(
+  for (const file of [
     "examples/desktop-host/src/wiring.ts",
-    `import { defaultProfileRegistry } from "@agentkit/host";`,
-  );
-  expect(violations.length).toBe(1);
-  expect(violations[0]?.violation).toInclude("not allowlisted");
-  // Same symbol in the allowlisted file is clean.
-  const allowed = scanSource(
     "examples/coding-agent/src/app.ts",
-    `import { defaultProfileRegistry, readSessionDescriptor } from "@agentkit/host";`,
+    "examples/coding-agent/src/main.ts",
+  ]) {
+    const violations = scanSource(
+      file,
+      `import { defaultProfileRegistry, readSessionDescriptor } from "@agentkit/host";`,
+    );
+    expect(violations.length).toBe(2);
+    expect(violations[0]?.violation).toInclude("not allowlisted");
+  }
+  expect(
+    scanSource(
+      "examples/coding-agent/src/main.ts",
+      `import { REASONING_EFFORTS } from "@agentkit/host";`,
+    ),
+  ).toEqual([]);
+});
+
+it("allows preset metadata only in the exact provider bootstrap helper", () => {
+  const source = `import { getPresetByKind } from "@agentkit/core";`;
+  expect(scanSource("examples/desktop-host/src/providers.ts", source)).toEqual(
+    [],
   );
-  expect(allowed).toEqual([]);
+  for (const file of [
+    "examples/desktop-host/src/wiring.ts",
+    "examples/desktop-host/src/other.ts",
+  ])
+    expect(scanSource(file, source)).toHaveLength(1);
+  expect(
+    scanSource(
+      "examples/desktop-host/src/providers.ts",
+      `import { getPresetByKind, createProvider } from "@agentkit/core";`,
+    ),
+  ).toHaveLength(1);
 });
 
 it("rejects namespace and require imports of backend packages", () => {
@@ -78,11 +100,9 @@ it("rejects namespace and require imports of backend packages", () => {
 });
 
 it("hard-bans are effective inside allowlisted files", () => {
-  // app.ts is allowlisted for two host symbols; the banned engine symbols
-  // must still fail there.
   const violations = scanSource(
-    "examples/coding-agent/src/app.ts",
-    `import { defaultProfileRegistry, TurnRunner } from "@agentkit/host";`,
+    "examples/coding-agent/src/main.ts",
+    `import { REASONING_EFFORTS, TurnRunner } from "@agentkit/host";`,
   );
   expect(violations.length).toBe(1);
   expect(violations[0]?.violation).toInclude("hard-banned");
