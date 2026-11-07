@@ -137,7 +137,9 @@ pub struct AgentDefinition {
     pub purpose: String,
     #[serde(default)]
     pub instructions: String,
-    /// Scoped resource references this agent may use.
+    /// Scoped resource references this agent may use. These are GRANTS
+    /// (run-profile resolution treats membership as authority), so
+    /// duplicate and import clear them rather than copy them.
     #[serde(default)]
     pub resources: Vec<String>,
     /// Skills selected under pinned revisions.
@@ -265,8 +267,12 @@ pub struct AgentDeletionPreview {
     /// Revision ledger rows that survive the tombstone (deletion never
     /// erases configuration history).
     pub revision_count: i64,
-    /// Admitted-without-result execution receipts currently held in the
-    /// receipt store. Any number above zero refuses the delete.
+    /// Tasks of this agent not yet completed/failed/cancelled (queued,
+    /// running, waiting, interrupted, or uncertain). Any number above zero
+    /// refuses the delete.
+    pub active_tasks: i64,
+    /// Admitted-without-result execution receipts of THIS agent's tasks.
+    /// Any number above zero refuses the delete.
     pub unresolved_executions: i64,
     pub deletable: bool,
 }
@@ -655,22 +661,63 @@ fn append_revision(
 fn duplicate_definition(definition: &AgentDefinition) -> AgentDefinition {
     AgentDefinition {
         // Credentials never ride along: references resolve in the SOURCE's
-        // secret context, so the copy starts with none (grants and private
-        // memory live outside the definition and cannot be copied by it).
+        // secret context, so the copy starts with none. `resources` are
+        // GRANTS (the run-profile resolver treats membership as authority),
+        // so a copy must not inherit them either: authority is re-granted
+        // to the new identity explicitly, never copied.
         secret_refs: Vec::new(),
+        resources: Vec::new(),
         ..definition.clone()
     }
 }
 
-/// The refusal shape for an explicit delete while the receipt store still
-/// holds admitted-without-result executions: deletion of an agent must
-/// never erase the evidence an active execution was admitted under. The
-/// count is the receipt store's own admitted-status query — this module
-/// never invents a second receipt notion.
-fn delete_blocked(unresolved: i64) -> StoreError {
+/// What blocks an explicit delete of ONE agent: its own unfinished tasks
+/// and the unresolved execution receipts of its own tasks. Another
+/// agent's work never blocks this agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeletionBlockers {
+    active_tasks: i64,
+    unresolved_executions: i64,
+}
+
+impl DeletionBlockers {
+    fn clear(self) -> bool {
+        self.active_tasks == 0 && self.unresolved_executions == 0
+    }
+}
+
+/// The single deletion gate, shared by [`SqliteStore::delete_agent`] and
+/// [`SqliteStore::preview_agent_deletion`] so preview and delete agree.
+/// Any status other than completed/failed/cancelled still owns the agent
+/// lane (Uncertain, WaitingApproval, WaitingChild, Interrupted, Queued,
+/// Running), so all of them block. Receipts are counted through the
+/// receipt store's own `admitted` status, restricted to this agent's runs.
+fn deletion_blockers(db: &Connection, agent_id: &str) -> Result<DeletionBlockers> {
+    let active_tasks = db.query_row(
+        "SELECT count(*) FROM tasks WHERE json_extract(record,'$.agentId')=? \
+         AND status NOT IN ('completed','failed','cancelled')",
+        params![agent_id],
+        |row| row.get(0),
+    )?;
+    let unresolved_executions = db.query_row(
+        "SELECT count(*) FROM tool_executions WHERE json_extract(record,'$.status')='admitted' \
+         AND run_id IN (SELECT id FROM tasks WHERE json_extract(record,'$.agentId')=?)",
+        params![agent_id],
+        |row| row.get(0),
+    )?;
+    Ok(DeletionBlockers {
+        active_tasks,
+        unresolved_executions,
+    })
+}
+
+/// The refusal shape for an explicit delete while the agent still has
+/// active work: deletion must never erase the evidence an active
+/// execution was admitted under.
+fn delete_blocked(blockers: DeletionBlockers) -> StoreError {
     StoreError::InvalidTransition(format!(
-        "agent_delete_blocked_active_executions: {unresolved} unresolved execution receipt(s) \
-         must complete or resolve first"
+        "agent_delete_blocked_active_work: {} active task(s), {} unresolved execution receipt(s)",
+        blockers.active_tasks, blockers.unresolved_executions
     ))
 }
 
@@ -875,7 +922,7 @@ impl SqliteStore {
     }
 
     /// Duplicate an agent under a NEW identity. The copy receives the
-    /// source's display metadata, purpose, instructions, scoped resources,
+    /// source's display metadata, purpose, instructions,
     /// skill selections, model preference, permission ceiling, and budgets
     /// — and NOTHING ELSE by construction: secret references are stripped
     /// (a reference resolves in the source's secret context; carrying it
@@ -883,7 +930,7 @@ impl SqliteStore {
     /// and private memory live outside the definition, so a definition
     /// projection cannot copy them even by accident. The copy starts its
     /// own ledger with one `create` revision; source history never
-    /// transfers.
+    /// transfers. `resources` are grants and are NOT copied either.
     pub async fn duplicate_agent(&self, input: DuplicateAgent) -> Result<AgentRecord> {
         let new_id = match &input.new_agent_id {
             Some(id) => {
@@ -924,19 +971,18 @@ impl SqliteStore {
 
     /// Explicit delete: a retention-gated TOMBSTONE. Configuration history
     /// and identity are never erased — the row keeps its definition,
-    /// ledger, and reserved id — but the delete refuses while the receipt
-    /// store holds admitted-without-result executions, because deleting
-    /// then would erase what an active execution was admitted under. The
-    /// check runs on the receipt store's own admitted-status query inside
-    /// the same transaction as the tombstone write, so a receipt admitted
-    /// concurrently cannot slip past it.
+    /// ledger, and reserved id — but the delete refuses while THIS agent
+    /// has any unfinished task or admitted-without-result execution
+    /// receipt of its own tasks (other agents' work never blocks it). The
+    /// check runs inside the same transaction as the tombstone write, so
+    /// work admitted concurrently cannot slip past it.
     pub async fn delete_agent(&self, agent_id: String, now: i64) -> Result<AgentRecord> {
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             let current = required_agent(&transaction, &agent_id)?;
-            let unresolved = crate::execution_receipts::count_admitted(&transaction)?;
-            if unresolved > 0 {
-                return Err(delete_blocked(unresolved));
+            let blockers = deletion_blockers(&transaction, &agent_id)?;
+            if !blockers.clear() {
+                return Err(delete_blocked(blockers));
             }
             let updated = AgentRecord {
                 lifecycle: AgentLifecycle::Deleted,
@@ -970,7 +1016,7 @@ impl SqliteStore {
                 params![agent_id],
                 |row| row.get(0),
             )?;
-            let unresolved = crate::execution_receipts::count_admitted(db)?;
+            let blockers = deletion_blockers(db, &agent_id)?;
             Ok(Some(AgentDeletionPreview {
                 agent_id: current.agent_id,
                 scope: current.scope,
@@ -978,8 +1024,9 @@ impl SqliteStore {
                 lifecycle: current.lifecycle,
                 current_revision: current.current_revision,
                 revision_count,
-                unresolved_executions: unresolved,
-                deletable: unresolved == 0,
+                active_tasks: blockers.active_tasks,
+                unresolved_executions: blockers.unresolved_executions,
+                deletable: blockers.clear(),
             }))
         })
         .await
@@ -1041,7 +1088,9 @@ impl SqliteStore {
     /// schema, contiguous ledger provenance, scope match against
     /// `expected_scope`, reserved-identity collision refusal, and a hard
     /// deny-all on credential material (no entry may carry a secret
-    /// reference, so an envelope cannot smuggle one). Every row lands in
+    /// reference, so an envelope cannot smuggle one). `resources` are
+    /// grants and are cleared on import, in the definition and every
+    /// ledger snapshot. Every row lands in
     /// ONE transaction: a rejected entry leaves no partial import.
     pub async fn import_agents(
         &self,
@@ -1180,6 +1229,14 @@ impl SqliteStore {
                         "agent {} already exists in this store",
                         entry.agent_id
                     )));
+                }
+                // `resources` are grants: an envelope is data, not an
+                // authority source, so imported identities start with none
+                // (secret refs were already refused above).
+                let mut entry = entry;
+                entry.definition.resources.clear();
+                for revision in &mut entry.revisions {
+                    revision.snapshot.resources.clear();
                 }
                 let record = AgentRecord {
                     agent_id: entry.agent_id.clone(),

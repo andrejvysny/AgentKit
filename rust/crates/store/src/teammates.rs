@@ -39,7 +39,10 @@
 //!   expiry mid-run), [`SqliteStore::reconcile_agent_runs`] moves the
 //!   orphan to `Uncertain` — never silently re-running a state-mutating
 //!   attempt — and only an explicit [`SqliteStore::resolve_uncertain`]
-//!   settles it. Admission reconciles first: unfinished runs are
+//!   settles it. Cancellation intent is not evidence of a settled
+//!   outcome: a `Running` orphan with a durable cancel request is still
+//!   `Uncertain` (the request stays recorded), because the dead attempt
+//!   may have mutated state before it died. Admission reconciles first: unfinished runs are
 //!   classified before new work is admitted.
 //!
 //! Agent DISPLAY state is a pure derived projection
@@ -62,6 +65,17 @@ use serde_json::Value;
 /// one lane while scope-based housekeeping stays conventional.
 pub fn teammate_scope(agent_id: &str) -> String {
     format!("agent:{agent_id}")
+}
+
+/// Hard cap on one [`SqliteStore::list_agent_tasks_page`] page.
+const MAX_TASK_PAGE: usize = 500;
+
+/// One newest-first page of an agent's tasks. `next_before` is the rowid
+/// cursor for the following page; `None` once a short page was returned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentTaskPage {
+    pub tasks: Vec<TaskRecord>,
+    pub next_before: Option<i64>,
 }
 
 /// The admission payload. `task_id` may be pinned for a caller-owned
@@ -221,6 +235,124 @@ fn abandon_running_attempts(db: &Connection, task_id: &str, now: i64, error: &st
     Ok(())
 }
 
+/// A child admitted under a parent of the SAME agent would deadlock: the
+/// parent's `WaitingChild` state holds the agent lane, so the child can
+/// never be claimed. A TERMINAL same-agent parent is a legitimate
+/// continuation link (the previous finished run) and is admitted.
+fn reject_self_delegation(db: &Connection, input: &AdmitTeammateTask) -> Result<()> {
+    let Some(parent_id) = input.parent_task_id.as_deref() else {
+        return Ok(());
+    };
+    let parent: Option<TaskRecord> = util::get(db, "tasks", "id", parent_id)?;
+    if parent.is_some_and(|parent| {
+        parent.agent_id.as_deref() == Some(input.agent_id.as_str()) && !parent.status.is_terminal()
+    }) {
+        return Err(StoreError::InvalidInput(
+            "self_delegation_unsupported".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The admission transaction body: replay check, agent gate, profile
+/// validation, task insert, ledger row, lifecycle event. The CALLER owns
+/// the transaction and its commit, so mailbox promotion can fold admission
+/// and the input conversion into one atomic unit.
+fn admit_in_transaction(db: &Connection, input: AdmitTeammateTask) -> Result<AdmittedTask> {
+    // Idempotent replay: the ledger names the task this key
+    // created; identity is verified against the durable record,
+    // never against the caller's claim.
+    let existing = read_admission(db, &input.admission_key)?;
+    if let Some(row) = existing {
+        let task: TaskRecord = util::required(db, "tasks", "id", &row.task_id)?;
+        if row.agent_id != input.agent_id
+            || task.agent_id.as_deref() != Some(input.agent_id.as_str())
+            || task.kind != input.kind
+            || task.payload != input.payload
+            || task.parent_task_id != input.parent_task_id
+            || task.depends_on != input.depends_on
+            // AGENTKIT-89: one key admitted ONE profile; a replay
+            // claiming a different seal is different work.
+            || task.run_profile.as_ref().map(|pin| &pin.digest)
+                != input.run_profile.as_ref().map(|pin| &pin.digest)
+            || input
+                .task_id
+                .as_deref()
+                .is_some_and(|id| id != task.task_id)
+        {
+            return Err(StoreError::InvalidInput(format!(
+                "admission replay identity mismatch: key {} already admitted different work",
+                input.admission_key
+            )));
+        }
+        return Ok(AdmittedTask {
+            task,
+            replayed: true,
+        });
+    }
+    // The gate runs on THIS transaction: archiving the agent
+    // serializes against admitting it — one of the two wins,
+    // and an admit that loses answers `agent_archived` having
+    // committed nothing.
+    let agent = admission_gate(db, &input.agent_id)?;
+    // AGENTKIT-89: the effective-profile seal and every durable
+    // fact it references verify HERE, on the admission
+    // transaction — the pin becomes part of the admitted task's
+    // durable binding in the same commit, never a second ledger.
+    crate::run_profiles::validate_at_admission(db, &agent, input.run_profile.as_ref())?;
+    // A pinned task id that already exists is a replay only when
+    // it is the very same admission; otherwise it is a collision
+    // the caller must not paper over.
+    if let Some(pinned) = input.task_id.as_deref()
+        && let Some(task) = util::get::<TaskRecord>(db, "tasks", "id", pinned)?
+    {
+        if task.agent_id.as_deref() == Some(input.agent_id.as_str())
+            && task.admission_key.as_deref() == Some(input.admission_key.as_str())
+        {
+            // Ledger row missing for an admitted task is
+            // impossible by construction (one transaction);
+            // the task itself is the replay either way.
+            return Ok(AdmittedTask {
+                task,
+                replayed: true,
+            });
+        }
+        return Err(StoreError::Duplicate(pinned.to_owned()));
+    }
+    reject_self_delegation(db, &input)?;
+    let task_id = input.task_id.clone().unwrap_or_else(util::id);
+    let task = crate::tasks::insert_bound(
+        db,
+        crate::SubmitTask {
+            task_id: task_id.clone(),
+            kind: input.kind,
+            scope_id: teammate_scope(&input.agent_id),
+            payload: input.payload,
+            priority: input.priority,
+            now: input.now,
+            available_at: input.available_at,
+            depends_on: input.depends_on,
+            parent_task_id: input.parent_task_id,
+            exclusive_scope: false,
+        },
+        Some(TaskBinding {
+            agent_id: input.agent_id.clone(),
+            agent_revision: agent.current_revision,
+            admission_key: input.admission_key.clone(),
+            run_profile: input.run_profile.clone(),
+        }),
+    )?;
+    db.execute(
+        "INSERT INTO agent_admissions VALUES(?,?,?,?)",
+        params![input.admission_key, input.agent_id, task_id, input.now],
+    )?;
+    crate::tasks::lifecycle_event(db, &task, "task.admitted", input.now)?;
+    Ok(AdmittedTask {
+        task,
+        replayed: false,
+    })
+}
+
 impl SqliteStore {
     /// The single admission path: agent gate + logical task insert +
     /// immutable revision pin + idempotency ledger, ONE transaction.
@@ -242,109 +374,9 @@ impl SqliteStore {
         }
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
-            // Idempotent replay: the ledger names the task this key
-            // created; identity is verified against the durable record,
-            // never against the caller's claim.
-            let existing = read_admission(&transaction, &input.admission_key)?;
-            if let Some(row) = existing {
-                let task: TaskRecord =
-                    util::required(&transaction, "tasks", "id", &row.task_id)?;
-                if row.agent_id != input.agent_id
-                    || task.agent_id.as_deref() != Some(input.agent_id.as_str())
-                    || task.kind != input.kind
-                    || task.payload != input.payload
-                    || task.parent_task_id != input.parent_task_id
-                    || task.depends_on != input.depends_on
-                    // AGENTKIT-89: one key admitted ONE profile; a replay
-                    // claiming a different seal is different work.
-                    || task.run_profile.as_ref().map(|pin| &pin.digest)
-                        != input.run_profile.as_ref().map(|pin| &pin.digest)
-                    || input
-                        .task_id
-                        .as_deref()
-                        .is_some_and(|id| id != task.task_id)
-                {
-                    return Err(StoreError::InvalidInput(format!(
-                        "admission replay identity mismatch: key {} already admitted different work",
-                        input.admission_key
-                    )));
-                }
-                return Ok(AdmittedTask {
-                    task,
-                    replayed: true,
-                });
-            }
-            // The gate runs on THIS transaction: archiving the agent
-            // serializes against admitting it — one of the two wins,
-            // and an admit that loses answers `agent_archived` having
-            // committed nothing.
-            let agent = admission_gate(&transaction, &input.agent_id)?;
-            // AGENTKIT-89: the effective-profile seal and every durable
-            // fact it references verify HERE, on the admission
-            // transaction — the pin becomes part of the admitted task's
-            // durable binding in the same commit, never a second ledger.
-            crate::run_profiles::validate_at_admission(
-                &transaction,
-                &agent,
-                input.run_profile.as_ref(),
-            )?;
-            // A pinned task id that already exists is a replay only when
-            // it is the very same admission; otherwise it is a collision
-            // the caller must not paper over.
-            if let Some(pinned) = input.task_id.as_deref()
-                && let Some(task) =
-                    util::get::<TaskRecord>(&transaction, "tasks", "id", pinned)?
-            {
-                if task.agent_id.as_deref() == Some(input.agent_id.as_str())
-                    && task.admission_key.as_deref() == Some(input.admission_key.as_str())
-                {
-                    // Ledger row missing for an admitted task is
-                    // impossible by construction (one transaction);
-                    // the task itself is the replay either way.
-                    return Ok(AdmittedTask {
-                        task,
-                        replayed: true,
-                    });
-                }
-                return Err(StoreError::Duplicate(pinned.to_owned()));
-            }
-            let task_id = input.task_id.clone().unwrap_or_else(util::id);
-            let task = crate::tasks::insert_bound(
-                &transaction,
-                crate::SubmitTask {
-                    task_id: task_id.clone(),
-                    kind: input.kind,
-                    scope_id: teammate_scope(&input.agent_id),
-                    payload: input.payload,
-                    priority: input.priority,
-                    now: input.now,
-                    available_at: input.available_at,
-                    depends_on: input.depends_on,
-                    parent_task_id: input.parent_task_id,
-                    exclusive_scope: false,
-                },
-                Some(TaskBinding {
-                    agent_id: input.agent_id.clone(),
-                    agent_revision: agent.current_revision,
-                    admission_key: input.admission_key.clone(),
-                    run_profile: input.run_profile.clone(),
-                }),
-            )?;
-            transaction.execute(
-                "INSERT INTO agent_admissions VALUES(?,?,?,?)",
-                params![input.admission_key, input.agent_id, task_id, input.now],
-            )?;
-            crate::tasks::lifecycle_event(
-                &transaction,
-                &task,
-                "task.admitted",
-                input.now,
-            )?;
+            let admitted = admit_in_transaction(&transaction, input)?;
             transaction.commit()?;
-            Ok(AdmittedTask {
-                task,
-                replayed: false,
-            })
+            Ok(admitted)
         })
         .await
     }
@@ -361,13 +393,61 @@ impl SqliteStore {
         .await
     }
 
-    /// Every task bound to one agent, insertion-ordered. The source rows
-    /// of the derived display state and of run-history load.
+    /// Every task bound to one agent, insertion-ordered. UNBOUNDED: it
+    /// reads the agent's whole history, so prefer
+    /// [`SqliteStore::list_agent_tasks_page`] (history) or
+    /// [`SqliteStore::list_agent_unfinished_tasks`] (display state).
     pub async fn list_agent_tasks(&self, agent_id: String) -> Result<Vec<TaskRecord>> {
         self.call(move |db| {
             util::select(
                 db,
                 "SELECT record FROM tasks WHERE json_extract(record,'$.agentId')=? ORDER BY rowid",
+                [&agent_id],
+            )
+        })
+        .await
+    }
+
+    /// One page of an agent's tasks, newest first by rowid. `before` is
+    /// the cursor from a previous page's `next_before` (exclusive);
+    /// `limit` is clamped to `1..=500`.
+    pub async fn list_agent_tasks_page(
+        &self,
+        agent_id: String,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<AgentTaskPage> {
+        let limit = limit.clamp(1, MAX_TASK_PAGE);
+        self.call(move |db| {
+            let mut statement = db.prepare(
+                "SELECT rowid, record FROM tasks WHERE json_extract(record,'$.agentId')=?1 \
+                 AND (?2 IS NULL OR rowid<?2) ORDER BY rowid DESC LIMIT ?3",
+            )?;
+            let rows = statement
+                .query_map(params![agent_id, before, limit as i64], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let next_before = (rows.len() == limit)
+                .then(|| rows.last().map(|(rowid, _)| *rowid))
+                .flatten();
+            let tasks = rows
+                .iter()
+                .map(|(_, text)| serde_json::from_str(text).map_err(Into::into))
+                .collect::<Result<Vec<TaskRecord>>>()?;
+            Ok(AgentTaskPage { tasks, next_before })
+        })
+        .await
+    }
+
+    /// The agent's tasks that have not reached completed/failed/cancelled,
+    /// insertion-ordered — the bounded source of derived display state.
+    pub async fn list_agent_unfinished_tasks(&self, agent_id: String) -> Result<Vec<TaskRecord>> {
+        self.call(move |db| {
+            util::select(
+                db,
+                "SELECT record FROM tasks WHERE json_extract(record,'$.agentId')=? \
+                 AND status NOT IN ('completed','failed','cancelled') ORDER BY rowid",
                 [&agent_id],
             )
         })
@@ -417,6 +497,9 @@ impl SqliteStore {
                     "{:?} cannot continue from a child wait",
                     task.status
                 )));
+            }
+            if unfinished_children(&transaction, &task.task_id)? {
+                return Err(StoreError::InvalidTransition("children_unsettled".into()));
             }
             task.status = TaskStatus::Queued;
             task.available_at = now;
@@ -522,14 +605,16 @@ impl SqliteStore {
     ///   an orphan: its attempts end `abandoned`, the lease residue
     ///   clears, and the task parks in `Uncertain` — it is NOT requeued
     ///   automatically, because a state-mutating attempt whose result is
-    ///   unknown must not run twice. An orphan whose durable
-    ///   `cancel_requested` flag was written is instead landed
-    ///   `Cancelled`: that request is evidence, so its outcome IS
-    ///   decidable.
+    ///   unknown must not run twice. A durable `cancel_requested` flag
+    ///   does NOT change that: cancellation intent is not evidence of a
+    ///   settled outcome (the attempt may have mutated state before it
+    ///   died), so the orphan is `Uncertain` with error
+    ///   `cancel_requested_outcome_unknown`, the flag stays set, and only
+    ///   an explicit [`SqliteStore::resolve_uncertain`] settles it.
     /// - `Running` under a live lease belongs to a worker that is still
     ///   attested; reconciliation leaves it alone.
     /// - `Queued` rows with a durable cancel land `Cancelled` now
-    ///   (nothing is running to notice).
+    ///   (nothing ran, so nothing is undecided).
     /// - `WaitingApproval` / `WaitingChild` / `Interrupted` / `Uncertain`
     ///   rows already own their wait and stay untouched.
     ///
@@ -543,7 +628,8 @@ impl SqliteStore {
             let transaction = crate::transaction::atomic(db)?;
             let tasks: Vec<TaskRecord> = util::select(
                 &transaction,
-                "SELECT record FROM tasks WHERE json_extract(record,'$.agentId')=? ORDER BY rowid",
+                "SELECT record FROM tasks WHERE json_extract(record,'$.agentId')=? \
+                 AND status IN ('running','queued') ORDER BY rowid",
                 [&agent_id],
             )?;
             let mut changed = Vec::new();
@@ -565,32 +651,14 @@ impl SqliteStore {
                             transaction
                                 .execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
                         }
-                        if task.cancel_requested {
-                            // The durable cancel was written but its
-                            // worker died before observing it: honor the
-                            // request — this outcome IS decidable.
-                            task.status = TaskStatus::Cancelled;
-                            task.finished_at = Some(now);
-                            task.retry_pending = false;
-                            task.interrupt_requested = false;
-                            crate::tasks::save(&transaction, &task)?;
-                            crate::tasks::lifecycle_event(
-                                &transaction,
-                                &task,
-                                "task.cancel_requested",
-                                now,
-                            )?;
+                        task.status = TaskStatus::Uncertain;
+                        task.error = Some(if task.cancel_requested {
+                            "cancel_requested_outcome_unknown".into()
                         } else {
-                            task.status = TaskStatus::Uncertain;
-                            task.error = Some("lease_expired_unresolved".into());
-                            crate::tasks::save(&transaction, &task)?;
-                            crate::tasks::lifecycle_event(
-                                &transaction,
-                                &task,
-                                "task.uncertain",
-                                now,
-                            )?;
-                        }
+                            "lease_expired_unresolved".into()
+                        });
+                        crate::tasks::save(&transaction, &task)?;
+                        crate::tasks::lifecycle_event(&transaction, &task, "task.uncertain", now)?;
                         changed.push(task);
                     }
                     TaskStatus::Queued if task.cancel_requested => {
@@ -669,17 +737,20 @@ impl SqliteStore {
         .await
     }
 
-    /// Promote the OLDEST pending mailbox input of one agent, compare-
-    /// and-set against the per-kind machine (`pending → converted`). Two
-    /// promoters never take the same input twice — the loser sees the
-    /// CAS refuse — and out-of-order promotion is impossible because
-    /// this is the only promotion path and it always takes the head of
-    /// the durable order.
+    /// Promote the OLDEST pending mailbox input of one agent into a
+    /// durable task, atomically. In ONE transaction: take the head input,
+    /// admit a teammate task for the agent through the same internal path
+    /// as [`SqliteStore::admit_teammate_task`] (key `mailbox:{input_id}`),
+    /// and compare-and-set the input `pending → converted` naming the new
+    /// task in `applied_task_id`. A refused admission (archived agent, …)
+    /// commits nothing and the input stays pending, so `Converted` always
+    /// names a durable destination task. Two promoters never take the
+    /// same input twice, and promotion is strictly oldest-first.
     pub async fn promote_next_agent_mailbox(
         &self,
         agent_id: String,
-        now: i64,
-    ) -> Result<Option<AgentInputRecord>> {
+        input: PromoteMailbox,
+    ) -> Result<Option<(AgentInputRecord, TaskRecord)>> {
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             let head: Option<AgentInputRecord> = get(
@@ -693,7 +764,27 @@ impl SqliteStore {
                 transaction.commit()?;
                 return Ok(None);
             };
-            let now_text = crate::ConversationTimestamp::from_epoch_millis(now)?
+            let admitted = admit_in_transaction(
+                &transaction,
+                AdmitTeammateTask {
+                    task_id: None,
+                    agent_id: agent_id.clone(),
+                    admission_key: format!("mailbox:{}", head.input_id),
+                    kind: input.kind,
+                    payload: serde_json::json!({
+                        "mailboxInputId": head.input_id,
+                        "inputKind": crate::agent_inputs::kind_text(head.kind),
+                        "content": head.content,
+                    }),
+                    priority: input.priority,
+                    now: input.now,
+                    available_at: None,
+                    depends_on: Vec::new(),
+                    parent_task_id: None,
+                    run_profile: None,
+                },
+            )?;
+            let now_text = crate::ConversationTimestamp::from_epoch_millis(input.now)?
                 .wire_text()?
                 .into_owned();
             let record = transition_input(
@@ -701,11 +792,14 @@ impl SqliteStore {
                 &head.input_id,
                 &[AgentInputStatus::Pending],
                 AgentInputStatus::Converted,
-                &crate::AgentInputPatch::default(),
+                &crate::AgentInputPatch {
+                    applied_task_id: Some(admitted.task.task_id.clone()),
+                    ..Default::default()
+                },
                 &now_text,
             )?;
             transaction.commit()?;
-            Ok(Some(record))
+            Ok(Some((record, admitted.task)))
         })
         .await
     }
@@ -838,5 +932,14 @@ pub struct CreateAgentMailbox {
     pub content_hash: String,
     pub expires_at: Option<String>,
     /// The caller's clock for the record timestamps.
+    pub now: i64,
+}
+
+/// The mailbox promotion parameters: the task `kind` and `priority` the
+/// converted input is admitted under, and the caller's clock.
+#[derive(Clone, Debug)]
+pub struct PromoteMailbox {
+    pub kind: String,
+    pub priority: i32,
     pub now: i64,
 }

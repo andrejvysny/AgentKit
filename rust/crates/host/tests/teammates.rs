@@ -652,10 +652,11 @@ async fn mailbox_is_a_durable_fifo_through_the_service() {
     );
     let head = fixture
         .service
-        .promote_next_input("alice")
+        .promote_next_input("alice", "teammate.mailbox", 0)
         .await
         .unwrap()
         .unwrap();
+    let (head, _task) = head;
     assert_eq!(head.input_id, "m2");
     assert_eq!(head.status, AgentInputStatus::Converted);
     fixture.service.cancel_input("m1").await.unwrap();
@@ -670,7 +671,7 @@ async fn mailbox_is_a_durable_fifo_through_the_service() {
     assert!(
         fixture
             .service
-            .promote_next_input("alice")
+            .promote_next_input("alice", "teammate.mailbox", 0)
             .await
             .unwrap()
             .is_none()

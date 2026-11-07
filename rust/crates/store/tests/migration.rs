@@ -27,6 +27,7 @@ fn version_one(path: &Path) {
         DROP TABLE agents;
         DROP TABLE agent_config_revisions;
         DROP TABLE agent_admissions;
+        DROP INDEX tasks_agent;
         DROP INDEX tasks_status;
         DROP INDEX tasks_parent;
         DROP TRIGGER messages_search_insert;

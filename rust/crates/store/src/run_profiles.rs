@@ -150,6 +150,9 @@ pub(crate) struct ProfileRefs<'a> {
     pub agent_id: &'a str,
     pub agent_revision: i64,
     pub provider_id: &'a str,
+    /// `provider.authority == "host"`: the embedding host owns the
+    /// provider registry and re-checks it at execution.
+    pub host_authority: bool,
     pub connection_id: Option<&'a str>,
     pub generation: Option<i64>,
     pub skills: Vec<(&'a str, &'a str)>,
@@ -173,6 +176,8 @@ fn profile_refs(profile: &Value) -> Result<ProfileRefs<'_>> {
             "capability",
             "skills",
             "contextSources",
+            "compiledContext",
+            "compilationPolicy",
             "permissionCeiling",
             "budgets",
             "environment",
@@ -193,6 +198,13 @@ fn profile_refs(profile: &Value) -> Result<ProfileRefs<'_>> {
     let provider = &profile["provider"];
     let provider_id = str_field(provider, "providerId")?;
     let _ = str_field(provider, "modelId")?;
+    // A missing authority means the catalogue (backward compatible).
+    let host_authority = match &provider["authority"] {
+        Value::Null => false,
+        Value::String(text) if text == "catalog" => false,
+        Value::String(text) if text == "host" => true,
+        _ => return Err(refused("provider.authority must be catalog or host")),
+    };
     let connection_id = opt_str_field(provider, "connectionId")?;
     let generation = match &provider["generation"] {
         Value::Null => None,
@@ -243,6 +255,11 @@ fn profile_refs(profile: &Value) -> Result<ProfileRefs<'_>> {
         let truncated = &source["truncated"];
         if !truncated.is_null() && !truncated.is_boolean() {
             return Err(refused("contextSources truncated must be a boolean"));
+        }
+        if !source["contentDigest"].is_null() && !is_hex64(&source["contentDigest"]) {
+            return Err(refused(
+                "contextSources contentDigest must be 64-char lowercase hex",
+            ));
         }
         let citations = &source["citations"];
         if !citations.is_null() {
@@ -339,6 +356,7 @@ fn profile_refs(profile: &Value) -> Result<ProfileRefs<'_>> {
         agent_id,
         agent_revision,
         provider_id,
+        host_authority,
         connection_id,
         generation,
         skills,
@@ -377,6 +395,12 @@ fn skill_revision(db: &Connection, id: &str) -> Result<Option<String>> {
 /// The check-at-USE over a sealed profile, on the caller's transaction.
 /// Every reference is revalidated against the CURRENT durable fact:
 /// nothing here trusts the pin to mean the reference still exists.
+///
+/// A profile with `provider.authority == "host"` skips the catalogue
+/// provider/capability/connection-generation checks: the embedding host
+/// owns that registry and re-checks it at execution. Digest, agent
+/// binding, skills, resource sources and approvals are still verified.
+/// A missing `authority` means the catalogue.
 pub(crate) fn verify_run_profile(
     db: &Connection,
     bound_agent_id: Option<&str>,
@@ -389,36 +413,39 @@ pub(crate) fn verify_run_profile(
     if bound_agent_id != Some(refs.agent_id) {
         return Err(refused("agent_binding_mismatch"));
     }
-    // The provider must still be registered and enabled — deletion of a
-    // referenced provider blocks new dispatch even for a pinned profile.
-    let provider = setting(db, crate::PROVIDERS_NAMESPACE, refs.provider_id)?
-        .ok_or_else(|| refused(format!("provider_deleted:{}", refs.provider_id)))?;
-    if !crate::provider_catalog::provider(&provider) || provider["enabled"].as_bool() != Some(true)
-    {
-        return Err(refused(format!("provider_revoked:{}", refs.provider_id)));
-    }
-    // Capability evidence is admission-conditional; its revocation fences
-    // dispatch too — fail closed, never re-probe a provider at dispatch.
-    let capabilities = setting(db, crate::PROVIDER_CAPABILITIES_NAMESPACE, refs.provider_id)?
-        .ok_or_else(|| {
+    if !refs.host_authority {
+        // The provider must still be registered and enabled — deletion of a
+        // referenced provider blocks new dispatch even for a pinned profile.
+        let provider = setting(db, crate::PROVIDERS_NAMESPACE, refs.provider_id)?
+            .ok_or_else(|| refused(format!("provider_deleted:{}", refs.provider_id)))?;
+        if !crate::provider_catalog::provider(&provider)
+            || provider["enabled"].as_bool() != Some(true)
+        {
+            return Err(refused(format!("provider_revoked:{}", refs.provider_id)));
+        }
+        // Capability evidence is admission-conditional; its revocation fences
+        // dispatch too — fail closed, never re-probe a provider at dispatch.
+        let capabilities = setting(db, crate::PROVIDER_CAPABILITIES_NAMESPACE, refs.provider_id)?
+            .ok_or_else(|| {
             refused(format!(
                 "provider_capabilities_revoked:{}",
                 refs.provider_id
             ))
         })?;
-    if !crate::provider_catalog::capabilities(&capabilities) {
-        return Err(refused(format!(
-            "provider_capabilities_revoked:{}",
-            refs.provider_id
-        )));
+        if !crate::provider_catalog::capabilities(&capabilities) {
+            return Err(refused(format!(
+                "provider_capabilities_revoked:{}",
+                refs.provider_id
+            )));
+        }
+        // The EXISTING keyed-authority fence: a revoked connection (or a
+        // rotated credential advancing the generation) fails closed here,
+        // inside the caller's transaction.
+        crate::provider_connections::validate_generation(
+            db,
+            &json!({ "connectionId": refs.connection_id, "generation": refs.generation }),
+        )?;
     }
-    // The EXISTING keyed-authority fence: a revoked connection (or a
-    // rotated credential advancing the generation) fails closed here,
-    // inside the caller's transaction.
-    crate::provider_connections::validate_generation(
-        db,
-        &json!({ "connectionId": refs.connection_id, "generation": refs.generation }),
-    )?;
     // Pinned skill versions must still be exactly what was pinned: a
     // deleted or re-published skill is a revoked context source.
     for (id, revision) in &refs.skills {
