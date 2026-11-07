@@ -762,6 +762,121 @@ impl DurableExecution {
         })
     }
 
+    /// Record a pre-body refusal — arguments rejected by the core's
+    /// pre-execution schema check — as a completed durable receipt, so a
+    /// receipt-gated mutation leaves an audit row for EVERY terminal
+    /// outcome, not only for body-level refusals (ONEMIND-353 audit gap:
+    /// executor refusals wrote rows, schema refusals wrote none). The row
+    /// is the same shape as a completed body refusal: an
+    /// Admitted→Completed receipt whose `result` is the ok-false tool
+    /// result carrying `errorCode: schema_invalid`. Keying matches
+    /// [`admit`] exactly, so a corrected retry (different arguments ⇒ a
+    /// different fingerprint) is never blocked by this row.
+    ///
+    /// Recording is best-effort: the model still gets core's
+    /// `schema_invalid` failure whether or not the ledger write lands.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn record_schema_refusal(
+        &self,
+        context: &ToolContext,
+        contribution: &ToolGuardContext,
+        tool: &ToolDefinition,
+        effect_context: Option<&Value>,
+        input: &Value,
+        message: &str,
+    ) {
+        if !self.needs_receipt(tool) {
+            return;
+        }
+        // Same identity rules as a real admission: without a call id there
+        // is no execution to key, and reads never have receipts at all.
+        let Some(tool_call_id) = context.tool_call_id.clone() else {
+            return;
+        };
+        let grant = self.approvals.get(&tool_call_id);
+        let current_context =
+            execution_context_sha256(self, &contribution.contribution, tool, effect_context);
+        let approval_request_id = grant.map(|grant| grant.request_id.clone());
+        let execution = execution_id(
+            &self.context.task.task_id,
+            &tool_call_id,
+            approval_request_id.as_deref(),
+        );
+        let refusal = ToolResult {
+            ok: false,
+            data: Some(json!({
+                "ok": false,
+                "errorCode": "schema_invalid",
+                "errorMessage": message,
+                "phase": "validation",
+                "retryable": false,
+            })),
+            sources: Vec::new(),
+            warnings: Vec::new(),
+            truncated: false,
+            limits: context.limits.clone(),
+            model_data: None,
+            summary: Some(message.to_owned()),
+            status: None,
+            model_content: None,
+        };
+        let admitted = self
+            .context
+            .store
+            .admit_execution(
+                self.context.fence.clone(),
+                agentkit_store::ExecutionReceiptAdmission {
+                    execution_id: execution.clone(),
+                    run_id: self.context.task.task_id.clone(),
+                    chat_id: self.chat_id.clone(),
+                    tool_call_id,
+                    tool_name: tool.name.clone(),
+                    args_sha256: args_sha256(input),
+                    // The same arguments under the TypeScript canonicalizer,
+                    // exactly as `admit` records them.
+                    ts_args_sha256: Some(ts_args_sha256(input)),
+                    args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
+                    context_sha256: current_context,
+                    attempt_id: self.context.attempt_id.clone(),
+                    approval_request_id,
+                    approval_generation: grant
+                        .and_then(|grant| grant.uncertainty_generation.clone()),
+                    now: self.context.runtime.now_ms(),
+                },
+            )
+            .await;
+        match admitted {
+            Ok(true) => {
+                let _ = self.complete(&execution, &refusal).await;
+            }
+            // A row already exists for this key: a previous identical
+            // refusal (completed) or an execution admitted for real. Either
+            // way the audit row is present; only one self-repair is allowed.
+            Ok(false) | Err(_) => {
+                if let Ok(rows) = self
+                    .context
+                    .store
+                    .list_executions(self.context.task.task_id.clone())
+                    .await
+                {
+                    // Our own crashed admit→complete gap: under THIS attempt
+                    // a schema-invalid call never reached a body, so an
+                    // Admitted row with this attempt id under this key can
+                    // only be the recorder's unfinished write. Any other
+                    // Admitted row is a genuine uncertainty and stays with
+                    // the audited operator route.
+                    if rows.iter().any(|row| {
+                        row.execution_id == execution
+                            && row.status == agentkit_store::ExecutionReceiptStatus::Admitted
+                            && row.attempt_id == self.context.attempt_id
+                    }) {
+                        let _ = self.complete(&execution, &refusal).await;
+                    }
+                }
+            }
+        }
+    }
+
     /// Persist the result before delivery. A failure here fails the run
     /// closed: an executed effect whose result could not be recorded must
     /// never be forgotten, and the receipt stays `admitted` — uncertain.
@@ -851,6 +966,25 @@ pub(crate) struct ReceiptedTool {
 impl agentkit_core::Tool for ReceiptedTool {
     fn definition(&self) -> &ToolDefinition {
         self.tool.definition()
+    }
+    async fn record_schema_refusal(&self, context: &ToolContext, args: &Value, message: &str) {
+        let definition = self.tool.definition();
+        let snapshot = ToolGuardContext {
+            contribution: self.contribution.clone(),
+            namespace: "static".into(),
+            tool: definition.clone(),
+            arguments: Some(args.clone()),
+        };
+        self.durable
+            .record_schema_refusal(
+                context,
+                &snapshot,
+                definition,
+                self.tool.effect_context().as_ref(),
+                args,
+                message,
+            )
+            .await;
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         let definition = self.tool.definition();

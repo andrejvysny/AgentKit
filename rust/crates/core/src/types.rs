@@ -232,6 +232,14 @@ pub trait Tool: Send + Sync {
     fn records_command_start(&self) -> bool {
         false
     }
+    /// Durably-recorded executions must leave an audit row for EVERY
+    /// terminal outcome, including the refusals raised before the body:
+    /// when the pre-execution schema validation rejects the arguments,
+    /// wrappers that own a durable execution receipt get the chance to
+    /// record the refusal themselves (the same completed-receipt shape an
+    /// executor refusal takes). The outcome the model sees is unchanged;
+    /// this is the audit sink, so the default records nothing.
+    async fn record_schema_refusal(&self, _context: &ToolContext, _args: &Value, _message: &str) {}
     /// Numeric inputs follow JavaScript binary64 semantics. Overflow remains a
     /// numeric node; `agentkit_contracts::javascript_number` reads its infinity.
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError>;

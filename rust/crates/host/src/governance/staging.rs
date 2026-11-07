@@ -356,6 +356,27 @@ impl Tool for GuardedTool {
     fn definition(&self) -> &ToolDefinition {
         self.tool.definition()
     }
+    async fn record_schema_refusal(&self, context: &ToolContext, args: &Value, message: &str) {
+        // The durable wrapper owns the receipt ledger; without it this host
+        // mode records nothing (the trusted-host mirror of `durable: None`).
+        let Some(durable) = &self.snapshot.contribution.durable else {
+            return;
+        };
+        let snapshot = ToolGuardContext {
+            arguments: Some(args.clone()),
+            ..self.snapshot.clone()
+        };
+        durable
+            .record_schema_refusal(
+                context,
+                &snapshot,
+                self.tool.definition(),
+                self.tool.effect_context().as_ref(),
+                args,
+                message,
+            )
+            .await;
+    }
     async fn execute(
         &self,
         mut context: ToolContext,
