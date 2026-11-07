@@ -1596,6 +1596,7 @@ export class NativeSessionService extends NativeSessionManagement {
     static registerProviderConnection(baseUrl: string, apiKey?: string | null, options?: NativeProviderConnectionOptions): Promise<string>;
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
     resolveUncertainExecution(input: ResolveUncertainExecutionInput): Promise<ExecutionReceiptJson>;
+    resolveUncertainExecutionForChat(input: ResolveUncertainExecutionForChatInput): Promise<ExecutionReceiptJson>;
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>;
     static revokeProviderConnection(connectionId: string): Promise<boolean>;
@@ -1993,6 +1994,7 @@ export interface ProviderRequest {
     messages: unknown[];
     // (undocumented)
     model: string;
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
     // (undocumented)
     runId: string;
     signal?: AbortSignal;
@@ -2102,6 +2104,21 @@ export function reserveRunProviderRequest(callId: string): Promise<void>;
 
 // @public (undocumented)
 export function resolveCall(callId: string, payload: string | null, error: string | null): boolean;
+
+// @public
+export interface ResolveUncertainExecutionForChatInput {
+    // (undocumented)
+    chatId: string;
+    // (undocumented)
+    executionId: string;
+    // (undocumented)
+    note?: string;
+    // (undocumented)
+    outcome: ExecutionResolutionOutcome;
+    // (undocumented)
+    resolvedBy?: string;
+    result?: unknown;
+}
 
 // @public (undocumented)
 export interface ResolveUncertainExecutionInput {
@@ -2271,6 +2288,7 @@ class SessionService {
     registerTool(definitionJson: string): Promise<void>
     // (undocumented)
     resolveUncertainExecution(inputJson: string): Promise<string>
+    resolveUncertainExecutionForChat(inputJson: string): Promise<string>
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>
     // (undocumented)
