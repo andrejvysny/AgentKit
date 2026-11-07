@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "examples/egui-host"]
+members = ["crates/*", "examples/agent-lifecycle", "examples/egui-host"]
 default-members = ["crates/*"]
 resolver = "3"
 

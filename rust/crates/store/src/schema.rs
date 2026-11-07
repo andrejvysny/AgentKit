@@ -13,8 +13,10 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// index (with a one-time backfill of the messages already on disk);
 /// version 10 adds the durable subagent registry (the host's spawn and
 /// orphan-reaper flows project child-task state onto these rows) and the
-/// advisor findings ledger the explicit/watchdog advice sources append to.
-pub const SCHEMA_VERSION: i64 = 13;
+/// advisor findings ledger the explicit/watchdog advice sources append to;
+/// version 14 adds the persistent agent identity registry (immutable ids,
+/// scope, lifecycle) and its append-only configuration-revision ledger.
+pub const SCHEMA_VERSION: i64 = 14;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -249,6 +251,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 13 {
             migrate_provider_authority(&mut connection)?;
         }
+        if version < 14 {
+            migrate_agent_records(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -351,6 +356,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 13 {
         sql.push_str(PROVIDER_AUTHORITY_SCHEMA);
     }
+    if version >= 14 {
+        sql.push_str(AGENTS_SCHEMA);
+    }
     sql
 }
 
@@ -380,6 +388,34 @@ fn migrate_provider_authority(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(PROVIDER_AUTHORITY_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 13)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Persistent agent identity and configuration history (AGENTKIT-87),
+/// additive at schema version 14. `agents` holds one row per host-owned
+/// agent: the immutable id, the owning `owner_id`/`scope`, the lifecycle
+/// CHECK-constrained to `active|archived|deleted` (deleted is a TOMBSTONE
+/// that keeps the row, reserving the id and retaining history), the
+/// current configuration revision, and the full record JSON. The
+/// scope/lifecycle/revision columns mirror the record at write time and
+/// carry the list scan; the `(scope, lifecycle)` index is the
+/// scope-filtered read path. `agent_config_revisions` is the append-only
+/// ledger: one row per configuration change holding the FULL effective
+/// definition snapshot, keyed `(agent_id, revision)`, with the
+/// CHECK-constrained `source` provenance (`create|edit|model_change|
+/// restore`). No table here carries a secret value: credentials enter only
+/// as scheme-qualified `secretRefs` references validated at write time.
+const AGENTS_SCHEMA: &str = r#"
+CREATE TABLE agents(agent_id TEXT PRIMARY KEY, scope TEXT NOT NULL, owner_id TEXT NOT NULL, lifecycle TEXT NOT NULL CHECK(lifecycle IN ('active','archived','deleted')), current_revision INTEGER NOT NULL CHECK(current_revision>=1), record TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX agents_scope ON agents(scope, lifecycle);
+CREATE TABLE agent_config_revisions(agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE, revision INTEGER NOT NULL CHECK(revision>=1), snapshot TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('create','edit','model_change','restore')), created_at INTEGER NOT NULL, PRIMARY KEY(agent_id,revision));
+"#;
+
+fn migrate_agent_records(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(AGENTS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 14)?;
     transaction.commit()?;
     Ok(())
 }

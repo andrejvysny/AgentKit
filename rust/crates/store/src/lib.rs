@@ -2,6 +2,7 @@
 mod actor;
 mod advisor;
 mod agent_inputs;
+mod agents;
 mod connector_crypto;
 mod context_summaries;
 mod conversations;
@@ -30,6 +31,7 @@ mod util;
 pub use actor::{SqliteStore, StoreActorIdentity};
 pub use advisor::*;
 pub use agent_inputs::*;
+pub use agents::*;
 pub use context_summaries::*;
 pub use conversations::*;
 pub use data::*;
@@ -74,6 +76,12 @@ pub enum StoreError {
     NotFound(String),
     #[error("duplicate record: {0}")]
     Duplicate(String),
+    /// Optimistic concurrency: the record moved out from under the caller's
+    /// expected version and the write applied NOTHING. The caller re-reads
+    /// and retries against the current version; versions never silently
+    /// overwrite each other.
+    #[error("concurrent modification: {0}")]
+    Conflict(String),
     #[error("scope busy: {0}")]
     ScopeBusy(String),
     /// The settlement committed nothing: the caller may rebuild its plan
