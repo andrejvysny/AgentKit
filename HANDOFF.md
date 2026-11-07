@@ -91,3 +91,15 @@ id-keyed accumulators; golden drivers in `packages/testing/src`; sideways `norma
 ## Pointers
 
 - Tasks → TODO.md · Snapshot → CURRENT_STATE.md · Plans + Run log → `~/.claude/plans/act-as-senior-software-linked-seal.md`, `~/.claude/plans/snappy-munching-wren.md` · Memory → `~/.claude/projects/-Users-andrejvysny-workspace-openpcb-AgentKit/memory/agentkit-hardening-tranche-2.md`
+
+## Hybrid M1 consumer notes (AGENTKIT-87–90, independent review 2026-11-07)
+
+- The HTTP teammates conformance lane (`crates/host/tests/http_teammates.rs`) is feature-gated on
+  `http` and now declares `required-features = ["http"]`: running `cargo test --locked -p agentkit-host
+  --test http_teammates` without the feature fails loudly instead of reporting a vacuous green
+  "0 passed". Canonical command:
+  `cargo test --locked -p agentkit-host --features http --test http_teammates`.
+- The napi lane exposes 14/15 M1 operations: `streamAgentTask` (SSE) is intentionally absent on the
+  native boundary (JSON-over-boundary design, documented in `crates/napi/src/teammate_lane.rs`).
+  "15 typed operations" refers to the REST consumer stack (contracts/host/transport-http/client);
+  do not count napi as 15/15 or assume native SSE parity in M2+ docs.
