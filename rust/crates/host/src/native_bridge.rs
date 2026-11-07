@@ -1,0 +1,914 @@
+//! Task-bound governed MCP broker (AGENTKIT-114).
+//!
+//! One loopback HTTP MCP endpoint per live native attempt, built on the
+//! existing `agentkit-mcp` server (bearer auth with constant-time compare,
+//! session/concurrency bounds, cancellation). The broker is the ONLY path
+//! on which an application tool executes during a native turn:
+//!
+//! * the catalog is frozen per attempt (names + schemas); vendor tool
+//!   CARDS from the stream are data, never dispatch (AGENTKIT-108);
+//! * every call re-checks attempt liveness (generation), then the host
+//!   `BrokerAuthority` validates arguments, gates approvals/questions
+//!   durably, and re-checks authority immediately before dispatch;
+//! * per-attempt bounds: call count, argument bytes, result bytes, call
+//!   wall-clock — exhaustion is an in-band `is_error` result the model can
+//!   observe, never a silent drop;
+//! * revocation is immediate: at attempt settlement, cancellation or lease
+//! * loss, tokens stop authenticating and live calls are cancelled.
+
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+
+use agentkit_mcp::ErrorData;
+use agentkit_mcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
+use agentkit_mcp::{Backend, BearerAuth, CatalogTool, McpServer, ServerOptions, SessionScope};
+
+/// One catalog entry frozen at attempt start.
+#[derive(Clone, Debug)]
+pub struct BrokerToolDefinition {
+    /// Server-local name; Claude sees `mcp__<server>__<name>`.
+    pub name: String,
+    pub description: String,
+    /// JSON Schema for arguments (validated by the authority).
+    pub input_schema: Value,
+    /// Host-owned effect classification; never inferred from vendor data.
+    pub writes: bool,
+}
+
+/// Identity context of one broker call, bound to the live attempt.
+#[derive(Clone, Debug)]
+pub struct BrokerInvocation {
+    pub task_id: String,
+    pub attempt_id: String,
+    pub server_name: String,
+    /// Process generation that owns the attempt (stale fencing, 116).
+    pub generation: u64,
+    /// Stable identity of the calling vendor session, as observed.
+    pub actor_id: String,
+    pub tool_name: String,
+}
+
+/// Successful in-band execution result.
+#[derive(Clone, Debug)]
+pub struct BrokerExecuted {
+    /// Content parts serialized into the MCP result (text-first).
+    pub content: Vec<Value>,
+    /// Optional structured output for durable evidence.
+    pub structured: Option<Value>,
+}
+
+/// A rejection the model may observe in-band. `code` is stable.
+#[derive(Clone, Debug)]
+pub struct BrokerDenial {
+    pub code: String,
+    pub message: String,
+}
+
+/// The host authority: approval gating, argument validation, effect
+/// execution (AGENTKIT-107 §6; AGENTKIT-115 supplies durable decisions).
+#[async_trait]
+pub trait BrokerAuthority: Send + Sync + 'static {
+    /// `Some(generation)` while the attempt owns a live process; `None`
+    /// means the attempt is settled/cancelled — every call is refused.
+    fn attempt_generation(&self) -> Option<u64>;
+
+    /// Validate the exact arguments and obtain (or replay) the durable
+    /// human decision. Runs BEFORE any effect. Denials are durable-visible.
+    async fn authorize(
+        &self,
+        invocation: &BrokerInvocation,
+        arguments: &Value,
+    ) -> Result<(), BrokerDenial>;
+
+    /// Execute the authorized operation. Called only after `authorize`
+    /// returned `Ok`; the host re-checks authority inside here.
+    async fn execute(
+        &self,
+        invocation: &BrokerInvocation,
+        arguments: Value,
+    ) -> Result<BrokerExecuted, BrokerDenial>;
+
+    /// Durable bookkeeping hook for every terminal call outcome.
+    fn record(&self, _invocation: &BrokerInvocation, _outcome: &Value) {}
+}
+
+/// Per-attempt resource bounds (AGENTKIT-116).
+#[derive(Clone, Copy, Debug)]
+pub struct BrokerLimits {
+    pub max_calls: usize,
+    pub max_args_bytes: usize,
+    pub max_result_bytes: usize,
+    pub call_timeout_ms: i64,
+}
+
+impl Default for BrokerLimits {
+    fn default() -> Self {
+        BrokerLimits {
+            max_calls: 64,
+            max_args_bytes: 256 * 1024,
+            max_result_bytes: 1024 * 1024,
+            call_timeout_ms: 120_000,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Live {
+    calls: usize,
+    revoked: bool,
+}
+
+/// The attempt-scoped MCP backend. Cheap to share; revocation is global.
+pub struct BrokerBackend {
+    task_id: String,
+    attempt_id: String,
+    server_name: String,
+    catalog: Vec<CatalogTool>,
+    /// Exact allowed names (server-local), frozen.
+    allowed: Vec<String>,
+    limits: BrokerLimits,
+    authority: Arc<dyn BrokerAuthority>,
+    live: Mutex<Live>,
+    cancellation: CancellationToken,
+}
+
+impl BrokerBackend {
+    pub fn new(
+        task_id: impl Into<String>,
+        attempt_id: impl Into<String>,
+        server_name: &str,
+        catalog: Vec<BrokerToolDefinition>,
+        limits: BrokerLimits,
+        authority: Arc<dyn BrokerAuthority>,
+        cancellation: CancellationToken,
+    ) -> Result<Arc<Self>, BrokerDenial> {
+        validate_server_name(server_name)?;
+        let mut defs = Vec::with_capacity(catalog.len());
+        let mut allowed = Vec::with_capacity(catalog.len());
+        for entry in catalog {
+            validate_tool_name(&entry.name)?;
+            if entry.input_schema.get("type").and_then(Value::as_str) != Some("object") {
+                return Err(BrokerDenial {
+                    code: "broker_catalog".into(),
+                    message: format!("tool {} schema must be an object type", entry.name),
+                });
+            }
+            allowed.push(entry.name.clone());
+            defs.push(entry);
+        }
+        if allowed.is_empty() {
+            return Err(BrokerDenial {
+                code: "broker_catalog".into(),
+                message: "broker catalog is empty".into(),
+            });
+        }
+        let tools: Vec<CatalogTool> = defs
+            .into_iter()
+            .map(|entry| CatalogTool {
+                definition: Tool::new(
+                    entry.name,
+                    entry.description,
+                    std::sync::Arc::new(
+                        entry.input_schema.as_object().cloned().unwrap_or_default(),
+                    ),
+                ),
+                writes: entry.writes,
+            })
+            .collect();
+        Ok(Arc::new(BrokerBackend {
+            task_id: task_id.into(),
+            attempt_id: attempt_id.into(),
+            server_name: server_name.into(),
+            catalog: tools,
+            allowed,
+            limits,
+            authority,
+            live: Mutex::new(Live::default()),
+            cancellation,
+        }))
+    }
+
+    /// Exact CLI-visible tool names (`mcp__<server>__<name>`), frozen.
+    pub fn cli_tool_names(&self) -> Vec<String> {
+        self.allowed
+            .iter()
+            .map(|name| format!("mcp__{}__{}", self.server_name, name))
+            .collect()
+    }
+
+    pub fn has_writes(&self) -> bool {
+        self.catalog.iter().any(|entry| entry.writes)
+    }
+
+    /// Immediate revocation for settlement/cancellation/lease loss.
+    pub fn revoke(&self) {
+        self.live.lock().expect("broker lock").revoked = true;
+        self.cancellation.cancel();
+    }
+
+    fn denied(&self, code: &str, message: impl Into<String>) -> CallToolResult {
+        let message = message.into();
+        let denial = json!({"denied": true, "code": code, "message": message});
+        self.authority.record(
+            &BrokerInvocation {
+                task_id: self.task_id.clone(),
+                attempt_id: self.attempt_id.clone(),
+                server_name: self.server_name.clone(),
+                generation: 0,
+                actor_id: String::new(),
+                tool_name: String::new(),
+            },
+            &denial,
+        );
+        CallToolResult::error(vec![ContentBlock::text(denial.to_string())])
+    }
+}
+
+#[async_trait]
+impl Backend for BrokerBackend {
+    async fn list_tools(&self, _scope: &SessionScope) -> Result<Vec<CatalogTool>, ErrorData> {
+        if self.live.lock().expect("broker lock").revoked
+            || self.authority.attempt_generation().is_none()
+        {
+            return Err(ErrorData::internal_error("broker revoked", None));
+        }
+        Ok(self.catalog.clone())
+    }
+
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: JsonObject,
+        scope: &SessionScope,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Attempt liveness first: a settled attempt answers nothing.
+        let Some(generation) = self.authority.attempt_generation() else {
+            return Ok(self.denied("attempt_not_live", "attempt no longer live"));
+        };
+        {
+            let live = self.live.lock().expect("broker lock");
+            if live.revoked {
+                return Ok(self.denied("revoked", "broker revoked"));
+            }
+        }
+        if self.cancellation.is_cancelled() || scope.cancellation.is_cancelled() {
+            return Ok(self.denied("cancelled", "attempt cancelled"));
+        }
+        if !self.allowed.iter().any(|allowed| allowed == name) {
+            return Ok(self.denied("unknown_tool", format!("unknown tool {name}")));
+        }
+        let arguments = Value::Object(arguments);
+        if arguments.to_string().len() > self.limits.max_args_bytes {
+            return Ok(self.denied(
+                "quota_args",
+                format!("arguments exceed {} bytes", self.limits.max_args_bytes),
+            ));
+        }
+        // Count the call before authorize: approvals that park also spend
+        // the attempt's budget (no infinite approval loops).
+        {
+            let mut live = self.live.lock().expect("broker lock");
+            live.calls += 1;
+            if live.calls > self.limits.max_calls {
+                return Ok(self.denied(
+                    "quota_calls",
+                    format!("attempt call budget {} exhausted", self.limits.max_calls),
+                ));
+            }
+        }
+        let invocation = BrokerInvocation {
+            task_id: self.task_id.clone(),
+            attempt_id: self.attempt_id.clone(),
+            server_name: self.server_name.clone(),
+            generation,
+            actor_id: scope.actor_id.clone(),
+            tool_name: name.to_owned(),
+        };
+        if let Err(denial) = self.authority.authorize(&invocation, &arguments).await {
+            let payload = json!({"denied": true, "code": denial.code, "message": denial.message});
+            self.authority.record(&invocation, &payload);
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                payload.to_string(),
+            )]));
+        }
+        let executed = tokio::time::timeout(
+            Duration::from_millis(self.limits.call_timeout_ms.max(1) as u64),
+            self.authority.execute(&invocation, arguments),
+        )
+        .await;
+        match executed {
+            Err(_) => {
+                let payload = json!({
+                    "denied": true, "code": "call_timeout",
+                    "message": format!("call exceeded {} ms", self.limits.call_timeout_ms),
+                });
+                self.authority.record(&invocation, &payload);
+                Ok(CallToolResult::error(vec![ContentBlock::text(
+                    payload.to_string(),
+                )]))
+            }
+            Ok(Err(denial)) => {
+                let payload =
+                    json!({"denied": true, "code": denial.code, "message": denial.message});
+                self.authority.record(&invocation, &payload);
+                Ok(CallToolResult::error(vec![ContentBlock::text(
+                    payload.to_string(),
+                )]))
+            }
+            Ok(Ok(result)) => {
+                let mut parts = Vec::new();
+                for part in &result.content {
+                    parts.push(ContentBlock::text(part.to_string()));
+                }
+                if parts.is_empty() {
+                    parts.push(ContentBlock::text("{}".to_owned()));
+                }
+                let serialized = serde_json::to_string(&result.content)
+                    .unwrap_or_default()
+                    .len();
+                if serialized > self.limits.max_result_bytes {
+                    // Never silently truncate: the model sees the bound.
+                    let payload = json!({
+                        "denied": true, "code": "quota_result",
+                        "message": format!("result exceeds {} bytes", self.limits.max_result_bytes),
+                    });
+                    self.authority.record(&invocation, &payload);
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
+                        payload.to_string(),
+                    )]));
+                }
+                let outcome = json!({
+                    "executed": true,
+                    "tool": name,
+                    "content": result.content,
+                    "structured": result.structured,
+                });
+                self.authority.record(&invocation, &outcome);
+                let mut response = CallToolResult::success(parts);
+                response.structured_content = result.structured;
+                response.is_error = Some(false);
+                Ok(response)
+            }
+        }
+    }
+
+    fn revoke_actor(&self, _actor_id: &str) {
+        // One attempt, one principal: any revocation revokes the attempt.
+        self.revoke();
+    }
+}
+
+fn validate_server_name(name: &str) -> Result<(), BrokerDenial> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(BrokerDenial {
+            code: "broker_catalog".into(),
+            message: format!("invalid MCP server name {name:?}"),
+        })
+    }
+}
+
+fn validate_tool_name(name: &str) -> Result<(), BrokerDenial> {
+    let ok = !name.is_empty()
+        && name.len() <= 96
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(BrokerDenial {
+            code: "broker_catalog".into(),
+            message: format!("invalid tool name {name:?}"),
+        })
+    }
+}
+
+/// A live broker endpoint for exactly one attempt.
+pub struct AttemptBroker {
+    backend: Arc<BrokerBackend>,
+    token: String,
+    url: String,
+    server: McpServer,
+    serve: tokio::task::JoinHandle<()>,
+    cancellation: CancellationToken,
+}
+
+impl AttemptBroker {
+    /// Bind a loopback endpoint and serve the frozen catalog. The token is
+    /// returned to the driver ONLY through [`AttemptBroker::spec`] (private
+    /// 0600 per-run file; never argv).
+    pub async fn start(
+        task_id: &str,
+        attempt_id: &str,
+        server_name: &str,
+        catalog: Vec<BrokerToolDefinition>,
+        limits: BrokerLimits,
+        authority: Arc<dyn BrokerAuthority>,
+    ) -> Result<Arc<Self>, String> {
+        let cancellation = CancellationToken::new();
+        let backend = BrokerBackend::new(
+            task_id,
+            attempt_id,
+            server_name,
+            catalog,
+            limits,
+            authority,
+            cancellation.clone(),
+        )
+        .map_err(|denial| format!("{}: {}", denial.code, denial.message))?;
+        let token = format!(
+            "brk-{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let auth = BearerAuth::new(
+            &token,
+            json!({"brokerTask": task_id, "brokerAttempt": attempt_id}),
+        )
+        .map_err(|e| format!("broker token: {e}"))?;
+        let mut options = ServerOptions {
+            writes_enabled: backend.has_writes(),
+            max_request_bytes: limits.max_args_bytes.saturating_mul(2).max(64 * 1024),
+            max_call_duration: Duration::from_millis(limits.call_timeout_ms.max(1) as u64),
+            ..ServerOptions::default()
+        };
+        options.session_idle_ttl = Duration::from_secs(3600);
+        let server = McpServer::new(backend.clone(), Arc::new(auth), options)
+            .map_err(|e| format!("broker server: {e}"))?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("broker bind: {e}"))?;
+        let url = format!(
+            "http://{}/mcp",
+            listener
+                .local_addr()
+                .map_err(|e| format!("broker addr: {e}"))?
+        );
+        let router = server.router();
+        let shutdown = cancellation.clone();
+        let serve = tokio::spawn(async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { shutdown.cancelled().await })
+                .await;
+        });
+        Ok(Arc::new(AttemptBroker {
+            backend,
+            token,
+            url,
+            server,
+            serve,
+            cancellation,
+        }))
+    }
+
+    /// The endpoint spec to hand the driver for `plan_turn`.
+    pub fn spec(&self) -> agentkit_native::McpEndpointSpec {
+        agentkit_native::McpEndpointSpec {
+            server_name: self.backend.server_name.clone(),
+            broker_tool_names: self.backend.cli_tool_names(),
+            stdio_command: None,
+            http_url: Some(self.url.clone()),
+            auth_token: Some(self.token.clone()),
+        }
+    }
+
+    pub fn backend(&self) -> &Arc<BrokerBackend> {
+        &self.backend
+    }
+
+    /// Stop serving and revoke every token; bounded, idempotent.
+    pub async fn shutdown(&self) {
+        self.backend.revoke();
+        self.server.close().await;
+        self.cancellation.cancel();
+        self.serve.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct ScriptedAuthority {
+        live: bool,
+        authorize_result: Option<BrokerDenial>,
+        execute_result: Option<BrokerDenial>,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl BrokerAuthority for ScriptedAuthority {
+        fn attempt_generation(&self) -> Option<u64> {
+            if self.live { Some(7) } else { None }
+        }
+        async fn authorize(
+            &self,
+            _invocation: &BrokerInvocation,
+            _arguments: &Value,
+        ) -> Result<(), BrokerDenial> {
+            match &self.authorize_result {
+                Some(denial) => Err(BrokerDenial {
+                    code: denial.code.clone(),
+                    message: denial.message.clone(),
+                }),
+                None => Ok(()),
+            }
+        }
+        async fn execute(
+            &self,
+            _invocation: &BrokerInvocation,
+            _arguments: Value,
+        ) -> Result<BrokerExecuted, BrokerDenial> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &self.execute_result {
+                Some(denial) => Err(BrokerDenial {
+                    code: denial.code.clone(),
+                    message: denial.message.clone(),
+                }),
+                None => Ok(BrokerExecuted {
+                    content: vec![json!({"note": "found"})],
+                    structured: Some(json!({"id": 1})),
+                }),
+            }
+        }
+    }
+
+    fn catalog() -> Vec<BrokerToolDefinition> {
+        vec![
+            BrokerToolDefinition {
+                name: "search_notes".into(),
+                description: "Search notes".into(),
+                input_schema: json!({"type":"object","properties":{"q":{"type":"string"}}}),
+                writes: false,
+            },
+            BrokerToolDefinition {
+                name: "propose_note".into(),
+                description: "Propose a note".into(),
+                input_schema: json!({"type":"object","properties":{}}),
+                writes: true,
+            },
+        ]
+    }
+
+    fn authority(live: bool) -> Arc<ScriptedAuthority> {
+        Arc::new(ScriptedAuthority {
+            live,
+            authorize_result: None,
+            execute_result: None,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    fn scope() -> SessionScope {
+        SessionScope {
+            principal: json!({"attempt":"att-1"}),
+            chat_id: None,
+            actor_id: "vendor-session-1".into(),
+            cancellation: CancellationToken::new(),
+        }
+    }
+
+    async fn backend(live: bool) -> (Arc<BrokerBackend>, Arc<ScriptedAuthority>) {
+        let authority = authority(live);
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        (backend, authority)
+    }
+
+    fn denial_of(result: &CallToolResult) -> Option<Value> {
+        if result.is_error == Some(true) {
+            result
+                .content
+                .first()
+                .and_then(|block| serde_json::from_str(&block.as_text()?.text.clone()).ok())
+        } else {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_is_frozen_and_named_for_the_cli() {
+        let (backend, _) = backend(true).await;
+        let tools = backend.list_tools(&scope()).await.unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(
+            backend.cli_tool_names(),
+            vec![
+                "mcp__onemind__search_notes".to_string(),
+                "mcp__onemind__propose_note".to_string(),
+            ]
+        );
+        assert!(backend.has_writes());
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_never_reaches_the_authority() {
+        let (backend, authority) = backend(true).await;
+        let result = backend
+            .call_tool("nope", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "unknown_tool");
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn settled_attempt_is_refused_everywhere() {
+        let (backend, authority) = backend(false).await;
+        assert!(
+            backend
+                .list_tools(&scope())
+                .await
+                .is_err_and(|e| e.message.contains("revoked"))
+        );
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "attempt_not_live");
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn denial_is_in_band_and_recorded() {
+        let authority = Arc::new(ScriptedAuthority {
+            live: true,
+            authorize_result: Some(BrokerDenial {
+                code: "approval_denied".into(),
+                message: "human denied".into(),
+            }),
+            execute_result: None,
+            calls: AtomicUsize::new(0),
+        });
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        let denial = denial_of(&result).unwrap();
+        assert_eq!(denial["code"], "approval_denied");
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn execution_returns_content_and_counts() {
+        let (backend, authority) = backend(true).await;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("hello"));
+        let result = backend
+            .call_tool("search_notes", args, &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result), None);
+        assert!(result.content[0].as_text().unwrap().text.contains("found"));
+        assert_eq!(result.structured_content, Some(json!({"id": 1})));
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn call_budget_is_bounded_and_visible_in_band() {
+        let authority = authority(true);
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits {
+                max_calls: 2,
+                ..BrokerLimits::default()
+            },
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let result = backend
+                .call_tool("search_notes", Default::default(), &scope())
+                .await
+                .unwrap();
+            assert_eq!(denial_of(&result), None);
+        }
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "quota_calls");
+        // The over-budget call never executed.
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn argument_bound_fails_closed() {
+        let (backend, authority) = backend(true).await;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("x".repeat(300 * 1024)));
+        let result = backend
+            .call_tool("search_notes", args, &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "quota_args");
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn result_bound_is_reported_not_truncated() {
+        struct Huge;
+        #[async_trait]
+        impl BrokerAuthority for Huge {
+            fn attempt_generation(&self) -> Option<u64> {
+                Some(1)
+            }
+            async fn authorize(&self, _: &BrokerInvocation, _: &Value) -> Result<(), BrokerDenial> {
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _: &BrokerInvocation,
+                _: Value,
+            ) -> Result<BrokerExecuted, BrokerDenial> {
+                Ok(BrokerExecuted {
+                    content: vec![json!("y".repeat(8 * 1024))],
+                    structured: None,
+                })
+            }
+        }
+        let backend = BrokerBackend::new(
+            "t",
+            "a",
+            "s",
+            catalog(),
+            BrokerLimits {
+                max_result_bytes: 1024,
+                ..BrokerLimits::default()
+            },
+            Arc::new(Huge),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "quota_result");
+    }
+
+    #[tokio::test]
+    async fn cancellation_stops_calls() {
+        let cancellation = CancellationToken::new();
+        let backend = BrokerBackend::new(
+            "t",
+            "a",
+            "s",
+            catalog(),
+            BrokerLimits::default(),
+            authority(true),
+            cancellation.clone(),
+        )
+        .unwrap();
+        cancellation.cancel();
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "cancelled");
+    }
+
+    #[tokio::test]
+    async fn revoke_stops_list_and_calls_immediately() {
+        let (backend, _) = backend(true).await;
+        backend.revoke();
+        assert!(backend.list_tools(&scope()).await.is_err());
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "revoked");
+    }
+
+    #[tokio::test]
+    async fn catalog_validation_refuses_junk() {
+        let cancellation = CancellationToken::new();
+        // Empty server name.
+        assert!(
+            BrokerBackend::new(
+                "t",
+                "a",
+                "",
+                catalog(),
+                BrokerLimits::default(),
+                authority(true),
+                cancellation.clone(),
+            )
+            .is_err_and(|d| d.code == "broker_catalog")
+        );
+        // Bad tool name.
+        let mut junk = catalog();
+        junk[0].name = "bad name!".into();
+        assert!(
+            BrokerBackend::new(
+                "t",
+                "a",
+                "s",
+                junk,
+                BrokerLimits::default(),
+                authority(true),
+                cancellation.clone(),
+            )
+            .is_err_and(|d| d.code == "broker_catalog")
+        );
+        // Non-object schema.
+        let mut junk = catalog();
+        junk[0].input_schema = json!([]);
+        assert!(
+            BrokerBackend::new(
+                "t",
+                "a",
+                "s",
+                junk,
+                BrokerLimits::default(),
+                authority(true),
+                cancellation.clone(),
+            )
+            .is_err_and(|d| d.code == "broker_catalog")
+        );
+        // Empty catalog.
+        assert!(
+            BrokerBackend::new(
+                "t",
+                "a",
+                "s",
+                vec![],
+                BrokerLimits::default(),
+                authority(true),
+                cancellation,
+            )
+            .is_err_and(|d| d.code == "broker_catalog")
+        );
+    }
+
+    #[tokio::test]
+    async fn endpoint_binds_loopback_and_spec_carries_private_token() {
+        let broker = AttemptBroker::start(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority(true),
+        )
+        .await
+        .unwrap();
+        let spec = broker.spec();
+        assert_eq!(spec.server_name, "onemind");
+        let url = spec.http_url.clone().unwrap();
+        assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+        assert!(spec.stdio_command.is_none());
+        let token = spec.auth_token.clone().unwrap();
+        assert!(token.starts_with("brk-") && token.len() > 40);
+        assert_eq!(
+            spec.broker_tool_names,
+            vec![
+                "mcp__onemind__search_notes".to_string(),
+                "mcp__onemind__propose_note".to_string()
+            ]
+        );
+        broker.shutdown().await;
+        // Idempotent second shutdown; calls after shutdown are refused.
+        broker.shutdown().await;
+        let result = broker
+            .backend()
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&result).unwrap()["code"], "revoked");
+    }
+}

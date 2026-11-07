@@ -32,6 +32,7 @@ pub use model_content::{ModelContentCapabilities, ModelContentProjection, projec
 pub use oauth::{ManagedOAuthOptions, ManagedOAuthProvider, OAuthBrowser, OAuthSecrets};
 pub use rmcp::model;
 pub use rmcp::transport::auth as oauth_protocol;
+pub use rmcp::{ErrorData, RmcpError};
 pub use server::{Authenticator, BearerAuth, McpServer, ServerOptions};
 
 /// Frozen from @modelcontextprotocol/sdk 1.30.0 dist/esm/types.js.

@@ -1,0 +1,17 @@
+[package]
+name = "agentkit-native"
+description = "Versioned execution contracts, capability policy and injected ports for optional native agent backends (AGENTKIT-108)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "=0.7.20", features = ["rt"] }

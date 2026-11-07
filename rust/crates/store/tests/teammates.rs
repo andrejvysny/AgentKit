@@ -1283,6 +1283,8 @@ async fn a_version_fourteen_database_upgrades_and_keeps_admissions() {
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch(
         "DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; DROP TABLE agent_admissions;
+         DROP INDEX native_session_bindings_task; DROP TABLE native_session_bindings;
+         DROP INDEX native_interactions_task; DROP TABLE native_interactions;
          DROP TABLE agent_inputs;
          CREATE TABLE agent_inputs(input_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, target_task_id TEXT, record TEXT NOT NULL);
          CREATE INDEX agent_inputs_session ON agent_inputs(session_id,status);

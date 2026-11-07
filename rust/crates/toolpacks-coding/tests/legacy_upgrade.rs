@@ -161,6 +161,10 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS agents;
          DROP TABLE IF EXISTS agent_config_revisions;
          DROP TABLE IF EXISTS agent_admissions;
+         DROP INDEX IF EXISTS native_session_bindings_task;
+         DROP TABLE IF EXISTS native_session_bindings;
+         DROP INDEX IF EXISTS native_interactions_task;
+         DROP TABLE IF EXISTS native_interactions;
          DROP INDEX IF EXISTS tasks_agent;
          DROP INDEX IF EXISTS tasks_status;
          DROP INDEX IF EXISTS tasks_parent;

@@ -168,6 +168,31 @@ impl SqliteStore {
             rows.map(|row|Ok(serde_json::from_str(&row?)?)).collect()
         }).await
     }
+
+    /// The TAIL of a task's event log, ascending: the last `limit` events.
+    /// Consumers that settle from the terminal facts (completion/terminal
+    /// events appended after an unbounded delta stream) must read from the
+    /// end — a head-bounded read would miss exactly the events that carry
+    /// the outcome once a turn outgrows the page.
+    pub async fn events_tail(&self, task_id: &str, limit: usize) -> Result<Vec<EventRecord>> {
+        let task_id = task_id.to_owned();
+        // Same ceiling as `events_after_number`; no floor: `limit == 0`
+        // honestly means the empty tail.
+        let limit = limit.min(10_000) as i64;
+        self.call(move |db| {
+            let _: TaskRecord = required(db, "tasks", "id", &task_id)?;
+            let mut statement =
+                db.prepare("SELECT record FROM events WHERE task_id=? ORDER BY seq DESC LIMIT ?")?;
+            let rows =
+                statement.query_map(params![task_id, limit], |row| row.get::<_, String>(0))?;
+            let mut events = rows
+                .map(|row| Ok(serde_json::from_str(&row?)?))
+                .collect::<Result<Vec<EventRecord>>>()?;
+            events.reverse();
+            Ok(events)
+        })
+        .await
+    }
 }
 
 // ---------------------------------------------------------------------------

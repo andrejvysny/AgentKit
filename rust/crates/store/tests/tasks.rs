@@ -65,6 +65,30 @@ async fn append_preserves_increasing_gaps_and_rejected_batches_leave_no_prefix()
 }
 
 #[tokio::test]
+async fn events_tail_returns_the_last_events_ascending() {
+    // ONEMIND-342 finalize path: the terminal facts live at the tail of a
+    // long log; a head-window read must never be the only way to see them.
+    let store = SqliteStore::memory(4).unwrap();
+    store.submit(task("a", "s")).await.unwrap();
+    let lease = store.claim(claim(1000)).await.unwrap().unwrap().lease;
+    for seq in 1..=6 {
+        store
+            .append_events(lease.fence(), vec![event(seq, &format!("e{seq}"))], 1001)
+            .await
+            .unwrap();
+    }
+    let tail = store.events_tail("a", 3).await.unwrap();
+    assert_eq!(
+        tail.iter().map(|r| r.seq).collect::<Vec<_>>(),
+        [4.0, 5.0, 6.0],
+        "tail must be the last events, still ascending"
+    );
+    assert_eq!(store.events_tail("a", 100).await.unwrap().len(), 6);
+    assert!(store.events_tail("a", 0).await.unwrap().is_empty());
+    assert!(store.events_tail("missing-task", 5).await.is_err());
+}
+
+#[tokio::test]
 async fn generic_number_sequences_accept_fractional_and_large_values() {
     let store = SqliteStore::memory(2).unwrap();
     store.submit(task("a", "s")).await.unwrap();
