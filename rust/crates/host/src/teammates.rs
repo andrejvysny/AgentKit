@@ -29,7 +29,8 @@
 use crate::{HostError, HostResult, SharedRuntime};
 use agentkit_store::{
     AdmitTeammateTask, AdmittedTask, AgentDisplayState, AgentInputRecord, AgentInputStatus,
-    CreateAgentMailbox, SqliteStore, TaskRecord, TaskStatus, derive_agent_display_state,
+    AgentTaskPage, CreateAgentMailbox, PromoteMailbox, SqliteStore, TaskRecord, TaskStatus,
+    derive_agent_display_state,
 };
 
 /// A caller's admission request. `admission_key` is the idempotency key:
@@ -135,11 +136,33 @@ impl TeammateService {
             .await?)
     }
 
-    /// The agent's logical tasks, insertion-ordered. Pure read: a
-    /// reconnecting client loads history through here and creates
-    /// nothing.
+    /// The agent's logical tasks, insertion-ordered. UNBOUNDED pure read;
+    /// prefer [`Self::tasks_page`] for history.
     pub async fn tasks(&self, agent_id: &str) -> HostResult<Vec<TaskRecord>> {
         Ok(self.store.list_agent_tasks(agent_id.to_owned()).await?)
+    }
+
+    /// One newest-first page of the agent's tasks (`before` is the
+    /// previous page's `next_before`; `limit` clamps to 1..=500). Pure
+    /// read: a reconnecting client loads history through here.
+    pub async fn tasks_page(
+        &self,
+        agent_id: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> HostResult<AgentTaskPage> {
+        Ok(self
+            .store
+            .list_agent_tasks_page(agent_id.to_owned(), before, limit)
+            .await?)
+    }
+
+    /// The agent's unfinished tasks (not completed/failed/cancelled).
+    pub async fn unfinished_tasks(&self, agent_id: &str) -> HostResult<Vec<TaskRecord>> {
+        Ok(self
+            .store
+            .list_agent_unfinished_tasks(agent_id.to_owned())
+            .await?)
     }
 
     /// Read one logical task by id (reconnect/history load path).
@@ -150,7 +173,9 @@ impl TeammateService {
     /// The agent's display state, DERIVED from its task rows on every
     /// read — there is no truth column to drift.
     pub async fn display_state(&self, agent_id: &str) -> HostResult<AgentDisplayState> {
-        Ok(derive_agent_display_state(&self.tasks(agent_id).await?))
+        Ok(derive_agent_display_state(
+            &self.unfinished_tasks(agent_id).await?,
+        ))
     }
 
     /// Request cancellation of a logical task. A queued, parked, or
@@ -232,12 +257,26 @@ impl TeammateService {
             .await?)
     }
 
-    /// Promote the oldest pending mailbox input (strict FIFO, CAS —
-    /// two promoters never take the same input twice).
-    pub async fn promote_next_input(&self, agent_id: &str) -> HostResult<Option<AgentInputRecord>> {
+    /// Promote the oldest pending mailbox input into a durable task,
+    /// atomically (strict FIFO, CAS — two promoters never take the same
+    /// input twice). `kind`/`priority` shape the admitted task; a refused
+    /// admission leaves the input pending.
+    pub async fn promote_next_input(
+        &self,
+        agent_id: &str,
+        kind: &str,
+        priority: i32,
+    ) -> HostResult<Option<(AgentInputRecord, TaskRecord)>> {
         Ok(self
             .store
-            .promote_next_agent_mailbox(agent_id.to_owned(), self.runtime.now_ms())
+            .promote_next_agent_mailbox(
+                agent_id.to_owned(),
+                PromoteMailbox {
+                    kind: kind.to_owned(),
+                    priority,
+                    now: self.runtime.now_ms(),
+                },
+            )
             .await?)
     }
 

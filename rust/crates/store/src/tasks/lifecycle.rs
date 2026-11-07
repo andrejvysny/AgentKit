@@ -378,7 +378,13 @@ fn recover_task(
     mode: RecoveryMode,
 ) -> Result<()> {
     task.error = Some("lease_expired".into());
-    if task.cancel_requested {
+    if task.cancel_requested && task.agent_id.is_some() {
+        // Cancellation intent is not evidence of a settled outcome for an
+        // agent-bound (state-mutating) task: the dead attempt may have
+        // mutated state. Park it Uncertain; the request stays recorded.
+        task.status = TaskStatus::Uncertain;
+        task.error = Some("cancel_requested_outcome_unknown".into());
+    } else if task.cancel_requested {
         task.status = TaskStatus::Cancelled;
         task.finished_at = Some(now);
     } else if mode == RecoveryMode::Manual {

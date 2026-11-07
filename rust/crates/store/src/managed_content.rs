@@ -734,10 +734,11 @@ pub fn validate_connection_config(config: &Value) -> Result<String> {
 const REDACTED: &str = "***";
 
 /// Visit every `transport.env` / `transport.headers` string value of a
-/// config with a fallible transform (seal on write, open on read).
-fn for_each_credential(
+/// config with a fallible transform (seal on write, open on read). The
+/// visitor gets the field path (`transport.env.NAME`), the AAD binding.
+pub(crate) fn for_each_credential(
     config: &mut Map<String, Value>,
-    visit: &mut impl FnMut(&mut Value) -> Result<()>,
+    visit: &mut impl FnMut(&str, &mut Value) -> Result<()>,
 ) -> Result<()> {
     let Some(transport) = config.get_mut("transport").and_then(Value::as_object_mut) else {
         return Ok(());
@@ -746,9 +747,9 @@ fn for_each_credential(
         let Some(bag) = transport.get_mut(field).and_then(Value::as_object_mut) else {
             continue;
         };
-        for entry in bag.values_mut() {
+        for (name, entry) in bag.iter_mut() {
             if entry.is_string() {
-                visit(entry)?;
+                visit(&format!("transport.{field}.{name}"), entry)?;
             }
         }
     }
@@ -761,12 +762,13 @@ fn for_each_credential(
 /// left alone so a get -> save round trip does not nest envelopes.
 fn seal_credentials(
     crypto: &crate::connector_crypto::ConnectorCrypto,
+    connection_id: &str,
     config: &mut Map<String, Value>,
 ) -> Result<()> {
-    for_each_credential(config, &mut |entry| {
+    for_each_credential(config, &mut |path, entry| {
         let text = entry.as_str().expect("string values only");
         if !crate::connector_crypto::ConnectorCrypto::is_sealed(text) {
-            *entry = Value::String(crypto.seal(text)?);
+            *entry = Value::String(crypto.seal(text, connection_id, path)?);
         }
         Ok(())
     })
@@ -777,7 +779,7 @@ fn seal_credentials(
 /// poison the record against every later read.
 fn refuse_forged_envelopes(config: &Value) -> Result<()> {
     let mut config = config.as_object().expect("validated").clone();
-    for_each_credential(&mut config, &mut |entry| {
+    for_each_credential(&mut config, &mut |_, entry| {
         if crate::connector_crypto::ConnectorCrypto::is_sealed(entry.as_str().expect("string")) {
             return Err(StoreError::InvalidInput(
                 "credential values must not carry the store envelope prefix".into(),
@@ -793,19 +795,28 @@ fn refuse_forged_envelopes(config: &Value) -> Result<()> {
 /// re-sealed — the caller persists the upgraded record in the same call,
 /// so pre-fix rows migrate credential by credential on first read.
 fn open_credentials(
-    crypto: &crate::connector_crypto::ConnectorCrypto,
+    db: &Connection,
+    source: &crate::connector_crypto::CryptoSource,
+    connection_id: &str,
     record: &mut Value,
 ) -> Result<bool> {
     let Some(config) = record.get_mut("config").and_then(Value::as_object_mut) else {
         return Ok(false);
     };
     let mut upgraded = false;
-    for_each_credential(config, &mut |entry| {
+    // Resolved on the first credential only: credential-free rows never
+    // need (or create) key material.
+    let mut crypto: Option<crate::connector_crypto::ConnectorCrypto> = None;
+    for_each_credential(config, &mut |path, entry| {
+        if crypto.is_none() {
+            crypto = Some(source.resolve(db)?);
+        }
+        let crypto = crypto.as_ref().expect("resolved above");
         let text = entry.as_str().expect("string values only").to_owned();
         if crate::connector_crypto::ConnectorCrypto::is_sealed(&text) {
-            *entry = Value::String(crypto.open(&text)?);
+            *entry = Value::String(crypto.open(&text, connection_id, path)?);
         } else {
-            *entry = Value::String(crypto.seal(&text)?);
+            *entry = Value::String(crypto.seal(&text, connection_id, path)?);
             upgraded = true;
         }
         Ok(())
@@ -900,7 +911,7 @@ pub fn redact_connection(record: &mut Value) {
 // Engine: one bounded worker, one table family
 // ---------------------------------------------------------------------------
 
-fn persisted(db: &Connection, value: &Value) -> Result<String> {
+pub(crate) fn persisted(db: &Connection, value: &Value) -> Result<String> {
     let normalized = agentkit_contracts::parse_javascript_json(&serde_json::to_string(value)?)?;
     let serialized = if db.path().is_none_or(str::is_empty) {
         serde_json::to_string(&normalized)?
@@ -913,7 +924,7 @@ fn persisted(db: &Connection, value: &Value) -> Result<String> {
     Ok(serialized)
 }
 
-fn read_stored(text: &str) -> Result<Value> {
+pub(crate) fn read_stored(text: &str) -> Result<Value> {
     Ok(agentkit_contracts::parse_javascript_json(text)?)
 }
 
@@ -1148,7 +1159,7 @@ impl SqliteStore {
         record: Value,
         expected_revision: Option<i64>,
     ) -> Result<Value> {
-        let injected = self.connector_credential_key.clone();
+        let source = self.connector_crypto_source();
         self.call(move |db| {
             let transaction = atomic(db)?;
             // The reference's exact order: compare-and-swap first, then the
@@ -1254,11 +1265,8 @@ impl SqliteStore {
             // AGENTKIT-72: seal before serializing — the row never holds a
             // plaintext credential value.
             if has_unsealed_credentials(&Value::Object(config.clone())) {
-                let crypto = crate::connector_crypto::ConnectorCrypto::resolve(
-                    &transaction,
-                    injected.as_deref().map(Vec::as_slice),
-                )?;
-                seal_credentials(&crypto, &mut config)?;
+                let crypto = source.resolve(&transaction)?;
+                seal_credentials(&crypto, &id, &mut config)?;
             }
             draft.insert("config".into(), Value::Object(config));
             draft.insert("status".into(), Value::String("disconnected".into()));
@@ -1289,7 +1297,7 @@ impl SqliteStore {
     /// credential-shaped values redacted. Sealed values are opened (fail
     /// closed); legacy plaintext values are lazily re-sealed durably.
     pub async fn list_connections(&self) -> Result<Vec<Value>> {
-        let injected = self.connector_credential_key.clone();
+        let source = self.connector_crypto_source();
         self.call(move |db| {
             let rows: Vec<(String, String)> = {
                 let mut statement =
@@ -1302,13 +1310,7 @@ impl SqliteStore {
             let mut records = Vec::new();
             for (id, text) in rows {
                 let mut record = read_stored(&text)?;
-                if open_credentials(
-                    &crate::connector_crypto::ConnectorCrypto::resolve(
-                        db,
-                        injected.as_deref().map(Vec::as_slice),
-                    )?,
-                    &mut record,
-                )? {
+                if open_credentials(db, &source, &id, &mut record)? {
                     db.execute(
                         "UPDATE connector_connections SET record = ?2 WHERE id = ?1",
                         params![id, persisted(db, &record)?],
@@ -1326,7 +1328,7 @@ impl SqliteStore {
     /// values redacted. Sealed values are opened (fail closed); legacy
     /// plaintext values are lazily re-sealed durably.
     pub async fn get_connection(&self, id: String) -> Result<Option<Value>> {
-        let injected = self.connector_credential_key.clone();
+        let source = self.connector_crypto_source();
         self.call(move |db| {
             let row: Option<String> = db
                 .query_row(
@@ -1337,13 +1339,7 @@ impl SqliteStore {
                 .optional()?;
             let Some(text) = row else { return Ok(None) };
             let mut record = read_stored(&text)?;
-            if open_credentials(
-                &crate::connector_crypto::ConnectorCrypto::resolve(
-                    db,
-                    injected.as_deref().map(Vec::as_slice),
-                )?,
-                &mut record,
-            )? {
+            if open_credentials(db, &source, &id, &mut record)? {
                 db.execute(
                     "UPDATE connector_connections SET record = ?2 WHERE id = ?1",
                     params![id, persisted(db, &record)?],
@@ -2032,15 +2028,17 @@ mod tests {
         assert!(!stored.contains("***"), "{stored}");
         // Losslessness: the sealed envelopes decrypt back to the values the
         // masked round trip promised to keep.
-        let crypto =
-            crate::connector_crypto::ConnectorCrypto::resolve(&raw, None).expect("store-local key");
+        let crypto = crate::connector_crypto::ConnectorCrypto::resolve(&raw, None, false)
+            .expect("store-local key");
         let durable: Value = serde_json::from_str(&stored).expect("stored json");
         assert_eq!(
             crypto
                 .open(
                     durable["config"]["transport"]["env"]["TOKEN"]
                         .as_str()
-                        .expect("sealed")
+                        .expect("sealed"),
+                    "c1",
+                    "transport.env.TOKEN"
                 )
                 .expect("open"),
             "real-secret"
@@ -2050,7 +2048,9 @@ mod tests {
                 .open(
                     durable["config"]["transport"]["env"]["OTHER"]
                         .as_str()
-                        .expect("sealed")
+                        .expect("sealed"),
+                    "c1",
+                    "transport.env.OTHER"
                 )
                 .expect("open"),
             "changed"
@@ -2127,15 +2127,17 @@ mod tests {
         let stored = read_column();
         assert!(!stored.contains("super-secret-token"), "{stored}");
         assert!(!stored.contains("***"), "{stored}");
-        let crypto =
-            crate::connector_crypto::ConnectorCrypto::resolve(&raw, None).expect("store key");
+        let crypto = crate::connector_crypto::ConnectorCrypto::resolve(&raw, None, false)
+            .expect("store key");
         let durable: Value = serde_json::from_str(&stored).expect("stored json");
         assert_eq!(
             crypto
                 .open(
                     durable["config"]["transport"]["headers"]["Authorization"]
                         .as_str()
-                        .expect("sealed")
+                        .expect("sealed"),
+                    "c1",
+                    "transport.headers.Authorization"
                 )
                 .expect("open"),
             "Bearer super-secret-token"
@@ -2145,7 +2147,9 @@ mod tests {
                 .open(
                     durable["config"]["transport"]["env"]["CONNECTOR_KEY"]
                         .as_str()
-                        .expect("sealed")
+                        .expect("sealed"),
+                    "c1",
+                    "transport.env.CONNECTOR_KEY"
                 )
                 .expect("open"),
             "env-secret-value"

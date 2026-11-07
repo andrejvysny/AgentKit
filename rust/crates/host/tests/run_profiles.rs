@@ -852,3 +852,417 @@ async fn explanation_and_pin_carry_no_secret_material() {
     );
     assert!(explanation["environment"]["vars"][0].get("value").is_none());
 }
+
+// ---- host-authority provider, safe compilation, content binding, budgets --
+
+fn host_pin(window: Option<u64>) -> HostProviderPin {
+    HostProviderPin {
+        provider_id: "app-provider".into(),
+        model_id: "app-model".into(),
+        provider_kind: "openai".into(),
+        local: false,
+        connection_generation: Some("gen-1".into()),
+        tool_calling: true,
+        vision: false,
+        streaming: true,
+        context_window_tokens: window,
+    }
+}
+
+fn explicit() -> Option<TruncationPolicy> {
+    Some(TruncationPolicy {
+        mode: "explicit".into(),
+    })
+}
+
+/// A text of exactly `tokens` estimated tokens (4 framing included),
+/// first char = `tag`.
+fn sized(tag: char, tokens: u64) -> String {
+    let chars = 4 * (tokens - 4) as usize;
+    format!("{tag}{}", "x".repeat(chars - 1))
+}
+
+fn resource_project(units: Vec<ContextUnit>) -> ProjectSelection {
+    ProjectSelection {
+        sources: vec![SelectedSource {
+            id: "mem://notes".into(),
+            kind: SelectedSourceKind::Resource,
+            units,
+        }],
+    }
+}
+
+/// Window for which the budget is exactly 1000 with "short instructions".
+const WINDOW_FOR_1000: u64 = 2_010;
+
+async fn resource_agent(fixture: &Fixture) {
+    let mut definition = definition("alice");
+    definition.allowed_tools = vec![];
+    definition.resources = vec!["mem://notes".into()];
+    agent(fixture, "alice", definition).await;
+}
+
+async fn host_resolve(
+    fixture: &Fixture,
+    project: &ProjectSelection,
+    task: &TaskProfileOverrides,
+    pin: &HostProviderPin,
+) -> Result<PinnedRunProfile, HostError> {
+    fixture
+        .profiles
+        .resolve_with_host_provider("alice", 1_000, project, task, &[], pin)
+        .await
+}
+
+#[tokio::test]
+async fn host_authority_resolves_with_empty_catalogue_and_passes_admission_and_claim() {
+    let fixture = new_fixture();
+    agent(&fixture, "alice", definition("alice")).await;
+    // The catalogue path refuses on the empty catalogue...
+    let error = fixture
+        .profiles
+        .resolve(
+            "alice",
+            1_000,
+            &ProjectSelection::default(),
+            &TaskProfileOverrides::default(),
+            &[],
+        )
+        .await
+        .expect_err("empty catalogue");
+    assert!(error.to_string().contains("unknown_provider"), "{error}");
+
+    // ...the host-authority path does not read it.
+    let pin = host_resolve(
+        &fixture,
+        &ProjectSelection::default(),
+        &TaskProfileOverrides::default(),
+        &host_pin(Some(64_000)),
+    )
+    .await
+    .unwrap();
+    let provider = &pin.profile["provider"];
+    assert_eq!(provider["authority"], "host");
+    assert_eq!(provider["providerId"], "app-provider");
+    assert_eq!(provider["kind"], "openai");
+    assert_eq!(provider["connectionGeneration"], "gen-1");
+    assert_eq!(pin.profile["capability"]["contextWindowTokens"], 64_000);
+
+    let admitted = fixture
+        .teammates
+        .admit(admission("alice", "host-1", Some(pin)))
+        .await
+        .unwrap();
+    let claimed = fixture.store.claim(claim_at(1_100)).await.unwrap().unwrap();
+    assert_eq!(claimed.task.task_id, admitted.task.task_id);
+    let explanation = fixture
+        .profiles
+        .explain(&admitted.task.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(explanation["dispatch"]["allowed"], true);
+    assert_eq!(explanation["provider"]["authority"], "host");
+}
+
+#[tokio::test]
+async fn host_authority_enforces_overrides_and_local_only() {
+    let fixture = new_fixture();
+    agent(&fixture, "alice", definition("alice")).await;
+    for task in [
+        TaskProfileOverrides {
+            provider_id: Some("other".into()),
+            ..Default::default()
+        },
+        TaskProfileOverrides {
+            model: Some("other-model".into()),
+            ..Default::default()
+        },
+    ] {
+        let error = host_resolve(
+            &fixture,
+            &ProjectSelection::default(),
+            &task,
+            &host_pin(None),
+        )
+        .await
+        .expect_err("mismatch must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("run_profile_refused:host_provider_mismatch"),
+            "{error}"
+        );
+    }
+    // Matching overrides pass.
+    host_resolve(
+        &fixture,
+        &ProjectSelection::default(),
+        &TaskProfileOverrides {
+            provider_id: Some("app-provider".into()),
+            model: Some("app-model".into()),
+            ..Default::default()
+        },
+        &host_pin(None),
+    )
+    .await
+    .unwrap();
+
+    let mut pin = host_pin(None);
+    pin.model_id = String::new();
+    assert!(
+        host_resolve(
+            &fixture,
+            &ProjectSelection::default(),
+            &TaskProfileOverrides::default(),
+            &pin
+        )
+        .await
+        .is_err()
+    );
+
+    let local_only = new_fixture_with(RunProfileDefaults {
+        local_only: true,
+        ..defaults()
+    });
+    agent(&local_only, "alice", definition("alice")).await;
+    let error = host_resolve(
+        &local_only,
+        &ProjectSelection::default(),
+        &TaskProfileOverrides::default(),
+        &host_pin(None),
+    )
+    .await
+    .expect_err("cloud host provider under local_only");
+    assert!(
+        error.to_string().contains("silent_local_to_cloud_refused"),
+        "{error}"
+    );
+    let mut local = host_pin(None);
+    local.local = true;
+    host_resolve(
+        &local_only,
+        &ProjectSelection::default(),
+        &TaskProfileOverrides::default(),
+        &local,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn truncation_drops_optional_before_required_and_stays_within_budget() {
+    let fixture = new_fixture();
+    resource_agent(&fixture).await;
+    let project = resource_project(vec![
+        text_unit(&sized('o', 800), &["opt.md"], false),
+        text_unit(&sized('r', 600), &["req.md"], true),
+    ]);
+    let task = TaskProfileOverrides {
+        truncation: explicit(),
+        ..Default::default()
+    };
+    let pin = host_resolve(&fixture, &project, &task, &host_pin(Some(WINDOW_FOR_1000)))
+        .await
+        .unwrap();
+    let source = &pin.profile["contextSources"][0];
+    assert_eq!(source["tokens"], 600);
+    assert_eq!(source["truncated"], true);
+    let units = pin.profile["compiledContext"][0]["units"]
+        .as_array()
+        .unwrap();
+    assert_eq!(units.len(), 1);
+    assert!(units[0]["text"].as_str().unwrap().starts_with('r'));
+}
+
+fn permutations(items: &[usize]) -> Vec<Vec<usize>> {
+    if items.len() <= 1 {
+        return vec![items.to_vec()];
+    }
+    let mut out = Vec::new();
+    for index in 0..items.len() {
+        let mut rest = items.to_vec();
+        let head = rest.remove(index);
+        for mut tail in permutations(&rest) {
+            tail.insert(0, head);
+            out.push(tail);
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn every_ordering_keeps_required_units_and_stays_within_budget() {
+    let fixture = new_fixture();
+    resource_agent(&fixture).await;
+    // (tag, tokens, required)
+    let set = [
+        ('a', 300u64, true),
+        ('b', 200, true),
+        ('c', 400, false),
+        ('d', 350, false),
+        ('e', 100, false),
+    ];
+    let task = TaskProfileOverrides {
+        truncation: explicit(),
+        ..Default::default()
+    };
+    for order in permutations(&[0, 1, 2, 3, 4]) {
+        let units = order
+            .iter()
+            .map(|&i| text_unit(&sized(set[i].0, set[i].1), &[], set[i].2))
+            .collect();
+        let pin = host_resolve(
+            &fixture,
+            &resource_project(units),
+            &task,
+            &host_pin(Some(WINDOW_FOR_1000)),
+        )
+        .await
+        .unwrap();
+        assert!(pin.profile["contextSources"][0]["tokens"].as_u64().unwrap() <= 1_000);
+        let kept: Vec<char> = pin.profile["compiledContext"][0]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|unit| unit["text"].as_str().unwrap().chars().next().unwrap())
+            .collect();
+        assert!(kept.contains(&'a') && kept.contains(&'b'), "{order:?}");
+    }
+    // Required material that cannot fit refuses instead.
+    let units = vec![
+        text_unit(&sized('a', 600), &[], true),
+        text_unit(&sized('b', 600), &[], true),
+    ];
+    let error = host_resolve(
+        &fixture,
+        &resource_project(units),
+        &task,
+        &host_pin(Some(WINDOW_FOR_1000)),
+    )
+    .await
+    .expect_err("unavoidable");
+    assert!(
+        error.to_string().contains("context_overflow_unavoidable"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn tiny_units_cost_at_least_one_token_plus_framing() {
+    let fixture = new_fixture();
+    resource_agent(&fixture).await;
+    let project = resource_project(vec![
+        text_unit("a", &[], false),
+        text_unit("bb", &[], false),
+        text_unit("ccc", &[], false),
+    ]);
+    let pin = host_resolve(
+        &fixture,
+        &project,
+        &TaskProfileOverrides::default(),
+        &host_pin(None),
+    )
+    .await
+    .unwrap();
+    // 3 units x (ceil(chars/4)=1 + 4 framing).
+    assert_eq!(pin.profile["contextSources"][0]["tokens"], 15);
+}
+
+#[tokio::test]
+async fn content_change_changes_content_digest_and_profile_digest_and_explain_hides_text() {
+    let fixture = new_fixture();
+    resource_agent(&fixture).await;
+    let resolve = |text: &'static str| {
+        let fixture = &fixture;
+        async move {
+            host_resolve(
+                fixture,
+                &resource_project(vec![text_unit(text, &["c.md"], false)]),
+                &TaskProfileOverrides::default(),
+                &host_pin(None),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let first = resolve("secret-ish alpha").await;
+    let second = resolve("secret-ish alphb").await;
+    assert_ne!(
+        first.profile["contextSources"][0]["contentDigest"],
+        second.profile["contextSources"][0]["contentDigest"]
+    );
+    assert_ne!(first.digest, second.digest);
+    assert_eq!(first.profile["compilationPolicy"], "v2");
+    assert_eq!(
+        first.profile["contextSources"][0]["tokens"],
+        second.profile["contextSources"][0]["tokens"]
+    );
+    assert_eq!(
+        first.profile["compiledContext"][0]["units"][0]["text"],
+        "secret-ish alpha"
+    );
+    assert_eq!(
+        first.profile["compiledContext"][0]["sourceId"],
+        "mem://notes"
+    );
+
+    let admitted = fixture
+        .teammates
+        .admit(admission("alice", "content", Some(first.clone())))
+        .await
+        .unwrap();
+    let explanation = fixture
+        .profiles
+        .explain(&admitted.task.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!explanation.to_string().contains("secret-ish"));
+    assert!(explanation.get("compiledContext").is_none());
+    assert_eq!(
+        explanation["contextSources"][0]["contentDigest"],
+        first.profile["contextSources"][0]["contentDigest"]
+    );
+}
+
+#[tokio::test]
+async fn requested_budget_without_ceiling_is_kept_and_nonpositive_values_refuse() {
+    let fixture = new_fixture();
+    let mut bare = definition("alice");
+    bare.budgets = AgentBudgets::default();
+    agent(&fixture, "alice", bare).await;
+    let budget = |value: i64| TaskProfileOverrides {
+        budgets: AgentBudgets {
+            max_tool_iterations: Some(value),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let pin = host_resolve(
+        &fixture,
+        &ProjectSelection::default(),
+        &budget(1),
+        &host_pin(None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(pin.profile["budgets"]["maxToolIterations"], 1);
+    assert_eq!(pin.profile["provenance"]["maxToolIterations"], "task");
+    for bad in [0, -3] {
+        let error = host_resolve(
+            &fixture,
+            &ProjectSelection::default(),
+            &budget(bad),
+            &host_pin(None),
+        )
+        .await
+        .expect_err("non-positive budget");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid_overrides: budget maxToolIterations must be positive"),
+            "{error}"
+        );
+    }
+}

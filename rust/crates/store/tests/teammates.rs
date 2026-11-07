@@ -67,6 +67,14 @@ async fn create_agent(store: &SqliteStore, agent_id: &str) -> AgentRecord {
         .unwrap()
 }
 
+fn promote(now: i64) -> PromoteMailbox {
+    PromoteMailbox {
+        kind: "teammate.mailbox".into(),
+        priority: 0,
+        now,
+    }
+}
+
 fn admit(agent_id: &str, key: &str, marker: &str) -> AdmitTeammateTask {
     AdmitTeammateTask {
         task_id: None,
@@ -773,15 +781,20 @@ async fn reconcile_classifies_orphans_and_lands_queued_cancels() {
         .unwrap();
     let carol_ids: Vec<&str> = carol_changed.iter().map(|t| t.task_id.as_str()).collect();
     assert_eq!(carol_ids, [pending_cancel.task.task_id.as_str()]);
-    // A cancelled orphan lands CANCELLED — the durable request is honored,
-    // not re-run and not left uncertain.
+    // Cancellation intent is not evidence of a settled outcome: the dead
+    // attempt may have mutated state, so the orphan is UNCERTAIN with the
+    // request still recorded.
     let cancelled = store
         .get_task(&pending_cancel.task.task_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cancelled.status, TaskStatus::Cancelled);
-    assert_eq!(cancelled.finished_at, Some(5_000));
+    assert_eq!(cancelled.status, TaskStatus::Uncertain);
+    assert!(cancelled.cancel_requested);
+    assert_eq!(
+        cancelled.error.as_deref(),
+        Some("cancel_requested_outcome_unknown")
+    );
     let orphan_now = store.get_task(&orphan.task.task_id).await.unwrap().unwrap();
     assert_eq!(orphan_now.status, TaskStatus::Uncertain);
     assert_eq!(
@@ -900,18 +913,23 @@ async fn mailbox_orders_per_agent_and_promotes_head_first() {
     assert_eq!(pending[0].agent_id.as_deref(), Some("alice"));
     // Promotion is head-first and CAS-guarded.
     let promoted = store
-        .promote_next_agent_mailbox("alice".into(), 1_100)
+        .promote_next_agent_mailbox("alice".into(), promote(1_100))
         .await
         .unwrap()
         .unwrap();
+    let (promoted, promoted_task) = promoted;
     assert_eq!(promoted.input_id, "i1");
     assert_eq!(promoted.status, AgentInputStatus::Converted);
+    assert_eq!(
+        promoted.applied_task_id.as_deref(),
+        Some(promoted_task.task_id.as_str())
+    );
     let next = store
-        .promote_next_agent_mailbox("alice".into(), 1_101)
+        .promote_next_agent_mailbox("alice".into(), promote(1_101))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(next.input_id, "i2");
+    assert_eq!(next.0.input_id, "i2");
     // Cancellation removes a pending input from the queue…
     store
         .cancel_agent_mailbox("i3".into(), 1_102)
@@ -926,7 +944,7 @@ async fn mailbox_orders_per_agent_and_promotes_head_first() {
     );
     assert!(
         store
-            .promote_next_agent_mailbox("alice".into(), 1_103)
+            .promote_next_agent_mailbox("alice".into(), promote(1_103))
             .await
             .unwrap()
             .is_none()
@@ -938,11 +956,11 @@ async fn mailbox_orders_per_agent_and_promotes_head_first() {
     ));
     // Bob's head is untouched by alice's drains.
     let bob_head = store
-        .promote_next_agent_mailbox("bob".into(), 1_105)
+        .promote_next_agent_mailbox("bob".into(), promote(1_105))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(bob_head.input_id, bob_input.input_id);
+    assert_eq!(bob_head.0.input_id, bob_input.input_id);
     // A human request is not mailbox material.
     let mut request = mailbox("i9", "approve?", 1_200);
     request.kind = AgentInputKind::HumanRequest;
@@ -1264,7 +1282,7 @@ async fn a_version_fourteen_database_upgrades_and_keeps_admissions() {
     // exactly as version 14 defined it.
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch(
-        "DROP INDEX agent_inputs_agent; DROP TABLE agent_admissions;
+        "DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; DROP TABLE agent_admissions;
          DROP TABLE agent_inputs;
          CREATE TABLE agent_inputs(input_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, target_task_id TEXT, record TEXT NOT NULL);
          CREATE INDEX agent_inputs_session ON agent_inputs(session_id,status);
@@ -1326,4 +1344,400 @@ async fn admitted_records_stay_byte_compatible_when_unbound() {
     assert!(!text.contains("agentId"), "{text}");
     assert!(!text.contains("agentRevision"), "{text}");
     assert!(!text.contains("admissionKey"), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// Hardening: cancel/uncertain, bounded reads, deletion scope, child joins,
+// atomic mailbox conversion, authority separation.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancel_with_lost_lease_is_uncertain_and_keeps_the_lane_blocked() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    let first = admit_ok(&store, "alice", "first").await;
+    let second = admit_ok(&store, "alice", "second").await;
+    let claimed = store.claim(claim_short(1_100)).await.unwrap().unwrap();
+    assert_eq!(claimed.task.task_id, first.task.task_id);
+    store.cancel_task(&first.task.task_id, 1_120).await.unwrap();
+    let changed = store
+        .reconcile_agent_runs("alice".into(), 5_000)
+        .await
+        .unwrap();
+    assert_eq!(changed.len(), 1);
+    let task = store.get_task(&first.task.task_id).await.unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Uncertain);
+    assert!(task.cancel_requested);
+    assert_eq!(
+        task.error.as_deref(),
+        Some("cancel_requested_outcome_unknown")
+    );
+    // The lane is still owned: the second task of the same agent waits.
+    assert!(store.claim(claim_at(5_100)).await.unwrap().is_none());
+    assert_eq!(
+        store
+            .get_task(&second.task.task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::Queued
+    );
+}
+
+#[tokio::test]
+async fn lease_recovery_of_a_cancelled_agent_task_is_uncertain() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    let admitted = admit_ok(&store, "alice", "k").await;
+    store.claim(claim_short(1_100)).await.unwrap().unwrap();
+    store
+        .cancel_task(&admitted.task.task_id, 1_120)
+        .await
+        .unwrap();
+    store
+        .recover(5_000, 3, 10, RecoveryMode::Automatic)
+        .await
+        .unwrap();
+    let task = store
+        .get_task(&admitted.task.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.status, TaskStatus::Uncertain);
+    assert!(task.cancel_requested);
+}
+
+#[tokio::test]
+async fn reconcile_ignores_terminal_rows_and_pages_are_newest_first() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    for index in 0..5 {
+        let admitted = admit_ok(&store, "alice", &format!("k{index}")).await;
+        let claimed = store.claim(claim_at(1_100 + index)).await.unwrap().unwrap();
+        assert_eq!(claimed.task.task_id, admitted.task.task_id);
+        finish(&store, claimed.lease, TaskStatus::Completed, 1_200 + index).await;
+    }
+    let live = admit_ok(&store, "alice", "live").await;
+    assert!(
+        store
+            .reconcile_agent_runs("alice".into(), 9_000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let unfinished = store
+        .list_agent_unfinished_tasks("alice".into())
+        .await
+        .unwrap();
+    assert_eq!(unfinished.len(), 1);
+    assert_eq!(unfinished[0].task_id, live.task.task_id);
+    let all = store.list_agent_tasks("alice".into()).await.unwrap();
+    assert_eq!(all.len(), 6);
+    let first = store
+        .list_agent_tasks_page("alice".into(), None, 4)
+        .await
+        .unwrap();
+    let ids = |tasks: &[TaskRecord]| tasks.iter().map(|t| t.task_id.clone()).collect::<Vec<_>>();
+    let newest_first: Vec<_> = all.iter().rev().map(|t| t.task_id.clone()).collect();
+    assert_eq!(ids(&first.tasks), newest_first[..4]);
+    let cursor = first.next_before.expect("full page yields a cursor");
+    let second = store
+        .list_agent_tasks_page("alice".into(), Some(cursor), 4)
+        .await
+        .unwrap();
+    assert_eq!(ids(&second.tasks), newest_first[4..]);
+    assert_eq!(second.next_before, None, "short page ends the cursor");
+    // limit 0 clamps to 1.
+    let one = store
+        .list_agent_tasks_page("alice".into(), None, 0)
+        .await
+        .unwrap();
+    assert_eq!(one.tasks.len(), 1);
+}
+
+#[tokio::test]
+async fn delete_is_blocked_by_the_agents_own_unfinished_work_only() {
+    // Queued.
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    create_agent(&store, "bob").await;
+    let queued = admit_ok(&store, "alice", "q").await;
+    let blocked = store.delete_agent("alice".into(), 2_000).await.unwrap_err();
+    assert!(
+        matches!(&blocked, StoreError::InvalidTransition(m)
+            if m == "agent_delete_blocked_active_work: 1 active task(s), 0 unresolved execution receipt(s)"),
+        "{blocked}"
+    );
+    let preview = store
+        .preview_agent_deletion("alice".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((preview.active_tasks, preview.deletable), (1, false));
+    // WaitingApproval.
+    let claimed = store.claim(claim_at(1_100)).await.unwrap().unwrap();
+    assert_eq!(claimed.task.task_id, queued.task.task_id);
+    store
+        .park_turn(ParkTurn {
+            fence: claimed.lease.fence(),
+            assistant_message: None,
+            events: vec![],
+            request: None,
+            now: 1_150,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_task(&queued.task.task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::WaitingApproval
+    );
+    assert!(store.delete_agent("alice".into(), 2_000).await.is_err());
+    // Another agent's unresolved receipt does not block alice; bob's own
+    // running task with a receipt blocks bob only.
+    let bob_task = admit_ok(&store, "bob", "b").await;
+    let bob_claim = store.claim(claim_at(1_200)).await.unwrap().unwrap();
+    assert_eq!(bob_claim.task.task_id, bob_task.task.task_id);
+    store
+        .admit_execution(
+            bob_claim.lease.fence(),
+            ExecutionReceiptAdmission {
+                execution_id: "exec-b".into(),
+                run_id: bob_task.task.task_id.clone(),
+                chat_id: "chat".into(),
+                tool_call_id: "call-1".into(),
+                tool_name: "write_file".into(),
+                args_sha256: "0".repeat(64),
+                ts_args_sha256: None,
+                args_hash_provenance: ArgsHashProvenance::Canonical,
+                context_sha256: "0".repeat(64),
+                attempt_id: "attempt-1".into(),
+                approval_request_id: None,
+                approval_generation: None,
+                now: 1_201,
+            },
+        )
+        .await
+        .unwrap();
+    let bob_preview = store
+        .preview_agent_deletion("bob".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bob_preview.unresolved_executions, 1);
+    // A third agent with no work deletes despite the global receipt.
+    create_agent(&store, "carol").await;
+    let carol = store
+        .preview_agent_deletion("carol".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(carol.deletable);
+    assert_eq!(carol.unresolved_executions, 0);
+    store.delete_agent("carol".into(), 2_000).await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_is_blocked_by_an_own_uncertain_task() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    let admitted = admit_ok(&store, "alice", "k").await;
+    let claimed = store.claim(claim_at(1_100)).await.unwrap().unwrap();
+    store
+        .mark_uncertain(claimed.lease.fence(), 1_150, "outcome_unknown")
+        .await
+        .unwrap();
+    let preview = store
+        .preview_agent_deletion("alice".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!preview.deletable);
+    assert!(store.delete_agent("alice".into(), 2_000).await.is_err());
+    store
+        .resolve_uncertain(admitted.task.task_id, TaskStatus::Failed, None, 1_200)
+        .await
+        .unwrap();
+    assert!(store.delete_agent("alice".into(), 2_000).await.is_ok());
+}
+
+#[tokio::test]
+async fn continue_after_children_refuses_while_a_child_is_unsettled() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    let parent = admit_ok(&store, "alice", "parent").await;
+    let claimed = store
+        .claim_with_concurrency(claim_at(1_100), 1)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .submit(child("child-1", &parent.task.task_id, 10, 1_150))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .wait_for_children(claimed.lease.fence(), 1_200)
+            .await
+            .unwrap()
+    );
+    let refused = store
+        .continue_after_children(parent.task.task_id.clone(), 1_300)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, StoreError::InvalidTransition(m) if m == "children_unsettled"),
+        "{refused}"
+    );
+    let running = store
+        .claim_with_concurrency(claim_at(1_310), 1)
+        .await
+        .unwrap()
+        .unwrap();
+    finish(&store, running.lease, TaskStatus::Completed, 1_400).await;
+    assert_eq!(
+        store
+            .continue_after_children(parent.task.task_id, 1_500)
+            .await
+            .unwrap()
+            .status,
+        TaskStatus::Queued
+    );
+}
+
+#[tokio::test]
+async fn same_agent_child_admission_is_refused_unless_the_parent_is_terminal() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    create_agent(&store, "bob").await;
+    let parent = admit_ok(&store, "alice", "parent").await;
+    let mut under_parent = admit("alice", "kid", "kid");
+    under_parent.parent_task_id = Some(parent.task.task_id.clone());
+    let refused = store
+        .admit_teammate_task(under_parent.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, StoreError::InvalidInput(m) if m == "self_delegation_unsupported"),
+        "{refused}"
+    );
+    // A different agent may be the child.
+    let mut other = admit("bob", "bob-kid", "bob-kid");
+    other.parent_task_id = Some(parent.task.task_id.clone());
+    store.admit_teammate_task(other).await.unwrap();
+    // Once the parent is terminal it is a continuation link: admitted.
+    let claimed = store.claim(claim_at(1_100)).await.unwrap().unwrap();
+    assert_eq!(claimed.task.task_id, parent.task.task_id);
+    finish(&store, claimed.lease, TaskStatus::Completed, 1_200).await;
+    let admitted = store.admit_teammate_task(under_parent).await.unwrap();
+    assert_eq!(
+        admitted.task.parent_task_id.as_deref(),
+        Some(parent.task.task_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn mailbox_promotion_creates_one_task_and_is_replay_safe() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    store
+        .enqueue_agent_mailbox("alice".into(), mailbox("i1", "one", 1_000))
+        .await
+        .unwrap();
+    let (input, task) = store
+        .promote_next_agent_mailbox("alice".into(), promote(1_100))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(input.status, AgentInputStatus::Converted);
+    assert_eq!(
+        input.applied_task_id.as_deref(),
+        Some(task.task_id.as_str())
+    );
+    assert_eq!(task.admission_key.as_deref(), Some("mailbox:i1"));
+    assert_eq!(task.agent_id.as_deref(), Some("alice"));
+    assert_eq!(task.kind, "teammate.mailbox");
+    assert_eq!(
+        task.payload,
+        json!({"mailboxInputId": "i1", "inputKind": "follow_up", "content": {"text": "one"}})
+    );
+    // Promoting again finds nothing and creates nothing.
+    assert!(
+        store
+            .promote_next_agent_mailbox("alice".into(), promote(1_101))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store.list_agent_tasks("alice".into()).await.unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn refused_mailbox_promotion_leaves_the_input_pending() {
+    let store = SqliteStore::memory(4).unwrap();
+    create_agent(&store, "alice").await;
+    store
+        .enqueue_agent_mailbox("alice".into(), mailbox("i1", "one", 1_000))
+        .await
+        .unwrap();
+    store.archive_agent("alice".into(), 1_050).await.unwrap();
+    let error = store
+        .promote_next_agent_mailbox("alice".into(), promote(1_100))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidTransition(_)), "{error}");
+    let pending = store
+        .list_agent_mailbox("alice".into(), Some(vec![AgentInputStatus::Pending]))
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(
+        store
+            .list_agent_tasks("alice".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn duplicate_and_import_clear_resource_grants() {
+    let store = SqliteStore::memory(4).unwrap();
+    let mut def = definition("src");
+    def.resources = vec!["resource://src/repo".into()];
+    store
+        .create_agent(CreateAgent {
+            agent_id: Some("src".into()),
+            scope: "team".into(),
+            owner_id: "owner".into(),
+            definition: def,
+            now: 1_000,
+        })
+        .await
+        .unwrap();
+    let copy = store
+        .duplicate_agent(DuplicateAgent {
+            agent_id: "src".into(),
+            new_agent_id: Some("copy".into()),
+            owner_id: None,
+            now: 2_000,
+        })
+        .await
+        .unwrap();
+    assert!(copy.definition.resources.is_empty());
+    let envelope = store.export_agents("team".into()).await.unwrap();
+    let target = SqliteStore::memory(4).unwrap();
+    target.import_agents(envelope, "team".into()).await.unwrap();
+    let imported = target.get_agent("src".into()).await.unwrap().unwrap();
+    assert!(imported.definition.resources.is_empty());
+    let revisions = target.list_agent_revisions("src".into()).await.unwrap();
+    assert!(revisions.iter().all(|r| r.snapshot.resources.is_empty()));
 }

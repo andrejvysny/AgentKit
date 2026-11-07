@@ -19,8 +19,10 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// version 15 adds the durable teammate admission ledger (idempotency key
 /// → logical task, AGENTKIT-88) and the agent addressing column on
 /// `agent_inputs` that turns the durable input queue into a per-agent
-/// ordered mailbox.
-pub const SCHEMA_VERSION: i64 = 15;
+/// ordered mailbox; version 16 adds the `tasks_agent` expression index so
+/// per-agent task reads (reconcile, history pages, deletion gate) are not
+/// full scans.
+pub const SCHEMA_VERSION: i64 = 16;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -261,6 +263,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 15 {
             migrate_teammate_admission(&mut connection)?;
         }
+        if version < 16 {
+            migrate_agent_task_index(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -369,6 +374,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 15 {
         sql.push_str(TEAMMATES_SCHEMA);
     }
+    if version >= 16 {
+        sql.push_str(AGENT_TASK_INDEX_SCHEMA);
+    }
     sql
 }
 
@@ -408,6 +416,22 @@ CREATE TABLE IF NOT EXISTS agent_admissions(admission_key TEXT PRIMARY KEY, agen
 CREATE INDEX IF NOT EXISTS agent_admissions_agent ON agent_admissions(agent_id);
 CREATE INDEX IF NOT EXISTS agent_inputs_agent ON agent_inputs(agent_id,status);
 "#;
+
+/// Per-agent task lookup, additive at schema version 16. `agentId` lives
+/// only inside the record JSON, so this is an expression index; partial
+/// because most tasks are not agent-bound. Queries must use the identical
+/// expression. `IF NOT EXISTS` keeps a re-applied migration a no-op.
+const AGENT_TASK_INDEX_SCHEMA: &str = r#"
+CREATE INDEX IF NOT EXISTS tasks_agent ON tasks(json_extract(record, '$.agentId')) WHERE json_extract(record, '$.agentId') IS NOT NULL;
+"#;
+
+fn migrate_agent_task_index(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(AGENT_TASK_INDEX_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 16)?;
+    transaction.commit()?;
+    Ok(())
+}
 
 fn migrate_teammate_admission(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;

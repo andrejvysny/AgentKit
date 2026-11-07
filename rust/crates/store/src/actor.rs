@@ -80,6 +80,9 @@ pub struct SqliteStore {
     /// Application-provided secret for sealing `connector_connections`
     /// credential values (AGENTKIT-72). `None` selects the store-local key.
     pub(crate) connector_credential_key: Option<Arc<Vec<u8>>>,
+    /// When true, the store-local connector key is refused (see
+    /// `with_connector_key_required`).
+    pub(crate) connector_key_required: bool,
 }
 
 /// Opaque identity that does not keep a SQLite actor or its file lock alive.
@@ -158,6 +161,7 @@ impl SqliteStore {
             gate_timeout: Duration::from_secs(30),
             aging: crate::TaskAging::default(),
             connector_credential_key: None,
+            connector_key_required: false,
         })
     }
     pub fn memory(capacity: usize) -> Result<Self> {
@@ -181,6 +185,21 @@ impl SqliteStore {
     pub fn with_connector_credential_key(mut self, secret: impl Into<Vec<u8>>) -> Self {
         self.connector_credential_key = Some(Arc::new(secret.into()));
         self
+    }
+    /// Production posture for connector credentials: when `required` and no
+    /// external key was injected, every connector credential seal/open that
+    /// would need the store-local key fails with
+    /// `InvalidInput("connector_credential_key_required: ...")`, and the
+    /// store-local key row is never created. Default `false`.
+    pub fn with_connector_key_required(mut self, required: bool) -> Self {
+        self.connector_key_required = required;
+        self
+    }
+    pub(crate) fn connector_crypto_source(&self) -> crate::connector_crypto::CryptoSource {
+        crate::connector_crypto::CryptoSource {
+            injected: self.connector_credential_key.clone(),
+            required: self.connector_key_required,
+        }
     }
     pub(crate) async fn lock_root(&self) -> Result<tokio::sync::OwnedMutexGuard<()>> {
         if let Ok(permit) = self.gate.clone().try_lock_owned() {

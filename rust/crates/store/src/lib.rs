@@ -34,6 +34,7 @@ pub use actor::{SqliteStore, StoreActorIdentity};
 pub use advisor::*;
 pub use agent_inputs::*;
 pub use agents::*;
+pub use connector_crypto::ResealReport;
 pub use context_summaries::*;
 pub use conversations::*;
 pub use data::*;

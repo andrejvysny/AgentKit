@@ -200,8 +200,262 @@ fn mode_rank(mode: agentkit_core::permission::CodingMode) -> u8 {
     }
 }
 
+/// Per-unit framing overhead: role/delimiter tokens a unit costs on top
+/// of its text, so many tiny units cannot slip under the budget.
+const UNIT_FRAMING_TOKENS: u64 = 4;
+
+/// Version tag of the compilation rules sealed into the profile.
+const COMPILATION_POLICY: &str = "v2";
+
+/// Conservative text estimate: `ceil(chars / 4)`, at least 1 when
+/// non-empty, 0 when empty.
 fn estimate_tokens(text: &str) -> u64 {
-    u64::try_from(text.chars().count()).unwrap_or(u64::MAX) / 4
+    if text.is_empty() {
+        return 0;
+    }
+    let chars = u64::try_from(text.chars().count()).unwrap_or(u64::MAX);
+    chars.div_ceil(4).max(1)
+}
+
+/// The ONE place a unit's cost is computed: text plus framing for every
+/// non-empty unit.
+fn unit_tokens(unit: &ContextUnit) -> u64 {
+    match estimate_tokens(&unit.text) {
+        0 => 0,
+        text => text.saturating_add(UNIT_FRAMING_TOKENS),
+    }
+}
+
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+fn safe_window(window: Option<u64>) -> u64 {
+    window
+        .filter(|value| *value > 0 && *value <= MAX_SAFE_INTEGER)
+        .unwrap_or(crate::FALLBACK_CONTEXT_WINDOW_TOKENS as u64)
+}
+
+/// The provider the host application owns and pins itself: the embedding
+/// app's registry is the authority, so AgentKit's catalogue is not read.
+/// The host re-checks its own registry at execution.
+#[derive(Clone, Debug)]
+pub struct HostProviderPin {
+    pub provider_id: String,
+    pub model_id: String,
+    pub provider_kind: String,
+    pub local: bool,
+    pub connection_generation: Option<String>,
+    pub tool_calling: bool,
+    pub vision: bool,
+    pub streaming: bool,
+    pub context_window_tokens: Option<u64>,
+}
+
+/// Provider, model and capability after resolution, whichever authority
+/// produced them; everything downstream is shared.
+struct ResolvedProvider {
+    provider_id: String,
+    model_id: String,
+    tool_calling: bool,
+    vision: bool,
+    streaming: bool,
+    window: u64,
+    supports_tool_calling_model: Option<bool>,
+    authority: &'static str,
+}
+
+/// Capability validated BEFORE admission against recorded/pinned
+/// evidence; returns continuation compatibility.
+fn check_capability(
+    resolved: &ResolvedProvider,
+    task: &TaskProfileOverrides,
+    tools: &[String],
+) -> HostResult<bool> {
+    if !tools.is_empty()
+        && (!resolved.tool_calling || resolved.supports_tool_calling_model == Some(false))
+    {
+        return Err(refused("unsupported_tools:provider_lacks_tool_calling"));
+    }
+    if task.requires_vision && !resolved.vision {
+        return Err(refused("unsupported_vision"));
+    }
+    if task.requires_continuation && !resolved.streaming {
+        return Err(refused("provider_continuation_incompatible"));
+    }
+    Ok(resolved.streaming && (tools.is_empty() || resolved.tool_calling))
+}
+
+/// Bounded compilation. Never seals an over-budget profile: the kept
+/// total is re-derived from the keep flags and asserted against budget.
+fn compile_context(
+    compiled: &mut [CompiledSource],
+    budget: u64,
+    truncate: bool,
+) -> HostResult<Option<Value>> {
+    let all = |compiled: &[CompiledSource]| -> Vec<(bool, u64)> {
+        compiled
+            .iter()
+            .flat_map(|source| source.units.iter())
+            .map(|unit| (unit.required, unit_tokens(unit)))
+            .collect()
+    };
+    let units = all(compiled);
+    let needed: u64 = units.iter().map(|(_, tokens)| *tokens).sum();
+    let mut truncation = None;
+    if needed > budget {
+        if !truncate {
+            // Overflow is a REFUSAL unless the caller put an explicit
+            // truncation policy on record. Nothing is dropped silently.
+            return Err(refused(format!(
+                "context_overflow_truncation_required:needed {needed} tokens, {budget} fit"
+            )));
+        }
+        // Pass 1: required units must fit — truncation is not an answer
+        // to impossible material.
+        let required: u64 = units
+            .iter()
+            .filter(|(required, _)| *required)
+            .map(|(_, tokens)| *tokens)
+            .sum();
+        if required > budget {
+            return Err(refused(format!(
+                "context_overflow_unavoidable:{required} required tokens exceed the {budget}-token budget"
+            )));
+        }
+        // Pass 2: optional units in original order, whole units only (a
+        // tool-call pair is ONE unit); `used` already holds all required.
+        let (mut used, mut dropped) = (required, 0u64);
+        for source in compiled.iter_mut() {
+            source.kept = source
+                .units
+                .iter()
+                .map(|unit| {
+                    let tokens = unit_tokens(unit);
+                    let keep = unit.required || used.saturating_add(tokens) <= budget;
+                    if keep && !unit.required {
+                        used = used.saturating_add(tokens);
+                    }
+                    if !keep {
+                        dropped += 1;
+                    }
+                    keep
+                })
+                .collect();
+        }
+        truncation = Some(json!({
+            "mode": "explicit",
+            "droppedUnits": dropped,
+            "toolPairsPreserved": true,
+        }));
+    } else {
+        for source in compiled.iter_mut() {
+            source.kept = vec![true; source.units.len()];
+        }
+    }
+    let kept_total: u64 = compiled
+        .iter()
+        .flat_map(|source| source.units.iter().zip(&source.kept))
+        .filter(|(_, kept)| **kept)
+        .map(|(unit, _)| unit_tokens(unit))
+        .sum();
+    if kept_total > budget {
+        return Err(refused(format!(
+            "context_compilation_invariant:kept {kept_total} tokens exceed the {budget}-token budget"
+        )));
+    }
+    Ok(truncation)
+}
+
+fn unit_kind(unit: &ContextUnit) -> &'static str {
+    match unit.kind {
+        ContextUnitKind::Text => "text",
+        ContextUnitKind::ToolPair => "toolPair",
+    }
+}
+
+fn kept_units(source: &CompiledSource) -> impl Iterator<Item = &ContextUnit> {
+    source
+        .units
+        .iter()
+        .zip(&source.kept)
+        .filter(|(_, kept)| **kept)
+        .map(|(unit, _)| unit)
+}
+
+/// sha256 over the KEPT units, so the seal binds the admitted content
+/// itself, not just ids and lengths.
+fn content_digest(source: &CompiledSource) -> String {
+    let units: Vec<Value> = kept_units(source).map(compiled_unit).collect();
+    compiled_content_digest(&units).expect("compiled units are well-formed")
+}
+
+fn compiled_unit(unit: &ContextUnit) -> Value {
+    json!({
+        "kind": unit_kind(unit),
+        "text": unit.text,
+        "citations": unit.citations,
+        "required": unit.required,
+    })
+}
+
+/// The `contentDigest` of one `compiledContext` entry's `units`
+/// (`{kind, text, citations, required}` objects), for executing hosts to
+/// verify the content they deliver. Each unit is encoded as the positional
+/// array `[kind, text, citations, required]` so the digest never depends on
+/// JSON object key order (serde_json's `preserve_order` feature). `None`
+/// when a unit is malformed.
+pub fn compiled_content_digest(units: &[Value]) -> Option<String> {
+    let mut encoded = Vec::with_capacity(units.len());
+    for unit in units {
+        let citations = unit["citations"].as_array()?;
+        if !citations.iter().all(Value::is_string) {
+            return None;
+        }
+        encoded.push(json!([
+            unit["kind"].as_str()?,
+            unit["text"].as_str()?,
+            citations,
+            unit["required"].as_bool()?,
+        ]));
+    }
+    serde_json::to_string(&Value::Array(encoded))
+        .ok()
+        .map(|text| value_digest(&text))
+}
+
+/// Seal one compiled source: kept tokens, preserved citations, explicit
+/// truncation markers. Dropped citations vanish with their unit; kept
+/// citations are NEVER silently dropped.
+fn seal_source(source: &CompiledSource) -> Value {
+    let mut tokens = 0u64;
+    let mut citations: Vec<String> = Vec::new();
+    for unit in kept_units(source) {
+        tokens = tokens.saturating_add(unit_tokens(unit));
+        for citation in &unit.citations {
+            if !citations.iter().any(|kept| kept == citation) {
+                citations.push(citation.clone());
+            }
+        }
+    }
+    json!({
+        "id": source.id,
+        "kind": source.kind,
+        "revision": source.revision,
+        "tokens": tokens,
+        "truncated": source.kept.iter().any(|kept| !*kept),
+        "citations": citations,
+        "contentDigest": content_digest(source),
+    })
+}
+
+/// The exact admitted content, for the executing host to deliver.
+fn compiled_entry(source: &CompiledSource) -> Value {
+    let units: Vec<Value> = kept_units(source).map(compiled_unit).collect();
+    json!({
+        "sourceId": source.id,
+        "kind": source.kind,
+        "revision": source.revision,
+        "units": units,
+    })
 }
 
 fn value_digest(value: &str) -> String {
@@ -254,6 +508,37 @@ impl RunProfileService {
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
     ) -> HostResult<PinnedRunProfile> {
+        self.resolve_inner(agent_id, now, project, task, approvals, None)
+            .await
+    }
+
+    /// Resolve with a HOST-AUTHORITY provider: the embedding application
+    /// owns its provider registry, so provider/model/capability come from
+    /// the pin with NO catalogue reads. Task provider/model overrides,
+    /// when present, must equal the pin's. Everything after provider
+    /// resolution is the same code as [`Self::resolve`].
+    pub async fn resolve_with_host_provider(
+        &self,
+        agent_id: &str,
+        now: i64,
+        project: &ProjectSelection,
+        task: &TaskProfileOverrides,
+        approvals: &[ApprovalGrantRef],
+        host: &HostProviderPin,
+    ) -> HostResult<PinnedRunProfile> {
+        self.resolve_inner(agent_id, now, project, task, approvals, Some(host))
+            .await
+    }
+
+    async fn resolve_inner(
+        &self,
+        agent_id: &str,
+        now: i64,
+        project: &ProjectSelection,
+        task: &TaskProfileOverrides,
+        approvals: &[ApprovalGrantRef],
+        host: Option<&HostProviderPin>,
+    ) -> HostResult<PinnedRunProfile> {
         if task
             .truncation
             .as_ref()
@@ -268,16 +553,154 @@ impl RunProfileService {
             .filter(|agent| agent.lifecycle != agentkit_store::AgentLifecycle::Deleted)
             .ok_or_else(|| HostError::NotFound(format!("agent {agent_id}")))?;
         let mut provenance = serde_json::Map::new();
+        let resolved = match host {
+            Some(pin) => self.host_provider(pin, task, &mut provenance)?,
+            None => self.catalog_provider(&agent, task, &mut provenance).await?,
+        };
+        let (effective_mode, effective_tools) = self.permissions(&agent, task, &mut provenance)?;
+        let continuation_compatible = check_capability(&resolved, task, &effective_tools)?;
+        let skills = self.pinned_skills(&agent).await?;
+        let mut compiled = self.collect_sources(&agent, project).await?;
 
+        let reserve = 16_384u64.min(resolved.window / 2);
+        let fixed = estimate_tokens(&agent.definition.instructions);
+        let budget = resolved
+            .window
+            .saturating_sub(reserve)
+            .saturating_sub(fixed);
+        let truncation = compile_context(&mut compiled, budget, task.truncation.is_some())?;
+        let context_sources: Vec<Value> = compiled.iter().map(seal_source).collect();
+        let compiled_context: Vec<Value> = compiled.iter().map(compiled_entry).collect();
+        let budgets = self.budgets(&agent, task, &mut provenance)?;
+
+        // -- environment: names and digests, never values ---------------
+        let vars: Vec<Value> = self
+            .defaults
+            .environment
+            .iter()
+            .map(|(name, value)| json!({"name": name, "valueDigest": value_digest(value)}))
+            .collect();
+
+        let mut provider = json!({
+            "providerId": resolved.provider_id,
+            "modelId": resolved.model_id,
+            "localOnly": self.defaults.local_only,
+            "fallbacks": self.defaults.fallback_providers,
+            "authority": resolved.authority,
+        });
+        if let (Some(pin), Some(object)) = (host, provider.as_object_mut()) {
+            object.insert("kind".into(), json!(pin.provider_kind));
+            object.insert(
+                "connectionGeneration".into(),
+                json!(pin.connection_generation),
+            );
+        }
+        let profile = json!({
+            "version": 1,
+            "agentId": agent.agent_id,
+            "agentRevision": agent.current_revision,
+            "provider": provider,
+            "capability": {
+                "toolCalling": resolved.tool_calling,
+                "vision": resolved.vision,
+                "streaming": resolved.streaming,
+                "continuationCompatible": continuation_compatible,
+                "contextWindowTokens": resolved.window,
+            },
+            "skills": skills,
+            "contextSources": context_sources,
+            "compiledContext": compiled_context,
+            "compilationPolicy": COMPILATION_POLICY,
+            "permissionCeiling": {
+                "mode": effective_mode.as_str(),
+                "tools": effective_tools,
+            },
+            "budgets": Value::Object(budgets),
+            "environment": {"vars": vars},
+            "approvals": approvals
+                .iter()
+                .map(|grant| {
+                    json!({
+                        "sessionId": grant.session_id,
+                        "grantId": grant.grant_id,
+                        "digest": grant.digest,
+                    })
+                })
+                .collect::<Vec<Value>>(),
+            "truncation": truncation,
+            "provenance": Value::Object(provenance),
+        });
+        Ok(PinnedRunProfile {
+            digest: run_profile_digest(&profile),
+            profile,
+            pinned_at: now,
+        })
+    }
+
+    /// Host-authority provider: values come from the pin, never from the
+    /// catalogue. Overrides may only restate the pin.
+    fn host_provider(
+        &self,
+        host: &HostProviderPin,
+        task: &TaskProfileOverrides,
+        provenance: &mut serde_json::Map<String, Value>,
+    ) -> HostResult<ResolvedProvider> {
+        if host.provider_id.trim().is_empty() {
+            return Err(refused("provider_unnamed"));
+        }
+        if host.model_id.trim().is_empty() {
+            return Err(refused("model_unresolved"));
+        }
+        if task
+            .provider_id
+            .as_deref()
+            .is_some_and(|requested| requested != host.provider_id)
+            || task
+                .model
+                .as_deref()
+                .is_some_and(|model| !model.is_empty() && model != host.model_id)
+        {
+            return Err(refused("host_provider_mismatch"));
+        }
+        if self.defaults.local_only && !host.local && !self.is_fallback(&host.provider_id) {
+            return Err(refused(format!(
+                "silent_local_to_cloud_refused:{}",
+                host.provider_id
+            )));
+        }
+        provenance.insert("provider".into(), json!("host"));
+        provenance.insert("model".into(), json!("host"));
+        Ok(ResolvedProvider {
+            provider_id: host.provider_id.clone(),
+            model_id: host.model_id.clone(),
+            tool_calling: host.tool_calling,
+            vision: host.vision,
+            streaming: host.streaming,
+            window: safe_window(host.context_window_tokens),
+            supports_tool_calling_model: None,
+            authority: "host",
+        })
+    }
+
+    fn is_fallback(&self, provider_id: &str) -> bool {
+        self.defaults
+            .fallback_providers
+            .iter()
+            .any(|configured| configured == provider_id)
+    }
+
+    /// Catalogue provider: the original routing, model precedence and
+    /// recorded-capability reads.
+    async fn catalog_provider(
+        &self,
+        agent: &agentkit_store::AgentRecord,
+        task: &TaskProfileOverrides,
+        provenance: &mut serde_json::Map<String, Value>,
+    ) -> HostResult<ResolvedProvider> {
         // -- provider & routing: only explicitly configured fallbacks ---
         let provider_id = match task.provider_id.as_deref() {
             Some(requested) if requested != self.defaults.provider_id => {
-                if !self
-                    .defaults
-                    .fallback_providers
-                    .iter()
-                    .any(|configured| configured == requested)
-                {
+                if !self.is_fallback(requested) {
                     // A different provider nobody configured is a silent
                     // fallback — refused, whatever the direction.
                     return Err(refused(format!("fallback_not_configured:{requested}")));
@@ -307,14 +730,7 @@ impl RunProfileService {
         let is_local = provider["kind"]
             .as_str()
             .is_some_and(|kind| LOCAL_PROVIDER_KINDS.contains(&kind));
-        if self.defaults.local_only
-            && !is_local
-            && !self
-                .defaults
-                .fallback_providers
-                .iter()
-                .any(|configured| configured == &provider_id)
-        {
+        if self.defaults.local_only && !is_local && !self.is_fallback(&provider_id) {
             return Err(refused(format!(
                 "silent_local_to_cloud_refused:{provider_id}"
             )));
@@ -345,11 +761,32 @@ impl RunProfileService {
             .get_provider_capabilities(&provider_id)
             .await?
             .ok_or_else(|| refused(format!("provider_capability_missing:{provider_id}")))?;
-        let tool_calling = capabilities["toolCalling"].as_bool() == Some(true);
-        let vision = capabilities["vision"].as_bool() == Some(true);
-        let streaming = capabilities["streaming"].as_bool() == Some(true);
+        let window = model_row
+            .as_ref()
+            .and_then(|row| row["contextWindowTokens"].as_u64())
+            .or_else(|| capabilities["maxContextTokens"].as_u64());
+        Ok(ResolvedProvider {
+            provider_id,
+            model_id,
+            tool_calling: capabilities["toolCalling"].as_bool() == Some(true),
+            vision: capabilities["vision"].as_bool() == Some(true),
+            streaming: capabilities["streaming"].as_bool() == Some(true),
+            window: safe_window(window),
+            supports_tool_calling_model: model_row
+                .as_ref()
+                .and_then(|row| row["supportsToolCalling"].as_bool()),
+            authority: "catalog",
+        })
+    }
 
-        // -- permission ceiling: agent ceiling ∩ default ∩ request ------
+    /// Permission ceiling (agent ceiling ∩ default ∩ request) and the
+    /// tool set, which must live inside the agent's ceiling.
+    fn permissions(
+        &self,
+        agent: &agentkit_store::AgentRecord,
+        task: &TaskProfileOverrides,
+        provenance: &mut serde_json::Map<String, Value>,
+    ) -> HostResult<(agentkit_core::permission::CodingMode, Vec<String>)> {
         let default_mode =
             agentkit_core::permission::CodingMode::parse(&self.defaults.permission_mode)
                 .ok_or_else(|| refused("default_permission_mode"))?;
@@ -393,7 +830,6 @@ impl RunProfileService {
             }),
         );
 
-        // -- tools: requested set must live inside the agent's ceiling --
         let ceiling_tools: &Vec<String> = if agent.definition.allowed_tools.is_empty() {
             &self.defaults.tools
         } else {
@@ -425,24 +861,11 @@ impl RunProfileService {
                 ceiling_tools.clone()
             }
         };
-        if !effective_tools.is_empty()
-            && (!tool_calling
-                || model_row
-                    .as_ref()
-                    .and_then(|row| row["supportsToolCalling"].as_bool())
-                    == Some(false))
-        {
-            return Err(refused("unsupported_tools:provider_lacks_tool_calling"));
-        }
-        if task.requires_vision && !vision {
-            return Err(refused("unsupported_vision"));
-        }
-        if task.requires_continuation && !streaming {
-            return Err(refused("provider_continuation_incompatible"));
-        }
-        let continuation_compatible = streaming && (effective_tools.is_empty() || tool_calling);
+        Ok((effective_mode, effective_tools))
+    }
 
-        // -- skills: pinned versions resolve or the run refuses ---------
+    /// Skills: pinned versions resolve or the run refuses.
+    async fn pinned_skills(&self, agent: &agentkit_store::AgentRecord) -> HostResult<Vec<Value>> {
         let mut skills = Vec::new();
         for selection in &agent.definition.skills {
             let entry = self
@@ -457,8 +880,15 @@ impl RunProfileService {
             }
             skills.push(json!({"id": selection.id, "revision": selection.revision}));
         }
+        Ok(skills)
+    }
 
-        // -- context sources: selection selects, grants authorize ------
+    /// Context sources: selection selects, grants authorize.
+    async fn collect_sources(
+        &self,
+        agent: &agentkit_store::AgentRecord,
+        project: &ProjectSelection,
+    ) -> HostResult<Vec<CompiledSource>> {
         let mut compiled: Vec<CompiledSource> = Vec::new();
         for source in &project.sources {
             let granted = match source.kind {
@@ -480,39 +910,10 @@ impl RunProfileService {
             }
             let mut units = source.units.clone();
             let revision = if source.kind == SelectedSourceKind::Skill {
-                let entry = self
-                    .store
-                    .get_skill(source.id.clone())
-                    .await?
-                    .ok_or_else(|| refused(format!("skill_revoked:{}", source.id)))?;
-                let revision = entry["revision"]
-                    .as_str()
-                    .ok_or_else(|| refused(format!("skill_revoked:{}", source.id)))?
-                    .to_owned();
-                if agent
-                    .definition
-                    .skills
-                    .iter()
-                    .any(|skill| skill.id == source.id && skill.revision != revision)
-                {
-                    // Selected at a pinned revision, compiled at another:
-                    // the pin, not the live row, is the contract.
-                    return Err(refused(format!("skill_revoked:{}", source.id)));
-                }
-                if units.is_empty() {
-                    let text = entry["content"]
-                        .as_str()
-                        .or_else(|| entry["instructions"].as_str())
-                        .unwrap_or_default()
-                        .to_owned();
-                    units.push(ContextUnit {
-                        kind: ContextUnitKind::Text,
-                        text,
-                        citations: vec![],
-                        required: false,
-                    });
-                }
-                Some(revision)
+                Some(
+                    self.skill_source_revision(agent, source, &mut units)
+                        .await?,
+                )
             } else {
                 None
             };
@@ -527,197 +928,112 @@ impl RunProfileService {
                 kept: vec![],
             });
         }
+        Ok(compiled)
+    }
 
-        // -- bounded compilation ----------------------------------------
-        let window = model_row
-            .as_ref()
-            .and_then(|row| row["contextWindowTokens"].as_u64())
-            .or_else(|| capabilities["maxContextTokens"].as_u64())
-            .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
-            .unwrap_or(crate::FALLBACK_CONTEXT_WINDOW_TOKENS as u64);
-        let reserve = 16_384u64.min(window / 2);
-        let fixed = estimate_tokens(&agent.definition.instructions);
-        let budget = window.saturating_sub(reserve).saturating_sub(fixed);
-        let needed: u64 = compiled
+    async fn skill_source_revision(
+        &self,
+        agent: &agentkit_store::AgentRecord,
+        source: &SelectedSource,
+        units: &mut Vec<ContextUnit>,
+    ) -> HostResult<String> {
+        let entry = self
+            .store
+            .get_skill(source.id.clone())
+            .await?
+            .ok_or_else(|| refused(format!("skill_revoked:{}", source.id)))?;
+        let revision = entry["revision"]
+            .as_str()
+            .ok_or_else(|| refused(format!("skill_revoked:{}", source.id)))?
+            .to_owned();
+        if agent
+            .definition
+            .skills
             .iter()
-            .flat_map(|source| source.units.iter())
-            .map(|unit| estimate_tokens(&unit.text))
-            .sum();
-        let truncation: Option<Value> = if needed > budget {
-            if task.truncation.is_none() {
-                // Overflow is a REFUSAL unless the caller put an explicit
-                // truncation policy on record. Nothing is dropped silently.
-                return Err(refused(format!(
-                    "context_overflow_truncation_required:needed {needed} tokens, {budget} fit"
-                )));
-            }
-            // Explicit truncation: whole units only. Required units must
-            // fit — truncation is not an answer to impossible material.
-            let required_tokens: u64 = compiled
-                .iter()
-                .flat_map(|source| source.units.iter())
-                .filter(|unit| unit.required)
-                .map(|unit| estimate_tokens(&unit.text))
-                .sum();
-            if required_tokens > budget {
-                return Err(refused(format!(
-                    "context_overflow_unavoidable:{required_tokens} required tokens exceed the {budget}-token budget"
-                )));
-            }
-            let mut used = 0u64;
-            let mut dropped = 0u64;
-            for source in &mut compiled {
-                source.kept = Vec::with_capacity(source.units.len());
-                for unit in &source.units {
-                    let tokens = estimate_tokens(&unit.text);
-                    // A tool-call pair is ONE unit — kept whole or
-                    // dropped whole, never split across the cut.
-                    let keep = unit.required || used.saturating_add(tokens) <= budget;
-                    if keep {
-                        used = used.saturating_add(tokens);
-                    } else {
-                        dropped += 1;
-                    }
-                    source.kept.push(keep);
-                }
-            }
-            Some(json!({
-                "mode": "explicit",
-                "droppedUnits": dropped,
-                // Units are atomic; a tool-call pair is one unit, so a
-                // pair is never split by the cut.
-                "toolPairsPreserved": true,
-            }))
-        } else {
-            for source in &mut compiled {
-                source.kept = vec![true; source.units.len()];
-            }
-            None
-        };
+            .any(|skill| skill.id == source.id && skill.revision != revision)
+        {
+            // Selected at a pinned revision, compiled at another:
+            // the pin, not the live row, is the contract.
+            return Err(refused(format!("skill_revoked:{}", source.id)));
+        }
+        if units.is_empty() {
+            let text = entry["content"]
+                .as_str()
+                .or_else(|| entry["instructions"].as_str())
+                .unwrap_or_default()
+                .to_owned();
+            units.push(ContextUnit {
+                kind: ContextUnitKind::Text,
+                text,
+                citations: vec![],
+                required: false,
+            });
+        }
+        Ok(revision)
+    }
 
-        // Seal the compiled sources: kept tokens, preserved citations,
-        // explicit truncation markers. Dropped citations vanish with
-        // their unit; kept citations are NEVER silently dropped.
-        let context_sources: Vec<Value> = compiled
-            .iter()
-            .map(|source| {
-                let mut tokens = 0u64;
-                let mut citations: Vec<String> = Vec::new();
-                let mut truncated = false;
-                for (unit, kept) in source.units.iter().zip(&source.kept) {
-                    if *kept {
-                        tokens = tokens.saturating_add(estimate_tokens(&unit.text));
-                        for citation in &unit.citations {
-                            if !citations.iter().any(|kept| kept == citation) {
-                                citations.push(citation.clone());
-                            }
-                        }
-                    } else {
-                        truncated = true;
-                    }
-                }
-                json!({
-                    "id": source.id,
-                    "kind": source.kind,
-                    "revision": source.revision,
-                    "tokens": tokens,
-                    "truncated": truncated,
-                    "citations": citations,
-                })
-            })
-            .collect();
-
-        // -- budgets: ceilings bound, precedence fills ------------------
+    /// Budgets: ceilings bound, precedence fills. With neither ceiling
+    /// nor default, a requested value stands (provenance "task"). Every
+    /// requested and stored value must be positive.
+    fn budgets(
+        &self,
+        agent: &agentkit_store::AgentRecord,
+        task: &TaskProfileOverrides,
+        provenance: &mut serde_json::Map<String, Value>,
+    ) -> HostResult<serde_json::Map<String, Value>> {
         let mut budgets = serde_json::Map::new();
+        let (a, d, t) = (
+            &agent.definition.budgets,
+            &self.defaults.budgets,
+            &task.budgets,
+        );
         for (key, ceiling, default, requested) in [
             (
                 "maxToolIterations",
-                agent.definition.budgets.max_tool_iterations,
-                self.defaults.budgets.max_tool_iterations,
-                task.budgets.max_tool_iterations,
+                a.max_tool_iterations,
+                d.max_tool_iterations,
+                t.max_tool_iterations,
             ),
             (
                 "maxToolCallsPerIteration",
-                agent.definition.budgets.max_tool_calls_per_iteration,
-                self.defaults.budgets.max_tool_calls_per_iteration,
-                task.budgets.max_tool_calls_per_iteration,
+                a.max_tool_calls_per_iteration,
+                d.max_tool_calls_per_iteration,
+                t.max_tool_calls_per_iteration,
             ),
             (
                 "maxOutputTokens",
-                agent.definition.budgets.max_output_tokens,
-                self.defaults.budgets.max_output_tokens,
-                task.budgets.max_output_tokens,
+                a.max_output_tokens,
+                d.max_output_tokens,
+                t.max_output_tokens,
             ),
             (
                 "attemptBudgetMs",
-                agent.definition.budgets.attempt_budget_ms,
-                self.defaults.budgets.attempt_budget_ms,
-                task.budgets.attempt_budget_ms,
+                a.attempt_budget_ms,
+                d.attempt_budget_ms,
+                t.attempt_budget_ms,
             ),
         ] {
-            let Some(ceiling) = ceiling.or(default) else {
-                continue;
-            };
-            if requested.is_some_and(|value| value > ceiling) {
+            if [ceiling, default, requested]
+                .into_iter()
+                .flatten()
+                .any(|value| value <= 0)
+            {
+                return Err(invalid_overrides(format!("budget {key} must be positive")));
+            }
+            let limit = ceiling.or(default);
+            if let (Some(limit), Some(value)) = (limit, requested)
+                && value > limit
+            {
                 return Err(refused(format!("budget_ceiling_exceeded:{key}")));
             }
             if requested.is_some() {
                 provenance.insert(key.to_string(), json!("task"));
             }
-            budgets.insert(key.to_string(), json!(requested.unwrap_or(ceiling)));
+            if let Some(value) = requested.or(limit) {
+                budgets.insert(key.to_string(), json!(value));
+            }
         }
-
-        // -- environment: names and digests, never values ---------------
-        let vars: Vec<Value> = self
-            .defaults
-            .environment
-            .iter()
-            .map(|(name, value)| json!({"name": name, "valueDigest": value_digest(value)}))
-            .collect();
-
-        let profile = json!({
-            "version": 1,
-            "agentId": agent.agent_id,
-            "agentRevision": agent.current_revision,
-            "provider": {
-                "providerId": provider_id,
-                "modelId": model_id,
-                "localOnly": self.defaults.local_only,
-                "fallbacks": self.defaults.fallback_providers,
-            },
-            "capability": {
-                "toolCalling": tool_calling,
-                "vision": vision,
-                "streaming": streaming,
-                "continuationCompatible": continuation_compatible,
-                "contextWindowTokens": window,
-            },
-            "skills": skills,
-            "contextSources": context_sources,
-            "permissionCeiling": {
-                "mode": effective_mode.as_str(),
-                "tools": effective_tools,
-            },
-            "budgets": Value::Object(budgets),
-            "environment": {"vars": vars},
-            "approvals": approvals
-                .iter()
-                .map(|grant| {
-                    json!({
-                        "sessionId": grant.session_id,
-                        "grantId": grant.grant_id,
-                        "digest": grant.digest,
-                    })
-                })
-                .collect::<Vec<Value>>(),
-            "truncation": truncation,
-            "provenance": Value::Object(provenance),
-        });
-        Ok(PinnedRunProfile {
-            digest: run_profile_digest(&profile),
-            profile,
-            pinned_at: now,
-        })
+        Ok(budgets)
     }
 
     /// The SAFE effective-profile explanation for OneMind diagnostics:
@@ -748,6 +1064,7 @@ impl RunProfileService {
                             "tokens": source["tokens"],
                             "truncated": source["truncated"].as_bool().unwrap_or(false),
                             "citations": source["citations"],
+                            "contentDigest": source["contentDigest"],
                         })
                     })
                     .collect()
@@ -768,6 +1085,7 @@ impl RunProfileService {
                 "modelId": profile["provider"]["modelId"],
                 "localOnly": profile["provider"]["localOnly"],
                 "fallbacks": profile["provider"]["fallbacks"],
+                "authority": profile["provider"]["authority"],
             },
             "capability": profile["capability"],
             "skills": profile["skills"],

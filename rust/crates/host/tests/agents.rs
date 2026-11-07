@@ -206,17 +206,18 @@ async fn lifecycle_admission_and_retention_flow_through_the_service() {
     // An active execution receipt refuses the delete.
     let store = service.store().clone();
     store
-        .submit(SubmitTask {
-            task_id: "run-x".into(),
+        .admit_teammate_task(AdmitTeammateTask {
+            task_id: Some("run-x".into()),
+            agent_id: "life".into(),
+            admission_key: "life-key".into(),
             kind: "test".into(),
-            scope_id: "run-x".into(),
             payload: json!({"chatId": "run-x"}),
             priority: 0,
             now: 1_000,
             available_at: None,
             depends_on: vec![],
             parent_task_id: None,
-            exclusive_scope: false,
+            run_profile: None,
         })
         .await
         .unwrap();
@@ -256,16 +257,28 @@ async fn lifecycle_admission_and_retention_flow_through_the_service() {
         .unwrap();
     let preview = service.deletion_preview("life").await.unwrap().unwrap();
     assert_eq!(preview.unresolved_executions, 1);
+    assert_eq!(preview.active_tasks, 1);
     assert!(!preview.deletable);
     let error = service.delete("life").await.unwrap_err();
     assert!(
-        error_code(&error).contains("agent_delete_blocked_active_executions"),
+        error_code(&error).contains("agent_delete_blocked_active_work"),
         "{error}"
     );
     // Resolve the receipt and the tombstone proceeds; identity stays
     // reserved and the ledger retained.
     store
         .complete_execution(lease.fence(), "exec-x".into(), json!({"ok": true}), 1_500)
+        .await
+        .unwrap();
+    store
+        .settle(SettleTask {
+            fence: lease.fence(),
+            now: 1_600,
+            status: TaskStatus::Completed,
+            error: None,
+            events: vec![],
+            messages: vec![],
+        })
         .await
         .unwrap();
     let tombstone = service.delete("life").await.unwrap();
@@ -298,6 +311,7 @@ async fn duplicate_strips_credentials_and_export_import_round_trips() {
     assert!(copy.definition.secret_refs.is_empty());
     let mut expected = source.definition.clone();
     expected.secret_refs = Vec::new();
+    expected.resources = Vec::new(); // grants are not copied
     assert_eq!(copy.definition, expected);
 
     // Export drops secret references and tombstones; import rebuilds the

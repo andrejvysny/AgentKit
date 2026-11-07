@@ -246,8 +246,35 @@ async fn archive_blocks_admission_and_restore_reopens_it() {
 }
 
 /// Admit one tool execution under a leased run and hand back its lease.
-async fn admit_one(store: &SqliteStore, run_id: &str, execution_id: &str) -> Lease {
-    store.submit(task(run_id, run_id)).await.unwrap();
+async fn admit_one_for(
+    store: &SqliteStore,
+    agent: Option<&str>,
+    run_id: &str,
+    execution_id: &str,
+) -> Lease {
+    match agent {
+        None => {
+            store.submit(task(run_id, run_id)).await.unwrap();
+        }
+        Some(agent) => {
+            store
+                .admit_teammate_task(AdmitTeammateTask {
+                    task_id: Some(run_id.into()),
+                    agent_id: agent.into(),
+                    admission_key: format!("key-{run_id}"),
+                    kind: "test".into(),
+                    payload: json!({"chatId": run_id}),
+                    priority: 0,
+                    now: 1_000,
+                    available_at: None,
+                    depends_on: vec![],
+                    parent_task_id: None,
+                    run_profile: None,
+                })
+                .await
+                .unwrap();
+        }
+    }
     let lease = store.claim(claim(1_000)).await.unwrap().unwrap().lease;
     let admitted = store
         .admit_execution(
@@ -296,18 +323,19 @@ async fn delete_previews_retention_and_refuses_active_receipts() {
     assert!(preview.deletable);
     // An admitted-without-result receipt is an active execution: the
     // delete refuses, the agent keeps its whole ledger.
-    let lease = admit_one(&store, "run-1", "exec-1").await;
+    let lease = admit_one_for(&store, Some("del"), "run-1", "exec-1").await;
     let preview = store
         .preview_agent_deletion("del".into())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(preview.unresolved_executions, 1);
+    assert_eq!(preview.active_tasks, 1);
     assert!(!preview.deletable);
     let error = store.delete_agent("del".into(), 2_500).await.unwrap_err();
     assert!(
         matches!(&error, StoreError::InvalidTransition(message)
-            if message.starts_with("agent_delete_blocked_active_executions")),
+            if message == "agent_delete_blocked_active_work: 1 active task(s), 1 unresolved execution receipt(s)"),
         "{error}"
     );
     let kept = store.get_agent("del".into()).await.unwrap().unwrap();
@@ -317,6 +345,9 @@ async fn delete_previews_retention_and_refuses_active_receipts() {
         .complete_execution(lease.fence(), "exec-1".into(), json!({"ok": true}), 1_050)
         .await
         .unwrap();
+    // The run itself must also settle: the task still owns the agent.
+    assert!(store.delete_agent("del".into(), 2_600).await.is_err());
+    support::finish(&store, lease, TaskStatus::Completed, 1_060).await;
     let tombstone = store.delete_agent("del".into(), 3_000).await.unwrap();
     assert_eq!(tombstone.lifecycle, AgentLifecycle::Deleted);
     // The tombstone reads as absence everywhere…
@@ -383,6 +414,9 @@ async fn duplicate_creates_new_identity_and_excludes_credentials() {
     // configuration copy over…
     let mut expected = source.definition.clone();
     expected.secret_refs = Vec::new();
+    // `resources` are grants: the copy never inherits them.
+    assert!(!source.definition.resources.is_empty());
+    expected.resources = Vec::new();
     assert_eq!(copy.definition, expected);
     // …while credentials never ride along.
     assert!(copy.definition.secret_refs.is_empty());
@@ -647,6 +681,7 @@ async fn export_round_trips_and_strips_credentials() {
         assert_eq!(got.created_at, want.created_at);
         let mut stripped = want.snapshot.clone();
         stripped.secret_refs = Vec::new();
+        stripped.resources = Vec::new(); // grants are cleared on import
         assert_eq!(
             got.snapshot, stripped,
             "the imported ledger mirrors the source with credentials stripped"
@@ -839,7 +874,7 @@ async fn a_version_thirteen_database_upgrades_non_destructively() {
     // v15 admissions ledger, its agent_inputs index, and the mailbox
     // column (dropped last so the index dependency is already gone).
     db.execute_batch(
-        "DROP INDEX agent_inputs_agent; \
+        "DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; \
          DROP TABLE agent_admissions; \
          DROP TABLE agent_config_revisions; DROP TABLE agents; \
          ALTER TABLE agent_inputs DROP COLUMN agent_id;",
@@ -872,13 +907,14 @@ async fn a_version_thirteen_database_upgrades_non_destructively() {
             .len(),
         2
     );
-    // The admitted receipt from the v13 era holds the retention gate too.
+    // The v13-era admitted receipt belongs to an unbound run, not to this
+    // agent, so it does not gate this agent's deletion.
     let preview = store
         .preview_agent_deletion("post".into())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(preview.unresolved_executions, 1);
+    assert_eq!(preview.unresolved_executions, 0);
     store
         .complete_execution(
             lease.fence(),
