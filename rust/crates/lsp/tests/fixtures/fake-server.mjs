@@ -9,7 +9,6 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 
 let buffer = Buffer.alloc(0);
-const pendingChunks = [];
 process.stdin.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
   while (true) {
@@ -50,7 +49,7 @@ const logPath = process.env.LSP_FAKE_LOG;
 function onMessage(message) {
   const { id, method, params } = message;
   if (logPath)
-    fs.appendFileSync(logPath, JSON.stringify({ id, method, params }) + "\n");
+    fs.appendFileSync(logPath, `${JSON.stringify({ id, method, params })}\n`);
   if (id === undefined) {
     if (method === "exit") process.exit(0);
     if (method === "textDocument/didOpen" && publishDiagnostics) {

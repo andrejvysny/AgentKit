@@ -86,10 +86,13 @@ and the loop invariants `runChat()` preserves: see
 ## Example embedding
 
 [`examples/desktop-host`](examples/desktop-host) is the canonical
-single-process composition root: `@agentkit/adapters-sqlite` +
-`@agentkit/runner-local` + `TurnRunner` + a sample tool contributor +
-`SessionWritePolicy` + `recoverOnBoot` + `serveRest` (`basePath` + CORS),
-driven end to end by an HTTP smoke test. It is a workspace-private example,
+single-process composition root: `NativeStore` + native session service +
+`startHttpServer` for Rust-owned storage, admission, execution, and REST/SSE,
+with sample tools supplied through JS callbacks. Managed provider mode requires
+explicit host vault and consent ports; fixed connections and custom provider
+callbacks remain explicit extension lanes. A loopback facade supplies the
+application route prefix, CORS, and MCP mounting. HTTP smoke tests exercise the
+composition end to end. It is a workspace-private example,
 not a published package — read it as the reference wiring, not as
 something to depend on.
 

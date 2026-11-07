@@ -298,6 +298,7 @@ async fn fixture_with_runtime(
         )
         .with_options(ChatExecutorOptions {
             usage: Some(Arc::new(UsageMeter(usage_records.clone()))),
+            auto_compaction: true,
             tool_contributors: vec![Arc::new(WriterContributor {
                 tool: write_tool(calls.clone()),
             })],
@@ -317,15 +318,18 @@ async fn fixture_with_runtime(
         runtime: service_runtime,
         plan_approval: None,
         wake: Some(host.wake_handle()),
-    });
+    })
+    .with_profiles(test_profiles());
     host.set_session_flush_planner(Arc::new(service.clone()))
         .await;
     service
         .create_session(&CreateSessionInput {
             session_id: Some("s1".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -695,15 +699,18 @@ async fn fixture_slow(
         runtime,
         plan_approval: None,
         wake: Some(host.wake_handle()),
-    });
+    })
+    .with_profiles(test_profiles());
     host.set_session_flush_planner(Arc::new(service.clone()))
         .await;
     service
         .create_session(&CreateSessionInput {
             session_id: Some("s1".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -894,15 +901,18 @@ async fn fixture_gated(
         runtime,
         plan_approval: None,
         wake: Some(host.wake_handle()),
-    });
+    })
+    .with_profiles(test_profiles());
     host.set_session_flush_planner(Arc::new(service.clone()))
         .await;
     service
         .create_session(&CreateSessionInput {
             session_id: Some("s1".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -2473,7 +2483,7 @@ async fn a_config_change_after_planning_revalidates_queued_turns() {
     );
     assert_eq!(
         f.service.flush_queue("s1").await.unwrap_err().code,
-        "not_implemented"
+        "invalid_input"
     );
     assert_eq!(f.requests.lock().unwrap().len(), 1);
 }
@@ -3679,6 +3689,10 @@ const ELIDED_9000_SHA256: &str = "c0234dd33ad2c17372db91edbf1532a2577d03f0c58b28
 #[tokio::test]
 async fn stale_tool_results_elide_to_head_and_tail_before_compaction() {
     let f = fixture_with(false).await;
+    f.service
+        .configure("s1", None, Some(json!({"toolResultElision":{}})), None)
+        .await
+        .unwrap();
     let big = format!(
         "{}{}{}",
         "H".repeat(2000),
@@ -4014,4 +4028,57 @@ async fn cancel_always_cancels_the_turns_pending_requests() {
         .unwrap()
         .expect("request");
     assert_eq!(record.status, agentkit_store::AgentInputStatus::Cancelled);
+}
+
+fn test_profiles() -> Arc<agentkit_host::ProfileRegistry> {
+    Arc::new(agentkit_host::ProfileRegistry::new(&[json!({"id":"coding","instructions":"","tools":["write_file","slow_write","gated_write"]})]).unwrap())
+}
+
+#[tokio::test]
+async fn default_context_preserves_complete_old_tool_results() {
+    let f = fixture_with(false).await;
+    let big = "original-tool-result".repeat(600);
+    seed_turn(
+        &f,
+        10,
+        "run-old",
+        "u-old",
+        "old question",
+        "call-old",
+        json!(big),
+        None,
+        "a-old",
+        "old answer",
+    )
+    .await;
+    seed_turn(
+        &f,
+        20,
+        "run-mid",
+        "u-mid",
+        "mid question",
+        "call-mid",
+        json!("small result"),
+        None,
+        "a-mid",
+        "mid answer",
+    )
+    .await;
+    f.service
+        .send(
+            "s1",
+            &send_input(json!("current question"), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let requests = f.requests.lock().unwrap();
+    let old = requests
+        .last()
+        .unwrap()
+        .messages
+        .iter()
+        .find(|message| message.tool_call_id.as_deref() == Some("call-old"))
+        .unwrap();
+    assert_eq!(old.content, json!(big));
 }

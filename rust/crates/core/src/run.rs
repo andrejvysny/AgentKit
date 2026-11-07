@@ -6,7 +6,11 @@ use crate::{
 use agentkit_contracts::AiRunEvent;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -148,10 +152,16 @@ struct State {
     iteration: u32,
     continuation: Option<Value>,
     applied_steers: HashSet<String>,
+    /// Runtime clock at the last persisted event (`run.progress` cadence).
+    last_emit_ms: u64,
 }
 /// How long a terminal/usage event may wait for a full channel after the run
 /// was cancelled.
 const TERMINAL_SEND_TIMEOUT: Duration = Duration::from_secs(2);
+/// Minimum spacing of `run.tool.preparing` updates for one tool call.
+const PREPARING_INTERVAL_MS: u64 = 2_000;
+/// Quiet time after which `run.progress` repeats an unchanged phase.
+const PROGRESS_INTERVAL_MS: u64 = 5_000;
 #[derive(Default)]
 struct Turn {
     delta: String,
@@ -164,6 +174,13 @@ struct Turn {
     announced: HashSet<String>,
     finish: String,
     saw_no_tool_warning: bool,
+    /// Per tool call: runtime clock and argument bytes of the last
+    /// `run.tool.preparing`.
+    preparing: HashMap<String, (u64, u64)>,
+    /// What the latest provider delta says the provider is busy with.
+    phase: Option<&'static str>,
+    /// The phase `run.progress` last reported.
+    reported_phase: Option<&'static str>,
 }
 impl State {
     fn new(options: RunOptions, sender: mpsc::Sender<AiRunEvent>) -> Self {
@@ -174,6 +191,7 @@ impl State {
         let messages = options.request.messages.clone();
         let initial_length = messages.len();
         let continuation = options.request.continuation.clone();
+        let last_emit_ms = options.runtime.now_ms();
         Self {
             run_id,
             seq: options.first_seq,
@@ -184,6 +202,7 @@ impl State {
             iteration: 0,
             continuation,
             applied_steers: HashSet::new(),
+            last_emit_ms,
             options,
             sender,
         }
@@ -204,6 +223,7 @@ impl State {
         }
         self.seq += 1;
         self.pending_messages.clear();
+        self.last_emit_ms = self.options.runtime.now_ms();
         let sent = if matches!(
             kind,
             "run.cancelled" | "run.failed" | "run.completed" | "run.usage"
@@ -539,6 +559,7 @@ impl State {
                     | ProviderEvent::ToolRequested(_)
                     | ProviderEvent::Usage(_)
                     | ProviderEvent::Activity
+                    | ProviderEvent::ToolCallProgress { .. }
             ) || matches!(&event, ProviderEvent::Event {kind,..} if kind == "run.message.completed" || kind == "run.message.reasoning-delta")
             {
                 first = false;
@@ -566,6 +587,7 @@ impl State {
                 }
             }
             ProviderEvent::Delta(delta) => {
+                turn.phase = Some("generating");
                 turn.delta.push_str(&delta);
                 self.emit("run.message.delta", json!({"delta":delta}))
                     .await?;
@@ -603,10 +625,17 @@ impl State {
                 self.emit("run.usage", data).await?;
             }
             ProviderEvent::Continuation(state) => self.continuation = Some(state),
-            ProviderEvent::Activity
-            | ProviderEvent::RequestStarted
-            | ProviderEvent::RetryBackoff(_) => {}
+            ProviderEvent::Activity => self.progress(turn).await?,
+            ProviderEvent::ToolCallProgress {
+                id,
+                name,
+                args_bytes,
+            } => self.tool_preparing(turn, id, name, args_bytes).await?,
+            ProviderEvent::RequestStarted | ProviderEvent::RetryBackoff(_) => {}
             ProviderEvent::Event { kind, data } => {
+                if kind == "run.message.reasoning-delta" {
+                    turn.phase = Some("reasoning");
+                }
                 if kind == "run.message.completed" {
                     turn.completed = true;
                     turn.content = data["content"].as_str().map(str::to_owned);
@@ -618,6 +647,53 @@ impl State {
             }
         }
         Ok(())
+    }
+    /// `run.tool.preparing` for a call still being streamed: at first sight,
+    /// then on argument growth at most every `PREPARING_INTERVAL_MS`. Never
+    /// after the call was announced; never a conversation record.
+    async fn tool_preparing(
+        &mut self,
+        turn: &mut Turn,
+        id: String,
+        name: String,
+        args_bytes: u64,
+    ) -> Result<(), CoreError> {
+        turn.phase = Some("tool_args");
+        if id.is_empty() || name.is_empty() || turn.announced.contains(&id) {
+            return Ok(());
+        }
+        let now = self.options.runtime.now_ms();
+        if let Some((at, bytes)) = turn.preparing.get(&id) {
+            if args_bytes <= *bytes || now.saturating_sub(*at) < PREPARING_INTERVAL_MS {
+                return Ok(());
+            }
+        }
+        turn.preparing.insert(id.clone(), (now, args_bytes));
+        self.emit(
+            "run.tool.preparing",
+            json!({"toolCallId":id,"toolName":name,"argsBytes":args_bytes,"step":self.iteration}),
+        )
+        .await
+    }
+    /// `run.progress` on bare provider activity: when the phase changed since
+    /// the last report, else once `PROGRESS_INTERVAL_MS` passed without any
+    /// persisted event. Nothing before the first delta reveals a phase.
+    async fn progress(&mut self, turn: &mut Turn) -> Result<(), CoreError> {
+        let Some(phase) = turn.phase else {
+            return Ok(());
+        };
+        let quiet = self
+            .options
+            .runtime
+            .now_ms()
+            .saturating_sub(self.last_emit_ms)
+            >= PROGRESS_INTERVAL_MS;
+        if turn.reported_phase == Some(phase) && !quiet {
+            return Ok(());
+        }
+        turn.reported_phase = Some(phase);
+        self.emit("run.progress", json!({"phase":phase,"step":self.iteration}))
+            .await
     }
     async fn tools(
         &mut self,

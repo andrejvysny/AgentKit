@@ -372,8 +372,9 @@ async fn replay_normalizes_json_numbers_and_rejects_delimiter_collision_across_c
 }
 
 #[tokio::test]
-async fn unsupported_selected_content_never_creates_turns_or_calls_providers() {
+async fn template_only_content_is_frozen_before_admission_and_replay() {
     let (host, prompts) = host();
+    host.store().publish_prompt_template(json!({"id":"template","revision":"1","description":"test","argumentsSchema":{"type":"object","properties":{}},"messages":[{"role":"system","content":"selected instruction"}]})).await.unwrap();
     let (base, server) = serve(host.clone()).await;
     let client = reqwest::Client::new();
     let chat = json(
@@ -388,49 +389,48 @@ async fn unsupported_selected_content_never_creates_turns_or_calls_providers() {
     )
     .await;
     let chat_id = chat["id"].as_str().unwrap();
-    for path in [
-        format!("chats/{chat_id}/messages"),
-        format!("chats/{chat_id}/messages/unused/regenerate"),
-    ] {
-        for selection in [
-            json!({}),
-            json!({"skills":[{"id":"skill","revision":"1"}]}),
-            json!({"template":{"id":"template","revision":"1","arguments":{}}}),
-        ] {
-            assert_content_unsupported(&client, &format!("{base}/v1/{path}"), selection).await;
-        }
-    }
-    assert!(
-        host.store()
-            .list_tasks(Some(chat_id.into()))
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        host.store()
-            .messages(chat_id, true)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(!host.run_once().await.unwrap());
-    assert!(prompts.lock().unwrap().is_empty());
-    server.abort();
-}
-
-async fn assert_content_unsupported(client: &reqwest::Client, url: &str, selection: Value) {
-    let response = client
-        .post(url)
+    let body = json!({"content":"hello","reasoningEffort":"high","contentSelection":{"template":{"id":"template","revision":"1","arguments":{}}}});
+    let url = format!("{base}/v1/chats/{chat_id}/messages");
+    let first = client
+        .post(&url)
         .bearer_auth(TOKEN)
-        .header("idempotency-key", "unsupported")
-        .json(&json!({"content":"hello","contentSelection":selection}))
+        .header("idempotency-key", "selected")
+        .json(&body)
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 501);
+    assert_eq!(first.status(), 201);
+    let first: Value = first.json().await.unwrap();
+    host.store()
+        .delete_prompt_template("template".into(), "1".into())
+        .await
+        .unwrap();
+    let replay = client
+        .post(&url)
+        .bearer_auth(TOKEN)
+        .header("idempotency-key", "selected")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 200);
+    assert_eq!(replay.json::<Value>().await.unwrap(), first);
+    host.run_once().await.unwrap();
+    let prompts = prompts.lock().unwrap();
+    assert_eq!(prompts.len(), 1);
     assert_eq!(
-        response.json::<Value>().await.unwrap()["code"],
-        "not_implemented"
+        prompts[0].selected_content[0].content,
+        "selected instruction"
     );
+    assert_eq!(
+        prompts[0].reasoning_effort,
+        Some(agentkit_core::ReasoningEffort::High)
+    );
+    assert!(
+        !prompts[0]
+            .messages
+            .iter()
+            .any(|message| message.content == json!("selected instruction"))
+    );
+    server.abort();
 }

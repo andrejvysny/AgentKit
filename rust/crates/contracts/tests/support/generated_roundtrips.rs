@@ -33,8 +33,10 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<AiRunMessageCompletedEvent>("AiRunMessageCompletedEventSchema");
     support::roundtrip::<AiRunMessageDeltaEvent>("AiRunMessageDeltaEventSchema");
     support::roundtrip::<AiRunMessageReasoningDeltaEvent>("AiRunMessageReasoningDeltaEventSchema");
+    support::roundtrip::<AiRunProgressEvent>("AiRunProgressEventSchema");
     support::roundtrip::<AiRunStartedEvent>("AiRunStartedEventSchema");
     support::roundtrip::<AiRunToolFailedEvent>("AiRunToolFailedEventSchema");
+    support::roundtrip::<AiRunToolPreparingEvent>("AiRunToolPreparingEventSchema");
     support::roundtrip::<AiRunToolRequestedEvent>("AiRunToolRequestedEventSchema");
     support::roundtrip::<AiRunToolRunningEvent>("AiRunToolRunningEventSchema");
     support::roundtrip::<AiRunToolSucceededEvent>("AiRunToolSucceededEventSchema");

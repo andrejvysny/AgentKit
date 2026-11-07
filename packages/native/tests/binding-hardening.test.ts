@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * Binding hardening: credential isolation across stores, mid-run credential
  * rotation, the MCP write gate's stricter-of classification, loopback-only
@@ -110,7 +111,7 @@ nativeTest(
   "HTTP and MCP servers refuse non-loopback binds unless allowNonLoopback",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       for (const host of ["0.0.0.0", "::", "example.invalid"]) {
         expect(
@@ -177,7 +178,7 @@ nativeTest(
   "MCP server hides and refuses exec/write tools whatever mix of effect and capability they declare",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     const calls: string[] = [];
     try {
       for (const definition of [SAFE_READ, READ_EXEC, WRITE_FS_READ])
@@ -239,7 +240,7 @@ nativeTest(
   "integer arguments reject non-finite, fractional, and out-of-range numbers",
   async () => {
     const store = await openStore();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       for (const bad of [Number.NaN, 1.5, -1, 0, 2 ** 40, Infinity])
         expect(
@@ -275,7 +276,7 @@ nativeTest(
   "cancel() wakes a parked poll at once and close() leaves no live subscription",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     service.setProvider(() => new Promise(() => undefined));
     try {
       await service.createSession({
@@ -314,7 +315,7 @@ nativeTest(
   async () => {
     const store = await NativeStore.inMemory();
     const started = await (async () => {
-      const service = await store.createService();
+      const service = await store.createService(testServiceOptions());
       const info = await service.startHttpServer({ bearerToken: TOKEN });
       // The only reference to `service` ends with this scope.
       return info;

@@ -387,6 +387,18 @@ fn configure_request(value: &Value, options: &mut RunOptions) -> Result<()> {
     }
     options.request.continuation_required =
         value["continuationRequired"].as_bool().unwrap_or(false);
+    options.request.reasoning_effort = value
+        .get("reasoningEffort")
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()
+        .map_err(|e| errors::invalid(format!("invalid reasoningEffort: {e}")))?;
+    options.request.selected_content = value
+        .get("runContent")
+        .map(|v| serde_json::from_value(v["messages"].clone()))
+        .transpose()
+        .map_err(|e| errors::invalid(format!("invalid runContent: {e}")))?
+        .unwrap_or_default();
     options.request.temperature = value["temperature"].as_f64();
     options.request.max_output_tokens = value["maxOutputTokens"].as_u64();
     Ok(())

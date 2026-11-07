@@ -7,6 +7,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.message.delta"),
   Type.Literal("run.message.reasoning-delta"),
   Type.Literal("run.message.completed"),
+  Type.Literal("run.tool.preparing"),
   Type.Literal("run.tool.requested"),
   Type.Literal("run.tool.running"),
   Type.Literal("run.tool.succeeded"),
@@ -16,6 +17,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.context.compacted"),
   Type.Literal("run.context.admitted"),
   Type.Literal("run.verification"),
+  Type.Literal("run.progress"),
   Type.Literal("run.input.applied"),
   Type.Literal("run.waiting"),
   Type.Literal("run.completed"),
@@ -120,6 +122,33 @@ export const AiRunMessageCompletedEventSchema = Type.Object({
 });
 export type AiRunMessageCompletedEvent = Static<
   typeof AiRunMessageCompletedEventSchema
+>;
+
+/**
+ * A tool call the provider is still streaming: its arguments are not complete.
+ * Informational only: emitted when the call first appears (`argsBytes` may be
+ * 0) and then, while arguments grow, at most once every 2 seconds per call, so
+ * a long argument payload (a large document or design) is visible instead of a
+ * silent provider. Never authorizes or starts the tool; `run.tool.requested`
+ * remains the only call announcement and follows these events. A run event
+ * only, never a conversation record.
+ */
+export const AiRunToolPreparingEventSchema = Type.Object({
+  type: Type.Literal("run.tool.preparing"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    toolCallId: Type.String({
+      description: "The call id `run.tool.requested` will carry.",
+    }),
+    toolName: Type.String(),
+    argsBytes: Type.Number({
+      description: "UTF-8 bytes of arguments streamed so far.",
+    }),
+    step: Type.Number({ description: "The 1-based provider step." }),
+  }),
+});
+export type AiRunToolPreparingEvent = Static<
+  typeof AiRunToolPreparingEventSchema
 >;
 
 export const AiRunToolRequestedEventSchema = Type.Object({
@@ -496,6 +525,27 @@ export type AiRunVerificationEvent = Static<
 >;
 
 /**
+ * What a streaming provider is busy with, for providers that are active but
+ * otherwise quiet. Emitted on provider activity when the phase (the kind of the
+ * latest delta) changed since the last report, else at most every 5 seconds
+ * while no other event was persisted. Informational only; a run event, never a
+ * conversation record.
+ */
+export const AiRunProgressEventSchema = Type.Object({
+  type: Type.Literal("run.progress"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    phase: Type.Union([
+      Type.Literal("reasoning"),
+      Type.Literal("generating"),
+      Type.Literal("tool_args"),
+    ]),
+    step: Type.Number({ description: "The 1-based provider step." }),
+  }),
+});
+export type AiRunProgressEvent = Static<typeof AiRunProgressEventSchema>;
+
+/**
  * A durable input (a steer) was placed into the run before a provider step
  * (ADR 0016 §3). Emitted only by a host that uses agent sessions.
  */
@@ -628,6 +678,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunMessageDeltaEventSchema,
   AiRunMessageReasoningDeltaEventSchema,
   AiRunMessageCompletedEventSchema,
+  AiRunToolPreparingEventSchema,
   AiRunToolRequestedEventSchema,
   AiRunToolRunningEventSchema,
   AiRunToolSucceededEventSchema,
@@ -637,6 +688,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunContextCompactedEventSchema,
   AiRunContextAdmittedEventSchema,
   AiRunVerificationEventSchema,
+  AiRunProgressEventSchema,
   AiRunInputAppliedEventSchema,
   AiRunWaitingEventSchema,
   AiRunCompletedEventSchema,
@@ -655,6 +707,7 @@ export type AiRunEvent =
   | AiRunMessageDeltaEvent
   | AiRunMessageReasoningDeltaEvent
   | AiRunMessageCompletedEvent
+  | AiRunToolPreparingEvent
   | AiRunToolRequestedEvent
   | AiRunToolRunningEvent
   | AiRunToolSucceededEvent
@@ -664,6 +717,7 @@ export type AiRunEvent =
   | AiRunContextCompactedEvent
   | AiRunContextAdmittedEvent
   | AiRunVerificationEvent
+  | AiRunProgressEvent
   | AiRunInputAppliedEvent
   | AiRunWaitingEvent
   | AiRunCompletedEvent

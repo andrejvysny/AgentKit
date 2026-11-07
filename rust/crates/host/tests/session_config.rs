@@ -1,25 +1,9 @@
-//! D2 + D4: session configuration boundaries.
-//!
-//! - Content selection (the descriptor's Skills) and provider reasoning
-//!   effort are REFUSED at session submit before any turn effect, with the
-//!   same `not_implemented` code and message shape the HTTP boundary uses for
-//!   `contentSelection` (`http/turns.rs` 501:
-//!   `{"code":"not_implemented","detail":"Native prompt templates and skills
-//!   are not configured."}`) — native execution must never dispatch a
-//!   prompt-only request that silently omits what the session selected.
-//!   Context assembly options (`policy`, `toolResultElision`, token budgets)
-//!   are NOT refused: staging carries the `sessionContext` snapshot and the
-//!   executor honors it.
-//! - `compact` is refused for the same reason (no consumer of
-//!   `compactRequestedAt`).
-//! - `set_model` patches `reasoningEffort` three-state: omitted preserves,
-//!   explicit null clears, a value replaces; an in-flight turn keeps the
-//!   payload snapshot it was submitted with.
+//! Session configuration validation, immutable staging, reasoning patches and admission gates.
 
 use agentkit_host::{
-    AgentHost, AgentSendResult, AgentSessionService, AgentSessionServiceDeps,
-    CONTENT_UNSUPPORTED_MESSAGE, CreateSessionInput, ExecutionContext, HostOptions, HostResult,
-    SendInput, SharedRuntime, SystemRuntime, TaskExecutor, WhenBusy,
+    AgentHost, AgentSendResult, AgentSessionService, AgentSessionServiceDeps, CreateSessionInput,
+    ExecutionContext, HostOptions, HostResult, SendInput, SharedRuntime, SystemRuntime,
+    TaskExecutor, WhenBusy,
 };
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
@@ -51,7 +35,7 @@ fn fixture() -> Fixture {
 fn create_input() -> CreateSessionInput {
     CreateSessionInput {
         session_id: Some("s1".into()),
-        profile_id: "p1".into(),
+        profile_id: "coding".into(),
         model: Some("model".into()),
         ..CreateSessionInput::default()
     }
@@ -177,7 +161,7 @@ async fn create_accepts_legal_descriptors_including_host_kinds() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn submit_refuses_selected_skills_with_http_boundary_parity() {
+async fn submit_refuses_missing_selected_skill_revision_before_admission() {
     let fixture = fixture();
     let input = CreateSessionInput {
         skills: Some(vec![json!({"id": "skill", "revision": "1"})]),
@@ -190,13 +174,11 @@ async fn submit_refuses_selected_skills_with_http_boundary_parity() {
         .send("s1", &send_input(json!("hello"), "in-1", WhenBusy::Reject))
         .await
         .expect_err("selected Skills dispatched");
-    // Same code and message as the HTTP boundary's 501 problem
-    // (`http/turns.rs`): code `not_implemented`, detail below.
-    assert_eq!(error.code, "not_implemented");
-    assert_eq!(error.message, CONTENT_UNSUPPORTED_MESSAGE);
-    assert_eq!(
-        error.message,
-        "Native prompt templates and skills are not configured."
+    assert_eq!(error.code, "invalid_input");
+    assert!(
+        error
+            .message
+            .contains("Selected skill revision changed or disappeared")
     );
     // Refused before any turn effect, like the HTTP assertion that a
     // rejected submit leaves no tasks and no messages behind.
@@ -217,8 +199,12 @@ async fn submit_refuses_selected_skills_with_http_boundary_parity() {
         .send("s1", &send_input(json!("hello"), "in-1", WhenBusy::Queue))
         .await
         .expect_err("selected Skills queued");
-    assert_eq!(queued.code, "not_implemented");
-    assert_eq!(queued.message, CONTENT_UNSUPPORTED_MESSAGE);
+    assert_eq!(queued.code, "invalid_input");
+    assert!(
+        queued
+            .message
+            .contains("Selected skill revision changed or disappeared")
+    );
     assert!(
         fixture
             .store
@@ -295,7 +281,7 @@ async fn submit_stages_context_assembly_overrides() {
 }
 
 #[tokio::test]
-async fn submit_refuses_provider_reasoning_effort() {
+async fn submit_snapshots_provider_reasoning_effort() {
     let fixture = fixture();
     fixture
         .service
@@ -307,25 +293,18 @@ async fn submit_refuses_provider_reasoning_effort() {
         .set_model("s1", None, "model", Some(Some("high")))
         .await
         .unwrap();
-    let error = fixture
+    let result = fixture
         .service
         .send("s1", &send_input(json!("hello"), "in-1", WhenBusy::Reject))
         .await
-        .expect_err("reasoning effort dispatched");
-    assert_eq!(error.code, "not_implemented");
-    assert!(
-        error.message.contains("reasoning effort"),
-        "unclear refusal: {}",
-        error.message
-    );
-    assert!(
-        fixture
-            .store
-            .list_tasks(Some("s1".into()))
-            .await
-            .unwrap()
-            .is_empty()
-    );
+        .unwrap();
+    let task = fixture
+        .store
+        .get_task(turn_id(&result))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.payload["reasoningEffort"], "high");
 }
 
 #[tokio::test]
@@ -510,13 +489,18 @@ async fn running_turn_keeps_its_snapshot_later_turns_see_the_patch() {
     assert_eq!(running.payload["model"], json!("beta"));
     assert!(running.payload.get("reasoningEffort").is_none());
     fixture.service.cancel("s1", &second_id).await.unwrap();
-    let error = fixture
+    let result = fixture
         .service
         .send("s1", &send_input(json!("three"), "in-3", WhenBusy::Reject))
         .await
-        .expect_err("later turn ignored the patched effort");
-    assert_eq!(error.code, "not_implemented");
-    assert!(error.message.contains("reasoning effort"));
+        .unwrap();
+    let task = fixture
+        .store
+        .get_task(turn_id(&result))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.payload["reasoningEffort"], "high");
 }
 
 // ---------------------------------------------------------------------------

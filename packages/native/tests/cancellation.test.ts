@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * One invocation identity/cancellation/authority contract for JS-tool lanes.
  *
@@ -153,15 +154,17 @@ async function openService(
     provider.baseUrl,
     null,
   );
-  const service = await store.createService({
-    jsToolAuthority: { configuredMode: jsToolMode },
-    providerConfig: {
-      protocol: "chat-completions",
-      providerId: "probe",
-      connectionId,
-      model: "loopback-model",
-    },
-  });
+  const service = await store.createService(
+    testServiceOptions({
+      jsToolAuthority: { configuredMode: jsToolMode },
+      providerConfig: {
+        protocol: "chat-completions",
+        providerId: "probe",
+        connectionId,
+        model: "loopback-model",
+      },
+    }),
+  );
   return { store, service };
 }
 

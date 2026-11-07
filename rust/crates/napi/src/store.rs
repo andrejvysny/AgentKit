@@ -44,12 +44,15 @@ mod transactions;
 pub struct NativeStore {
     inner: Mutex<Option<SqliteStore>>,
     /// MCP client state (crate manager + declarations + projected
-    /// descriptors). In-memory only, exactly like the crate's contract:
-    /// the store file never carries server configs or secrets.
-    mcp: tokio::sync::Mutex<Option<mcp_client::Registry>>,
+    /// descriptors). Durable HTTP declarations restore into this same manager;
+    /// resolved secrets remain behind the explicit host vault port.
+    mcp: std::sync::Arc<tokio::sync::Mutex<Option<mcp_client::Registry>>>,
     /// Serializes `mcpConnect` so the registry mutex above is never held
     /// across a spawn / handshake / `tools/list`.
-    mcp_connect_gate: tokio::sync::Mutex<()>,
+    mcp_connect_gate: std::sync::Arc<tokio::sync::Mutex<()>>,
+    mcp_closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mcp_shared: std::sync::Arc<Mutex<mcp_client::RuntimeState>>,
+    mcp_ports: std::sync::OnceLock<mcp_client::ConfigPorts>,
 }
 
 #[napi]
@@ -62,8 +65,11 @@ impl NativeStore {
         let store = SqliteStore::open(Path::new(&path), capacity).map_err(errors::store)?;
         Ok(Self {
             inner: Mutex::new(Some(store)),
-            mcp: tokio::sync::Mutex::new(None),
-            mcp_connect_gate: tokio::sync::Mutex::new(()),
+            mcp: Default::default(),
+            mcp_connect_gate: Default::default(),
+            mcp_closed: Default::default(),
+            mcp_shared: Default::default(),
+            mcp_ports: Default::default(),
         })
     }
 
@@ -74,8 +80,11 @@ impl NativeStore {
         let store = SqliteStore::memory(capacity).map_err(errors::store)?;
         Ok(Self {
             inner: Mutex::new(Some(store)),
-            mcp: tokio::sync::Mutex::new(None),
-            mcp_connect_gate: tokio::sync::Mutex::new(()),
+            mcp: Default::default(),
+            mcp_connect_gate: Default::default(),
+            mcp_closed: Default::default(),
+            mcp_shared: Default::default(),
+            mcp_ports: Default::default(),
         })
     }
 
@@ -107,7 +116,8 @@ impl NativeStore {
         on_event: ThreadsafeFunction<String>,
         options_json: Option<String>,
     ) -> Result<crate::service::SessionService> {
-        crate::service::SessionService::build(self.handle()?, on_event, options_json).await
+        let ports = self.mcp_config_ports().await?;
+        crate::service::SessionService::build(self.handle()?, on_event, options_json, ports).await
     }
 }
 

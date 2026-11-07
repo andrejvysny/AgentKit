@@ -35,7 +35,8 @@ async fn transport(connection_id: &str) -> BindingTransport {
     }
 }
 
-async fn serve_canned(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
+async fn serve_canned(response: impl Into<String>) -> (String, std::thread::JoinHandle<String>) {
+    let response = response.into();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let thread = std::thread::spawn(move || {
@@ -427,3 +428,56 @@ fn lane_without_config_passes_request_through() {
     assert_eq!(seen.temperature, Some(0.9));
     assert_eq!(seen.max_output_tokens, Some(16_384));
 }
+
+#[tokio::test]
+async fn legacy_native_transport_never_follows_a_provider_redirect() {
+    use std::io::{Read, Write};
+    let destination = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    destination.set_nonblocking(true).unwrap();
+    let address = destination.local_addr().unwrap();
+    let reached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = reached.clone();
+    let target = std::thread::spawn(move || {
+        for _ in 0..40 {
+            if let Ok((mut socket, _)) = destination.accept() {
+                count.fetch_add(1, Ordering::SeqCst);
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                    .unwrap();
+                let mut buffer = [0_u8; 4096];
+                let _ = socket.read(&mut buffer);
+                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    let (endpoint, origin) = serve_canned(format!(
+        "HTTP/1.1 302 Found\r\nlocation: http://{address}/redirected\r\ncontent-length: 0\r\n\r\n"
+    ))
+    .await;
+    registered("redirect-origin", endpoint, Some("synthetic-key".into())).await;
+    let transport = BindingTransport::connect(
+        "configured",
+        "chat-completions",
+        "redirect-origin",
+        open_fence(),
+    )
+    .await
+    .unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(1), transport.request(
+        &transport.identity(), "chat/completions", Some(serde_json::json!({"model":"model","messages":[{"role":"user","content":"private fixture"}]})), CancellationToken::new(),
+    )).await.unwrap().unwrap();
+    target.join().unwrap();
+    let original = origin.join().unwrap();
+    assert!(
+        original
+            .to_ascii_lowercase()
+            .contains("authorization: bearer synthetic-key")
+    );
+    assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+    assert_eq!(reached.load(Ordering::SeqCst), 0);
+}
+
+#[path = "provider_dispatch_guard_tests.rs"]
+mod dispatch_guard;

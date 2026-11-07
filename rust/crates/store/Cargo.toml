@@ -18,7 +18,7 @@ serde_json = "1"
 sha2.workspace = true
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 
 [features]
 # Off by default: importing a TypeScript adapters-sqlite database is a migration

@@ -1,5 +1,5 @@
 use super::{responses_request::bounded, transport::classify};
-use crate::{CoreError, ToolCall, ToolDefinition};
+use crate::{CoreError, ProviderEvent, ToolCall, ToolDefinition};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 struct Item {
@@ -24,6 +24,9 @@ pub(crate) struct ResponsesState {
     /// arrival order exactly.
     reasoning_parts: Vec<(String, String)>,
     reasoning_pending: String,
+    /// Function call progress from the last accepted frame (output index).
+    /// The run loop throttles what it persists.
+    tool_progress: Option<usize>,
 }
 pub(crate) struct ResponsesResult {
     pub output: Vec<Value>,
@@ -118,6 +121,7 @@ impl ResponsesState {
                 }
                 item.arguments.push_str(string(&event["delta"])?);
                 bounded(&Value::String(item.arguments.clone()))?;
+                self.tool_progress = Some(item.index);
             }
             "response.function_call_arguments.done" => {
                 let item = self.lookup_mut(&event)?;
@@ -172,6 +176,7 @@ impl ResponsesState {
         {
             return err("duplicate_output_item");
         }
+        let function_call = item["type"] == "function_call";
         self.items.insert(
             index,
             Item {
@@ -183,7 +188,21 @@ impl ResponsesState {
                 done: false,
             },
         );
+        if function_call {
+            self.tool_progress = Some(index);
+        }
         Ok(())
+    }
+    /// `ToolCallProgress` for the function call the last accepted frame
+    /// started or extended. Its id is the `call_id` the finished call carries.
+    pub fn take_tool_progress(&mut self) -> Option<ProviderEvent> {
+        let item = self.items.get(&self.tool_progress.take()?)?;
+        let name = item.item["name"].as_str().filter(|name| !name.is_empty())?;
+        Some(ProviderEvent::ToolCallProgress {
+            id: item.item["call_id"].as_str().unwrap_or(&item.id).into(),
+            name: name.into(),
+            args_bytes: item.arguments.len() as u64,
+        })
     }
     fn lookup_mut(&mut self, event: &Value) -> Result<&mut Item, CoreError> {
         let id = nonempty(&event["item_id"])?;
@@ -423,12 +442,10 @@ fn compare(state: &Item, final_item: &Value) -> Result<(), CoreError> {
             return err("stream_output_mismatch");
         }
     }
-    if state.done
-        && final_item["type"] == "reasoning"
-        && state.item["encrypted_content"] != final_item["encrypted_content"]
-    {
-        return err("stream_output_mismatch");
-    }
+    // Reasoning `encrypted_content` is deliberately not compared: OpenAI
+    // re-encrypts it per event (fresh Fernet IV and timestamp), so
+    // `output_item.done` and `response.completed` carry different ciphertexts
+    // of the same reasoning. The terminal copy is authoritative.
     Ok(())
 }
 fn message_text(item: &Value) -> Result<String, CoreError> {

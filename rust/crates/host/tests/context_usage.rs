@@ -16,7 +16,7 @@ async fn fixture() -> (SqliteStore, AgentSessionService) {
     service
         .create_session(&CreateSessionInput {
             session_id: Some("session".into()),
-            profile_id: "p".into(),
+            profile_id: "coding".into(),
             provider_id: Some("provider".into()),
             model: Some("old".into()),
             ..Default::default()

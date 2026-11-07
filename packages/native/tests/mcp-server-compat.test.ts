@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * Pre-deletion parity: the behaviours the TS `packages/mcp-server` suite
  * pinned (groups 9–13 of the Phase-1 gate map) asserted against the native
@@ -69,7 +70,7 @@ async function withService(): Promise<{
   service: NativeSessionService;
 }> {
   const store = await NativeStore.inMemory();
-  const service = await store.createService();
+  const service = await store.createService(testServiceOptions());
   return { store, service };
 }
 

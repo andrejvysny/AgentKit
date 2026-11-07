@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { NativeStore } from "../src/index.js";
 import { available, missing, required } from "./helpers/binding.js";
@@ -10,7 +11,7 @@ nativeTest(
   "uncertain execution surface lists, validates and refuses explicitly",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       await service.createSession({ sessionId: "s1", profileId: "p1" });
       expect(await service.listUncertainExecutions("s1")).toEqual([]);

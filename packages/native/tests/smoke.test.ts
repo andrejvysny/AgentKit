@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,7 +135,7 @@ suite(
   "in-memory store runs a full chat turn through JS provider and JS tool",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       const providerCalls: ProviderRequest[] = [];
       service.setProvider((request) => {
@@ -246,7 +247,7 @@ suite(
       expect(secondError).toBeInstanceOf(NativeAgentErrorCtor);
       expect(codeOf(secondError)).toBe("already_owned");
       // Create a session, then close everything and reopen from disk.
-      const service = await first.createService();
+      const service = await first.createService(testServiceOptions());
       await service.createSession({
         sessionId: "s-persist",
         profileId: "p1",
@@ -256,7 +257,9 @@ suite(
       await first.close();
       // Ownership released: reopening works and the session is still there.
       const reopened = await NativeStoreCtor.open(path);
-      const reopenedService = await reopened.createService();
+      const reopenedService = await reopened.createService(
+        testServiceOptions(),
+      );
       const state = await reopenedService.getState("s-persist");
       const sessionId =
         "sessionId" in state && typeof state.sessionId === "string"
@@ -275,7 +278,7 @@ suite(
   "session failures cross the boundary as contract-coded errors",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       let error: unknown;
       try {
@@ -305,7 +308,7 @@ suite(
 
 suite("close is idempotent and later calls fail closed", async () => {
   const store = await NativeStoreCtor.inMemory();
-  const service = await store.createService();
+  const service = await store.createService(testServiceOptions());
   await service.close();
   await service.close();
   let error: unknown;
@@ -324,7 +327,7 @@ suite(
   "a provider that rejects fails the turn instead of faking success",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       service.setProvider(() => {
         throw new Error("provider exploded");

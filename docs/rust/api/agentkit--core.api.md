@@ -2368,6 +2368,7 @@ id: TString;
 revision: TString;
 }>>>;
 }>>;
+reasoningEffort: TOptional<TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>>;
 model: TOptional<TString>;
 providerId: TOptional<TString>;
 metadata: TOptional<TRecord<TString, TUnknown>>;
@@ -3137,6 +3138,7 @@ id: TString;
 revision: TString;
 }>>>;
 }>>;
+reasoningEffort: TOptional<TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>>;
 content: TUnion<[TString, TArray<TUnion<[TObject<    {
 type: TLiteral<"text">;
 text: TString;

@@ -18,7 +18,7 @@ axum = "=0.8.8"
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 reqwest.workspace = true
-rmcp = { version = "=3.5.0", default-features = false, features = ["server", "client", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-streamable-http-server", "reqwest"] }
+rmcp = { version = "=3.5.0", default-features = false, features = ["auth", "server", "client", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-streamable-http-server", "reqwest"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

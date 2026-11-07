@@ -1,0 +1,167 @@
+[
+  {
+    "id": "chat",
+    "kind": "chat",
+    "label": "General chat agent",
+    "instructions": "Answer directly and honestly. Say what you do not know.",
+    "tools": [],
+    "permissionMode": "read_only",
+    "role": "supervisor",
+    "limits": {
+      "maxToolIterations": 1
+    },
+    "resources": {
+      "projectInstructions": false
+    }
+  },
+  {
+    "id": "coding",
+    "kind": "coding",
+    "label": "Coding agent",
+    "instructions": "Work in the granted workspace only. Explore with the native tools (read_file, list_dir, find_files, code_search, repo_map, git_inspect) — never with run_command. Change files with edit_file/write_file, and run the test suite with run_tests. Keep changes minimal and verified.",
+    "tools": [
+      "read_file",
+      "list_dir",
+      "find_files",
+      "code_search",
+      "repo_map",
+      "git_inspect",
+      "edit_file",
+      "write_file",
+      "run_command",
+      "run_tests",
+      "submit_plan"
+    ],
+    "permissionMode": "ask",
+    "role": "implementer",
+    "limits": {
+      "maxToolIterations": 30,
+      "maxToolCallsPerIteration": 8
+    },
+    "resources": {
+      "projectInstructions": true
+    }
+  },
+  {
+    "id": "coding/plan",
+    "kind": "coding",
+    "label": "Coding agent (plan first)",
+    "instructions": "Work in the granted workspace only. Explore with the native tools (read_file, list_dir, find_files, code_search, repo_map, git_inspect) — never with run_command. Change files with edit_file/write_file, and run the test suite with run_tests. Keep changes minimal and verified. Propose a plan and wait for approval before any file changes or commands.",
+    "tools": [
+      "read_file",
+      "list_dir",
+      "find_files",
+      "code_search",
+      "repo_map",
+      "git_inspect",
+      "edit_file",
+      "write_file",
+      "run_command",
+      "run_tests",
+      "submit_plan"
+    ],
+    "permissionMode": "plan",
+    "role": "implementer",
+    "limits": {
+      "maxToolIterations": 30,
+      "maxToolCallsPerIteration": 8
+    },
+    "resources": {
+      "projectInstructions": true
+    }
+  },
+  {
+    "id": "coding/supervisor",
+    "kind": "coding",
+    "label": "Coding supervisor (read-only)",
+    "instructions": "Review and explain; never change anything. Read the code, describe the problem precisely with file and line, and propose the change for someone else to apply.",
+    "tools": [
+      "read_file",
+      "list_dir",
+      "find_files",
+      "code_search",
+      "repo_map",
+      "git_inspect"
+    ],
+    "permissionMode": "read_only",
+    "role": "supervisor",
+    "limits": {
+      "maxToolIterations": 20
+    },
+    "resources": {
+      "projectInstructions": true
+    }
+  },
+  {
+    "id": "coding/reviewer",
+    "kind": "coding",
+    "label": "Coding reviewer (may run tests, may not edit)",
+    "instructions": "Review by running, not by guessing: inspect the change, run the tests, report findings with file and line. Do not edit files.",
+    "tools": [
+      "read_file",
+      "list_dir",
+      "find_files",
+      "code_search",
+      "repo_map",
+      "git_inspect",
+      "run_tests"
+    ],
+    "permissionMode": "ask",
+    "role": "reviewer",
+    "limits": {
+      "maxToolIterations": 20
+    },
+    "resources": {
+      "projectInstructions": true
+    }
+  },
+  {
+    "id": "research",
+    "kind": "research",
+    "label": "Research agent",
+    "instructions": "Answer from evidence you gathered in this run. Cite the file and line, or the command output, for every claim. Prefer reading a file over guessing its contents, and say what you could not determine.",
+    "tools": [
+      "read_file",
+      "list_dir",
+      "find_files",
+      "code_search",
+      "repo_map",
+      "git_inspect",
+      "run_command"
+    ],
+    "permissionMode": "ask",
+    "role": "reviewer",
+    "limits": {
+      "maxToolIterations": 40
+    },
+    "resources": {
+      "projectInstructions": true
+    }
+  },
+  {
+    "id": "automation",
+    "kind": "automation",
+    "label": "Automation agent",
+    "instructions": "Carry out the requested operation exactly, with the least scope that accomplishes it. Report what changed. When an instruction is ambiguous and the ambiguity has side effects, ask instead of choosing.",
+    "tools": [
+      "read_file",
+      "list_dir",
+      "find_files",
+      "code_search",
+      "repo_map",
+      "git_inspect",
+      "edit_file",
+      "write_file",
+      "run_command"
+    ],
+    "permissionMode": "full_auto",
+    "role": "implementer",
+    "limits": {
+      "maxToolIterations": 25,
+      "maxToolCallsPerIteration": 4
+    },
+    "resources": {
+      "projectInstructions": false
+    }
+  }
+]

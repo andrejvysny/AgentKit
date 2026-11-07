@@ -1,0 +1,1607 @@
+{
+  "source": "packages/toolpacks-coding/src/command-words.ts + command-script-inputs.ts @ 77fc558",
+  "runtimes": [
+    "Node 22.20.0",
+    "Bun 1.4.4"
+  ],
+  "agreement": "both runtimes produced byte-identical JSON for every case",
+  "cases": [
+    {
+      "input": "bun test",
+      "words": [
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "bun",
+        "test"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "bun   test",
+      "words": [
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "bun",
+        "test"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "   bun test   ",
+      "words": [
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "bun",
+        "test"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "bun \t test",
+      "words": [
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "bun",
+        "\t",
+        "test"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "\tbun\ttest\t",
+      "words": [
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "bun\ttest"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "env  FOO=bar   env  node  x.mjs",
+      "words": [
+        "env",
+        "FOO=bar",
+        "env",
+        "node",
+        "x.mjs"
+      ],
+      "tokens": [
+        "env",
+        "FOO=bar",
+        "env",
+        "node",
+        "x.mjs"
+      ],
+      "files": {
+        "ok": [
+          "x.mjs"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "bun  run   build",
+      "words": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "tokens": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "files": {
+        "error": "nested Bun entrypoint resolution is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "node  --require  evil.js  script.js",
+      "words": [
+        "node",
+        "--require",
+        "evil.js",
+        "script.js"
+      ],
+      "tokens": [
+        "node",
+        "--require",
+        "evil.js",
+        "script.js"
+      ],
+      "files": {
+        "ok": [
+          "evil.js",
+          "script.js"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "node --require=evil.js script.js",
+      "words": [
+        "node",
+        "--require=evil.js",
+        "script.js"
+      ],
+      "tokens": [
+        "node",
+        "--require=evil.js",
+        "script.js"
+      ],
+      "files": {
+        "ok": [
+          "script.js"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "bun --preload ./hook.ts run",
+      "words": [
+        "bun",
+        "--preload",
+        "./hook.ts",
+        "run"
+      ],
+      "tokens": [
+        "bun",
+        "--preload",
+        "./hook.ts",
+        "run"
+      ],
+      "files": {
+        "error": "nested Bun entrypoint resolution is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "env   NODE_ENV=test   node   check.mjs",
+      "words": [
+        "env",
+        "NODE_ENV=test",
+        "node",
+        "check.mjs"
+      ],
+      "tokens": [
+        "env",
+        "NODE_ENV=test",
+        "node",
+        "check.mjs"
+      ],
+      "files": {
+        "ok": [
+          "check.mjs"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "a\tb c",
+      "words": [
+        "a",
+        "b",
+        "c"
+      ],
+      "tokens": [
+        "a\tb",
+        "c"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a b c",
+      "words": [
+        "a",
+        "b",
+        "c"
+      ],
+      "tokens": [
+        "a b",
+        "c"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "ab c",
+      "words": [
+        "ab",
+        "c"
+      ],
+      "tokens": [
+        "ab",
+        "c"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "ab"
+      }
+    },
+    {
+      "input": "a\u001cb",
+      "words": [
+        "a\u001cb"
+      ],
+      "tokens": [
+        "a\u001cb"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a\u001cb"
+      }
+    },
+    {
+      "input": "a\u001db",
+      "words": [
+        "a\u001db"
+      ],
+      "tokens": [
+        "a\u001db"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a\u001db"
+      }
+    },
+    {
+      "input": "a\u001eb",
+      "words": [
+        "a\u001eb"
+      ],
+      "tokens": [
+        "a\u001eb"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a\u001eb"
+      }
+    },
+    {
+      "input": "a\u001fb",
+      "words": [
+        "a\u001fb"
+      ],
+      "tokens": [
+        "a\u001fb"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a\u001fb"
+      }
+    },
+    {
+      "input": "a b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a​b",
+      "words": [
+        "a​b"
+      ],
+      "tokens": [
+        "a​b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a​b"
+      }
+    },
+    {
+      "input": "a﻿b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a﻿b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a\u000bb",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a\u000bb"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a\fb",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a\fb"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a\rb",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a\rb"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a　b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a　b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "   ",
+      "words": [],
+      "tokens": [
+        ""
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "\t\t",
+      "words": [],
+      "tokens": [
+        ""
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "",
+      "words": [],
+      "tokens": [
+        ""
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "echo 'a b'",
+      "words": [
+        "echo",
+        "a b"
+      ],
+      "tokens": [
+        "echo",
+        "'a",
+        "b'"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo \"a b\"",
+      "words": [
+        "echo",
+        "a b"
+      ],
+      "tokens": [
+        "echo",
+        "\"a",
+        "b\""
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo 'a'b",
+      "words": [
+        "echo",
+        "ab"
+      ],
+      "tokens": [
+        "echo",
+        "'a'b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo \\$HOME",
+      "words": [
+        "echo",
+        "$HOME"
+      ],
+      "tokens": [
+        "echo",
+        "\\$HOME"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo a\\",
+      "words": [
+        "echo",
+        "a\\"
+      ],
+      "tokens": [
+        "echo",
+        "a\\"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo 'unclosed",
+      "words": [
+        "echo",
+        "unclosed"
+      ],
+      "tokens": [
+        "echo",
+        "'unclosed"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo \"unclosed",
+      "words": [
+        "echo",
+        "unclosed"
+      ],
+      "tokens": [
+        "echo",
+        "\"unclosed"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo \"a\\\"b\"",
+      "words": [
+        "echo",
+        "a\"b"
+      ],
+      "tokens": [
+        "echo",
+        "\"a\\\"b\""
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo 'it''s'",
+      "words": [
+        "echo",
+        "its"
+      ],
+      "tokens": [
+        "echo",
+        "'it''s'"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo \\ b",
+      "words": [
+        "echo",
+        " b"
+      ],
+      "tokens": [
+        "echo",
+        "\\",
+        "b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "a;b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a;b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a&&b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a&&b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a|b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a|b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a>b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a>b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a<b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a<b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a`b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a`b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a$b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a$b"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a(b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a(b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "a)b",
+      "words": [
+        "a",
+        "b"
+      ],
+      "tokens": [
+        "a)b"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "a"
+      }
+    },
+    {
+      "input": "command  -v  npm  run  test",
+      "words": [
+        "command",
+        "-v",
+        "npm",
+        "run",
+        "test"
+      ],
+      "tokens": [
+        "command",
+        "-v",
+        "npm",
+        "run",
+        "test"
+      ],
+      "files": {
+        "error": "unsupported package script command resolution"
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "exec  env  FOO=bar  bash  run.sh",
+      "words": [
+        "exec",
+        "env",
+        "FOO=bar",
+        "bash",
+        "run.sh"
+      ],
+      "tokens": [
+        "exec",
+        "env",
+        "FOO=bar",
+        "bash",
+        "run.sh"
+      ],
+      "files": {
+        "ok": [
+          "run.sh"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "bash"
+      }
+    },
+    {
+      "input": "FOO=1 BAR=2 env -- node a.js",
+      "words": [
+        "FOO=1",
+        "BAR=2",
+        "env",
+        "--",
+        "node",
+        "a.js"
+      ],
+      "tokens": [
+        "FOO=1",
+        "BAR=2",
+        "env",
+        "--",
+        "node",
+        "a.js"
+      ],
+      "files": {
+        "error": "unsupported package script command resolution"
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "cd  src  &&  bun test",
+      "words": [
+        "cd",
+        "src",
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "cd",
+        "src",
+        "&&",
+        "bun",
+        "test"
+      ],
+      "files": {
+        "error": "nonliteral package script cannot receive standing approval"
+      },
+      "scriptExecutable": {
+        "ok": "cd"
+      }
+    },
+    {
+      "input": "PATH=/x node x.mjs",
+      "words": [
+        "PATH=/x",
+        "node",
+        "x.mjs"
+      ],
+      "tokens": [
+        "PATH=/x",
+        "node",
+        "x.mjs"
+      ],
+      "files": {
+        "error": "package script PATH override is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "npx vitest",
+      "words": [
+        "npx",
+        "vitest"
+      ],
+      "tokens": [
+        "npx",
+        "vitest"
+      ],
+      "files": {
+        "error": "nested package runner resolution is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "npx"
+      }
+    },
+    {
+      "input": "bunx eslint",
+      "words": [
+        "bunx",
+        "eslint"
+      ],
+      "tokens": [
+        "bunx",
+        "eslint"
+      ],
+      "files": {
+        "error": "nested package runner resolution is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "bunx"
+      }
+    },
+    {
+      "input": "-x tsc",
+      "words": [
+        "-x",
+        "tsc"
+      ],
+      "tokens": [
+        "-x",
+        "tsc"
+      ],
+      "files": {
+        "error": "unsupported package script command resolution"
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "node a.js",
+      "words": [
+        "node",
+        "a.js"
+      ],
+      "tokens": [
+        "node",
+        "a.js"
+      ],
+      "files": {
+        "ok": [
+          "a.js"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "nodejs --require r.cjs s.js",
+      "words": [
+        "nodejs",
+        "--require",
+        "r.cjs",
+        "s.js"
+      ],
+      "tokens": [
+        "nodejs",
+        "--require",
+        "r.cjs",
+        "s.js"
+      ],
+      "files": {
+        "ok": [
+          "r.cjs",
+          "s.js"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "nodejs"
+      }
+    },
+    {
+      "input": "node -r ./x.cjs s.js",
+      "words": [
+        "node",
+        "-r",
+        "./x.cjs",
+        "s.js"
+      ],
+      "tokens": [
+        "node",
+        "-r",
+        "./x.cjs",
+        "s.js"
+      ],
+      "files": {
+        "ok": [
+          "./x.cjs",
+          "s.js"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "node --test",
+      "words": [
+        "node",
+        "--test"
+      ],
+      "tokens": [
+        "node",
+        "--test"
+      ],
+      "files": {
+        "error": "unsupported direct interpreter options"
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "bun test",
+      "words": [
+        "bun",
+        "test"
+      ],
+      "tokens": [
+        "bun",
+        "test"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "bun build entry.ts",
+      "words": [
+        "bun",
+        "build",
+        "entry.ts"
+      ],
+      "tokens": [
+        "bun",
+        "build",
+        "entry.ts"
+      ],
+      "files": {
+        "error": "nested Bun entrypoint resolution is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "bun run dev",
+      "words": [
+        "bun",
+        "run",
+        "dev"
+      ],
+      "tokens": [
+        "bun",
+        "run",
+        "dev"
+      ],
+      "files": {
+        "error": "nested Bun entrypoint resolution is unsupported"
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "bun x -- foo",
+      "words": [
+        "bun",
+        "x",
+        "--",
+        "foo"
+      ],
+      "tokens": [
+        "bun",
+        "x",
+        "--",
+        "foo"
+      ],
+      "files": {
+        "ok": [
+          "x"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "bun"
+      }
+    },
+    {
+      "input": "node -- a.js",
+      "words": [
+        "node",
+        "--",
+        "a.js"
+      ],
+      "tokens": [
+        "node",
+        "--",
+        "a.js"
+      ],
+      "files": {
+        "ok": [
+          "a.js"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "node --",
+      "words": [
+        "node",
+        "--"
+      ],
+      "tokens": [
+        "node",
+        "--"
+      ],
+      "files": {
+        "error": "direct interpreter entrypoint is unresolved"
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "node",
+      "words": [
+        "node"
+      ],
+      "tokens": [
+        "node"
+      ],
+      "files": {
+        "error": "direct interpreter entrypoint is unresolved"
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "python3 -m pytest",
+      "words": [
+        "python3",
+        "-m",
+        "pytest"
+      ],
+      "tokens": [
+        "python3",
+        "-m",
+        "pytest"
+      ],
+      "files": {
+        "error": "unsupported direct interpreter options"
+      },
+      "scriptExecutable": {
+        "ok": "python3"
+      }
+    },
+    {
+      "input": "python -c print(1)",
+      "words": [
+        "python",
+        "-c",
+        "print",
+        "1"
+      ],
+      "tokens": [
+        "python",
+        "-c",
+        "print(1)"
+      ],
+      "files": {
+        "error": "unsupported direct interpreter options"
+      },
+      "scriptExecutable": {
+        "ok": "python"
+      }
+    },
+    {
+      "input": "sh run.sh",
+      "words": [
+        "sh",
+        "run.sh"
+      ],
+      "tokens": [
+        "sh",
+        "run.sh"
+      ],
+      "files": {
+        "ok": [
+          "run.sh"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "sh"
+      }
+    },
+    {
+      "input": "sh -x run.sh",
+      "words": [
+        "sh",
+        "-x",
+        "run.sh"
+      ],
+      "tokens": [
+        "sh",
+        "-x",
+        "run.sh"
+      ],
+      "files": {
+        "error": "unsupported direct interpreter options"
+      },
+      "scriptExecutable": {
+        "ok": "sh"
+      }
+    },
+    {
+      "input": "bash -lc exit",
+      "words": [
+        "bash",
+        "-lc",
+        "exit"
+      ],
+      "tokens": [
+        "bash",
+        "-lc",
+        "exit"
+      ],
+      "files": {
+        "error": "unsupported direct interpreter options"
+      },
+      "scriptExecutable": {
+        "ok": "bash"
+      }
+    },
+    {
+      "input": "café.py",
+      "words": [
+        "café.py"
+      ],
+      "tokens": [
+        "café.py"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "café.py"
+      }
+    },
+    {
+      "input": "run café.py now",
+      "words": [
+        "run",
+        "café.py",
+        "now"
+      ],
+      "tokens": [
+        "run",
+        "café.py",
+        "now"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "run"
+      }
+    },
+    {
+      "input": "echo 1.5.py",
+      "words": [
+        "echo",
+        "1.5.py"
+      ],
+      "tokens": [
+        "echo",
+        "1.5.py"
+      ],
+      "files": {
+        "ok": [
+          "1.5.py"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo ./a-b_c.ts",
+      "words": [
+        "echo",
+        "./a-b_c.ts"
+      ],
+      "tokens": [
+        "echo",
+        "./a-b_c.ts"
+      ],
+      "files": {
+        "ok": [
+          "./a-b_c.ts"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo a..py",
+      "words": [
+        "echo",
+        "a..py"
+      ],
+      "tokens": [
+        "echo",
+        "a..py"
+      ],
+      "files": {
+        "ok": [
+          "a..py"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo .py",
+      "words": [
+        "echo",
+        ".py"
+      ],
+      "tokens": [
+        "echo",
+        ".py"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo -x.py",
+      "words": [
+        "echo",
+        "-x.py"
+      ],
+      "tokens": [
+        "echo",
+        "-x.py"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "node 0.py",
+      "words": [
+        "node",
+        "0.py"
+      ],
+      "tokens": [
+        "node",
+        "0.py"
+      ],
+      "files": {
+        "ok": [
+          "0.py"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "node"
+      }
+    },
+    {
+      "input": "echo x.PY",
+      "words": [
+        "echo",
+        "x.PY"
+      ],
+      "tokens": [
+        "echo",
+        "x.PY"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "tools/run.sh",
+      "words": [
+        "tools/run.sh"
+      ],
+      "tokens": [
+        "tools/run.sh"
+      ],
+      "files": {
+        "ok": [
+          "tools/run.sh"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "NODE_ENV=test ./bin/tool.py",
+      "words": [
+        "NODE_ENV=test",
+        "./bin/tool.py"
+      ],
+      "tokens": [
+        "NODE_ENV=test",
+        "./bin/tool.py"
+      ],
+      "files": {
+        "ok": [
+          "./bin/tool.py"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": null
+      }
+    },
+    {
+      "input": "echo x.tsx",
+      "words": [
+        "echo",
+        "x.tsx"
+      ],
+      "tokens": [
+        "echo",
+        "x.tsx"
+      ],
+      "files": {
+        "ok": []
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    },
+    {
+      "input": "echo x.mjs",
+      "words": [
+        "echo",
+        "x.mjs"
+      ],
+      "tokens": [
+        "echo",
+        "x.mjs"
+      ],
+      "files": {
+        "ok": [
+          "x.mjs"
+        ]
+      },
+      "scriptExecutable": {
+        "ok": "echo"
+      }
+    }
+  ],
+  "executableNames": [
+    {
+      "input": "",
+      "name": ""
+    },
+    {
+      "input": "/",
+      "name": ""
+    },
+    {
+      "input": "//",
+      "name": ""
+    },
+    {
+      "input": "///",
+      "name": ""
+    },
+    {
+      "input": "a//b/",
+      "name": "b"
+    },
+    {
+      "input": "/usr/bin/NPM",
+      "name": "npm"
+    },
+    {
+      "input": "Bin//Npx",
+      "name": "npx"
+    },
+    {
+      "input": "C:\\dir\\Cmd",
+      "name": "c:\\dir\\cmd"
+    },
+    {
+      "input": "node.EXE",
+      "name": "node.exe"
+    },
+    {
+      "input": ".",
+      "name": "."
+    },
+    {
+      "input": "..",
+      "name": ".."
+    },
+    {
+      "input": "a/",
+      "name": "a"
+    },
+    {
+      "input": "MiXeD",
+      "name": "mixed"
+    },
+    {
+      "input": "İstanbul",
+      "name": "i̇stanbul"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * AGENTKIT-56: the MCP surface of the native binding, both directions.
  *
@@ -91,7 +92,7 @@ async function withService(
   options?: Parameters<NativeStore["createService"]>[0],
 ): Promise<{ store: NativeStore; service: NativeSessionService }> {
   const store = await NativeStore.inMemory();
-  const service = await store.createService(options);
+  const service = await store.createService(testServiceOptions(options));
   return { store, service };
 }
 
@@ -1332,7 +1333,7 @@ nativeTest(
       );
       // Nothing partially published: no declaration, no descriptors, and
       // the refusal consumed no registration — the healthy connect below
-      // is still registration 1.
+      // consumes a durable lifecycle fence even though its catalogue never publishes.
       expect(await store.mcpListServers()).toEqual([]);
 
       // The healthy catalogue under the same alias publishes unchanged and
@@ -1354,15 +1355,15 @@ nativeTest(
       ]);
       expect((await store.mcpListServers())[0]).toMatchObject({
         alias: "names",
-        registration: 1,
-        handle: "names#1",
+        registration: 2,
+        handle: "names#2",
         tools: 2,
       });
       const viaFull = await store.mcpCallTool(
         "names",
         "mcp__names__echo",
         { text: "mine" },
-        "names#1",
+        "names#2",
       );
       expect(textOf(viaFull)).toBe("echo:mine");
       console.log(

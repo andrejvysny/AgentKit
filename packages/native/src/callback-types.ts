@@ -6,6 +6,9 @@ export interface ProviderRequest {
   tools: unknown[];
   temperature?: number | null;
   maxOutputTokens?: number | null;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
+  /** Request-local managed content, outside the durable transcript. */
+  runContent?: { messages: readonly unknown[] };
   /**
    * Aborts when the host has given up on this callback — run cancellation
    * (`cancel` notification) or `close()` (`discard`/drain). The provider is
@@ -14,6 +17,8 @@ export interface ProviderRequest {
    * not what stops the run.
    */
   signal?: AbortSignal;
+  /** Call after awaited preparation, immediately before a custom provider send. */
+  checkAuthority?: () => Promise<void>;
 }
 
 export interface ProviderToolCall {
@@ -78,3 +83,83 @@ export type ToolRunFunction = (
   input: unknown,
   request: ToolCallRequest,
 ) => Promise<ToolResultJson | unknown> | ToolResultJson | unknown;
+
+/** MCP form/URL elicitation. The host owns any browser interaction. */
+export interface McpElicitationRequest {
+  alias: string;
+  params: unknown;
+  signal: AbortSignal;
+}
+export interface McpElicitationResult {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, unknown>;
+}
+export type McpElicitationHandler = (
+  request: McpElicitationRequest,
+) => McpElicitationResult | Promise<McpElicitationResult>;
+
+/** Durable credentials remain in the host vault; references alone may persist in config. */
+export interface ProviderSecretStore {
+  get(
+    reference: string,
+    signal: AbortSignal,
+  ): string | null | Promise<string | null>;
+  put(
+    reference: string,
+    value: string,
+    signal: AbortSignal,
+  ): void | Promise<void>;
+  delete(reference: string, signal: AbortSignal): void | Promise<void>;
+}
+export interface ProviderConsentRequest {
+  actorId: string;
+  connectionId: string;
+  generation: number;
+  account: string;
+  providerKind: string;
+  destination: string;
+  capability: string;
+  model?: string | null;
+  /** Exact serialized outgoing body approved by this request; empty for discovery. */
+  payloadJson: string;
+  disclosedData: readonly string[];
+  signal: AbortSignal;
+}
+export type ProviderConsentHandler = (
+  request: ProviderConsentRequest,
+) => { approved: boolean } | Promise<{ approved: boolean }>;
+
+/** OAuth credentials and browser interaction are owned by the embedding host. */
+export interface McpOAuthHttpRequest {
+  /** Host HTTP implementations must disable redirects. */
+  redirect: "error";
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: string;
+  signal: AbortSignal;
+}
+export interface McpOAuthHttpResponse {
+  status: number;
+  headers?: Record<string, string>;
+  body: string;
+}
+export interface McpOAuthCallbacks {
+  /** Trusted host HTTP port; enabled only by explicit OAuth options. */
+  http?(
+    request: McpOAuthHttpRequest,
+  ): McpOAuthHttpResponse | Promise<McpOAuthHttpResponse>;
+  secrets: {
+    get(
+      key: string,
+      signal: AbortSignal,
+    ): string | null | Promise<string | null>;
+    set(key: string, value: string, signal: AbortSignal): void | Promise<void>;
+    delete(key: string, signal: AbortSignal): void | Promise<void>;
+  };
+  redirect(request: {
+    alias: string;
+    url: string;
+    signal: AbortSignal;
+  }): void | Promise<void>;
+}

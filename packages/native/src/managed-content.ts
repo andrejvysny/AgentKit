@@ -91,6 +91,8 @@ export interface UnavailableRunSkill {
 
 /** `runContent.resolve` output. */
 export interface RunContentResolution {
+  /** Only connector identities consumed by the selected skills. */
+  authorizedConnectors: string[];
   blocks: RunContentBlock[];
   messages: PromptTemplate["messages"];
   unavailable: UnavailableRunSkill[];

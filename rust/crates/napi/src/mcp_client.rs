@@ -14,11 +14,10 @@
 //! contracts compiler rejects can validate nothing, so nothing is ever
 //! dispatched unchecked — the same rule as the crate's `RemoteTool`)
 //! before the crate's manager talks to the server. Resolved secret
-//! material never appears here: the binding installs a resolver that
-//! provides nothing, so any `secretRefs` entry fails its connect with
-//! `mcp_secret_missing` rather than leaking or silently dropping a value.
-//! Configs live in memory only, on this store handle; a process restart
-//! re-declares them.
+//! material is resolved through the explicit host vault callback. Without
+//! a configured vault, `secretRefs` fail with `mcp_secret_missing`.
+//! Manual declarations are ephemeral; the HTTP configuration repository
+//! restores durable declarations through this same manager.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -36,16 +35,29 @@ use tokio_util::sync::CancellationToken;
 use super::NativeStore;
 use crate::errors;
 
+#[path = "mcp_client_oauth.rs"]
+mod client_oauth;
+#[path = "mcp_client_runtime.rs"]
+mod client_runtime;
+pub(crate) use client_runtime::{ConfigPorts, RuntimeState};
+#[path = "mcp_client_ports.rs"]
+mod client_ports;
+use client_ports::{CallbackMap, close_callback, next_registration};
+
 /// The store-side client state: the crate manager, the accepted configs
 /// (declarations only — resolved secrets never enter this state), and the
 /// per-alias projected descriptors with their pre-compiled validators.
 pub(crate) struct Registry {
+    shared: Arc<std::sync::Mutex<RuntimeState>>,
     /// Shared so `mcp_call_tool` can drop the store-wide lock before the
     /// network round-trip: the engine dispatches parallel tool calls, and
     /// serializing them behind a binding mutex would fake timeouts. The
     /// crate manager is internally safe for concurrent use (per-session
     /// lifecycles, serialized config swaps via its own update gate).
     manager: Arc<McpClientManager>,
+    callbacks: CallbackMap,
+    oauth: client_ports::OAuthMap,
+    connecting: HashMap<String, Connecting>,
     configs: BTreeMap<String, ServerConfig>,
     tools: HashMap<String, Vec<CachedTool>>,
     /// How many times each alias has been (re)registered on this store. It
@@ -62,6 +74,11 @@ pub(crate) struct Registry {
     /// the tombstone into an already-cancelled token, so an abort that wins
     /// the race still denies the dispatch — the key never dispatches.
     cancelled: HashSet<String>,
+}
+
+struct Connecting {
+    id: String,
+    token: CancellationToken,
 }
 
 /// One projected remote tool. Projection mirrors the crate's own
@@ -84,6 +101,7 @@ pub(crate) struct CachedTool {
     /// wire-last bound guard. `None` only for a server that had no live
     /// transport at projection time, which `mcpConnect` refuses outright.
     binding: Option<ToolBinding>,
+    model_capabilities: agentkit_mcp::ModelContentCapabilities,
 }
 
 /// Resolve the addressable name a caller used for one alias's cached tools.
@@ -112,19 +130,6 @@ fn resolve_entry<'a>(entries: &'a [CachedTool], tool_name: &str) -> Option<&'a C
 /// registration of that alias is admitted.
 fn handle_for(alias: &str, registration: u64) -> String {
     format!("{alias}#{registration}")
-}
-
-/// The binding's secret resolver: nothing is available in-process, so a
-/// config carrying `secretRefs` fails closed at connect with
-/// `mcp_secret_missing`. This is a documented gap (a host-provided
-/// resolver will replace it), never a fake lookup.
-struct UnavailableSecrets;
-
-#[async_trait]
-impl McpSecretResolver for UnavailableSecrets {
-    async fn get(&self, _reference: &str) -> std::result::Result<Option<String>, McpClientError> {
-        Ok(None)
-    }
 }
 
 fn map_client(error: McpClientError) -> napi::Error {
@@ -218,6 +223,7 @@ fn project_tool(
         // Stamped by `mcpConnect` from the session's live transport right
         // after the listing that produced this entry.
         binding: None,
+        model_capabilities: Default::default(),
     })
 }
 
@@ -260,7 +266,18 @@ fn catalogue_is_addressable(entries: &[CachedTool]) -> bool {
 /// `RemoteTool::outcome` (`rust/crates/mcp/src/bridge.rs:205-262`):
 /// concatenated text, non-text parts reported as a warning, `isError`
 /// never laundered into success.
+#[cfg(test)]
 fn outcome(canonical: &str, alias: &str, original: &str, result: CallToolResult) -> Value {
+    outcome_with_capabilities(canonical, alias, original, result, Default::default())
+}
+
+fn outcome_with_capabilities(
+    canonical: &str,
+    alias: &str,
+    original: &str,
+    result: CallToolResult,
+    capabilities: agentkit_mcp::ModelContentCapabilities,
+) -> Value {
     let content = serde_json::to_value(result.content).unwrap_or_else(|_| json!([]));
     let mut texts = Vec::new();
     let mut non_text: Vec<String> = Vec::new();
@@ -274,6 +291,13 @@ fn outcome(canonical: &str, alias: &str, original: &str, result: CallToolResult)
         }
     }
     let text = texts.join("\n");
+    let projected = agentkit_mcp::project_model_content(
+        canonical,
+        alias,
+        original,
+        content.as_array().map(Vec::as_slice).unwrap_or_default(),
+        capabilities,
+    );
     let is_error = result.is_error == Some(true);
     let mut data = json!({
         "canonicalId": canonical,
@@ -291,16 +315,16 @@ fn outcome(canonical: &str, alias: &str, original: &str, result: CallToolResult)
     let mut model = if is_error {
         json!({"errorCode":"mcp_tool_error","errorMessage":text,"retryable":false})
     } else {
-        json!({"text":text})
+        json!({"text":projected.text})
     };
     if !is_error && let Some(structured) = &structured {
         model["structured"] = structured.clone();
     }
     let mut warnings = Vec::new();
-    if !is_error && !non_text.is_empty() {
+    if !is_error && !projected.unsupported.is_empty() {
         warnings.push(format!(
-            "MCP tool returned non-text content ({}); only text parts were passed to the model.",
-            non_text.join(", ")
+            "MCP tool returned non-text content ({}); unsupported parts were not passed to the model.",
+            projected.unsupported.join(", ")
         ));
     }
     serde_json::to_value(ToolResult {
@@ -313,12 +337,17 @@ fn outcome(canonical: &str, alias: &str, original: &str, result: CallToolResult)
             text.lines().next().unwrap_or_default().to_owned()
         }),
         status: (!is_error).then(|| "ok".to_owned()),
-        sources: Vec::new(),
+        sources: if is_error {
+            Vec::new()
+        } else {
+            projected.sources
+        },
         warnings,
         truncated: false,
         limits: ToolLimits::default(),
 
-        model_content: None,
+        model_content: (!is_error && !projected.attachments.is_empty())
+            .then_some(projected.attachments),
     })
     .unwrap_or_else(|_| json!({"ok":false,"data":{"errorCode":"internal_error"}}))
 }
@@ -336,175 +365,29 @@ impl NativeStore {
     /// descriptor.remoteName, args)` from the tool lane to invoke. Fails
     /// with `mcp_invalid_config` for a bad declaration or remote identity,
     /// `mcp_connect_failed`/`mcp_*` for transport problems, and
-    /// `mcp_secret_missing` if the config carries `secretRefs` (the
-    /// binding has no secret resolver yet). Connecting an already-known
-    /// alias fails with `invalid_input`; disconnect it first.
+    /// `mcp_secret_missing` if referenced host-vault values are unavailable.
+    /// Connecting an already-connected alias fails with `invalid_input`;
+    /// durable disconnected aliases retain their declarations.
     #[napi]
     pub async fn mcp_connect(&self, config_json: String) -> Result<String> {
-        let config: ServerConfig = serde_json::from_str(&config_json).map_err(|error| {
-            errors::invalid(format!(
-                "configJson must be a valid MCP server configuration: {error}"
-            ))
-        })?;
-        if !config.enabled {
-            return Err(errors::invalid(
-                "mcpConnect never connects a disabled server; omit enabled or set it true",
-            ));
+        self.connect_mcp(config_json, None, None).await
+    }
+
+    #[napi]
+    pub async fn mcp_connect_with_callbacks(
+        &self,
+        config_json: String,
+        deliver: napi::threadsafe_function::ThreadsafeFunction<String>,
+    ) -> Result<String> {
+        let callback = Arc::new(crate::jsbridge::JsBridge::new(deliver));
+        let result = self
+            .connect_mcp(config_json, Some(callback.clone()), None)
+            .await;
+        if result.is_err() {
+            callback.start_closing();
+            callback.mark_closed();
         }
-        // Connects are serialized by their own gate so the registry mutex is
-        // never held across spawn / handshake / `tools/list` (which can take
-        // as long as a server cares to stall): calls, cancels, and
-        // disconnects on OTHER aliases keep flowing meanwhile.
-        let _connect_gate = self.mcp_connect_gate.lock().await;
-        let alias = config.alias.clone();
-        // Phase 1 (short lock): validate, snapshot, mint the registration.
-        let (manager, registration, known_aliases, next_configs, mut names, mut canonicals) = {
-            let mut state = self.mcp.lock().await;
-            if state.is_none() {
-                let manager = McpClientManager::new(Vec::new(), Arc::new(UnavailableSecrets))
-                    .map_err(map_client)?;
-                *state = Some(Registry {
-                    manager: Arc::new(manager),
-                    configs: BTreeMap::new(),
-                    tools: HashMap::new(),
-                    registrations: HashMap::new(),
-                    pending: HashMap::new(),
-                    cancelled: HashSet::new(),
-                });
-            }
-            let registry = state
-                .as_mut()
-                .ok_or_else(|| errors::internal("MCP registry state was not installed"))?;
-            if registry.configs.contains_key(&config.alias) {
-                return Err(errors::invalid(format!(
-                    "MCP server {} is already connected; call mcpDisconnect() first",
-                    config.alias
-                )));
-            }
-            // Build the NEXT state completely before publishing any of it.
-            // The mirrors (`configs`, `tools`, `registrations`) are written
-            // only once the new server has connected AND projected, so every
-            // failure path leaves the servers that were already connected
-            // exactly as they were. A reconnect under a known alias is a NEW
-            // registration: it mints new handles, and the previous
-            // registration's handles stop being admitted.
-            let registration = registry
-                .registrations
-                .get(&alias)
-                .copied()
-                .unwrap_or(0)
-                .wrapping_add(1);
-            let mut next_configs = registry.configs.clone();
-            next_configs.insert(alias.clone(), config.clone());
-            // Cross-server descriptor uniqueness is checked against the
-            // CURRENT cache plus the candidate set, before publishing.
-            let names: Vec<String> = registry
-                .tools
-                .values()
-                .flatten()
-                .filter_map(|entry| entry.descriptor.get("name")?.as_str().map(str::to_owned))
-                .collect();
-            let canonicals: Vec<String> = registry
-                .tools
-                .values()
-                .flatten()
-                .map(|entry| entry.canonical.clone())
-                .collect();
-            let known_aliases: Vec<String> = registry.configs.keys().cloned().collect();
-            (
-                Arc::clone(&registry.manager),
-                registration,
-                known_aliases,
-                next_configs,
-                names,
-                canonicals,
-            )
-        };
-        // Phase 2 (no registry lock): the network work.
-        let cancellation = CancellationToken::new();
-        let projected = async {
-            manager
-                .replace_configs(next_configs.values().cloned().collect())
-                .await?;
-            manager.connect(&alias, cancellation.clone()).await?;
-            let listed = manager.list_tools(&alias, cancellation).await?;
-            // Capture the transport the listing just answered on: every
-            // descriptor minted here is pinned to it (W1d - bound dispatch
-            // across automatic reconnects). A session that lost its
-            // transport between the listing and this read is refused here;
-            // an unbound descriptor would silently dispatch on whichever
-            // transport the session happens to hold at call time.
-            let binding = manager.binding(&alias).ok_or(McpClientError::Closed)?;
-            let mut projected = Vec::new();
-            for tool in listed {
-                let mut entry = project_tool(&alias, &config, tool, registration)?;
-                entry.binding = Some(binding);
-                let name = entry
-                    .descriptor
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                if names.iter().any(|seen| seen == &name)
-                    || canonicals.iter().any(|seen| seen == &entry.canonical)
-                {
-                    return Err(McpClientError::Configuration);
-                }
-                names.push(name);
-                canonicals.push(entry.canonical.clone());
-                projected.push(entry);
-            }
-            // Cross-namespace ambiguity (an advertised name that is another
-            // tool's ORIGINAL) is refused here, before a single descriptor of
-            // this registration is published.
-            if !catalogue_is_addressable(&projected) {
-                return Err(McpClientError::Configuration);
-            }
-            Ok::<_, McpClientError>(projected)
-        }
-        .await;
-        // Phase 3 (short lock): publish, or roll the manager back to the
-        // declaration set the registry actually holds.
-        let mut state = self.mcp.lock().await;
-        let projected = match projected {
-            Ok(projected) => projected,
-            Err(error) => {
-                if let Some(registry) = state.as_ref() {
-                    let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
-                    let _ = registry.manager.replace_configs(rollback).await;
-                }
-                return Err(map_client(error));
-            }
-        };
-        let Some(registry) = state.as_mut() else {
-            // The store closed while the connect was in flight; its teardown
-            // already closed the manager, so there is nothing to publish.
-            return Err(errors::closed("the store is closed"));
-        };
-        if !registry.configs.keys().eq(known_aliases.iter()) {
-            // A disconnect landed during the handshake: the manager was
-            // configured from a stale declaration set. Restore it and make
-            // the caller retry against the registry as it now stands.
-            let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
-            let _ = registry.manager.replace_configs(rollback).await;
-            return Err(errors::stable(
-                "invalid_state",
-                "the connected MCP server set changed while connecting; retry mcpConnect()",
-                None,
-            ));
-        }
-        registry.configs = next_configs;
-        registry.tools.insert(alias.clone(), projected);
-        registry.registrations.insert(alias.clone(), registration);
-        Ok(json!({
-            "alias": alias,
-            "tools": registry
-                .tools
-                .get(&alias)
-                .map(|entries| entries.iter().map(|entry| entry.descriptor.clone()).collect::<Vec<_>>())
-                .unwrap_or_default(),
-        })
-        .to_string())
+        result
     }
 
     /// Invoke one tool on a connected MCP server. `toolName` accepts the
@@ -600,7 +483,7 @@ impl NativeStore {
         // Snapshot under the lock, dispatch WITHOUT it: a slow remote
         // must never serialize other calls or block disconnects behind
         // this binding's own mutex.
-        let (manager, canonical, original, valid, admitted, binding) = {
+        let (manager, canonical, original, valid, admitted, binding, capabilities) = {
             let state = self.mcp.lock().await;
             let registry = state
                 .as_ref()
@@ -647,6 +530,7 @@ impl NativeStore {
                 valid,
                 admitted,
                 binding,
+                entry.model_capabilities,
             )
         };
         if !admitted {
@@ -671,7 +555,10 @@ impl NativeStore {
             .call_tool_bound(&canonical, binding, arguments, token)
             .await
             .map_err(map_client)?;
-        Ok(outcome(&canonical, alias, &original, result).to_string())
+        Ok(
+            outcome_with_capabilities(&canonical, alias, &original, result, capabilities)
+                .to_string(),
+        )
     }
 
     /// Tear down one in-flight `mcpCallTool` by the cancellation key the JS
@@ -703,34 +590,11 @@ impl NativeStore {
     /// alias is a no-op success.
     #[napi]
     pub async fn mcp_disconnect(&self, alias: String) -> Result<()> {
-        let mut state = self.mcp.lock().await;
-        let Some(registry) = state.as_mut() else {
-            return Ok(());
-        };
-        if !registry.configs.contains_key(&alias) {
-            registry.tools.remove(&alias);
-            return Ok(());
-        }
-        // Compute the next set first; the mirrors are only edited once the
-        // manager has accepted it. A failure here means the manager could not
-        // CLOSE the dropped transport — the session was already revoked and
-        // removed either way, so the mirrors must match the manager, not the
-        // declaration the call started from.
-        let remaining = registry
-            .configs
-            .values()
-            .filter(|config| config.alias != alias)
-            .cloned()
-            .collect::<Vec<_>>();
-        let failure = registry
-            .manager
-            .replace_configs(remaining)
-            .await
-            .err()
-            .map(map_client);
-        registry.configs.remove(&alias);
-        registry.tools.remove(&alias);
-        failure.map_or(Ok(()), Err)
+        self.disconnect_mcp(alias, None).await
+    }
+    #[napi]
+    pub async fn mcp_disconnect_bound(&self, alias: String, expected_handle: String) -> Result<()> {
+        self.disconnect_mcp(alias, Some(expected_handle)).await
     }
 
     /// Every MCP server declared on this store: `{alias, kind, enabled,
@@ -781,16 +645,428 @@ impl NativeStore {
 }
 
 impl NativeStore {
+    async fn disconnect_mcp(&self, alias: String, expected: Option<String>) -> Result<()> {
+        let mut state = self.mcp.lock().await;
+        let Some(registry) = state.as_mut() else {
+            return Ok(());
+        };
+        if let Some(expected) = expected {
+            let current = registry
+                .registrations
+                .get(&alias)
+                .map(|registration| handle_for(&alias, *registration));
+            if registry.connecting.contains_key(&alias)
+                || current.as_deref() != Some(expected.as_str())
+            {
+                return Err(errors::stable(
+                    "mcp_authority_revoked",
+                    "MCP connection handle was superseded",
+                    None,
+                ));
+            }
+        }
+        let connecting = registry.connecting.remove(&alias);
+        if let Some(connecting) = &connecting {
+            connecting.token.cancel();
+        }
+        {
+            let mut shared = registry
+                .shared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            shared.pending.remove(&alias);
+            shared.tool_counts.remove(&alias);
+        }
+        close_callback(&registry.callbacks, &alias);
+        registry
+            .oauth
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&alias);
+        if !registry.configs.contains_key(&alias) && connecting.is_none() {
+            registry.tools.remove(&alias);
+            return Ok(());
+        }
+        // Compute the next set first; the mirrors are only edited once the
+        // manager has accepted it. A failure here means the manager could not
+        // CLOSE the dropped transport — the session was already revoked and
+        // removed either way, so the mirrors must match the manager, not the
+        // declaration the call started from.
+        let remaining = registry
+            .configs
+            .values()
+            .filter(|config| config.alias != alias)
+            .cloned()
+            .collect::<Vec<_>>();
+        let owned = registry
+            .shared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .owned
+            .contains(&alias);
+        let failure = if owned {
+            registry.manager.close(&alias).await.err().map(map_client)
+        } else {
+            registry
+                .manager
+                .replace_configs(remaining)
+                .await
+                .err()
+                .map(map_client)
+        };
+        if !owned {
+            registry.configs.remove(&alias);
+        }
+        registry.tools.remove(&alias);
+        failure.map_or(Ok(()), Err)
+    }
+
+    async fn admit_connect(
+        &self,
+        alias: &str,
+        callback: Option<&client_ports::CallbackBinding>,
+        oauth: Option<&client_ports::OAuthTransport>,
+    ) -> Result<Connecting> {
+        let mut state = self.mcp.lock().await;
+        if self.mcp_closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(errors::closed("the store is closing"));
+        }
+        self.handle()?;
+        if state.is_none() {
+            *state = Some(client_ports::registry(self.mcp_shared.clone())?);
+        }
+        let registry = state
+            .as_mut()
+            .ok_or_else(|| errors::closed("the store is closed"))?;
+        if registry.tools.contains_key(alias) || registry.connecting.contains_key(alias) {
+            return Err(errors::invalid(
+                "MCP server is already connected or connecting",
+            ));
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let token = CancellationToken::new();
+        {
+            let mut shared = registry
+                .shared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if shared.blocked.contains(alias) || shared.reservation.is_some() {
+                return Err(errors::closed("MCP configuration is changing"));
+            }
+            shared
+                .pending
+                .insert(alias.into(), (id.clone(), token.clone()));
+        }
+        registry.connecting.insert(
+            alias.into(),
+            Connecting {
+                id: id.clone(),
+                token: token.clone(),
+            },
+        );
+        if let Some(callback) = callback {
+            registry
+                .callbacks
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(alias.into(), callback.clone());
+        }
+        if let Some(oauth) = oauth {
+            registry
+                .oauth
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(alias.into(), oauth.clone());
+        }
+        Ok(Connecting { id, token })
+    }
+    async fn abandon_connect(&self, alias: &str, id: &str) {
+        if let Some(registry) = self.mcp.lock().await.as_mut() {
+            remove_candidate(registry, alias, id);
+        }
+    }
+    async fn connect_mcp(
+        &self,
+        config_json: String,
+        callback: Option<Arc<crate::jsbridge::JsBridge>>,
+        oauth: Option<client_ports::OAuthTransport>,
+    ) -> Result<String> {
+        let config: ServerConfig = serde_json::from_str(&config_json)
+            .map_err(|_| errors::invalid("configJson must be a valid MCP server configuration"))?;
+        let model_capabilities = client_ports::model_capabilities(&config_json)?;
+        let raw = agentkit_contracts::parse_javascript_json(&config_json)
+            .map_err(|_| errors::invalid("Invalid MCP config"))?;
+        let elicitation = match raw.get("elicitation") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(errors::invalid("Invalid elicitation selection")),
+        };
+        let callback_binding = callback
+            .as_ref()
+            .map(|bridge| client_ports::CallbackBinding {
+                bridge: bridge.clone(),
+                elicitation: oauth.is_none() || elicitation,
+            });
+        if !config.enabled {
+            return Err(errors::invalid(
+                "mcpConnect never connects a disabled server; omit enabled or set it true",
+            ));
+        }
+        // Connects are serialized by their own gate so the registry mutex is
+        // never held across spawn / handshake / `tools/list` (which can take
+        // as long as a server cares to stall): calls, cancels, and
+        // disconnects on OTHER aliases keep flowing meanwhile.
+        let alias = config.alias.clone();
+        let candidate = self
+            .admit_connect(&alias, callback_binding.as_ref(), oauth.as_ref())
+            .await?;
+        let _connect_gate = self.mcp_connect_gate.lock().await;
+        if candidate.token.is_cancelled()
+            || self.mcp_closed.load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.abandon_connect(&alias, &candidate.id).await;
+            return Err(errors::closed("the MCP connection attempt was cancelled"));
+        }
+        let registration = match next_registration(&self.handle()?, &alias).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.abandon_connect(&alias, &candidate.id).await;
+                return Err(error);
+            }
+        };
+        let (manager, registration, known_aliases, next_configs, mut names, mut canonicals) = {
+            let mut state = self.mcp.lock().await;
+            let registry = state
+                .as_mut()
+                .ok_or_else(|| errors::closed("the store is closed"))?;
+            if self.mcp_closed.load(std::sync::atomic::Ordering::Acquire)
+                || !current_candidate(registry, &alias, &candidate.id)
+            {
+                remove_candidate(registry, &alias, &candidate.id);
+                return Err(errors::closed("the MCP connection attempt was cancelled"));
+            }
+            let owned = registry
+                .shared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .owned
+                .contains(&alias);
+            if owned && registry.configs.get(&alias) != Some(&config) {
+                remove_candidate(registry, &alias, &candidate.id);
+                return Err(errors::invalid(
+                    "MCP declaration differs from durable configuration",
+                ));
+            }
+            let mut next_configs = registry.configs.clone();
+            next_configs.insert(alias.clone(), config.clone());
+            // Cross-server descriptor uniqueness is checked against the
+            // CURRENT cache plus the candidate set, before publishing.
+            let names: Vec<String> = registry
+                .tools
+                .values()
+                .flatten()
+                .filter_map(|entry| entry.descriptor.get("name")?.as_str().map(str::to_owned))
+                .collect();
+            let canonicals: Vec<String> = registry
+                .tools
+                .values()
+                .flatten()
+                .map(|entry| entry.canonical.clone())
+                .collect();
+            let known_aliases: Vec<String> = registry.configs.keys().cloned().collect();
+            (
+                Arc::clone(&registry.manager),
+                registration,
+                known_aliases,
+                next_configs,
+                names,
+                canonicals,
+            )
+        };
+        // Phase 2 (no registry lock): the network work.
+        let cancellation = candidate.token.clone();
+        let projected = async {
+            manager
+                .replace_configs(next_configs.values().cloned().collect())
+                .await?;
+            manager.connect(&alias, cancellation.clone()).await?;
+            let listed = manager.list_tools(&alias, cancellation).await?;
+            // Capture the transport the listing just answered on: every
+            // descriptor minted here is pinned to it (W1d - bound dispatch
+            // across automatic reconnects). A session that lost its
+            // transport between the listing and this read is refused here;
+            // an unbound descriptor would silently dispatch on whichever
+            // transport the session happens to hold at call time.
+            let binding = manager.binding(&alias).ok_or(McpClientError::Closed)?;
+            let mut projected = Vec::new();
+            for tool in listed {
+                let mut entry = project_tool(&alias, &config, tool, registration)?;
+                entry.model_capabilities = model_capabilities;
+                entry.binding = Some(binding);
+                let name = entry
+                    .descriptor
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if names.iter().any(|seen| seen == &name)
+                    || canonicals.iter().any(|seen| seen == &entry.canonical)
+                {
+                    return Err(McpClientError::Configuration);
+                }
+                names.push(name);
+                canonicals.push(entry.canonical.clone());
+                projected.push(entry);
+            }
+            // Cross-namespace ambiguity (an advertised name that is another
+            // tool's ORIGINAL) is refused here, before a single descriptor of
+            // this registration is published.
+            if !catalogue_is_addressable(&projected) {
+                return Err(McpClientError::Configuration);
+            }
+            Ok::<_, McpClientError>(projected)
+        }
+        .await;
+        // Phase 3 (short lock): publish, or roll the manager back to the
+        // declaration set the registry actually holds.
+        let mut state = self.mcp.lock().await;
+        let projected = match projected {
+            Ok(projected) => projected,
+            Err(error) => {
+                if let Some(registry) = state.as_mut() {
+                    remove_candidate(registry, &alias, &candidate.id);
+                    let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
+                    let _ = registry.manager.replace_configs(rollback).await;
+                }
+                return Err(map_client(error));
+            }
+        };
+        let Some(registry) = state.as_mut() else {
+            // The store closed while the connect was in flight; its teardown
+            // already closed the manager, so there is nothing to publish.
+            return Err(errors::closed("the store is closed"));
+        };
+        if self.mcp_closed.load(std::sync::atomic::Ordering::Acquire)
+            || !current_candidate(registry, &alias, &candidate.id)
+            || !registry.configs.keys().eq(known_aliases.iter())
+        {
+            remove_candidate(registry, &alias, &candidate.id);
+            // A disconnect landed during the handshake: the manager was
+            // configured from a stale declaration set. Restore it and make
+            // the caller retry against the registry as it now stands.
+            let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
+            let _ = registry.manager.replace_configs(rollback).await;
+            return Err(errors::stable(
+                "invalid_state",
+                "the connected MCP server set changed while connecting; retry mcpConnect()",
+                None,
+            ));
+        }
+        registry.connecting.remove(&alias);
+        {
+            let mut shared = registry
+                .shared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            shared.pending.remove(&alias);
+            shared.tool_counts.insert(alias.clone(), projected.len());
+        }
+        registry.configs = next_configs;
+        registry.tools.insert(alias.clone(), projected);
+        registry.registrations.insert(alias.clone(), registration);
+        Ok(json!({
+            "alias": alias,
+            "handle":handle_for(&alias,registration),
+            "tools": registry
+                .tools
+                .get(&alias)
+                .map(|entries| entries.iter().map(|entry| entry.descriptor.clone()).collect::<Vec<_>>())
+                .unwrap_or_default(),
+        })
+        .to_string())
+    }
+
     /// Best-effort teardown used by `close()`: revoke every handle and
     /// await transport cleanup. The manager's own `Drop` also reaps any
     /// session the await could not finish, so close never leaks a child
     /// process beyond the handle's lifetime — but unlike a bare drop,
     /// this gives the graceful close a chance to complete first.
     pub(crate) async fn close_mcp(&self) {
+        self.mcp_closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        let (manager, vault) = {
+            let mut shared = self
+                .mcp_shared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            shared.ready = false;
+            for (_, token) in shared.pending.values() {
+                token.cancel();
+            }
+            shared.pending.clear();
+            shared.tool_counts.clear();
+            (shared.manager(), shared.take_vault())
+        };
+        if let Some(manager) = manager {
+            manager.revoke();
+        }
+        if let Some(vault) = vault {
+            vault.start_closing();
+            vault.mark_closed();
+        }
         let registry = self.mcp.lock().await.take();
         if let Some(registry) = registry {
+            for connecting in registry.connecting.values() {
+                connecting.token.cancel();
+            }
+            let callbacks = std::mem::take(
+                &mut *registry
+                    .callbacks
+                    .write()
+                    .unwrap_or_else(|error| error.into_inner()),
+            );
+            for callback in callbacks.into_values() {
+                callback.bridge.start_closing();
+                callback.bridge.mark_closed();
+            }
             let _ = registry.manager.dispose().await;
         }
+    }
+}
+
+fn current_candidate(registry: &Registry, alias: &str, id: &str) -> bool {
+    registry
+        .connecting
+        .get(alias)
+        .is_some_and(|candidate| candidate.id == id && !candidate.token.is_cancelled())
+}
+fn remove_candidate(registry: &mut Registry, alias: &str, id: &str) {
+    if registry
+        .connecting
+        .get(alias)
+        .is_some_and(|candidate| candidate.id == id)
+    {
+        if let Some(candidate) = registry.connecting.remove(alias) {
+            candidate.token.cancel();
+        }
+        let mut shared = registry
+            .shared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if shared
+            .pending
+            .get(alias)
+            .is_some_and(|(current, _)| current == id)
+        {
+            shared.pending.remove(alias);
+        }
+        drop(shared);
+        close_callback(&registry.callbacks, alias);
+        registry
+            .oauth
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(alias);
     }
 }
 
@@ -898,6 +1174,7 @@ mod tests {
             validator: None,
             handle: handle.into(),
             binding: None,
+            model_capabilities: Default::default(),
         }
     }
 

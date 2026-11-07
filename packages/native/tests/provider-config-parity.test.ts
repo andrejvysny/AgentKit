@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 /**
  * Provider/config parity at the public binding: (1) a persisted model
  * catalogue decides context admission, (2) `toolCalling` settings and
@@ -138,14 +139,16 @@ suite(
           provider.baseUrl,
           "sk-loopback",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "chat-completions",
-          providerId: "catalog",
-          connectionId,
-          model: "tiny-model",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "chat-completions",
+            providerId: "catalog",
+            connectionId,
+            model: "tiny-model",
+          },
+        }),
+      );
 
       // (a) No descriptor override: the STORED entry decides the window.
       await service.createSession({
@@ -285,14 +288,16 @@ async function toolGateCase(
         provider.baseUrl,
         "sk-loopback",
       );
-    service = await store.createService({
-      providerConfig: {
-        protocol: "chat-completions",
-        providerId: "gate",
-        connectionId,
-        model: "gate-model",
-      },
-    });
+    service = await store.createService(
+      testServiceOptions({
+        providerConfig: {
+          protocol: "chat-completions",
+          providerId: "gate",
+          connectionId,
+          model: "gate-model",
+        },
+      }),
+    );
     let toolRuns = 0;
     await service.registerTool(
       {
@@ -425,9 +430,11 @@ suite(
     let accountService: NativeSessionService | undefined;
     const seen: Record<string, unknown>[] = [];
     try {
-      accountService = await accountStore.createService({
-        providerAuthKind: "chatgpt-account",
-      });
+      accountService = await accountStore.createService(
+        testServiceOptions({
+          providerAuthKind: "chatgpt-account",
+        }),
+      );
       accountService.setProvider((request) => {
         seen.push(request as unknown as Record<string, unknown>);
         return accountAdapter(request);
@@ -462,7 +469,7 @@ suite(
     let keyService: NativeSessionService | undefined;
     const keySeen: Record<string, unknown>[] = [];
     try {
-      keyService = await keyStore.createService();
+      keyService = await keyStore.createService(testServiceOptions());
       keyService.setProvider((request) => {
         keySeen.push(request as unknown as Record<string, unknown>);
         return accountAdapter(request);
@@ -504,14 +511,16 @@ suite(
           provider.baseUrl,
           "sk-loopback",
         );
-      service = await store.createService({
-        providerConfig: {
-          protocol: "chat-completions",
-          providerId: "revoked",
-          connectionId,
-          model: "revoked-model",
-        },
-      });
+      service = await store.createService(
+        testServiceOptions({
+          providerConfig: {
+            protocol: "chat-completions",
+            providerId: "revoked",
+            connectionId,
+            model: "revoked-model",
+          },
+        }),
+      );
       expect(
         await NativeSessionServiceCtor.revokeProviderConnection(connectionId),
       ).toBe(true);

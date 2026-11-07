@@ -19,7 +19,7 @@ The supported revision list is frozen from the installed TypeScript SDK
 The newer default `2026-07-28` in rmcp is deliberately excluded. Incoming
 initialization with an unlisted revision is refused before an SDK session is
 registered. `discover` is not exposed as a replacement lifecycle. The adapter
-does not opt into MRTR, task extensions, OAuth flows, sampling, or elicitation.
+does not opt into MRTR, task extensions, or sampling. OAuth and elicitation require explicit host ports; they are never enabled by a remote request alone.
 
 ## Outbound clients and native tools
 
@@ -247,3 +247,13 @@ retained-handle revocation, close/connect races, connect/request deadlines and
 cancellation, and ambiguous calls with one effect. Native HTTP rotation verifies
 the previous remote session's actor is revoked before the new session executes;
 a real unresponsive stdio process verifies connect-timeout process cleanup.
+
+## Explicit OAuth, elicitation and configuration ports
+
+`ManagedOAuthProvider` binds application namespace, generation, connection/account, resource, redirect and allowed origins. Host ports own durable secrets and browser interaction. PKCE/state, issuer, replay and refresh fences remain native; resource operations are never transparently replayed after authorization failure. Remembered OAuth credentials are redacted case-sensitively to `[REDACTED]` before SDK JSON/error/SSE parsing, including values split across stream chunks. At most 1024 credential values may be remembered; overflow fails closed. This does not qualify a live third-party OAuth service.
+
+Elicitation is advertised only with an installed handler. Accepted form data is schema-validated; cancellation and teardown abort host callback signals. Rich content projection is untrusted and images/audio require host capabilities. The complete UI representation remains available.
+
+The native HTTP configuration repository uses the same manager and an explicit secret vault. Preflight reserves aliases before durable/live authority changes; changed or deleted aliases are revoked before commit. Dropping a cancelled operation releases its unpublished reservation. Already-invalidated aliases remain fenced after an ambiguous or cancelled commit until explicit higher-generation reconciliation/initialization; old handles are never restored. Live metadata is visible only for its matching durable generation.
+
+See [native host ports and migration](../../../docs/rust/native-admission.md) for binding APIs, secret references, lifecycle witnesses and remaining cross-platform/process qualification gates.

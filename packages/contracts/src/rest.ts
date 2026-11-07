@@ -732,6 +732,14 @@ export type CreateChatRequest = Static<typeof CreateChatRequestSchema>;
  */
 export const SubmitMessageRequestSchema = Type.Object({
   contentSelection: Type.Optional(RunContentSelectionSchema),
+  reasoningEffort: Type.Optional(
+    Type.Union([
+      Type.Literal("minimal"),
+      Type.Literal("low"),
+      Type.Literal("medium"),
+      Type.Literal("high"),
+    ]),
+  ),
   /**
    * The turn's body: a plain string, or content parts for a multimodal turn.
    *
@@ -851,6 +859,14 @@ export type UpdateChatRequest = Static<typeof UpdateChatRequestSchema>;
  */
 export const RegenerateMessageRequestSchema = Type.Object({
   contentSelection: Type.Optional(RunContentSelectionSchema),
+  reasoningEffort: Type.Optional(
+    Type.Union([
+      Type.Literal("minimal"),
+      Type.Literal("low"),
+      Type.Literal("medium"),
+      Type.Literal("high"),
+    ]),
+  ),
   /** Overrides the provider's default model for this attempt only. */
   model: Type.Optional(Type.String()),
   /** Answer with a DIFFERENT provider than the one that answered first. */

@@ -209,3 +209,20 @@ async fn malformed_missing_changed_and_newer_budgets_fail_closed() {
             .is_err()
     );
 }
+
+#[test]
+fn role_bounds_never_widen_host_time_or_request_ceilings() {
+    let host = BudgetLimits {
+        overall_ms: Some(1000),
+        provider_requests: Some(1),
+        ..Default::default()
+    };
+    let role = RoleTaskOverrides {
+        overall_timeout_ms: Some(3000),
+        max_provider_requests: Some(10),
+        ..Default::default()
+    };
+    let effective = role.apply(host);
+    assert_eq!(effective.overall_ms, Some(1000));
+    assert_eq!(effective.provider_requests, Some(1));
+}

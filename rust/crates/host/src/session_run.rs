@@ -19,6 +19,11 @@ use std::collections::{HashMap, HashSet};
 /// Is this task the session turn of its chat (the chat carries a session
 /// descriptor and the task kind is the session's turn kind)?
 pub(crate) async fn is_session_turn(context: &ExecutionContext, chat_id: &str) -> HostResult<bool> {
+    if let Some(snapshot) = context.task.payload.get("sessionDescriptor") {
+        let descriptor = read_session_descriptor(&serde_json::json!({"agentkit.session":snapshot}))
+            .ok_or_else(|| HostError::Execution("session_context_invalid".into()))?;
+        return Ok(session_turn_kind(&descriptor) == context.task.kind);
+    }
     let Some(chat) = context.store.get_chat(chat_id).await? else {
         return Ok(false);
     };

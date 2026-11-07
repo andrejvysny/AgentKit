@@ -202,6 +202,14 @@ impl McpClientManager {
         &self,
         cancellation: CancellationToken,
     ) -> Result<ContributionReport, BridgeError> {
+        self.contribute_with_capabilities(cancellation, crate::ModelContentCapabilities::default())
+            .await
+    }
+    pub async fn contribute_with_capabilities(
+        &self,
+        cancellation: CancellationToken,
+        capabilities: crate::ModelContentCapabilities,
+    ) -> Result<ContributionReport, BridgeError> {
         let mut connections = self.connect_all(cancellation.clone()).await;
         let mut tools = Vec::new();
         let mut names = BTreeSet::new();
@@ -209,7 +217,8 @@ impl McpClientManager {
             let session = self.session(&alias)?;
             let read_only = session.config.read_only;
             let set = McpToolSet::new(&alias, session.config.tool_aliases.clone(), session)?
-                .with_read_only(read_only);
+                .with_read_only(read_only)
+                .with_model_content_capabilities(capabilities);
             match set.contribute(cancellation.clone()).await {
                 Ok(listed) => {
                     for tool in listed {
@@ -264,7 +273,7 @@ impl McpClientManager {
             .into_iter()
             .map(|config| {
                 old.iter()
-                    .find(|session| session.config == config)
+                    .find(|session| session.config == config && !session.revoked())
                     .cloned()
                     .unwrap_or_else(|| {
                         Arc::new(Session::new(
@@ -286,6 +295,19 @@ impl McpClientManager {
         *self.sessions.write().unwrap() = next;
         close_all(removed).await
     }
+    /// Immediately denies retained tool handles; dispose also awaits transport cleanup.
+    pub fn revoke_alias(&self, alias: &str) {
+        if let Some(session) = self
+            .sessions
+            .read()
+            .unwrap()
+            .iter()
+            .find(|session| session.config.alias == alias)
+        {
+            session.revoke();
+        }
+    }
+
     /// Immediately denies retained tool handles; dispose also awaits transport cleanup.
     pub fn revoke(&self) {
         self.disposed.store(true, Ordering::Release);

@@ -1,3 +1,4 @@
+import { testServiceOptions } from "./helpers/test-profiles.js";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,7 +60,7 @@ nativeTest(
     const path = join(directory, "state.sqlite");
     try {
       let store = await NativeStore.open(path);
-      let service = await store.createService();
+      let service = await store.createService(testServiceOptions());
       await service.createSession({
         sessionId: "s1",
         profileId: "p1",
@@ -99,7 +100,7 @@ nativeTest(
       expect(() => service.setProvider(null)).toThrow();
       await store.close();
       store = await NativeStore.open(path);
-      service = await store.createService();
+      service = await store.createService(testServiceOptions());
       const state = await service.getState("s1");
       expect((state.descriptor as { model: string }).model).toBe("new");
       expect((await service.getExecution("s1"))?.mode).toBe("plan");
@@ -116,7 +117,7 @@ nativeTest(
   "manual compaction runs before the next ordinary provider call",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     const requests: string[] = [];
     service.setProvider(async (request) => {
       const text = JSON.stringify(request.messages);
@@ -165,7 +166,7 @@ nativeTest(
   "queued inputs can be cancelled and cleared while a turn is active",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     let release!: () => void;
     let entered!: () => void;
     const waiting = new Promise<void>((resolve) => {
@@ -222,7 +223,7 @@ nativeTest(
   "archive, unarchive, and delete drive the chat lifecycle through the store engine",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    const service = await store.createService(testServiceOptions());
     try {
       service.setProvider(async () => ({
         content: "answer",

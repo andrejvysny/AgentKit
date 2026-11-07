@@ -79,7 +79,13 @@ impl ChatExecutor {
             .unwrap_or(true))
     }
     async fn provider(&self, context: &ExecutionContext) -> HostResult<Arc<dyn ChatProvider>> {
-        if let Some(factory) = &self.options.provider_factory {
+        if let Some(factory) = &self.options.provider_factory
+            && context
+                .task
+                .payload
+                .get("providerSnapshot")
+                .is_some_and(|value| !value.is_null())
+        {
             let snapshot = context
                 .task
                 .payload
@@ -135,7 +141,10 @@ impl TaskExecutor for ChatExecutor {
         self.options.verification.is_some()
     }
     fn resolves_provider_snapshots(&self) -> bool {
-        self.options.provider_factory.is_some()
+        self.options
+            .provider_factory
+            .as_ref()
+            .is_some_and(|factory| factory.available())
     }
     async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
         context.check_cancelled()?;
@@ -144,23 +153,64 @@ impl TaskExecutor for ChatExecutor {
         if chat_id != context.task.scope_id {
             return Err(HostError::Execution("chat scope mismatch".into()));
         }
-        // Native execution resolves neither selected content (Skills) nor
-        // provider reasoning effort, so a turn carrying them is refused
-        // rather than dispatched as a prompt-only request that silently
-        // omits the selection — the executor-level mirror of the HTTP
-        // boundary's 501 and of the session service's submit gate.
-        for field in ["contentSelection", "reasoningEffort"] {
-            if context
-                .task
-                .payload
-                .get(field)
-                .is_some_and(|value| !value.is_null())
-            {
-                return Err(HostError::Execution(format!(
-                    "{field}_unsupported: native prompt templates, skills, and provider reasoning effort are not configured."
-                )));
+        let session = session_run::is_session_turn(&context, chat_id).await?;
+        let profile = crate::profiles::task_profile(&context.task.payload)?;
+        if session && profile.is_none() {
+            return Err(HostError::Execution("profile_snapshot_required".into()));
+        }
+        let mut options = self.options.clone();
+        if let Some(profile) = &profile {
+            if let Some(limit) = profile.limits.max_tool_iterations {
+                options.max_tool_iterations = options.max_tool_iterations.min(limit);
+            }
+            if let Some(limit) = profile.limits.max_tool_calls_per_iteration {
+                options.max_tool_calls_per_iteration =
+                    options.max_tool_calls_per_iteration.min(limit);
+            }
+            if let Some(limit) = profile.limits.history_limit {
+                options.history_limit = options.history_limit.min(limit);
+            }
+            if let Some(limit) = profile.limits.max_output_tokens {
+                options.max_output_tokens = Some(
+                    options
+                        .max_output_tokens
+                        .map_or(limit, |host| host.min(limit)),
+                );
+            }
+            if let Some(limit) = profile.limits.attempt_budget_ms {
+                options.execution_budgets.overall_ms = Some(
+                    options
+                        .execution_budgets
+                        .overall_ms
+                        .map_or(limit, |host| host.min(limit)),
+                );
+            }
+            if profile.resources.project_instructions == Some(false) {
+                options.project_instructions = None;
             }
         }
+        if let Some(value) = context.task.payload.get("maxOutputTokens") {
+            let limit = value
+                .as_u64()
+                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                .ok_or_else(|| HostError::Execution("invalid_max_output_tokens".into()))?;
+            options.max_output_tokens = Some(
+                options
+                    .max_output_tokens
+                    .map_or(limit, |host| host.min(limit)),
+            );
+        }
+        let selected_content =
+            crate::run_content::selected_messages(&context, options.content_authority.as_ref())
+                .await?;
+        let reasoning_effort = context
+            .task
+            .payload
+            .get("reasoningEffort")
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| HostError::Execution(format!("invalid_reasoning_effort: {e}")))?;
         let loaded = context.store.messages(chat_id, true).await?;
         // The active chain is what the continuation and the anchor see.
         let records: Vec<_> = loaded
@@ -191,10 +241,9 @@ impl TaskExecutor for ChatExecutor {
             &anchor,
         )
         .await?;
-        let resolved = hooks::resolve_context(&self.options, &context, chat_id).await?;
+        let resolved = hooks::resolve_context(&options, &context, chat_id).await?;
         // A session turn steers at tool boundaries and runs the exact calls
         // its answered approvals authorized (ADR 0016 §3, ADR 0019 §2).
-        let session = session_run::is_session_turn(&context, chat_id).await?;
         let (approvals, resume_calls) = if session {
             // Steer-event reconciliation (ADR 0016 §3): the placement
             // transaction is the unit of record and the
@@ -219,7 +268,7 @@ impl TaskExecutor for ChatExecutor {
         let stage_tools = self.stage_tools(&context, provider.id()).await?;
         let registry = if stage_tools {
             hooks::stage_registry(
-                &self.options,
+                &options,
                 &context,
                 chat_id,
                 self.tools.clone(),
@@ -230,23 +279,35 @@ impl TaskExecutor for ChatExecutor {
         } else {
             Arc::new(ToolRegistry::new())
         };
+        let registry = match &profile {
+            Some(profile) => profile.filter_tools(&registry)?,
+            None => registry,
+        };
+        let base_prompt = profile
+            .as_ref()
+            .map(|profile| profile.instructions.clone())
+            .filter(|s| !s.is_empty());
+        let base_prompt = match (base_prompt, resolved.system_prompt.clone()) {
+            (Some(profile), Some(context)) => Some(format!("{profile}\n\n{context}")),
+            (profile, context) => profile.or(context),
+        };
         // Project instructions (ADR 0017 part 1): the session workspace's
         // AGENTS.md / CLAUDE.md text is appended to the resolved system
         // prompt after context resolution and before provider dispatch,
         // with every read refusal/truncation surfaced as a `run.warning`
         // event (TS turn-runner parity).
         let system_prompt = crate::project_instructions::augment_system_prompt(
-            &self.options,
+            &options,
             &context,
             chat_id,
-            resolved.system_prompt.clone(),
+            base_prompt,
         )
         .await?;
         // Autonomous-delegation channel: while subagents are enabled, every
         // session turn (Chat and Coding alike) carries the guidance to
         // delegate when beneficial. Consulted per turn so hot configuration
         // takes effect without rebuilding the executor.
-        let system_prompt = match &self.options.delegation_guidance {
+        let system_prompt = match &options.delegation_guidance {
             Some(guidance) => match guidance.guidance(chat_id).await {
                 Some(text) if !text.is_empty() => Some(match system_prompt {
                     Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
@@ -280,7 +341,7 @@ impl TaskExecutor for ChatExecutor {
             .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
         let mut entries = history::assemble_with_ids(
             records,
-            self.options.history_limit,
+            usize::MAX,
             &anchor,
             system_prompt.clone(),
             // Unanswered persisted calls reconcile against durable receipts,
@@ -291,6 +352,19 @@ impl TaskExecutor for ChatExecutor {
             &context.task.task_id,
             assembly.policy,
         );
+        let history_records = entries
+            .iter()
+            .filter(|(_, record_id)| record_id.is_some())
+            .count();
+        if history_records > options.history_limit {
+            return Err(HostError::Failure(ExecutionFailure {
+                code: Some("context_overflow".into()),
+                retryable: Some(false),
+                ..ExecutionFailure::new(
+                    "context_overflow: The complete transcript exceeds the configured historyLimit; no records were dropped.",
+                )
+            }));
+        }
         // Frozen order (turn-runner.ts:1758): stale tool results are elided in
         // the assembled view BEFORE summaries/compaction see them, so the
         // summary is written over the same bytes the provider gets. The
@@ -311,22 +385,31 @@ impl TaskExecutor for ChatExecutor {
         } else {
             crate::budget::RoleTaskOverrides::default()
         };
-        let budget = crate::restore_execution_budget(
-            &context,
-            role_overrides.apply(self.options.execution_budgets.clone()),
-            runtime.clone(),
-        )
-        .await?;
+        let mut execution_limits = role_overrides.apply(options.execution_budgets.clone());
+        if let Some(limit) = profile.as_ref().and_then(|p| p.limits.attempt_budget_ms) {
+            execution_limits.overall_ms = Some(
+                execution_limits
+                    .overall_ms
+                    .map_or(limit, |value| value.min(limit)),
+            );
+        }
+        let budget =
+            crate::restore_execution_budget(&context, execution_limits, runtime.clone()).await?;
         let context_budget =
             context_budget::ContextBudget::resolve(&context, chat_id, provider.id(), model).await?;
         let prepared = Arc::new(hooks::PreparedProvider {
             budget: context_budget.clone(),
             inner: provider,
-            options: self.options.clone(),
+            options: options.clone(),
             context: context.clone(),
             chat_id: chat_id.into(),
         });
+        let compact_requested = session
+            && context.store.get_chat(chat_id).await?.is_some_and(|chat| {
+                chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
+            });
         let messages = if session
+            && (options.auto_compaction || compact_requested)
             && continuation.is_none()
             && let Some(context_budget) = context_budget.clone()
         {
@@ -341,8 +424,8 @@ impl TaskExecutor for ChatExecutor {
                 tools: registry.definitions(),
                 path_snapshot,
                 receipt_snapshot,
-                usage: self.options.usage.clone(),
-                usage_timeout_ms: self.options.hook_timeouts.usage_ms,
+                usage: options.usage.clone(),
+                usage_timeout_ms: options.hook_timeouts.usage_ms,
             })
             .await?
             .into_iter()
@@ -395,12 +478,18 @@ impl TaskExecutor for ChatExecutor {
                 .await?
                 .map(|message| message.metadata)
                 .unwrap_or(json!({})),
-            usage: self.options.usage.clone(),
-            usage_timeout_ms: self.options.hook_timeouts.usage_ms,
+            usage: options.usage.clone(),
+            usage_timeout_ms: options.hook_timeouts.usage_ms,
         });
         let mut request = ChatRequest {
             model: model.into(),
             messages,
+            selected_content,
+            content_binding_digest: context.task.payload["contentSnapshot"]["digest"]
+                .as_str()
+                .map(str::to_owned),
+            reasoning_effort,
+            max_output_tokens: options.max_output_tokens,
             budget: Some(budget),
             ..ChatRequest::default()
         };
@@ -414,7 +503,7 @@ impl TaskExecutor for ChatExecutor {
                 anchor: anchor.clone(),
             }));
         }
-        let options = RunOptions {
+        let run_options = RunOptions {
             request,
             run_id: Some(context.task.task_id.clone()),
             first_seq: context.store.next_seq(&context.task.task_id).await?,
@@ -424,9 +513,11 @@ impl TaskExecutor for ChatExecutor {
             bindings: resolved.bindings,
             max_tool_iterations: role_overrides
                 .max_tool_iterations
-                .unwrap_or(self.options.max_tool_iterations),
-            max_tool_calls_per_iteration: self.options.max_tool_calls_per_iteration,
-            default_tool_timeout_ms: self.options.default_tool_timeout_ms,
+                .map_or(options.max_tool_iterations, |value| {
+                    value.min(options.max_tool_iterations)
+                }),
+            max_tool_calls_per_iteration: options.max_tool_calls_per_iteration,
+            default_tool_timeout_ms: options.default_tool_timeout_ms,
             cancellation: context.cancellation.clone(),
             runtime,
             event_sink: Some(sink.clone()),
@@ -435,7 +526,7 @@ impl TaskExecutor for ChatExecutor {
                 context: context.clone(),
             })),
             interruption: Some(context.interruption.clone()),
-            hooks: self.options.run_hooks.clone(),
+            hooks: options.run_hooks.clone(),
             steering: session.then(|| {
                 Arc::new(session_run::SessionSteering::new(context.clone(), chat_id))
                     as Arc<dyn agentkit_core::SteeringSource>
@@ -446,8 +537,8 @@ impl TaskExecutor for ChatExecutor {
         let session = correction::ChatSession {
             answer_committed: false,
             context: context.clone(),
-            options: self.options.clone(),
-            base: options,
+            options: options.clone(),
+            base: run_options,
             provider: prepared,
             registry,
             sink,
@@ -526,6 +617,20 @@ impl AgentHost {
     pub async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle> {
         if !self.supports("chat.turn") {
             return Err(HostError::UnknownKind("chat.turn".into()));
+        }
+        if self
+            .store
+            .get_chat(&input.chat_id)
+            .await?
+            .is_some_and(|chat| {
+                chat.metadata
+                    .get(agentkit_store::SESSION_METADATA_KEY)
+                    .is_some()
+            })
+        {
+            return Err(HostError::Execution(
+                "session_submission_required: use AgentSessionService for session turns".into(),
+            ));
         }
         let user = format!("{}_user", input.task_id);
         let assistant = format!("{}_assistant", input.task_id);
@@ -669,6 +774,22 @@ mod tool_gate_tests {
             .await
             .unwrap();
         assert!(executor.stage_tools(&context, "other").await.unwrap());
+    }
+    #[tokio::test]
+    async fn session_tasks_without_frozen_profiles_fail_before_dispatch() {
+        let store = SqliteStore::memory(2).unwrap();
+        store.create_chat("chat",None,json!({"agentkit.session":{"version":1,"profile":{"id":"coding"},"createdAt":"2026-01-01T00:00:00.000Z"}}),1000).await.unwrap();
+        let mut context = executor_context(store).await;
+        context.task.payload = json!({"chatId":"chat","model":"model"});
+        let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+        assert!(
+            executor
+                .execute(context)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("profile_snapshot_required")
+        );
     }
 }
 

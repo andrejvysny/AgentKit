@@ -339,8 +339,10 @@ async fn fixture_with_options(
         .create_session(&CreateSessionInput {
             session_id: Some("s1".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -412,16 +414,24 @@ impl Fixture {
     /// `arguments_json`. Returns the execution id — the uncertainty
     /// generation an answer must name.
     async fn seed_uncertain(&self, run_id: &str, tool: &str, arguments_json: &str) -> String {
-        self.host
-            .submit_chat(SubmitChat {
-                task_id: run_id.into(),
-                chat_id: "s1".into(),
-                model: "model".into(),
-                content: json!("work"),
-                parent_message_id: None,
-            })
+        let result = self
+            .service
+            .send(
+                "s1",
+                &SendInput {
+                    content: json!("work"),
+                    input_id: Some(format!("crash:{run_id}")),
+                    when_busy: WhenBusy::Reject,
+                    turn_id: None,
+                    on_settled: None,
+                },
+            )
             .await
             .unwrap();
+        let AgentSendResult::Turn { turn_id, .. } = result else {
+            panic!("an idle session starts the crash fixture turn");
+        };
+        let run_id = turn_id.as_str();
         let claimed = self
             .store
             .claim(ClaimInput {
@@ -607,7 +617,10 @@ async fn a_plan_vetoed_by_the_policy_is_refused_and_never_runs() {
         .approve(&request.input_id, "ans-1", None, None)
         .await
         .unwrap();
-    assert!(f.service.get_execution("s1").await.unwrap().is_none());
+    assert_eq!(
+        f.service.get_execution("s1").await.unwrap().unwrap()["mode"],
+        "ask"
+    );
     f.set_ask(false);
     f.host.run_once().await.unwrap();
     assert_eq!(f.status(&turn).await, TaskStatus::Completed);
@@ -1338,7 +1351,10 @@ async fn an_approved_plan_request_still_refuses_a_down_grant_policy() {
         1,
         "the request still awaits a decision"
     );
-    assert!(f.service.get_execution("s1").await.unwrap().is_none());
+    assert_eq!(
+        f.service.get_execution("s1").await.unwrap().unwrap()["mode"],
+        "ask"
+    );
     assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
 }
 
