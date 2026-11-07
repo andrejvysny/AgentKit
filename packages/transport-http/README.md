@@ -30,6 +30,7 @@ const deps = {
   secrets: secretStore,       // optional; a write-only provider apiKey 501s without it
   writePolicy: sessionWritePolicy, // optional; the allowance routes 501 without it
   mcpConfigs: mcpServerConfigStore, // optional; /v1/mcp/servers 501s without it
+  teammates: teammateApiPort, // optional; the 15 /v1/agents + /v1/agent-tasks routes 501 without it
   packages: { "@agentkit/host": "0.1.0" }, // optional, reported by GET /v1/version
 };
 
@@ -66,6 +67,7 @@ them under a prefix, set `basePath` (below) rather than rewriting `req.url`.
 | `writePolicy` | no | `WritePolicy` (e.g. `SessionWritePolicy`) — backs the allowance routes |
 | `mcpConfigs` | no | `McpServerConfigStore` (`@agentkit/mcp-client`) — backs `/v1/mcp/servers` |
 | `toolCatalog` | no | `ToolCatalog` (`@agentkit/host`) backing `GET /v1/tools` |
+| `teammates` | no | `TeammateApiPort` — backs the AGENTKIT-90 teammate routes; the Rust backend (`rust/crates/host`) is the execution owner, the port is host-wired |
 | `packages` | no | Reported as `VersionDto.packages` |
 | `authenticate` | no | `(req) => Promise<unknown \| Response>`; a `Response` short-circuits |
 | `authorize` | no | `AuthorizationPort` — consulted per route; a refusal is 403 |
@@ -162,6 +164,13 @@ const deps = {
 | `DELETE /v1/chats/:chatId/write-policy/allowances/:allowanceId` | `{ kind: "policy", id: chatId }` |
 | `GET,POST /v1/mcp/servers` | `{ kind: "mcp_config" }` |
 | `PATCH,DELETE /v1/mcp/servers/:serverId` | `{ kind: "mcp_config", id: serverId }` |
+| `GET,POST /v1/agents` | `{ kind: "agent" }` |
+| `GET,PATCH /v1/agents/:agentId` | `{ kind: "agent", id: agentId }` |
+| `POST /v1/agents/:agentId/{model,archive,restore}` | `{ kind: "agent", id: agentId }` |
+| `GET /v1/agents/:agentId/revisions` | `{ kind: "agent", id: agentId }` |
+| `GET,POST /v1/agents/:agentId/tasks` | `{ kind: "agent", id: agentId }` |
+| `GET /v1/agent-tasks/:taskId`, `.../events`, `.../stream`, `.../run-profile` | `{ kind: "agent_task", id: taskId }` |
+| `POST /v1/agent-tasks/:taskId/cancel` | `{ kind: "agent_task", id: taskId }` |
 | `GET /v1/tools` | `{ kind: "tools" }` |
 | `GET /v1/version` | *never authorized* |
 
@@ -676,12 +685,32 @@ contract fails this package's compile until it is served.
   authorised it). `apply` takes the **client's** `operationId` as the
   idempotency key for the side effect; the route never mints one, because a
   server-minted id would make every retry a fresh apply.
+- **`/v1/agents` and `/v1/agent-tasks`** — **all fifteen routes 501 without
+  `deps.teammates`** (AGENTKIT-90). The port is host-wired; the Rust backend
+  (`rust/crates/host`) is the execution owner behind it, and the port
+  convention is `null` = not found (a 404 here) with state violations thrown
+  as `AgentKitHostError` (a stale `expectedRevision` is **409
+  `revision_conflict`**, the dispatcher's own mapping). `createAgent` is
+  **201**; a first `submitTeammateTask` is **201** and a replayed
+  `admissionKey` is **200** with `replayed: true` — the same task either
+  way, and no `Idempotency-Key` header because the key is in the validated
+  body. `cancelAgentTask` is **202** like `cancelRun` — cancellation is a
+  request the running attempt lands through the lease heartbeat. The events
+  page and the stream both check existence FIRST (an empty page and a
+  never-ending stream are both worse than an honest 404); `?after=` is a
+  `seq` and 0 is legal. `streamAgentTask` is the same seq-cursor pump as
+  `streamRun` fed through the port's `taskStatus`/`events`, closing on a
+  terminal status. Request bodies are the contract's CLOSED objects — an
+  unknown member of a definition or task-profile is **400**, because the
+  closedness is the smuggling gate: there is no field anywhere that could
+  carry a credential value, and `secretRefs` carries references only.
 
 Request bodies are validated structurally against the contract's request schemas
 (required fields present and correctly typed, optional fields typed when
-present, unknown members allowed for forward compatibility — except the two
-CLOSED unions, message content parts and an MCP transport, where an unknown
-discriminator is rejected rather than persisted). The validation is
+present, unknown members allowed for forward compatibility — except the three
+CLOSED corners, message content parts, an MCP transport, and the AGENTKIT-90
+teammate bodies, where an unknown member or discriminator is rejected rather
+than persisted). The validation is
 hand-written rather than schema-driven so this package keeps its zero-dependency
 promise — Ajv and TypeBox both belong to *other* packages, and reaching through
 a transitive dependency is how a lockfile change becomes someone else's runtime
@@ -723,6 +752,14 @@ root):
   the resource each one authorizes as, and MCP config CRUD with the
   duplicate-alias 409, the redacted `transport.env`/`headers`, and the injected
   clock — plus the 501 for every optional dependency.
+- `tests/teammates.test.ts` — the AGENTKIT-90 lane: the 501 for every one of
+  the fifteen routes without `deps.teammates`, a stub-port pass over all
+  fifteen proving each route consults it (statuses, bounded queries, the
+  replayed-admission 200, the SSE stream closed by the port's terminal
+  status), the `agent`/`agent_task` authorization resources with the ids from
+  the path, the 404s the port's `null` becomes (including the pre-stream
+  existence check), the 409 `revision_conflict` through the port's host
+  error, and the closed-body 400s a smuggled member earns.
 - `tests/branches-e2e.test.ts` — over a real socket: ask, ask again, rewrite the
   second question, stream the new branch, switch back, fork the prefix.
 - `tests/sse.test.ts` — replay order, `Last-Event-ID` resume, unknown-id full

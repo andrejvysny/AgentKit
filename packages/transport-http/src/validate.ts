@@ -25,6 +25,12 @@
  * contract types open but only one package can interpret — an unknown key there
  * is a knob nothing will ever read, and silently storing it tells the operator
  * a timeout is in force that is not.
+ *
+ * A fourth exception is also the contract's: the AGENTKIT-90 teammate bodies
+ * are `additionalProperties: false` objects (see {@link checkAgentDefinition}),
+ * whose closedness IS the smuggling gate the DTO docs promise — a member
+ * naming a credential VALUE or a foreign scope must be refused at the
+ * boundary, not ride through a cast to the service that trusts this layer.
  */
 import {
   IMAGE_URL_PATTERN,
@@ -32,7 +38,9 @@ import {
   SubmitMessageRequestSchema,
 } from "@agentkit/contracts";
 import type {
+  AgentDefinitionDto,
   ApplyProposalRequest,
+  CreateAgentRequest,
   CreateChatRequest,
   CreateMcpServerRequest,
   CreateProviderRequest,
@@ -40,7 +48,10 @@ import type {
   GrantAllowanceRequest,
   ProposalDecisionRequest,
   RegenerateMessageRequest,
+  SetAgentModelRequest,
   SubmitMessageRequest,
+  SubmitTeammateTaskRequest,
+  UpdateAgentRequest,
   UpdateChatRequest,
   UpdateMcpServerRequest,
   UpdateProviderRequest,
@@ -758,4 +769,418 @@ function checkContentSelection(value: unknown): string | null {
   )
     return "Invalid skill selection.";
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// AGENTKIT-90 — teammate bodies
+//
+// Every object below is `additionalProperties: false` in the contract, and
+// the closedness is load-bearing: the definition and the task-profile are
+// the smuggling gates their DTO docs promise, so an unknown member here is
+// refused, not passed through. The rest of this module's "unknown members
+// ride through" rule stays exactly where it was.
+// ---------------------------------------------------------------------------
+
+/** The largest integer the wire's `maximum` fields admit (2^53 − 1). */
+const MAX_SAFE = 9_007_199_254_740_991;
+
+/** Unknown members of a closed object, named. */
+function checkClosedMembers(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+): string | null {
+  const extras = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extras.length === 0) return null;
+  return `\`${label}\` carries unknown ${extras.length === 1 ? "member" : "members"}: ${extras.join(", ")}.`;
+}
+
+/** A string array, required or optional, by the same rule the MCP bodies use. */
+function checkStringArray(
+  value: unknown,
+  label: string,
+  required: boolean,
+): string | null {
+  if (value === undefined) {
+    return required ? `\`${label}\` is required.` : null;
+  }
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    return `\`${label}\` must be an array of strings.`;
+  }
+  return null;
+}
+
+/** A required finite integer, non-negative — optimistic-concurrency tokens. */
+function checkRequiredRevision(
+  body: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = body[field];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return `\`${field}\` must be a non-negative integer.`;
+  }
+  return null;
+}
+
+const BUDGET_FIELDS = [
+  "maxToolIterations",
+  "maxToolCallsPerIteration",
+  "maxOutputTokens",
+  "attemptBudgetMs",
+] as const;
+
+/** `AgentBudgetsDto` — four optional bounded integers, and nothing else. */
+function checkBudgets(value: unknown, label: string): string | null {
+  if (value === undefined) return null;
+  if (!isRecord(value)) return `\`${label}\` must be an object.`;
+  const closed = checkClosedMembers(value, BUDGET_FIELDS, label);
+  if (closed !== null) return closed;
+  for (const field of BUDGET_FIELDS) {
+    const issue = checkOptionalNumber(value, field, {
+      integer: true,
+      min: 1,
+      max: MAX_SAFE,
+    });
+    if (issue !== null) return `\`${label}\`: ${issue}`;
+  }
+  return null;
+}
+
+/** `AgentSkillSelectionDto[]` — closed `{ id, revision }` rows. */
+function checkSkillSelection(value: unknown, label: string): string | null {
+  if (!Array.isArray(value)) return `\`${label}\` must be an array.`;
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) {
+      return `\`${label}[${index}]\` must be an object.`;
+    }
+    const issue = first(
+      checkClosedMembers(item, ["id", "revision"], `${label}[${index}]`),
+      checkRequiredNonEmptyString(item, "id"),
+      checkRequiredNonEmptyString(item, "revision"),
+    );
+    if (issue !== null) return issue;
+  }
+  return null;
+}
+
+const DEFINITION_FIELDS = [
+  "name",
+  "avatar",
+  "purpose",
+  "instructions",
+  "resources",
+  "skills",
+  "model",
+  "reasoningEffort",
+  "permissionMode",
+  "allowedTools",
+  "budgets",
+  "secretRefs",
+] as const;
+
+/**
+ * `AgentDefinitionDtoSchema` restated, closed. The closedness is the point:
+ * there is no field anywhere that could carry a credential VALUE — only
+ * `secretRefs`, which carries REFERENCES — and an envelope that tries to
+ * smuggle one under another name is refused here, before the service ever
+ * sees the request.
+ */
+function checkAgentDefinition(body: Record<string, unknown>): string | null {
+  const definition = body["definition"];
+  if (!isRecord(definition)) return "`definition` must be an object.";
+  const issue = first(
+    checkClosedMembers(definition, DEFINITION_FIELDS, "definition"),
+    checkRequiredNonEmptyString(definition, "name"),
+    checkOptionalString(definition, "avatar"),
+    checkRequiredNonEmptyString(definition, "purpose"),
+    checkRequiredNonEmptyString(definition, "instructions"),
+    checkStringArray(definition["resources"], "definition.resources", true),
+    checkSkillSelection(definition["skills"], "definition.skills"),
+    checkOptionalString(definition, "model"),
+    checkOptionalString(definition, "reasoningEffort"),
+    checkRequiredNonEmptyString(definition, "permissionMode"),
+    checkStringArray(
+      definition["allowedTools"],
+      "definition.allowedTools",
+      true,
+    ),
+    definition["budgets"] === undefined
+      ? "`definition.budgets` is required (an empty object is the unset answer)."
+      : checkBudgets(definition["budgets"], "definition.budgets"),
+    checkStringArray(definition["secretRefs"], "definition.secretRefs", true),
+  );
+  return issue;
+}
+
+const TASK_PROFILE_FIELDS = [
+  "providerId",
+  "model",
+  "tools",
+  "requiresVision",
+  "requiresContinuation",
+  "permissionMode",
+  "budgets",
+  "truncation",
+] as const;
+
+/**
+ * `TaskProfileOverridesDtoSchema` restated, closed. Narrowing-only is the
+ * SERVICE's rule (tools inside the agent's ceiling, budgets under its
+ * ceilings); what the wire guarantees is that the envelope names nothing
+ * outside this vocabulary — no secret value, no credential, no grant.
+ */
+function checkTaskProfile(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!isRecord(value)) return "`taskProfile` must be an object.";
+  const issue = first(
+    checkClosedMembers(value, TASK_PROFILE_FIELDS, "taskProfile"),
+    checkOptionalString(value, "providerId"),
+    checkOptionalString(value, "model"),
+    checkStringArray(value["tools"], "taskProfile.tools", false),
+    checkOptionalBoolean(value, "requiresVision"),
+    checkOptionalBoolean(value, "requiresContinuation"),
+    checkOptionalString(value, "permissionMode"),
+    checkBudgets(value["budgets"], "taskProfile.budgets"),
+    checkTruncation(value["truncation"]),
+  );
+  return issue;
+}
+
+/** `truncation` is one literal decision or absent — the on-record drop gate. */
+function checkTruncation(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!isRecord(value)) return "`taskProfile.truncation` must be an object.";
+  const closed = checkClosedMembers(value, ["mode"], "taskProfile.truncation");
+  if (closed !== null) return closed;
+  if (value["mode"] !== "explicit") {
+    return '`taskProfile.truncation.mode` must be "explicit".';
+  }
+  return null;
+}
+
+const CONTEXT_UNIT_KINDS = ["text", "toolPair"] as const;
+const SELECTED_SOURCE_KINDS = ["skill", "resource"] as const;
+
+/** `SelectedSourceDto[]` — closed rows of closed units. */
+function checkProjectSources(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return "`projectSources` must be an array.";
+  for (const [index, source] of value.entries()) {
+    if (!isRecord(source)) {
+      return `\`projectSources[${index}]\` must be an object.`;
+    }
+    const issue = first(
+      checkClosedMembers(
+        source,
+        ["id", "kind", "units"],
+        `projectSources[${index}]`,
+      ),
+      checkRequiredNonEmptyString(source, "id"),
+      checkRequiredEnum(source, "kind", SELECTED_SOURCE_KINDS),
+    );
+    if (issue !== null) return issue;
+    if (!Array.isArray(source["units"])) {
+      return `\`projectSources[${index}].units\` must be an array.`;
+    }
+    for (const [unitIndex, unit] of source["units"].entries()) {
+      if (!isRecord(unit)) {
+        return `\`projectSources[${index}].units[${unitIndex}]\` must be an object.`;
+      }
+      const unitIssue = first(
+        checkClosedMembers(
+          unit,
+          ["kind", "text", "citations", "required"],
+          `projectSources[${index}].units[${unitIndex}]`,
+        ),
+        checkRequiredEnum(unit, "kind", CONTEXT_UNIT_KINDS),
+        checkRequiredString(unit, "text"),
+        checkStringArray(
+          unit["citations"],
+          `projectSources[${index}].units[${unitIndex}].citations`,
+          true,
+        ),
+      );
+      if (unitIssue !== null) return unitIssue;
+      if (typeof unit["required"] !== "boolean") {
+        return `\`projectSources[${index}].units[${unitIndex}].required\` must be a boolean.`;
+      }
+    }
+  }
+  return null;
+}
+
+/** `ApprovalGrantRefDto[]` — closed `{ sessionId, grantId, digest }` rows. */
+function checkApprovals(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return "`approvals` must be an array.";
+  for (const [index, grant] of value.entries()) {
+    if (!isRecord(grant)) {
+      return `\`approvals[${index}]\` must be an object.`;
+    }
+    const issue = first(
+      checkClosedMembers(
+        grant,
+        ["sessionId", "grantId", "digest"],
+        `approvals[${index}]`,
+      ),
+      checkRequiredNonEmptyString(grant, "sessionId"),
+      checkRequiredNonEmptyString(grant, "grantId"),
+      checkRequiredNonEmptyString(grant, "digest"),
+    );
+    if (issue !== null) return issue;
+  }
+  return null;
+}
+
+export function validateCreateAgentRequest(
+  body: Record<string, unknown>,
+): ValidationResult<CreateAgentRequest> {
+  // No `scope`, no `owner`, no `actor`: the agent's scope and owner are the
+  // server's answer from the authenticated actor, and the closed body means a
+  // request cannot even try to name them.
+  const issue = first(
+    checkClosedMembers(body, ["definition"], "body"),
+    checkAgentDefinition(body),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return {
+    ok: true,
+    value: { definition: body["definition"] as AgentDefinitionDto },
+  };
+}
+
+export function validateUpdateAgentRequest(
+  body: Record<string, unknown>,
+): ValidationResult<UpdateAgentRequest> {
+  const issue = first(
+    checkClosedMembers(body, ["expectedRevision", "definition"], "body"),
+    checkRequiredRevision(body, "expectedRevision"),
+    checkAgentDefinition(body),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return {
+    ok: true,
+    value: {
+      expectedRevision: body["expectedRevision"] as number,
+      definition: body["definition"] as AgentDefinitionDto,
+    },
+  };
+}
+
+export function validateSetAgentModelRequest(
+  body: Record<string, unknown>,
+): ValidationResult<SetAgentModelRequest> {
+  const model = body["model"];
+  const reasoningEffort = body["reasoningEffort"];
+  const issue = first(
+    checkClosedMembers(
+      body,
+      ["expectedRevision", "model", "reasoningEffort"],
+      "body",
+    ),
+    checkRequiredRevision(body, "expectedRevision"),
+    model === null || model === undefined || typeof model === "string"
+      ? null
+      : "`model` must be a string or null.",
+    reasoningEffort === null ||
+      reasoningEffort === undefined ||
+      typeof reasoningEffort === "string"
+      ? null
+      : "`reasoningEffort` must be a string or null.",
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return {
+    ok: true,
+    value: {
+      expectedRevision: body["expectedRevision"] as number,
+      ...(typeof model === "string" || model === null ? { model } : {}),
+      ...(typeof reasoningEffort === "string" || reasoningEffort === null
+        ? { reasoningEffort }
+        : {}),
+    },
+  };
+}
+
+export function validateSubmitTeammateTaskRequest(
+  body: Record<string, unknown>,
+): ValidationResult<SubmitTeammateTaskRequest> {
+  // No `agentId`: the agent is a path parameter — the one the authorizer
+  // ruled on, and the only admission identity that counts.
+  const issue = first(
+    checkClosedMembers(
+      body,
+      [
+        "taskId",
+        "admissionKey",
+        "kind",
+        "payload",
+        "priority",
+        "dependsOn",
+        "parentTaskId",
+        "taskProfile",
+        "projectSources",
+        "approvals",
+      ],
+      "body",
+    ),
+    checkOptionalString(body, "taskId"),
+    checkRequiredNonEmptyString(body, "admissionKey"),
+    checkRequiredNonEmptyString(body, "kind"),
+    isRecord(body["payload"]) ? null : "`payload` must be an object.",
+    checkOptionalNumber(body, "priority", {
+      integer: true,
+      min: -MAX_SAFE,
+      max: MAX_SAFE,
+    }),
+    checkStringArray(body["dependsOn"], "dependsOn", false),
+    checkOptionalString(body, "parentTaskId"),
+    checkTaskProfile(body["taskProfile"]),
+    checkProjectSources(body["projectSources"]),
+    checkApprovals(body["approvals"]),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  // Rebuilt field by field, the `grantAllowance` rule: the value goes to the
+  // admission service, and a stray member riding through a cast would be a
+  // second answer to a question the closed schema already settled.
+  return {
+    ok: true,
+    value: {
+      admissionKey: body["admissionKey"] as string,
+      kind: body["kind"] as string,
+      payload: body["payload"] as Record<string, unknown>,
+      ...(body["taskId"] === undefined
+        ? {}
+        : { taskId: body["taskId"] as string }),
+      ...(body["priority"] === undefined
+        ? {}
+        : { priority: body["priority"] as number }),
+      ...(body["dependsOn"] === undefined
+        ? {}
+        : { dependsOn: body["dependsOn"] as string[] }),
+      ...(body["parentTaskId"] === undefined
+        ? {}
+        : { parentTaskId: body["parentTaskId"] as string }),
+      ...(body["taskProfile"] === undefined
+        ? {}
+        : {
+            taskProfile: body[
+              "taskProfile"
+            ] as SubmitTeammateTaskRequest["taskProfile"],
+          }),
+      ...(body["projectSources"] === undefined
+        ? {}
+        : {
+            projectSources: body[
+              "projectSources"
+            ] as SubmitTeammateTaskRequest["projectSources"],
+          }),
+      ...(body["approvals"] === undefined
+        ? {}
+        : {
+            approvals: body[
+              "approvals"
+            ] as SubmitTeammateTaskRequest["approvals"],
+          }),
+    },
+  };
 }

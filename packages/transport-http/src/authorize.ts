@@ -92,6 +92,31 @@ const mcpConfig = (params: RouteParams): AuthorizationResource => ({
 });
 
 /**
+ * A persistent agent (AGENTKIT-90). `createAgent`/`listAgents` carry no id —
+ * the same collection-route caveat as every other listing: the port can only
+ * answer "every row" or "no rows", and the host filters in front if it must.
+ */
+const agent = (params: RouteParams): AuthorizationResource => ({
+  kind: "agent",
+  ...(params["agentId"] === undefined ? {} : { id: params["agentId"] }),
+});
+
+/**
+ * One agent-bound LOGICAL TASK. The id is the `taskId` its path carries —
+ * never an agent id in a `task` costume, for the `listToolEvents` reason:
+ * a host that resolves task → agent owns that lookup, not this table.
+ *
+ * `submitTeammateTask` is NOT here: it writes a task under an AGENT that
+ * already exists, its path carries the `agentId`, and the task does not
+ * exist yet to authorize against — it is authorized as the agent it admits
+ * into.
+ */
+const agentTask = (params: RouteParams): AuthorizationResource => ({
+  kind: "agent_task",
+  ...(params["taskId"] === undefined ? {} : { id: params["taskId"] }),
+});
+
+/**
  * `searchMessages` — the one route whose subject is in the QUERY STRING.
  *
  * `?chatId=` scopes the search to one conversation, and when it is there the
@@ -218,6 +243,26 @@ export const RESOURCE_BY_OPERATION = {
   createMcpServer: mcpConfig,
   updateMcpServer: mcpConfig,
   deleteMcpServer: mcpConfig,
+
+  // AGENTKIT-90. Every id comes from the path, per the rule above; the two
+  // collections (`createAgent`, `listAgents`) authorize against the kind
+  // with no id, and `submitTeammateTask` against the AGENT it admits into
+  // (the task is not created yet — see `agentTask`'s note).
+  createAgent: agent,
+  listAgents: agent,
+  getAgent: agent,
+  updateAgent: agent,
+  setAgentModel: agent,
+  archiveAgent: agent,
+  restoreAgent: agent,
+  listAgentRevisions: agent,
+  submitTeammateTask: agent,
+  listAgentTasks: agent,
+  getAgentTask: agentTask,
+  cancelAgentTask: agentTask,
+  listAgentTaskEvents: agentTask,
+  streamAgentTask: agentTask,
+  getAgentTaskRunProfile: agentTask,
 
   listTools: () => ({ kind: "tools" }),
 

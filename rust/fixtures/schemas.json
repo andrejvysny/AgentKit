@@ -1,4 +1,884 @@
 {
+  "AgentBudgetsDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "attemptBudgetMs": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "number"
+      },
+      "maxOutputTokens": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "number"
+      },
+      "maxToolCallsPerIteration": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "number"
+      },
+      "maxToolIterations": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "number"
+      }
+    },
+    "type": "object"
+  },
+  "AgentDefinitionDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "allowedTools": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "avatar": {
+        "type": "string"
+      },
+      "budgets": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptBudgetMs": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          },
+          "maxOutputTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          },
+          "maxToolCallsPerIteration": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          },
+          "maxToolIterations": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "instructions": {
+        "type": "string"
+      },
+      "model": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "permissionMode": {
+        "type": "string"
+      },
+      "purpose": {
+        "type": "string"
+      },
+      "reasoningEffort": {
+        "type": "string"
+      },
+      "resources": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "secretRefs": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "skills": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "name",
+      "purpose",
+      "instructions",
+      "resources",
+      "skills",
+      "permissionMode",
+      "allowedTools",
+      "budgets",
+      "secretRefs"
+    ],
+    "type": "object"
+  },
+  "AgentDtoSchema": {
+    "properties": {
+      "agentId": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "number"
+      },
+      "currentRevision": {
+        "type": "number"
+      },
+      "definition": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedTools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "avatar": {
+            "type": "string"
+          },
+          "budgets": {
+            "additionalProperties": false,
+            "properties": {
+              "attemptBudgetMs": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolCallsPerIteration": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolIterations": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissionMode": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "secretRefs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "purpose",
+          "instructions",
+          "resources",
+          "skills",
+          "permissionMode",
+          "allowedTools",
+          "budgets",
+          "secretRefs"
+        ],
+        "type": "object"
+      },
+      "lifecycle": {
+        "anyOf": [
+          {
+            "const": "active",
+            "type": "string"
+          },
+          {
+            "const": "archived",
+            "type": "string"
+          }
+        ]
+      },
+      "ownerId": {
+        "type": "string"
+      },
+      "scope": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "agentId",
+      "scope",
+      "ownerId",
+      "lifecycle",
+      "currentRevision",
+      "definition",
+      "createdAt",
+      "updatedAt"
+    ],
+    "type": "object"
+  },
+  "AgentLifecycleDtoSchema": {
+    "anyOf": [
+      {
+        "const": "active",
+        "type": "string"
+      },
+      {
+        "const": "archived",
+        "type": "string"
+      }
+    ]
+  },
+  "AgentRevisionDtoSchema": {
+    "properties": {
+      "agentId": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "number"
+      },
+      "revision": {
+        "type": "number"
+      },
+      "snapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedTools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "avatar": {
+            "type": "string"
+          },
+          "budgets": {
+            "additionalProperties": false,
+            "properties": {
+              "attemptBudgetMs": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolCallsPerIteration": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolIterations": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissionMode": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "secretRefs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "purpose",
+          "instructions",
+          "resources",
+          "skills",
+          "permissionMode",
+          "allowedTools",
+          "budgets",
+          "secretRefs"
+        ],
+        "type": "object"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "const": "create",
+            "type": "string"
+          },
+          {
+            "const": "edit",
+            "type": "string"
+          },
+          {
+            "const": "model_change",
+            "type": "string"
+          },
+          {
+            "const": "restore",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "agentId",
+      "revision",
+      "snapshot",
+      "source",
+      "createdAt"
+    ],
+    "type": "object"
+  },
+  "AgentRevisionSourceDtoSchema": {
+    "anyOf": [
+      {
+        "const": "create",
+        "type": "string"
+      },
+      {
+        "const": "edit",
+        "type": "string"
+      },
+      {
+        "const": "model_change",
+        "type": "string"
+      },
+      {
+        "const": "restore",
+        "type": "string"
+      }
+    ]
+  },
+  "AgentSkillSelectionDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "revision": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "AgentTaskDtoSchema": {
+    "properties": {
+      "admissionKey": {
+        "type": "string"
+      },
+      "agentId": {
+        "type": "string"
+      },
+      "agentRevision": {
+        "type": "number"
+      },
+      "attemptCount": {
+        "type": "number"
+      },
+      "availableAt": {
+        "type": "number"
+      },
+      "cancelRequested": {
+        "type": "boolean"
+      },
+      "dependsOn": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "enqueuedAt": {
+        "type": "number"
+      },
+      "error": {
+        "type": "string"
+      },
+      "finishedAt": {
+        "type": "number"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "parentTaskId": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "number"
+      },
+      "runProfileDigest": {
+        "type": "string"
+      },
+      "startedAt": {
+        "type": "number"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "queued",
+            "type": "string"
+          },
+          {
+            "const": "running",
+            "type": "string"
+          },
+          {
+            "const": "interrupted",
+            "type": "string"
+          },
+          {
+            "const": "waiting_approval",
+            "type": "string"
+          },
+          {
+            "const": "waiting_child",
+            "type": "string"
+          },
+          {
+            "const": "uncertain",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "type": "string"
+          }
+        ]
+      },
+      "taskId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "taskId",
+      "agentId",
+      "agentRevision",
+      "admissionKey",
+      "kind",
+      "status",
+      "priority",
+      "enqueuedAt",
+      "availableAt",
+      "attemptCount",
+      "cancelRequested",
+      "dependsOn"
+    ],
+    "type": "object"
+  },
+  "AgentTaskProjectionDtoSchema": {
+    "properties": {
+      "approval": {
+        "additionalProperties": false,
+        "properties": {
+          "approvalId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "const": "requested",
+                "type": "string"
+              },
+              {
+                "const": "granted",
+                "type": "string"
+              },
+              {
+                "const": "denied",
+                "type": "string"
+              }
+            ]
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "attemptId": {
+        "type": "string"
+      },
+      "eventCount": {
+        "minimum": 0,
+        "type": "number"
+      },
+      "lastSeq": {
+        "type": "number"
+      },
+      "sourceRefs": {
+        "items": {
+          "properties": {
+            "excerpt": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "metadata": {
+              "patternProperties": {
+                "^(.*)$": {}
+              },
+              "type": "object"
+            },
+            "path": {
+              "type": "string"
+            },
+            "refId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "task": {
+        "properties": {
+          "admissionKey": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "agentRevision": {
+            "type": "number"
+          },
+          "attemptCount": {
+            "type": "number"
+          },
+          "availableAt": {
+            "type": "number"
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          },
+          "dependsOn": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enqueuedAt": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "parentTaskId": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "number"
+          },
+          "runProfileDigest": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "number"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "const": "queued",
+                "type": "string"
+              },
+              {
+                "const": "running",
+                "type": "string"
+              },
+              {
+                "const": "interrupted",
+                "type": "string"
+              },
+              {
+                "const": "waiting_approval",
+                "type": "string"
+              },
+              {
+                "const": "waiting_child",
+                "type": "string"
+              },
+              {
+                "const": "uncertain",
+                "type": "string"
+              },
+              {
+                "const": "completed",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "type": "string"
+              },
+              {
+                "const": "cancelled",
+                "type": "string"
+              }
+            ]
+          },
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "agentId",
+          "agentRevision",
+          "admissionKey",
+          "kind",
+          "status",
+          "priority",
+          "enqueuedAt",
+          "availableAt",
+          "attemptCount",
+          "cancelRequested",
+          "dependsOn"
+        ],
+        "type": "object"
+      },
+      "usage": {
+        "additionalProperties": false,
+        "properties": {
+          "cachedPromptTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completionTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "promptTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoningTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usageEvents": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "usageEvents"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "task",
+      "eventCount",
+      "usage",
+      "sourceRefs"
+    ],
+    "type": "object"
+  },
+  "AgentTaskStatusDtoSchema": {
+    "anyOf": [
+      {
+        "const": "queued",
+        "type": "string"
+      },
+      {
+        "const": "running",
+        "type": "string"
+      },
+      {
+        "const": "interrupted",
+        "type": "string"
+      },
+      {
+        "const": "waiting_approval",
+        "type": "string"
+      },
+      {
+        "const": "waiting_child",
+        "type": "string"
+      },
+      {
+        "const": "uncertain",
+        "type": "string"
+      },
+      {
+        "const": "completed",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "type": "string"
+      },
+      {
+        "const": "cancelled",
+        "type": "string"
+      }
+    ]
+  },
   "AiAudioPartSchema": {
     "properties": {
       "data": {
@@ -4814,6 +5694,26 @@
     ],
     "type": "object"
   },
+  "ApprovalGrantRefDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "digest": {
+        "type": "string"
+      },
+      "grantId": {
+        "type": "string"
+      },
+      "sessionId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "sessionId",
+      "grantId",
+      "digest"
+    ],
+    "type": "object"
+  },
   "ChatDtoSchema": {
     "properties": {
       "activeRunId": {
@@ -5076,6 +5976,152 @@
         "type": "string"
       }
     ]
+  },
+  "ContextUnitDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "citations": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "const": "text",
+            "type": "string"
+          },
+          {
+            "const": "toolPair",
+            "type": "string"
+          }
+        ]
+      },
+      "required": {
+        "type": "boolean"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "text",
+      "citations",
+      "required"
+    ],
+    "type": "object"
+  },
+  "CreateAgentRequestSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "definition": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedTools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "avatar": {
+            "type": "string"
+          },
+          "budgets": {
+            "additionalProperties": false,
+            "properties": {
+              "attemptBudgetMs": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolCallsPerIteration": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolIterations": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissionMode": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "secretRefs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "purpose",
+          "instructions",
+          "resources",
+          "skills",
+          "permissionMode",
+          "allowedTools",
+          "budgets",
+          "secretRefs"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "definition"
+    ],
+    "type": "object"
   },
   "CreateChatRequestSchema": {
     "properties": {
@@ -8230,6 +9276,26 @@
       }
     ]
   },
+  "RunProfileExplanationDtoSchema": {
+    "properties": {
+      "digest": {
+        "type": "string"
+      },
+      "profile": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "taskId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "taskId"
+    ],
+    "type": "object"
+  },
   "RunStatusDtoSchema": {
     "anyOf": [
       {
@@ -8261,6 +9327,103 @@
         "type": "string"
       }
     ]
+  },
+  "SelectedSourceDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "const": "skill",
+            "type": "string"
+          },
+          {
+            "const": "resource",
+            "type": "string"
+          }
+        ]
+      },
+      "units": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "citations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "const": "text",
+                  "type": "string"
+                },
+                {
+                  "const": "toolPair",
+                  "type": "string"
+                }
+              ]
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text",
+            "citations",
+            "required"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "kind",
+      "units"
+    ],
+    "type": "object"
+  },
+  "SetAgentModelRequestSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "expectedRevision": {
+        "type": "number"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reasoningEffort": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "expectedRevision"
+    ],
+    "type": "object"
   },
   "SettingsDtoSchema": {
     "properties": {
@@ -8608,10 +9771,395 @@
     ],
     "type": "object"
   },
+  "SubmitTeammateTaskRequestSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "admissionKey": {
+        "type": "string"
+      },
+      "approvals": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "type": "string"
+            },
+            "grantId": {
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "grantId",
+            "digest"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "dependsOn": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "parentTaskId": {
+        "type": "string"
+      },
+      "payload": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "priority": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "number"
+      },
+      "projectSources": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "const": "skill",
+                  "type": "string"
+                },
+                {
+                  "const": "resource",
+                  "type": "string"
+                }
+              ]
+            },
+            "units": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "citations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "const": "text",
+                        "type": "string"
+                      },
+                      {
+                        "const": "toolPair",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text",
+                  "citations",
+                  "required"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "units"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "taskId": {
+        "type": "string"
+      },
+      "taskProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "budgets": {
+            "additionalProperties": false,
+            "properties": {
+              "attemptBudgetMs": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolCallsPerIteration": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolIterations": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "model": {
+            "type": "string"
+          },
+          "permissionMode": {
+            "type": "string"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "requiresContinuation": {
+            "type": "boolean"
+          },
+          "requiresVision": {
+            "type": "boolean"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "truncation": {
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "explicit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "required": [
+      "admissionKey",
+      "kind",
+      "payload"
+    ],
+    "type": "object"
+  },
+  "SubmitTeammateTaskResponseSchema": {
+    "properties": {
+      "replayed": {
+        "type": "boolean"
+      },
+      "task": {
+        "properties": {
+          "admissionKey": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "agentRevision": {
+            "type": "number"
+          },
+          "attemptCount": {
+            "type": "number"
+          },
+          "availableAt": {
+            "type": "number"
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          },
+          "dependsOn": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enqueuedAt": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "parentTaskId": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "number"
+          },
+          "runProfileDigest": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "number"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "const": "queued",
+                "type": "string"
+              },
+              {
+                "const": "running",
+                "type": "string"
+              },
+              {
+                "const": "interrupted",
+                "type": "string"
+              },
+              {
+                "const": "waiting_approval",
+                "type": "string"
+              },
+              {
+                "const": "waiting_child",
+                "type": "string"
+              },
+              {
+                "const": "uncertain",
+                "type": "string"
+              },
+              {
+                "const": "completed",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "type": "string"
+              },
+              {
+                "const": "cancelled",
+                "type": "string"
+              }
+            ]
+          },
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "agentId",
+          "agentRevision",
+          "admissionKey",
+          "kind",
+          "status",
+          "priority",
+          "enqueuedAt",
+          "availableAt",
+          "attemptCount",
+          "cancelRequested",
+          "dependsOn"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "task",
+      "replayed"
+    ],
+    "type": "object"
+  },
+  "TaskEventApprovalSchema": {
+    "additionalProperties": true,
+    "properties": {
+      "approvalId": {
+        "type": "string"
+      },
+      "state": {
+        "anyOf": [
+          {
+            "const": "requested",
+            "type": "string"
+          },
+          {
+            "const": "granted",
+            "type": "string"
+          },
+          {
+            "const": "denied",
+            "type": "string"
+          }
+        ]
+      },
+      "toolName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "type": "object"
+  },
   "TaskEventEnvelopeSchema": {
     "additionalProperties": true,
     "description": "Minimal durable task-event shape: ordered by seq, deduplicated by eventId.",
     "properties": {
+      "agentId": {
+        "description": "Durable agent identity the event's task runs under.",
+        "type": "string"
+      },
+      "approval": {
+        "additionalProperties": true,
+        "properties": {
+          "approvalId": {
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "const": "requested",
+                "type": "string"
+              },
+              {
+                "const": "granted",
+                "type": "string"
+              },
+              {
+                "const": "denied",
+                "type": "string"
+              }
+            ]
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
       "attemptId": {
         "description": "Groups the events of one attempt when a task is retried.",
         "type": "string"
@@ -8619,6 +10167,10 @@
       "contractVersion": {
         "description": "CONTRACT_VERSION the emitter spoke.",
         "type": "string"
+      },
+      "definitionRevision": {
+        "description": "Agent configuration revision pinned by the task's admission.",
+        "type": "number"
       },
       "eventId": {
         "description": "Unique per event; the key for dedup on replay.",
@@ -8628,6 +10180,89 @@
         "description": "Strictly increasing within a task; the ordering key.",
         "type": "number"
       },
+      "sourceRefs": {
+        "description": "Normalized source references the event introduced or used.",
+        "items": {
+          "properties": {
+            "excerpt": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "metadata": {
+              "patternProperties": {
+                "^(.*)$": {}
+              },
+              "type": "object"
+            },
+            "path": {
+              "type": "string"
+            },
+            "refId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "queued",
+            "type": "string"
+          },
+          {
+            "const": "running",
+            "type": "string"
+          },
+          {
+            "const": "interrupted",
+            "type": "string"
+          },
+          {
+            "const": "waiting_approval",
+            "type": "string"
+          },
+          {
+            "const": "waiting_child",
+            "type": "string"
+          },
+          {
+            "const": "uncertain",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "type": "string"
+          }
+        ]
+      },
+      "taskId": {
+        "description": "Logical task the event belongs to (the log's key).",
+        "type": "string"
+      },
       "timestamp": {
         "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
         "type": "string"
@@ -8635,6 +10270,68 @@
       "type": {
         "description": "Event type. Open here; the per-task-kind vocabulary closes it.",
         "type": "string"
+      },
+      "usage": {
+        "additionalProperties": true,
+        "properties": {
+          "cachedPromptTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "callId": {
+            "type": "string"
+          },
+          "completionTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "promptTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoningTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalTokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       }
     },
     "required": [
@@ -8643,6 +10340,508 @@
       "eventId",
       "timestamp",
       "contractVersion"
+    ],
+    "type": "object"
+  },
+  "TaskEventPageDtoSchema": {
+    "properties": {
+      "events": {
+        "items": {
+          "additionalProperties": true,
+          "description": "Minimal durable task-event shape: ordered by seq, deduplicated by eventId.",
+          "properties": {
+            "agentId": {
+              "description": "Durable agent identity the event's task runs under.",
+              "type": "string"
+            },
+            "approval": {
+              "additionalProperties": true,
+              "properties": {
+                "approvalId": {
+                  "type": "string"
+                },
+                "state": {
+                  "anyOf": [
+                    {
+                      "const": "requested",
+                      "type": "string"
+                    },
+                    {
+                      "const": "granted",
+                      "type": "string"
+                    },
+                    {
+                      "const": "denied",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "toolName": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "type": "object"
+            },
+            "attemptId": {
+              "description": "Groups the events of one attempt when a task is retried.",
+              "type": "string"
+            },
+            "contractVersion": {
+              "description": "CONTRACT_VERSION the emitter spoke.",
+              "type": "string"
+            },
+            "definitionRevision": {
+              "description": "Agent configuration revision pinned by the task's admission.",
+              "type": "number"
+            },
+            "eventId": {
+              "description": "Unique per event; the key for dedup on replay.",
+              "type": "string"
+            },
+            "seq": {
+              "description": "Strictly increasing within a task; the ordering key.",
+              "type": "number"
+            },
+            "sourceRefs": {
+              "description": "Normalized source references the event introduced or used.",
+              "items": {
+                "properties": {
+                  "excerpt": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    },
+                    "type": "object"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "refId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "label"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "const": "queued",
+                  "type": "string"
+                },
+                {
+                  "const": "running",
+                  "type": "string"
+                },
+                {
+                  "const": "interrupted",
+                  "type": "string"
+                },
+                {
+                  "const": "waiting_approval",
+                  "type": "string"
+                },
+                {
+                  "const": "waiting_child",
+                  "type": "string"
+                },
+                {
+                  "const": "uncertain",
+                  "type": "string"
+                },
+                {
+                  "const": "completed",
+                  "type": "string"
+                },
+                {
+                  "const": "failed",
+                  "type": "string"
+                },
+                {
+                  "const": "cancelled",
+                  "type": "string"
+                }
+              ]
+            },
+            "taskId": {
+              "description": "Logical task the event belongs to (the log's key).",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+              "type": "string"
+            },
+            "type": {
+              "description": "Event type. Open here; the per-task-kind vocabulary closes it.",
+              "type": "string"
+            },
+            "usage": {
+              "additionalProperties": true,
+              "properties": {
+                "cachedPromptTokens": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "callId": {
+                  "type": "string"
+                },
+                "completionTokens": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "model": {
+                  "type": "string"
+                },
+                "promptTokens": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reasoningTokens": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "totalTokens": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "seq",
+            "eventId",
+            "timestamp",
+            "contractVersion"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "nextCursor": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "events"
+    ],
+    "type": "object"
+  },
+  "TaskEventStatusSchema": {
+    "anyOf": [
+      {
+        "const": "queued",
+        "type": "string"
+      },
+      {
+        "const": "running",
+        "type": "string"
+      },
+      {
+        "const": "interrupted",
+        "type": "string"
+      },
+      {
+        "const": "waiting_approval",
+        "type": "string"
+      },
+      {
+        "const": "waiting_child",
+        "type": "string"
+      },
+      {
+        "const": "uncertain",
+        "type": "string"
+      },
+      {
+        "const": "completed",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "type": "string"
+      },
+      {
+        "const": "cancelled",
+        "type": "string"
+      }
+    ]
+  },
+  "TaskEventUsageSchema": {
+    "additionalProperties": true,
+    "properties": {
+      "cachedPromptTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "callId": {
+        "type": "string"
+      },
+      "completionTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "model": {
+        "type": "string"
+      },
+      "promptTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reasoningTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "totalTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "TaskEventUsageTotalsDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "cachedPromptTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "completionTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "promptTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reasoningTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "totalTokens": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "usageEvents": {
+        "minimum": 0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "usageEvents"
+    ],
+    "type": "object"
+  },
+  "TaskProfileOverridesDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "budgets": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptBudgetMs": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          },
+          "maxOutputTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          },
+          "maxToolCallsPerIteration": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          },
+          "maxToolIterations": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "model": {
+        "type": "string"
+      },
+      "permissionMode": {
+        "type": "string"
+      },
+      "providerId": {
+        "type": "string"
+      },
+      "requiresContinuation": {
+        "type": "boolean"
+      },
+      "requiresVision": {
+        "type": "boolean"
+      },
+      "tools": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "truncation": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "const": "explicit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "object"
+  },
+  "TaskProjectionApprovalDtoSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "approvalId": {
+        "type": "string"
+      },
+      "seq": {
+        "type": "number"
+      },
+      "state": {
+        "anyOf": [
+          {
+            "const": "requested",
+            "type": "string"
+          },
+          {
+            "const": "granted",
+            "type": "string"
+          },
+          {
+            "const": "denied",
+            "type": "string"
+          }
+        ]
+      },
+      "toolName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "state",
+      "seq"
     ],
     "type": "object"
   },
@@ -8847,6 +11046,120 @@
       "toolName",
       "status",
       "createdAt"
+    ],
+    "type": "object"
+  },
+  "UpdateAgentRequestSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "definition": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedTools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "avatar": {
+            "type": "string"
+          },
+          "budgets": {
+            "additionalProperties": false,
+            "properties": {
+              "attemptBudgetMs": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolCallsPerIteration": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              },
+              "maxToolIterations": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissionMode": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "secretRefs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "purpose",
+          "instructions",
+          "resources",
+          "skills",
+          "permissionMode",
+          "allowedTools",
+          "budgets",
+          "secretRefs"
+        ],
+        "type": "object"
+      },
+      "expectedRevision": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "expectedRevision",
+      "definition"
     ],
     "type": "object"
   },

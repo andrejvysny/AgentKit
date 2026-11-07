@@ -206,11 +206,22 @@ async fn route_request(service: &Service, request: Request) -> Result<Response, 
         crate::validation::provider_id(&input.params["providerId"])?;
     }
     input.idempotency = idempotency(&input, &headers)?;
-    if input.operation == "streamRun" {
+    if input.operation == "streamRun" || input.operation == "streamAgentTask" {
+        // Two SSE routes, one pump: the chat run stream keys on `runId`,
+        // the agent-task stream on `taskId`. Both authorize BEFORE this
+        // branch (the gate above hands `authorize` the operation and the
+        // path params), so a run id that names an agent task — or a task
+        // id that names someone else's agent — is a 404 before a single
+        // event frame is written.
+        let task_id = if input.operation == "streamRun" {
+            &input.params["runId"]
+        } else {
+            &input.params["taskId"]
+        };
         return crate::stream::response(
             service.backend.clone(),
             input.actor,
-            &input.params["runId"],
+            task_id,
             headers.get("last-event-id").and_then(|v| v.to_str().ok()),
             service.config.streaming.clone(),
         )

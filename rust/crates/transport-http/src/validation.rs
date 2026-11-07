@@ -25,6 +25,7 @@ fn semantic(operation: &str, body: &Value) -> Result<(), Problem> {
         "createProvider" => &["label", "kind", "baseUrl", "defaultModel"][..],
         "grantAllowance" => &["toolName", "proposalKind"][..],
         "createMcpServer" => &["alias"][..],
+        "submitTeammateTask" => &["admissionKey", "kind"][..],
         _ => &[],
     };
     for field in nonempty {
@@ -80,12 +81,34 @@ pub(crate) fn validate_query(
 ) -> Result<(), Problem> {
     if matches!(
         operation,
-        "listChats" | "listMessages" | "searchMessages" | "listToolEvents" | "listProposals"
+        "listChats"
+            | "listMessages"
+            | "searchMessages"
+            | "listToolEvents"
+            | "listProposals"
+            | "listAgents"
+            | "listAgentRevisions"
+            | "listAgentTasks"
+            | "listAgentTaskEvents"
     ) && let Some(raw) = query.get("limit")
         && positive_integer(raw).is_none_or(|v| v > 1000)
     {
         return Err(invalid(
             "Query parameter `limit` must be an integer between 1 and 1000.",
+        ));
+    }
+    // The event page cursor is a `seq`: a numeric cursor only. An
+    // unparseable one is a client bug answered at the door — the
+    // event-log read below would treat it as absent and silently
+    // replay from zero.
+    if operation == "listAgentTaskEvents"
+        && let Some(cursor) = query.get("after")
+        && !cursor
+            .parse::<f64>()
+            .is_ok_and(|sequence| sequence.is_finite() && sequence >= -1.0)
+    {
+        return Err(invalid(
+            "Query parameter `after` must be a finite numeric event sequence.",
         ));
     }
     if operation == "searchMessages" && !query.contains_key("q") {

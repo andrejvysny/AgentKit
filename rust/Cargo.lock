@@ -251,6 +251,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-teammate-consumer"
+version = "0.1.0"
+dependencies = [
+ "agentkit-host",
+ "agentkit-store",
+ "agentkit-transport-http",
+ "axum",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "agentkit-toolpacks-coding"
 version = "0.1.0"
 dependencies = [

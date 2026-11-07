@@ -63,6 +63,10 @@ mod ports;
 mod retry;
 mod runtime_state;
 pub(crate) use events::append;
+pub use events::{
+    MAX_TOOL_TEXT_BYTES, TaskProjection, TaskProjectionApproval, TaskProjectionUsage,
+    derive_task_projection, redact_event,
+};
 pub(crate) use lifecycle::end_attempt;
 
 pub(crate) fn save(db: &Connection, task: &TaskRecord) -> Result<()> {

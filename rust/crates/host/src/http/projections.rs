@@ -86,6 +86,72 @@ pub(super) fn proposal(record: ProposalRecord) -> Value {
     value
 }
 
+/// AGENTKIT-90: the bounded wire view of an admitted agent task. Canonical
+/// status and identity come from the task ROW (the one truth); nothing here
+/// is recomputed. Secret material is structurally absent: the row carries
+/// `run_profile` as an opaque digest-and-references pin, and only the
+/// digest crosses this boundary.
+pub(super) fn agent_task(task: &TaskRecord) -> Value {
+    let mut value = json!({
+        "taskId": task.task_id,
+        "agentId": task.agent_id,
+        "agentRevision": task.agent_revision,
+        "admissionKey": task.admission_key,
+        "kind": task.kind,
+        "status": task.status,
+        "priority": task.priority,
+        "enqueuedAt": task.enqueued_at,
+        "availableAt": task.available_at,
+        "attemptCount": task.attempt_count,
+        "cancelRequested": task.cancel_requested,
+        "dependsOn": task.depends_on,
+    });
+    for (key, entry) in [
+        ("startedAt", task.started_at),
+        ("finishedAt", task.finished_at),
+    ] {
+        if let Some(ms) = entry {
+            value[key] = json!(ms);
+        }
+    }
+    if let Some(error) = &task.error {
+        value["error"] = json!(error);
+    }
+    if let Some(parent) = &task.parent_task_id {
+        value["parentTaskId"] = json!(parent);
+    }
+    if let Some(pin) = &task.run_profile {
+        // The digest only — the pin's reference lists are inspected
+        // through the dedicated run-profile explanation route.
+        value["runProfileDigest"] = json!(pin.digest);
+    }
+    value
+}
+
+/// The bounded projection view: canonical task plus the derived attempt /
+/// approval / usage / source windows. `usage` counters serialize as `null`
+/// while unknown — a consumer must never read absence as zero.
+pub(super) fn agent_task_projection(projection: &agentkit_store::TaskProjection) -> Value {
+    let mut value = json!({
+        "task": agent_task(&projection.task),
+        "eventCount": projection.event_count,
+        "usage": serde_json::to_value(&projection.usage)
+            .expect("usage projection is plain numbers"),
+        "sourceRefs": projection.source_refs,
+    });
+    if let Some(attempt_id) = &projection.attempt_id {
+        value["attemptId"] = json!(attempt_id);
+    }
+    if let Some(seq) = projection.last_seq {
+        value["lastSeq"] = json!(seq);
+    }
+    if let Some(approval) = &projection.approval {
+        value["approval"] =
+            serde_json::to_value(approval).expect("approval projection is plain strings");
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

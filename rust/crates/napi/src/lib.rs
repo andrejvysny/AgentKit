@@ -29,6 +29,7 @@ mod run_provider;
 mod run_retry;
 mod run_steering;
 mod subagent_lane;
+mod teammate_lane;
 pub use run_provider::{
     end_run_provider, is_run_callback_active, push_run_provider_event, reserve_run_provider_request,
 };

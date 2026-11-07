@@ -1661,6 +1661,7 @@ class NativeStore_2 {
     callStore(operation: string, inputJson: string): Promise<string>
     close(): Promise<void>
     createService(onEvent: ((err: Error | null, arg: string) => any), optionsJson?: string | undefined | null): Promise<SessionService>
+    createTeammates(optionsJson?: string | undefined | null): Promise<NativeTeammates>
     mcpCallTool(alias: string, toolName: string, argsJson: string, handle?: string | undefined | null, cancellationKey?: string | undefined | null): Promise<string>
     mcpCancelCall(cancellationKey: string): Promise<void>
     mcpConnect(configJson: string): Promise<string>
@@ -1751,6 +1752,25 @@ export interface NativeSubagentView {
     updatedAt: number;
     // (undocumented)
     waiting: boolean;
+}
+
+// @public
+class NativeTeammates {
+    archiveAgent(agentId: string): Promise<string>
+    cancelAgentTask(taskId: string): Promise<string>
+    close(): void
+    createAgent(scope: string, ownerId: string, definitionJson: string): Promise<string>
+    getAgent(agentId: string): Promise<string>
+    getAgentTaskProjection(taskId: string, window?: number | undefined | null): Promise<string>
+    getAgentTaskRunProfile(taskId: string): Promise<string | null>
+    listAgentRevisions(agentId: string): Promise<string>
+    listAgents(scope: string): Promise<string>
+    listAgentTaskEvents(taskId: string, after?: number | undefined | null, limit?: number | undefined | null): Promise<string>
+    listAgentTasks(agentId: string): Promise<string>
+    restoreAgent(agentId: string): Promise<string>
+    setAgentModel(agentId: string, expectedRevision: number, model?: string | undefined | null, reasoningEffort?: string | undefined | null): Promise<string>
+    submitTeammateTask(admissionJson: string): Promise<string>
+    updateAgent(agentId: string, expectedRevision: number, definitionJson: string): Promise<string>
 }
 
 // @public (undocumented)
@@ -2413,6 +2433,33 @@ const TaskEventEnvelopeSchema: TObject<    {
     timestamp: TString;
     contractVersion: TString;
     attemptId: TOptional<TString>;
+    agentId: TOptional<TString>;
+    taskId: TOptional<TString>;
+    definitionRevision: TOptional<TNumber>;
+    status: TOptional<TUnion<[TLiteral<"queued">, TLiteral<"running">, TLiteral<"interrupted">, TLiteral<"waiting_approval">, TLiteral<"waiting_child">, TLiteral<"uncertain">, TLiteral<"completed">, TLiteral<"failed">, TLiteral<"cancelled">]>>;
+    approval: TOptional<TObject<    {
+        state: TUnion<[TLiteral<"requested">, TLiteral<"granted">, TLiteral<"denied">]>;
+        approvalId: TOptional<TString>;
+        toolName: TOptional<TString>;
+    }>>;
+    usage: TOptional<TObject<    {
+        callId: TOptional<TString>;
+        model: TOptional<TString>;
+        promptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        completionTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        totalTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        cachedPromptTokens: TOptional<TUnion<[TNumber, TNull]>>;
+        reasoningTokens: TOptional<TUnion<[TNumber, TNull]>>;
+    }>>;
+    sourceRefs: TOptional<TArray<TObject<    {
+        id: TString;
+        kind: TString;
+        label: TString;
+        refId: TOptional<TString>;
+        path: TOptional<TString>;
+        excerpt: TOptional<TString>;
+        metadata: TOptional<TRecord<TString, TUnknown>>;
+    }>>>;
 }>;
 
 // @public

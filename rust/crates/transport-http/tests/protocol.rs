@@ -152,17 +152,29 @@ fn body(operation: &str) -> Value {
         }
         "grantAllowance" => json!({"toolName":"t","proposalKind":"edit","maxRisk":"low"}),
         "createMcpServer" => json!({"alias":"tools","transport":{"kind":"stdio","command":"test"}}),
+        // AGENTKIT-90: the closed teammate request bodies, shaped exactly
+        // as the contract demands — this harness proves the ROUTE reaches
+        // a backend, so every schema-required member must be present.
+        "createAgent" => json!({"definition":agent_definition()}),
+        "updateAgent" => json!({"expectedRevision":1,"definition":agent_definition()}),
+        "setAgentModel" => json!({"expectedRevision":1,"model":"m"}),
+        "submitTeammateTask" => json!({"admissionKey":"k","kind":"k","payload":{}}),
         _ => json!({}),
     }
 }
 
+fn agent_definition() -> Value {
+    json!({"name":"n","purpose":"p","instructions":"i","resources":[],"skills":[],
+           "permissionMode":"ask","allowedTools":[],"budgets":{},"secretRefs":[]})
+}
+
 #[tokio::test]
-async fn all_48_routes_reach_backend_and_preserve_status() {
+async fn all_63_routes_reach_backend_and_preserve_status() {
     let fake = Arc::new(Fake::default());
     fake.settled.store(true, Ordering::SeqCst);
     let (base, task) = serve(fake.clone(), Config::default()).await;
     let client = reqwest::Client::new();
-    assert_eq!(routes().len(), 48);
+    assert_eq!(routes().len(), 63);
     for route in routes() {
         let path = route
             .path
@@ -194,7 +206,13 @@ async fn all_48_routes_reach_backend_and_preserve_status() {
             assert_eq!(status, 202);
         }
     }
-    assert_eq!(fake.calls.lock().unwrap().len(), routes().len() - 1);
+    // SSE routes answer from the event pump, not `dispatch`: each one
+    // legitimately skips the calls ledger (streamRun, streamAgentTask).
+    let streams = routes()
+        .iter()
+        .filter(|route| route.operation.starts_with("stream"))
+        .count();
+    assert_eq!(fake.calls.lock().unwrap().len(), routes().len() - streams);
     task.abort();
 }
 

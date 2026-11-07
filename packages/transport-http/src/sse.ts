@@ -67,7 +67,7 @@
  * already.
  */
 import type { TaskEventEnvelope } from "@agentkit/contracts";
-import type { Logger, TaskStatus, TaskStore } from "@agentkit/host";
+import type { Logger } from "@agentkit/host";
 import { DEFAULT_STREAM_OPTIONS, type RestStreamOptions } from "./deps.js";
 
 /**
@@ -80,11 +80,29 @@ export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "run.cancelled",
 ]);
 
-const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set<string>([
   "completed",
   "failed",
   "cancelled",
 ]);
+
+/**
+ * The durable-log reads the pump performs, stated structurally.
+ *
+ * `TaskStore` satisfies it, and naming it this way lets a feed that is NOT a
+ * task store — the teammate lane's `TeammateApiPort`, whose events come from
+ * the host's own execution backend — drive the SAME replay-then-poll pump
+ * without implementing the write half of a store it never writes to. A status
+ * is the only task field the pump reads (it closes the stream on a terminal
+ * one), so that is the only field this asks for.
+ */
+export interface TaskEventSource {
+  getTask(taskId: string): Promise<{ status: string } | null>;
+  listEvents(
+    taskId: string,
+    opts?: { afterSeq?: number; limit?: number },
+  ): Promise<TaskEventEnvelope[]>;
+}
 
 export const SSE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   "content-type": "text/event-stream",
@@ -120,7 +138,7 @@ export interface StreamStart {
 }
 
 export interface RunEventStreamInput {
-  tasks: TaskStore;
+  tasks: TaskEventSource;
   taskId: string;
   /** Where to resume from: the seq of the first event to send. */
   startSeq: number;
@@ -155,7 +173,7 @@ export interface RunEventStreamInput {
  * resume cannot log, meter, or reconcile it.
  */
 export async function resolveStreamStart(
-  tasks: TaskStore,
+  tasks: TaskEventSource,
   taskId: string,
   lastEventId: string | null,
   batchSize: number = DEFAULT_STREAM_OPTIONS.readBatchSize,
@@ -187,7 +205,7 @@ export async function resolveStreamStart(
  * announcement).
  */
 export async function resolveStartSeq(
-  tasks: TaskStore,
+  tasks: TaskEventSource,
   taskId: string,
   lastEventId: string | null,
   batchSize: number = DEFAULT_STREAM_OPTIONS.readBatchSize,
@@ -477,7 +495,7 @@ export function createRunEventStream(
  * return, but nothing can recover a page the store chose badly.
  */
 async function readAfter(
-  tasks: TaskStore,
+  tasks: TaskEventSource,
   taskId: string,
   cursor: number,
   limit: number,

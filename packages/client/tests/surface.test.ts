@@ -12,7 +12,11 @@
  * right holes.
  */
 import { describe, expect, test } from "bun:test";
-import { REST_ROUTES, type RestOperation } from "@agentkit/contracts";
+import {
+  REST_ROUTES,
+  type AgentDefinitionDto,
+  type RestOperation,
+} from "@agentkit/contracts";
 import { createAgentKitClient, type AgentKitClient } from "../src/index.js";
 
 const BASE = "http://client.test";
@@ -28,6 +32,8 @@ const PATH_VALUES: Readonly<Record<string, string>> = {
   connectionId: "cn-1",
   templateId: "tpl-1",
   revision: "1",
+  agentId: "ag-1",
+  taskId: "at-1",
 };
 
 interface Recorded {
@@ -71,6 +77,19 @@ function recordingClient(): {
   });
   return { client, calls };
 }
+
+/** A closed, credential-free definition — the shape the create/update rows send. */
+const AGENT_DEFINITION: AgentDefinitionDto = {
+  name: "Scribe",
+  purpose: "Daily digests",
+  instructions: "Summarize the day.",
+  resources: [],
+  skills: [],
+  permissionMode: "ask",
+  allowedTools: [],
+  budgets: {},
+  secretRefs: [],
+};
 
 /** How each operation is invoked. Keyed by operation ⇒ exhaustive at compile time. */
 const DRIVERS = {
@@ -168,6 +187,45 @@ const DRIVERS = {
     c.updateMcpServer({ serverId: "sv-1" }, { alias: "gh" }),
   deleteMcpServer: (c) => c.deleteMcpServer({ serverId: "sv-1" }),
   listTools: (c) => c.listTools(),
+  // AGENTKIT-90. One definition shape, shared by every row that carries one:
+  // these tests pin the ROUTE each method takes, not the body.
+  createAgent: (c) => c.createAgent({ definition: AGENT_DEFINITION }),
+  listAgents: (c) => c.listAgents(),
+  getAgent: (c) => c.getAgent({ agentId: "ag-1" }),
+  updateAgent: (c) =>
+    c.updateAgent(
+      { agentId: "ag-1" },
+      {
+        expectedRevision: 1,
+        definition: AGENT_DEFINITION,
+      },
+    ),
+  setAgentModel: (c) =>
+    c.setAgentModel(
+      { agentId: "ag-1" },
+      {
+        expectedRevision: 1,
+        model: "gpt-4o",
+      },
+    ),
+  archiveAgent: (c) => c.archiveAgent({ agentId: "ag-1" }),
+  restoreAgent: (c) => c.restoreAgent({ agentId: "ag-1" }),
+  listAgentRevisions: (c) => c.listAgentRevisions({ agentId: "ag-1" }),
+  submitTeammateTask: (c) =>
+    c.submitTeammateTask(
+      { agentId: "ag-1" },
+      {
+        admissionKey: "ak-1",
+        kind: "digest",
+        payload: { target: "standup" },
+      },
+    ),
+  listAgentTasks: (c) => c.listAgentTasks({ agentId: "ag-1" }),
+  getAgentTask: (c) => c.getAgentTask({ taskId: "at-1" }),
+  cancelAgentTask: (c) => c.cancelAgentTask({ taskId: "at-1" }),
+  listAgentTaskEvents: (c) => c.listAgentTaskEvents({ taskId: "at-1" }),
+  streamAgentTask: (c) => c.streamAgentTask({ taskId: "at-1" }),
+  getAgentTaskRunProfile: (c) => c.getAgentTaskRunProfile({ taskId: "at-1" }),
   getVersion: (c) => c.getVersion(),
 } satisfies Record<RestOperation, (client: AgentKitClient) => Promise<unknown>>;
 
@@ -193,9 +251,9 @@ describe("every route in the contract has a client method", () => {
       (op) => typeof (client as Record<string, unknown>)[op] === "function",
     );
     expect(clientOps).toEqual(contractOps);
-    // 39 operations, and the number is asserted so a route quietly disappearing
+    // 63 operations, and the number is asserted so a route quietly disappearing
     // from the contract does not quietly shrink this test with it.
-    expect(contractOps).toHaveLength(48);
+    expect(contractOps).toHaveLength(63);
   });
 
   for (const operation of Object.keys(REST_ROUTES) as RestOperation[]) {

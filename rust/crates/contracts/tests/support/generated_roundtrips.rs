@@ -1,6 +1,16 @@
 // Generated coverage for every exported TypeBox schema.
 #[test]
 fn all_generated_dtos_roundtrip() {
+    support::roundtrip::<AgentBudgetsDto>("AgentBudgetsDtoSchema");
+    support::roundtrip::<AgentDefinitionDto>("AgentDefinitionDtoSchema");
+    support::roundtrip::<AgentDto>("AgentDtoSchema");
+    support::roundtrip::<AgentLifecycleDto>("AgentLifecycleDtoSchema");
+    support::roundtrip::<AgentRevisionDto>("AgentRevisionDtoSchema");
+    support::roundtrip::<AgentRevisionSourceDto>("AgentRevisionSourceDtoSchema");
+    support::roundtrip::<AgentSkillSelectionDto>("AgentSkillSelectionDtoSchema");
+    support::roundtrip::<AgentTaskDto>("AgentTaskDtoSchema");
+    support::roundtrip::<AgentTaskProjectionDto>("AgentTaskProjectionDtoSchema");
+    support::roundtrip::<AgentTaskStatusDto>("AgentTaskStatusDtoSchema");
     support::roundtrip::<AiAudioPart>("AiAudioPartSchema");
     support::roundtrip::<AiChatMessage>("AiChatMessageSchema");
     support::roundtrip::<AiChatRole>("AiChatRoleSchema");
@@ -56,9 +66,12 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<AiToolStatus>("AiToolStatusSchema");
     support::roundtrip::<ApplyOutcomeDto>("ApplyOutcomeDtoSchema");
     support::roundtrip::<ApplyProposalRequest>("ApplyProposalRequestSchema");
+    support::roundtrip::<ApprovalGrantRefDto>("ApprovalGrantRefDtoSchema");
     support::roundtrip::<ChatDto>("ChatDtoSchema");
     support::roundtrip::<ConnectionRecord>("ConnectionRecordSchema");
     support::roundtrip::<ConnectionStatus>("ConnectionStatusSchema");
+    support::roundtrip::<ContextUnitDto>("ContextUnitDtoSchema");
+    support::roundtrip::<CreateAgentRequest>("CreateAgentRequestSchema");
     support::roundtrip::<CreateChatRequest>("CreateChatRequestSchema");
     support::roundtrip::<CreateMcpServerRequest>("CreateMcpServerRequestSchema");
     support::roundtrip::<CreateProviderRequest>("CreateProviderRequestSchema");
@@ -86,15 +99,28 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<RunContentSelection>("RunContentSelectionSchema");
     support::roundtrip::<RunDto>("RunDtoSchema");
     support::roundtrip::<RunEventFrameDto>("RunEventFrameDtoSchema");
+    support::roundtrip::<RunProfileExplanationDto>("RunProfileExplanationDtoSchema");
     support::roundtrip::<RunStatusDto>("RunStatusDtoSchema");
+    support::roundtrip::<SelectedSourceDto>("SelectedSourceDtoSchema");
+    support::roundtrip::<SetAgentModelRequest>("SetAgentModelRequestSchema");
     support::roundtrip::<SettingsDto>("SettingsDtoSchema");
     support::roundtrip::<SubmitMessageRequest>("SubmitMessageRequestSchema");
     support::roundtrip::<SubmitMessageResponse>("SubmitMessageResponseSchema");
+    support::roundtrip::<SubmitTeammateTaskRequest>("SubmitTeammateTaskRequestSchema");
+    support::roundtrip::<SubmitTeammateTaskResponse>("SubmitTeammateTaskResponseSchema");
+    support::roundtrip::<TaskEventApproval>("TaskEventApprovalSchema");
     support::roundtrip::<TaskEventEnvelope>("TaskEventEnvelopeSchema");
+    support::roundtrip::<TaskEventPageDto>("TaskEventPageDtoSchema");
+    support::roundtrip::<TaskEventStatus>("TaskEventStatusSchema");
+    support::roundtrip::<TaskEventUsage>("TaskEventUsageSchema");
+    support::roundtrip::<TaskEventUsageTotalsDto>("TaskEventUsageTotalsDtoSchema");
+    support::roundtrip::<TaskProfileOverridesDto>("TaskProfileOverridesDtoSchema");
+    support::roundtrip::<TaskProjectionApprovalDto>("TaskProjectionApprovalDtoSchema");
     support::roundtrip::<TestProviderResponse>("TestProviderResponseSchema");
     support::roundtrip::<ToolCallingModeDto>("ToolCallingModeDtoSchema");
     support::roundtrip::<ToolDefinitionDto>("ToolDefinitionDtoSchema");
     support::roundtrip::<ToolEventDto>("ToolEventDtoSchema");
+    support::roundtrip::<UpdateAgentRequest>("UpdateAgentRequestSchema");
     support::roundtrip::<UpdateChatRequest>("UpdateChatRequestSchema");
     support::roundtrip::<UpdateMcpServerRequest>("UpdateMcpServerRequestSchema");
     support::roundtrip::<UpdateProviderRequest>("UpdateProviderRequestSchema");
