@@ -12,7 +12,7 @@ pub const PROVIDER_CAPABILITIES_NAMESPACE: &str = "agentkit.compat.provider-capa
 fn invalid(kind: &str) -> StoreError {
     StoreError::RecoveryUnreadable(format!("Malformed {kind} record"))
 }
-fn parse(text: &str, kind: &str) -> Result<Value> {
+pub(crate) fn parse_setting(text: &str, kind: &str) -> Result<Value> {
     agentkit_contracts::parse_javascript_json(text).map_err(|_| invalid(kind))
 }
 fn required_strings(value: &Value, fields: &[&str]) -> bool {
@@ -62,7 +62,7 @@ fn get(db: &Connection, namespace: &str, key: &str, kind: &str) -> Result<Option
             |row| row.get(0),
         )
         .optional()?;
-    text.map(|text| parse(&text, kind)).transpose()
+    text.map(|text| parse_setting(&text, kind)).transpose()
 }
 fn save(db: &Connection, namespace: &str, key: &str, value: &Value) -> Result<()> {
     db.execute("INSERT INTO settings(namespace,key,value) VALUES(?,?,?) ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value", params![namespace, key, json(db, value)?])?;
@@ -79,7 +79,7 @@ impl SqliteStore {
             })?;
             rows.map(|row| {
                 let (key, text) = row?;
-                let value = parse(&text, "provider")?;
+                let value = parse_setting(&text, "provider")?;
                 if !provider(&value) || value["id"].as_str() != Some(key.as_str()) {
                     return Err(invalid("provider"));
                 }

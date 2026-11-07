@@ -1177,6 +1177,9 @@ impl<'a> Importer<'a> {
                 agent_id: None,
                 agent_revision: None,
                 admission_key: None,
+                // AGENTKIT-89: same honesty for the pinned profile — an
+                // importer cannot invent an effective-profile seal.
+                run_profile: None,
             };
             let status = self.status_text(&task.status)?;
             let scope = task.scope_id.clone();

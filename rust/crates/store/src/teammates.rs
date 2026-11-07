@@ -81,6 +81,14 @@ pub struct AdmitTeammateTask {
     pub available_at: Option<i64>,
     pub depends_on: Vec<String>,
     pub parent_task_id: Option<String>,
+    /// AGENTKIT-89: the ONE immutable effective run profile, resolved and
+    /// sealed by the host before admission. It rides the admission
+    /// transaction as part of the task's durable binding — validation of
+    /// everything it references (provider, capabilities, skill revisions,
+    /// sources, approvals) runs INSIDE that transaction, so an admission
+    /// either pins a profile that was live at its commit instant or
+    /// commits nothing. `None` is a pre-89 admission (no profile).
+    pub run_profile: Option<crate::PinnedRunProfile>,
 }
 
 /// The admission receipt. `replayed` distinguishes the call that created
@@ -247,6 +255,10 @@ impl SqliteStore {
                     || task.payload != input.payload
                     || task.parent_task_id != input.parent_task_id
                     || task.depends_on != input.depends_on
+                    // AGENTKIT-89: one key admitted ONE profile; a replay
+                    // claiming a different seal is different work.
+                    || task.run_profile.as_ref().map(|pin| &pin.digest)
+                        != input.run_profile.as_ref().map(|pin| &pin.digest)
                     || input
                         .task_id
                         .as_deref()
@@ -267,6 +279,15 @@ impl SqliteStore {
             // and an admit that loses answers `agent_archived` having
             // committed nothing.
             let agent = admission_gate(&transaction, &input.agent_id)?;
+            // AGENTKIT-89: the effective-profile seal and every durable
+            // fact it references verify HERE, on the admission
+            // transaction — the pin becomes part of the admitted task's
+            // durable binding in the same commit, never a second ledger.
+            crate::run_profiles::validate_at_admission(
+                &transaction,
+                &agent,
+                input.run_profile.as_ref(),
+            )?;
             // A pinned task id that already exists is a replay only when
             // it is the very same admission; otherwise it is a collision
             // the caller must not paper over.
@@ -306,6 +327,7 @@ impl SqliteStore {
                     agent_id: input.agent_id.clone(),
                     agent_revision: agent.current_revision,
                     admission_key: input.admission_key.clone(),
+                    run_profile: input.run_profile.clone(),
                 }),
             )?;
             transaction.execute(

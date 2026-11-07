@@ -47,6 +47,11 @@ pub struct TeammateAdmission {
     pub priority: i32,
     pub depends_on: Vec<String>,
     pub parent_task_id: Option<String>,
+    /// AGENTKIT-89: the sealed effective run profile from
+    /// [`crate::RunProfileService::resolve`]. It is pinned INSIDE the
+    /// admission transaction — the admitted task's durable binding, not a
+    /// second ledger. `None` admits without a profile (pre-89 shape).
+    pub run_profile: Option<agentkit_store::PinnedRunProfile>,
 }
 
 /// The host service boundary for persistent-agent admission. Cheap to
@@ -113,6 +118,7 @@ impl TeammateService {
                 available_at: None,
                 depends_on: input.depends_on,
                 parent_task_id: input.parent_task_id,
+                run_profile: input.run_profile,
             })
             .await?)
     }

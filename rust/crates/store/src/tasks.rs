@@ -173,6 +173,12 @@ pub(crate) fn insert_bound(
         admission_key: binding
             .as_ref()
             .map(|binding| binding.admission_key.clone()),
+        // AGENTKIT-89: the pinned effective profile rides the SAME binding
+        // — one transaction, one durable row, never a second ledger.
+        run_profile: binding
+            .as_ref()
+            .and_then(|binding| binding.run_profile.as_ref())
+            .map(|profile| Box::new(profile.clone())),
     };
     db.execute(
         "INSERT INTO tasks VALUES(?,?,?,?)",
@@ -385,6 +391,17 @@ impl SqliteStore {
                     continue;
                 }
                 if !dependencies(&transaction, &mut task, input.now)? {
+                    continue;
+                }
+                // AGENTKIT-89: revocation fences NEW dispatch even for an
+                // already-pinned profile — the check runs at USE, on this
+                // transaction, against the durable facts the pin points
+                // at (provider registration, capability evidence, skill
+                // revisions, source grants, approvals). A fenced task stays
+                // in the queue untouched: nothing dispatches it and nothing
+                // rewrites its pin; the reason is readable through
+                // `run_profile_dispatch_refusal`.
+                if crate::run_profiles::dispatch_fenced(&transaction, &task) {
                     continue;
                 }
                 if task.attempt_count >= input.max_attempts {
