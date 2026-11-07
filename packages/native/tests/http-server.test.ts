@@ -134,6 +134,47 @@ nativeTest(
 );
 
 nativeTest(
+  "sessionProfileId resolves against the service's registry; an undeclared one 400s",
+  async () => {
+    // The positive half of this contract is `examples/desktop-host`, which
+    // declares its own profile through `createService({ profiles })` and
+    // creates chats with 201. This is the enforcement half the fix must not
+    // have relaxed: a server pointed at a profile THAT service does not know
+    // still refuses chat creation, with the profile refusal in the body, and
+    // leaves no chat row behind.
+    const { store, service } = await withService();
+    try {
+      const { baseUrl } = await service.startHttpServer({
+        bearerToken: TOKEN,
+        defaultModel: "test-model",
+        sessionProfileId: "undeclared-profile",
+      });
+      const refused = await call(`${baseUrl}/v1/chats`, {
+        method: "POST",
+        headers: AUTH,
+        body: JSON.stringify({ title: "ghost" }),
+      });
+      expect(refused.status).toBe(400);
+      expect(refused.contentType).toBe("application/problem+json");
+      expect(refused.body).toMatchObject({
+        status: 400,
+        code: "invalid_request",
+      });
+      expect(String(refused.body.detail)).toContain("unknown profile");
+      // Refused before any effect: nothing was half-created.
+      const listed = await call(`${baseUrl}/v1/chats`, { headers: AUTH });
+      expect(listed.status).toBe(200);
+      expect(listed.text).toBe("[]");
+    } finally {
+      await service.stopHttpServer();
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);
+
+nativeTest(
   "chat round-trip, durable submit + worker execution, task poll, and SSE replay over REST",
   async () => {
     const { store, service } = await withService();

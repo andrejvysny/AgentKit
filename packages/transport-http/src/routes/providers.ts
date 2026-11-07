@@ -125,11 +125,21 @@ export async function updateProvider(ctx: RouteContext): Promise<Response> {
 /**
  * 204, and the stored credential goes with it.
  *
- * Deleting the provider without deleting its secret would leave a live API key
- * in the secret store under a ref nothing points at any more — unreachable
- * through this API and impossible to notice, which is the worst combination a
- * credential can have. Best-effort: the secret store is asked only when one is
- * wired and the config actually named a ref.
+ * THE SECRET IS RETIRED BEFORE THE ROW — the create/update order inverted for
+ * the mirrored reason (see {@link writeApiKey}). Deleting the row first and the
+ * secret second leaves, on any failure in between, a live API key under a ref
+ * nothing points at any more: unreachable through this API and impossible to
+ * notice, the worst state a credential can be in. Retiring the secret first
+ * leaves only the recoverable direction: the row present with its credential
+ * gone, and a DELETE whose retry finishes the job (the ref is derived from the
+ * id, so re-deleting the absent secret is a no-op and a `PATCH` re-fills it).
+ *
+ * So a retirement that fails aborts here, before the row is touched, and a
+ * row delete that fails afterwards puts the captured value back — the observed
+ * failure is all-or-nothing, never a live provider quietly without its key.
+ * Best-effort on wiring, not on ordering: the secret store is asked only when
+ * one is wired and the config actually named a ref, but whenever it is asked,
+ * it is asked first.
  */
 export async function deleteProvider(ctx: RouteContext): Promise<Response> {
   const providerId = pathParam(ctx, "providerId");
@@ -138,9 +148,54 @@ export async function deleteProvider(ctx: RouteContext): Promise<Response> {
     return notFound(`Provider not found: ${providerId}`, ctx.instance);
   }
   const ref = existing.metadata?.[PROVIDER_SECRET_REF_KEY];
-  await ctx.deps.store.providers.deleteProvider(providerId);
-  if (ctx.deps.secrets !== undefined && typeof ref === "string" && ref !== "") {
-    await ctx.deps.secrets.delete(ref);
+  const secrets = ctx.deps.secrets;
+  const secretRef =
+    secrets !== undefined && typeof ref === "string" && ref !== ""
+      ? ref
+      : undefined;
+
+  let captured: string | null = null;
+  if (secrets !== undefined && secretRef !== undefined) {
+    try {
+      // Capture before retirement so a later failure can undo it.
+      captured = await secrets.get(secretRef);
+      await secrets.delete(secretRef);
+    } catch (err) {
+      ctx.deps.logger?.error("provider credential retire failed", {
+        instance: ctx.instance,
+        ref: secretRef,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return problemResponse({
+        status: 500,
+        code: "secret_delete_failed",
+        detail:
+          "The provider was not deleted because its stored credential could not be retired. Both are unchanged; retry the delete.",
+        instance: ctx.instance,
+      });
+    }
+  }
+
+  try {
+    await ctx.deps.store.providers.deleteProvider(providerId);
+  } catch (err) {
+    // Compensate: the row stayed, so its credential comes back too. A failed
+    // restore is logged and the original fault still surfaces.
+    if (captured !== null && secrets !== undefined && secretRef !== undefined) {
+      try {
+        await secrets.set(secretRef, captured);
+      } catch (restoreErr) {
+        ctx.deps.logger?.error("provider credential restore failed", {
+          instance: ctx.instance,
+          ref: secretRef,
+          message:
+            restoreErr instanceof Error
+              ? restoreErr.message
+              : String(restoreErr),
+        });
+      }
+    }
+    throw err;
   }
   return new Response(null, { status: 204 });
 }

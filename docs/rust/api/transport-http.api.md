@@ -1589,6 +1589,9 @@ export function resolveStartSeq(tasks: TaskStore, taskId: string, lastEventId: s
 export function resolveStreamOptions(options?: RestStreamOptions): Required<RestStreamOptions>;
 
 // @public
+export function resolveStreamStart(tasks: TaskStore, taskId: string, lastEventId: string | null, batchSize?: number): Promise<StreamStart>;
+
+// @public
 export const RESOURCE_BY_OPERATION: {
     createChat: (params: RouteParams) => AuthorizationResource;
     listChats: (params: RouteParams) => AuthorizationResource;
@@ -2012,6 +2015,7 @@ export interface RunEventStreamInput {
     logger?: Logger;
     // (undocumented)
     options: Required<RestStreamOptions>;
+    resyncReason?: StreamResyncReason;
     signal?: AbortSignal;
     startSeq: number;
     // (undocumented)
@@ -2131,6 +2135,21 @@ interface SkillSource {
 
 // @public (undocumented)
 export const SSE_HEADERS: Readonly<Record<string, string>>;
+
+// @public
+export const STREAM_RESYNC_EVENT = "agentkit.stream.resync";
+
+// @public
+export const STREAM_RESYNC_HEADER = "x-agentkit-stream-resync";
+
+// @public
+export type StreamResyncReason = "unknown_last_event_id";
+
+// @public
+export interface StreamStart {
+    resyncReason: StreamResyncReason | null;
+    startSeq: number;
+}
 
 // @public
 export function stripBasePath(pathname: string, basePath: string): string | null;

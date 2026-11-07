@@ -2368,6 +2368,7 @@ id: TString;
 revision: TString;
 }>>>;
 }>>;
+reasoningEffort: TOptional<TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>>;
 model: TOptional<TString>;
 providerId: TOptional<TString>;
 metadata: TOptional<TRecord<TString, TUnknown>>;
@@ -3076,6 +3077,12 @@ type: TLiteral<"run.cancelled">;
 export function runObservers<K extends ObserverName>(input: HookRunInput, runId: string, stamp: EventStamper, name: K, ctx: ObserverCtx<K>): AsyncGenerator<AiRunEvent, void, unknown>;
 
 // @public (undocumented)
+export type RunReasoningEffort = Static<typeof RunReasoningEffortSchema>;
+
+// @public
+export const RunReasoningEffortSchema: TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>;
+
+// @public (undocumented)
 export type RunStatusDto = Static<typeof RunStatusDtoSchema>;
 
 // @public
@@ -3137,6 +3144,7 @@ id: TString;
 revision: TString;
 }>>>;
 }>>;
+reasoningEffort: TOptional<TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>>;
 content: TUnion<[TString, TArray<TUnion<[TObject<    {
 type: TLiteral<"text">;
 text: TString;

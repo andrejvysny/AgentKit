@@ -42,7 +42,7 @@ fn ownership(path: &Path) -> Result<Option<Vec<File>>> {
     let mut locks = Vec::new();
     let mut beside = canonical.as_os_str().to_owned();
     beside.push(".agentkit-owner");
-    match lock_file(Path::new(&beside)) {
+    match lock_file(Path::new(&beside), None) {
         Ok(lock) => locks.push(lock),
         // A read-only database directory cannot hold the lock; the legacy
         // lock then stands alone (unix). Any other failure is real.
@@ -56,12 +56,83 @@ fn ownership(path: &Path) -> Result<Option<Vec<File>>> {
         Err(LockError::Owned) => return Err(StoreError::AlreadyOwned),
     }
     #[cfg(unix)]
-    match lock_file(&legacy_lock_path(&canonical)?) {
-        Ok(lock) => locks.push(lock),
-        Err(LockError::Io(error)) => return Err(error.into()),
-        Err(LockError::Owned) => return Err(StoreError::AlreadyOwned),
+    {
+        let legacy = legacy_lock_path(&canonical)?;
+        match lock_file(&legacy, Some(&canonical)) {
+            Ok(lock) => locks.push(lock),
+            Err(LockError::Io(error)) => return Err(error.into()),
+            Err(LockError::Owned) => return Err(StoreError::AlreadyOwned),
+        }
+        // AGENTKIT-74 cleanup sweep (hygiene only, never correctness):
+        // databases come and go but this inode-keyed directory accumulated
+        // one file per opened database forever. Once we hold our own
+        // ownership, sweep provably-orphaned siblings (see
+        // `sweep_owner_locks`). Best-effort: any failure is ignored.
+        if let Some(directory) = legacy.parent() {
+            sweep_owner_locks(directory, std::time::Duration::from_secs(3600));
+        }
     }
     Ok(Some(locks))
+}
+
+/// AGENTKIT-74 cleanup sweep for the temp-dir owner-lock directory. A
+/// `{dev}-{ino}.lock` is removable only when it is provably orphaned: its
+/// one-line tag names a database path that no longer exists, or exists at
+/// a different `{dev}:{ino}` than the file name (the path was re-created;
+/// the live database is guarded by a fresh lock under a different name).
+/// Untagged (legacy, empty) files are never swept — nothing can prove
+/// they are orphaned — and a lock still held is left alone. Removal
+/// happens while holding the flock: an opener already blocked on this
+/// inode keeps its serialization (flock follows the inode, which the
+/// unlinked file's descriptor still pins), so the sweep cannot let two
+/// stores believe they own one database.
+#[cfg(unix)]
+fn sweep_owner_locks(directory: &Path, min_age: std::time::Duration) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".lock") else {
+            continue;
+        };
+        let Some((dev, ino)) = stem.split_once('-') else {
+            continue;
+        };
+        let (Ok(dev), Ok(ino)) = (dev.parse::<u64>(), ino.parse::<u64>()) else {
+            continue;
+        };
+        let path = entry.path();
+        let age = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|modified| modified.elapsed().ok());
+        match age {
+            Some(age) if age >= min_age => {}
+            // Too fresh to judge, or no usable mtime: keep (conservative).
+            _ => continue,
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue; // unreadable: prove nothing, keep
+        };
+        let Some(recorded) = text.lines().next().filter(|line| !line.is_empty()) else {
+            continue; // untagged legacy file: never swept
+        };
+        let referenced =
+            std::fs::metadata(recorded).is_ok_and(|db| db.dev() == dev && db.ino() == ino);
+        if referenced {
+            continue; // still guards a live database
+        }
+        let Ok(handle) = OpenOptions::new().read(true).write(true).open(&path) else {
+            continue;
+        };
+        if handle.try_lock().is_err() {
+            continue; // held: its owner may still be running
+        }
+        let _ = std::fs::remove_file(&path); // unlock+close on drop
+    }
 }
 
 enum LockError {
@@ -69,14 +140,26 @@ enum LockError {
     Owned,
 }
 
-fn lock_file(path: &Path) -> std::result::Result<File, LockError> {
-    let lock = OpenOptions::new()
+fn lock_file(path: &Path, tag: Option<&Path>) -> std::result::Result<File, LockError> {
+    let mut lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(path)
         .map_err(LockError::Io)?;
+    // AGENTKIT-74 cleanup sweep support: record WHICH database this inode
+    // keys (written once, under the lock). A later sweep may only remove a
+    // lock it can prove nothing references any more — a lock whose recorded
+    // database is gone or has moved to a different inode. Un-tagged legacy
+    // files (empty) are never swept: nothing can prove they are orphaned.
+    if let Some(tag) = tag
+        && std::fs::metadata(path).is_ok_and(|meta| meta.len() == 0)
+    {
+        use std::io::Write;
+        let _ = writeln!(lock, "{}", tag.display());
+        let _ = lock.flush();
+    }
     lock.try_lock().map_err(|_| LockError::Owned)?;
     Ok(lock)
 }

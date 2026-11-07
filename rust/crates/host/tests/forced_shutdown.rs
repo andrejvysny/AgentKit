@@ -53,8 +53,17 @@ fn task() -> SubmitTask {
 }
 
 fn host(store: SqliteStore, executor: Arc<ToolRunner>) -> AgentHost {
+    // 90 ms: the forced-stop test grades what the worker does while its lease is
+    // actively short-lived, so the sweep and the fencing window are in play.
+    host_with_lease(store, executor, 90)
+}
+
+/// Same host at a chosen lease TTL. A test that does not grade fencing must not
+/// inherit a TTL short enough for a loaded host to expire the worker's lease
+/// mid-run — that turns correct fencing into a false verdict.
+fn host_with_lease(store: SqliteStore, executor: Arc<ToolRunner>, lease_ttl_ms: i64) -> AgentHost {
     let options = HostOptions {
-        lease_ttl_ms: 90,
+        lease_ttl_ms,
         poll_interval_ms: 10,
         ..HostOptions::default()
     };
@@ -119,15 +128,23 @@ async fn forced_shutdown_leaves_task_recoverable_not_cancelled() {
 async fn user_cancel_still_settles_cancelled() {
     let store = SqliteStore::memory(8).unwrap();
     let (runner, mut started) = executor();
-    let host = host(store.clone(), runner);
+    // A 5 s lease, not the file's default 90 ms: this test grades what a durable
+    // user cancel settles, not what fencing looks like. At 90 ms a busy host
+    // legitimately expires the worker's lease mid-run, and the honest `LeaseLost`
+    // from `worker.shutdown()` becomes a false verdict — measured 2 failures in 3
+    // runs, then 8 in 8 with the compile fix alone. Here the lease cannot lapse
+    // inside the test, so any fence at all is a real regression and must fail.
+    let host = host_with_lease(store.clone(), runner, 5_000);
     host.submit(task()).await.unwrap();
     let worker = host.start_worker();
     started.recv().await.unwrap();
     host.cancel("t").await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), worker.shutdown())
         .await
-        .unwrap()
-        .unwrap();
+        .expect("shutdown must settle within the deadline")
+        .unwrap_or_else(|error| {
+            panic!("a cancelled run must not be fenced at a 5 s lease: {error:?}")
+        });
     let record = store.get_task("t").await.unwrap().unwrap();
     assert_eq!(record.status, TaskStatus::Cancelled);
 }

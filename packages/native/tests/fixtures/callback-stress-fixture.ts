@@ -9,9 +9,19 @@ import {
   resolveCall,
   type SessionService,
 } from "../../generated/index.js";
+import { testProfile } from "../helpers/profiles.js";
 
 const BATCH_SIZE = 32;
 const BATCHES = 100;
+/**
+ * The one profile these sessions run on. The scripted provider answers every
+ * turn with plain content and never asks for a tool, so the allow-list is
+ * empty and `read_only` is the policy that matches what the bridge sustains.
+ */
+const STRESS_PROFILE = testProfile("stress", {
+  tools: [],
+  permissionMode: "read_only",
+});
 const emit = (value: Record<string, unknown>): void => {
   console.log(JSON.stringify(value));
 };
@@ -152,7 +162,11 @@ async function createSessions(service: SessionService): Promise<string[]> {
     Array.from({ length: BATCH_SIZE }, async (_, index) => {
       const sessionId = `callback-stress-${index}`;
       await service.createSession(
-        JSON.stringify({ sessionId, profileId: "stress", model: "test-model" }),
+        JSON.stringify({
+          sessionId,
+          profileId: STRESS_PROFILE.id,
+          model: "test-model",
+        }),
       );
       return sessionId;
     }),
@@ -207,7 +221,13 @@ async function run(): Promise<void> {
   const store = NativeStore.memory();
   const service = await store.createService(
     receive,
-    JSON.stringify({ subagentMaxConcurrency: 20, closeTimeoutMs: 2_000 }),
+    // Admission resolves the sessions' `profileId` against this service's
+    // registry, so the definition they name is declared right here.
+    JSON.stringify({
+      subagentMaxConcurrency: 20,
+      closeTimeoutMs: 2_000,
+      profiles: [STRESS_PROFILE],
+    }),
   );
   service.bindEnv();
   try {

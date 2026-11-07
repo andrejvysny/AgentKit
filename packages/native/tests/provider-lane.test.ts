@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import { available, missing, required } from "./helpers/binding.js";
 import { startProviderMock } from "./helpers/loopback-provider.js";
+import { testProfile } from "./helpers/profiles.js";
 import type { NativeSessionService, NativeStore } from "../src/index.js";
 
 let NativeStoreCtor: typeof NativeStore;
@@ -119,6 +120,9 @@ suite(
         );
       expect(connectionId).toStartWith("conn_");
       service = await store.createService({
+        // Pure transport turn: the Rust lane streams the provider's own
+        // deltas; no tool is ever staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerConfig: {
           protocol: "chat-completions",
           providerId: "loopback",
@@ -218,6 +222,9 @@ suite(
           "sk-loopback",
         );
       service = await store.createService({
+        // Pure transport turn: deltas, usage and the encrypted-reasoning
+        // replay are provider-level; no tool is staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerConfig: {
           protocol: "responses",
           providerId: "loopback-rs",
@@ -309,6 +316,9 @@ suite(
           "sk-loopback",
         );
       service = await store.createService({
+        // The witness is the streamed/completed text itself; the profile
+        // stages no tools.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerConfig: {
           protocol: "responses",
           providerId: "terminal-reasoning",
@@ -362,6 +372,9 @@ suite(
           "sk-loopback",
         );
       service = await store.createService({
+        // The witness is the stream_output_mismatch terminalization; no
+        // tool is staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerConfig: {
           protocol: "responses",
           providerId: "conflicting-reasoning",
@@ -397,7 +410,11 @@ suite(
     const store = await NativeStoreCtor.inMemory();
     let service: NativeSessionService | undefined;
     try {
-      service = await store.createService();
+      service = await store.createService({
+        // The turn fails for want of a provider, before any tool could be
+        // staged; the profile stages none.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
+      });
       await service.createSession({ sessionId: "none", profileId: "p1" });
       const sent = await service.send("none", { content: "hi" });
       if (sent.kind !== "turn") throw new Error("unreachable");
@@ -440,6 +457,10 @@ suite(
             "sk-loopback",
           );
         service = await store.createService({
+          // The tool-call turn stages exactly the one JS tool the provider
+          // is scripted to call; full_auto so it executes and the loop
+          // reaches the concluding (history-carrying) request.
+          profiles: [testProfile("p1", { tools: ["probe_hist"] })],
           jsToolAuthority: { configuredMode: "full_auto" },
           providerConfig: {
             protocol: "chat-completions",
@@ -507,7 +528,10 @@ suite("js callback lane keeps single-chunk delta semantics", async () => {
   const store = await NativeStoreCtor.inMemory();
   let service: NativeSessionService | undefined;
   try {
-    service = await store.createService();
+    service = await store.createService({
+      // The JS callback returns content verbatim; no tool is staged.
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     service.setProvider(() => ({
       content: "Hello world",
       finishReason: "stop",
@@ -566,6 +590,9 @@ suite(
               "sk-loopback",
             );
           service = await store.createService({
+            // Admission/cap witness only: the mock answers with text, no
+            // tool is staged.
+            profiles: [testProfile("p1", { permissionMode: "read_only" })],
             providerConfig: {
               protocol,
               providerId: "cap",

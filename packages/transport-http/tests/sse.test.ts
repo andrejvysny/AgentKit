@@ -16,7 +16,12 @@ import {
   resolveStreamOptions,
   type RestStreamOptions,
 } from "../src/deps.js";
-import { createRunEventStream, frameFor, resolveStartSeq } from "../src/sse.js";
+import {
+  createRunEventStream,
+  frameFor,
+  resolveStartSeq,
+  resolveStreamStart,
+} from "../src/sse.js";
 
 const TASK_ID = "task-stream";
 const CHAT_ID = "chat-stream";
@@ -211,6 +216,62 @@ describe("createRunEventStream", () => {
       await resolveStartSeq(store.tasks, TASK_ID, "evt-from-another-run"),
     ).toBe(0);
     expect(await resolveStartSeq(store.tasks, TASK_ID, null)).toBe(0);
+  });
+
+  it("(c2) announces the replay an unknown cursor earns and stays silent otherwise", async () => {
+    // AGENTKIT-81: the replay itself was never the defect — the silence was.
+    // The resolver now reports WHY it fell back to 0, and the pump puts that
+    // reason on the wire before the first replayed frame.
+    const store = await seed(completedRun());
+    expect(
+      await resolveStreamStart(store.tasks, TASK_ID, "evt-from-another-run", 2),
+    ).toEqual({
+      startSeq: 0,
+      resyncReason: "unknown_last_event_id",
+    });
+    expect(await resolveStreamStart(store.tasks, TASK_ID, "evt-2", 2)).toEqual({
+      startSeq: 3,
+      resyncReason: null,
+    });
+    expect(await resolveStreamStart(store.tasks, TASK_ID, null, 2)).toEqual({
+      startSeq: 0,
+      resyncReason: null,
+    });
+    expect(await resolveStreamStart(store.tasks, TASK_ID, "   ", 2)).toEqual({
+      startSeq: 0,
+      resyncReason: null,
+    });
+    // The reason reaches the wire: a control frame, transport-owned like the
+    // settlement marker — no id, no seq, not a durable event.
+    const replayed = parseFrames(
+      await drain(
+        createRunEventStream({
+          tasks: store.tasks,
+          taskId: TASK_ID,
+          startSeq: 0,
+          resyncReason: "unknown_last_event_id",
+          options: options(),
+        }),
+      ),
+    );
+    expect(replayed[1]).toEqual({
+      event: "agentkit.stream.resync",
+      data: '{"reason":"unknown_last_event_id"}',
+    });
+    // A fresh stream — nobody asked to resume — carries no such announcement.
+    const fresh = parseFrames(
+      await drain(
+        createRunEventStream({
+          tasks: store.tasks,
+          taskId: TASK_ID,
+          startSeq: 0,
+          options: options(),
+        }),
+      ),
+    );
+    expect(
+      fresh.some((frame) => frame.event === "agentkit.stream.resync"),
+    ).toBe(false);
   });
 
   it("(d) closes a terminal task whose log has no terminal event", async () => {

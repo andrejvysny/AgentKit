@@ -153,6 +153,54 @@ export interface NativeServiceOptions {
    * behavior). Valid only without `providerConfig`, whose Rust lane is
    * always API-key shaped. */
   providerAuthKind?: "api-key" | "chatgpt-account";
+  /** Host-owned agent profiles this service may resolve sessions to
+   * (mirrors `profiles` in `rust/crates/napi/src/service.rs`). Absent, the
+   * registry is the host's built-ins (`chat`, `coding`, `coding/plan`,
+   * `coding/supervisor`, `coding/reviewer`, `research`, `automation`) and
+   * `createSession` refuses any other id with `invalid_input`. Present, the
+   * definitions are merged onto the built-ins exactly as the host merges
+   * them — an entry with an existing `id` overrides that built-in, an entry
+   * with `extends` inherits another profile's fields — so a consumer whose
+   * turns exercise tools outside the built-in sets declares the profile it
+   * actually needs. A definition the host rejects (unknown kind or
+   * permission mode, empty/duplicate tool names, a reviewer or supervisor
+   * holding write tools, a non-positive limit) fails construction with
+   * `invalid_input`, never a session running on a different policy. */
+  profiles?: ReadonlyArray<NativeAgentProfile>;
+}
+
+/** One host-owned profile definition (the `AgentProfile` shape resolved in
+ * `rust/crates/host/src/profiles.rs`). `id`, `kind`, `instructions`, `tools`
+ * and `permissionMode` are required unless `extends` names a profile that
+ * already carries them. `kind` is `chat`, `coding`, `research` or
+ * `automation`; `permissionMode` is the coding mode the session starts in
+ * (`read_only`, `ask`, `auto_edit`, `full_auto`, `plan`) unless
+ * `createSession` overrides it; `tools` is the exact allow-list of tool names
+ * the turn may stage. */
+export interface NativeAgentProfile {
+  id: string;
+  kind: "chat" | "coding" | "research" | "automation";
+  /** Another profile id whose fields this definition inherits. */
+  extends?: string;
+  label?: string;
+  instructions: string;
+  model?: string;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  tools: ReadonlyArray<string>;
+  permissionMode: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+  role?: "implementer" | "reviewer" | "supervisor";
+  limits?: {
+    maxToolIterations?: number;
+    maxToolCallsPerIteration?: number;
+    historyLimit?: number;
+    attemptBudgetMs?: number;
+    maxOutputTokens?: number;
+  };
+  resources?: {
+    skills?: ReadonlyArray<{ id: string; revision: string }>;
+    projectInstructions?: boolean;
+    resources?: ReadonlyArray<string>;
+  };
 }
 
 /** Construction-time selection of the Rust provider lane (mirrors
@@ -867,6 +915,22 @@ export interface ResolveUncertainExecutionInput {
   resolvedBy?: string;
 }
 
+/**
+ * AGENTKIT-73: one uncertain receipt of a sessionless (static fast path)
+ * chat, keyed by its chat — no session owns such chats, so the session
+ * surface can never close their receipts. Same rules as
+ * {@link ResolveUncertainExecutionInput}, swapped ownership key.
+ */
+export interface ResolveUncertainExecutionForChatInput {
+  chatId: string;
+  executionId: string;
+  outcome: ExecutionResolutionOutcome;
+  /** Required for `completed` (string or JSON value); forbidden otherwise. */
+  result?: unknown;
+  note?: string;
+  resolvedBy?: string;
+}
+
 export interface CreateSessionInputJson {
   sessionId?: string;
   title?: string;
@@ -874,6 +938,8 @@ export interface CreateSessionInputJson {
   profileDigest?: string;
   providerId?: string;
   model?: string;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
+  contentSelection?: Record<string, unknown>;
   workspace?: unknown;
   context?: unknown;
   skills?: unknown[];
@@ -1188,6 +1254,21 @@ export class NativeSessionService extends NativeSessionManagement {
   ): Promise<ExecutionReceiptJson> {
     const text = await lift(() =>
       this.raw.resolveUncertainExecution(JSON.stringify(input)),
+    );
+    return JSON.parse(text) as ExecutionReceiptJson;
+  }
+
+  /**
+   * Explicitly close one uncertain receipt of a sessionless (static fast
+   * path) chat — the AGENTKIT-73 exit from the `tool_result_uncertain`
+   * dead end. Never happens implicitly, and never executes, re-admits, or
+   * replays the effect: it records what the operator verified.
+   */
+  async resolveUncertainExecutionForChat(
+    input: ResolveUncertainExecutionForChatInput,
+  ): Promise<ExecutionReceiptJson> {
+    const text = await lift(() =>
+      this.raw.resolveUncertainExecutionForChat(JSON.stringify(input)),
     );
     return JSON.parse(text) as ExecutionReceiptJson;
   }

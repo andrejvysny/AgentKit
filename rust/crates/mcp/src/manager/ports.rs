@@ -127,6 +127,17 @@ pub trait McpSecretResolver: Send + Sync {
 
 #[async_trait]
 pub trait McpConnector: Send + Sync {
+    /// Named connection context permits host ports to bind OAuth and elicitation
+    /// to a configured alias rather than to a global current account.
+    async fn connect_named(
+        &self,
+        _alias: &str,
+        transport: TransportConfig,
+        options: ClientOptions,
+        cancellation: CancellationToken,
+    ) -> Result<Arc<dyn McpConnection>, McpClientError> {
+        self.connect(transport, options, cancellation).await
+    }
     /// The future must release partially opened transports when dropped. Any detached
     /// operation must observe cancellation and close a client before returning it late.
     async fn connect(

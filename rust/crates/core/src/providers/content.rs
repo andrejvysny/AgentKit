@@ -109,3 +109,22 @@ pub(crate) fn parts(
     }
     Ok((output.into(), dropped))
 }
+
+/// Managed instructions are text-only prompt messages, never transcript tool events.
+pub(crate) fn validate_selected(messages: &[ChatMessage]) -> Result<(), CoreError> {
+    if messages.len() > 1024
+        || messages.iter().any(|message| {
+            !matches!(message.role.as_str(), "system" | "user" | "assistant")
+                || !message.content.is_string()
+                || !message.tool_calls.is_empty()
+                || message.tool_call_id.is_some()
+                || message.name.is_some()
+        })
+    {
+        return Err(CoreError::new(
+            "invalid_request",
+            "Invalid selected run content.",
+        ));
+    }
+    Ok(())
+}

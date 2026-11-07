@@ -211,6 +211,12 @@ async function finalResult(
     request.maxOutputTokens === undefined
       ? {}
       : { maxOutputTokens: request.maxOutputTokens }),
+    // The descriptor's effort rides the callback payload; forwarding it is
+    // what makes "the session runs at the effort the user asked for" true on
+    // this lane rather than a silently dropped request field.
+    ...(request.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: request.reasoningEffort }),
   };
   let content = "";
   let finishReason = "stop";

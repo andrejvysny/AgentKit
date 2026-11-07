@@ -7,7 +7,45 @@ use std::{
 use tokio::task::JoinHandle;
 
 /// Upper bound on one settled observer call (see `HostOptions`).
-const SETTLED_OBSERVER_TIMEOUT: Duration = Duration::from_secs(30);
+const SETTLED_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
+/// Retries for one settlement commit refused by the store. The commit is an
+/// attempt's LAST step — the execution already reached its durable terminal
+/// — so a store fault around it (full device, contended file, EIO) is an
+/// environmental condition around data that MUST land, not a reason to kill
+/// this worker and strand every later turn in the queue (ONEMIND-351: an
+/// `ENOSPC` interval made the NEXT turn execute fully, commit `run.completed`
+/// durably, then stay `Running` forever because its settlement commit was
+/// lost with the worker). The budget stays well inside the 30 s lease TTL so
+/// the recovery sweep never races a live retry loop.
+const MAX_SETTLE_COMMITS: usize = 8;
+
+/// Whether a store fault on a settlement commit is environmental — the
+/// SQLITE_FULL / SQLITE_BUSY / SQLITE_IOERR family surfacing as `Database`,
+/// and filesystem faults as `Io`. Everything else (lease lost, invalid
+/// transition, poisoned worker) is structural and must not be retried.
+fn settle_commit_is_transient(error: &agentkit_store::StoreError) -> bool {
+    matches!(
+        error,
+        agentkit_store::StoreError::Database(_) | agentkit_store::StoreError::Io(_)
+    )
+}
+
+fn settle_retry_backoff(failures: usize) -> Duration {
+    Duration::from_millis((250u64 << failures.min(2)).min(1_000))
+}
+
+/// Outcome of [`AgentHost::commit_settlement`].
+enum SettleCommit {
+    Committed,
+    /// A structural (non-transient) store fault; the caller chooses the
+    /// descriptor-conflict re-plan from parking the attempt.
+    Failed(agentkit_store::StoreError),
+    /// Transient faults outlasted the retry budget: park for recovery.
+    Exhausted(agentkit_store::StoreError),
+    /// Forced shutdown arrived mid-retry — keep the lease untouched, exactly
+    /// like the execution select loop's hard-stop arm.
+    HardStopped,
+}
 
 #[derive(Clone)]
 pub struct HostOptions {
@@ -680,6 +718,83 @@ impl AgentHost {
         Ok(())
     }
 
+    /// Runs one settlement commit, retrying environmental store faults with
+    /// bounded backoff. The commit is the attempt's last step — the durable
+    /// events are already terminal — so a refused commit (full device,
+    /// contended file, EIO) is retried instead of being allowed to kill this
+    /// worker, and a fault that outlasts the budget parks the attempt for the
+    /// recovery machinery rather than stranding the task in `Running` and
+    /// the chat lane behind it (ONEMIND-351). The lease is deliberately NOT
+    /// renewed during retries: the budget ends well before the TTL, and a
+    /// renewal would add its own failure surface.
+    async fn commit_settlement<F, Fut>(
+        &self,
+        context: &ExecutionContext,
+        what: &str,
+        mut commit: F,
+    ) -> SettleCommit
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<agentkit_store::TaskRecord, agentkit_store::StoreError>>,
+    {
+        let mut failures = 0usize;
+        loop {
+            if self.hard_stop.is_cancelled() {
+                return SettleCommit::HardStopped;
+            }
+            match commit().await {
+                Ok(_) => return SettleCommit::Committed,
+                Err(error) if settle_commit_is_transient(&error) => {
+                    failures += 1;
+                    if failures >= MAX_SETTLE_COMMITS {
+                        return SettleCommit::Exhausted(error);
+                    }
+                    eprintln!(
+                        "agentkit: settle {what} commit failed for {} (transient failure {failures}/{MAX_SETTLE_COMMITS}): {error}",
+                        context.task.task_id
+                    );
+                    tokio::time::sleep(settle_retry_backoff(failures)).await;
+                }
+                Err(error) => return SettleCommit::Failed(error),
+            }
+        }
+    }
+
+    /// The attempt's durable terminal committed but its settlement will not.
+    /// Park the attempt exactly the way a descriptor conflict parks its own:
+    /// interrupted-resumable under the worker's own lease token, so the chat
+    /// lane and the queue keep moving and the recovery machinery (or an
+    /// explicit resume) owns the completion. A park that itself fails (the
+    /// lease was already taken, the store is wedged) still ends in lease-expiry
+    /// recovery; either way the worker survives and serves the next task.
+    async fn abandon_unsettled_attempt(
+        &self,
+        context: &ExecutionContext,
+        what: &str,
+        error: &agentkit_store::StoreError,
+    ) -> HostResult<()> {
+        eprintln!(
+            "agentkit: {what} commit for {} refused by the store ({error}); interrupting the attempt for recovery",
+            context.task.task_id
+        );
+        if let Err(park_error) = self
+            .store
+            .interrupt_task(
+                &context.task.task_id,
+                "settle_store_unavailable",
+                Some(context.fence.lease_token.clone()),
+                self.runtime.now_ms(),
+            )
+            .await
+        {
+            eprintln!(
+                "agentkit: could not interrupt unsettled task {}: {park_error}; lease expiry will recover it",
+                context.task.task_id
+            );
+        }
+        Ok(())
+    }
+
     async fn settle(&self, context: &ExecutionContext, outcome: HostResult<()>) -> HostResult<()> {
         let cancelled = self
             .store
@@ -769,32 +884,59 @@ impl AgentHost {
                     } else {
                         (vec![], None)
                     };
+                    let expected_descriptor = plan.expected_descriptor;
                     let mut input = settle.clone();
                     input.now = self.runtime.now_ms();
                     match self
-                        .store
-                        .settle_session(
-                            input,
-                            agentkit_store::SessionSettle {
-                                convert,
-                                staging,
-                                expected_descriptor: plan.expected_descriptor,
-                            },
-                        )
+                        .commit_settlement(context, "session", || {
+                            self.store.settle_session(
+                                input.clone(),
+                                agentkit_store::SessionSettle {
+                                    convert: convert.clone(),
+                                    staging: staging.clone(),
+                                    expected_descriptor: expected_descriptor.clone(),
+                                },
+                            )
+                        })
                         .await
                     {
-                        Ok(_) => break,
-                        Err(agentkit_store::StoreError::SessionDescriptorChanged(_))
-                            if attempt + 1 < MAX_SETTLE_PLANS =>
-                        {
+                        SettleCommit::Committed => break,
+                        SettleCommit::HardStopped => return Ok(()),
+                        SettleCommit::Failed(
+                            agentkit_store::StoreError::SessionDescriptorChanged(_),
+                        ) if attempt + 1 < MAX_SETTLE_PLANS => {
                             self.heartbeat(context).await?;
                         }
-                        Err(error) => return Err(error.into()),
+                        // A definitive (non-transient) store rejection is NOT
+                        // ours to swallow: lease lost, invalid transition and
+                        // the descriptor conflict past the last re-plan
+                        // propagate exactly as before this retry path existed
+                        // — the worker loop names them (`settle_conflict`) or
+                        // the caller decides.
+                        SettleCommit::Failed(error) => return Err(error.into()),
+                        SettleCommit::Exhausted(error) => {
+                            return self
+                                .abandon_unsettled_attempt(context, "settle_session", &error)
+                                .await;
+                        }
                     }
                 }
             }
             None => {
-                self.store.settle(settle).await?;
+                match self
+                    .commit_settlement(context, "task", || self.store.settle(settle.clone()))
+                    .await
+                {
+                    SettleCommit::Committed | SettleCommit::HardStopped => {}
+                    // Definitive rejections propagate exactly as before the
+                    // retry path; only a transiently starved commit parks.
+                    SettleCommit::Failed(error) => return Err(error.into()),
+                    SettleCommit::Exhausted(error) => {
+                        return self
+                            .abandon_unsettled_attempt(context, "settle", &error)
+                            .await;
+                    }
+                }
             }
         }
         // A settled turn can have promoted queued work (the session settle

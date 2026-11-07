@@ -151,6 +151,61 @@ impl DesktopBackend {
         }
         Ok(())
     }
+
+    /// Delete a deleted provider's secret slots BEFORE its config row is
+    /// committed (AGENTKIT-37), capturing the retired values so the caller
+    /// can compensate a later failure. Both slots are read up front —
+    /// nothing is destroyed until every value that might need restoring is
+    /// in hand — and a failed deletion restores the slots already deleted
+    /// before the error surfaces, so no half-retired state can be mistaken
+    /// for a finished delete.
+    pub(super) async fn retire_provider_secrets_capturing(
+        &self,
+        keys: Option<(SecretKey, SecretKey)>,
+    ) -> Result<Vec<(SecretKey, Secret)>, Problem> {
+        let (Some(secrets), Some((credential, headers))) = (&self.secrets, keys) else {
+            return Ok(Vec::new());
+        };
+        let targets = [
+            (credential.clone(), carry(secrets, Some(&credential)).await?),
+            (headers.clone(), carry(secrets, Some(&headers)).await?),
+        ];
+        let mut retired: Vec<(SecretKey, Secret)> = Vec::new();
+        for (key, value) in targets {
+            if let Err(error) = secrets
+                .delete(&key)
+                .await
+                .map_err(|_| secret_write_failed())
+            {
+                Self::restore_captured(secrets, retired).await;
+                return Err(error);
+            }
+            if let Some(value) = value {
+                retired.push((key, value));
+            }
+        }
+        Ok(retired)
+    }
+
+    /// Put captured values back after a delete rolled back at a later step
+    /// (AGENTKIT-37). Best effort: a failed restore leaves only the
+    /// harmless direction — the config row is still present, so a retried
+    /// DELETE finishes the job; a live credential can never be orphaned by
+    /// it.
+    pub(super) async fn restore_provider_secrets(&self, retired: Vec<(SecretKey, Secret)>) {
+        if let Some(secrets) = &self.secrets {
+            Self::restore_captured(secrets, retired).await;
+        }
+    }
+
+    async fn restore_captured(
+        secrets: &agentkit_connections::SharedSecretStore,
+        retired: Vec<(SecretKey, Secret)>,
+    ) {
+        for (key, value) in retired {
+            let _ = secrets.put(&key, value).await;
+        }
+    }
 }
 
 async fn carry(

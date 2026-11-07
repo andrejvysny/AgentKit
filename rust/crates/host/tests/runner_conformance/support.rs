@@ -1,5 +1,10 @@
+// Shared driver support, compiled into every target that mounts it by path
+// (`m0_fault_*`, `runner_conformance`); each target exercises a subset.
+// Precedent: `tests/governance/support.rs`, `store/tests/support/mod.rs`.
+#![allow(dead_code)]
 use agentkit_host::*;
-use agentkit_store::{SqliteStore, SubmitTask};
+use agentkit_store::{Lease, OutboxRecord, SqliteStore, SubmitTask};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -143,6 +148,76 @@ pub async fn snapshot(env: &Environment, label: &str, extra: Value) -> Value {
         .unwrap()
         .extend(extra.as_object().unwrap().clone());
     value
+}
+
+/// One profile of the shared fault schedule. The field names mirror
+/// `runner-faults-v1.json` exactly, so the same document drives the
+/// six-runner differential gate and the M0 boundary tests.
+#[derive(Deserialize)]
+pub struct Profile {
+    pub name: String,
+    #[serde(default)]
+    pub schedule: Vec<String>,
+    #[serde(default)]
+    pub delta: Option<String>,
+    pub expected: Expected,
+}
+
+#[derive(Deserialize)]
+pub struct Expected {
+    /// The TypeScript oracle's checkpoints. The M0 profiles are executed by
+    /// the Rust host only, so they carry an empty list here — see
+    /// `runner-faults.md`, "M0 boundary profiles".
+    #[serde(default)]
+    pub typescript: Vec<Value>,
+    pub rust: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+pub struct Schedule {
+    pub scenarios: Vec<Profile>,
+}
+
+/// The single shared fault schedule the M0 gate is authored against.
+pub fn schedule() -> Schedule {
+    serde_json::from_str(include_str!(
+        "../../../contracts/tests/fixtures/conformance/runner-faults-v1.json"
+    ))
+    .expect("the shared fault schedule parses")
+}
+
+/// A profile plus its documented schedule, so a missing profile is a test
+/// failure rather than a silently skipped boundary.
+pub fn profile(name: &str) -> Profile {
+    schedule()
+        .scenarios
+        .into_iter()
+        .find(|scenario| scenario.name == name)
+        .unwrap_or_else(|| panic!("profile {name} is missing from the shared schedule"))
+}
+
+/// The live attempt lease of a suspended run: the fencing proof the driver
+/// uses to stand in for the dispatch layer at a receipt boundary.
+pub async fn lease(env: &Environment, task_id: &str) -> Lease {
+    env.host
+        .store()
+        .get_lease(task_id)
+        .await
+        .unwrap()
+        .unwrap_or_else(|| panic!("task {task_id} holds no attempt lease"))
+}
+
+/// The client-visible publication rows for one run: every event payload the
+/// store queued for delivery, in insertion order.
+pub async fn publication(env: &Environment, run_id: &str) -> Vec<OutboxRecord> {
+    env.host
+        .store()
+        .outbox()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.topic == "task.events" && record.run_id.as_deref() == Some(run_id))
+        .collect()
 }
 
 pub struct Directory(pub PathBuf);

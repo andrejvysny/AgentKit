@@ -6,6 +6,16 @@ impl DesktopBackend {
     async fn create_chat(&self, input: &OperationRequest, now: i64) -> Result<ChatRecord, Problem> {
         let title = string(&input.body, "title");
         let metadata = input.body.get("metadata").cloned().unwrap_or(json!({}));
+        if metadata
+            .as_object()
+            .is_none_or(|metadata| metadata.keys().any(|key| key.starts_with("agentkit.")))
+        {
+            return Err(Problem::new(
+                400,
+                "invalid_request",
+                "Chat metadata must not contain host-owned agentkit keys.",
+            ));
+        }
         let Some(profile_id) = &self.session_profile else {
             return self
                 .host
@@ -19,7 +29,12 @@ impl DesktopBackend {
             runtime: self.host.runtime().clone(),
             plan_approval: None,
             wake: None,
-        });
+        })
+        .with_profiles(self.profiles.clone());
+        let service = match &self.content_authority {
+            Some(authority) => service.with_content_authority(authority.clone()),
+            None => service,
+        };
         service
             .create_session_chat(&crate::CreateSessionInput {
                 profile_id: profile_id.clone(),
@@ -70,21 +85,48 @@ impl DesktopBackend {
                 value["activeRunId"] = json!(active);
                 output(200, value)
             }
-            "updateChat" => output(
-                200,
-                projections::chat(
-                    store
-                        .update_chat(
-                            chat_id,
-                            string(&input.body, "title"),
-                            input.body.get("metadata").cloned(),
-                            input.body.get("archived").and_then(Value::as_bool),
-                            now,
-                        )
-                        .await
-                        .map_err(store_error)?,
-                )?,
-            ),
+            "updateChat" => {
+                let title = string(&input.body, "title");
+                let metadata = input.body.get("metadata").cloned();
+                let archived = input.body.get("archived").and_then(Value::as_bool);
+                let chat = store
+                    .mutate_chat(chat_id, now, move |chat| {
+                        if let Some(metadata) = metadata {
+                            let mut next = metadata.as_object().cloned().ok_or_else(|| {
+                                agentkit_store::StoreError::InvalidInput(
+                                    "Chat metadata must be an object.".into(),
+                                )
+                            })?;
+                            for (key, value) in &next {
+                                if key.starts_with("agentkit.")
+                                    && chat.metadata.get(key) != Some(value)
+                                {
+                                    return Err(agentkit_store::StoreError::InvalidInput(
+                                        "Host-owned agentkit metadata cannot be changed.".into(),
+                                    ));
+                                }
+                            }
+                            if let Some(existing) = chat.metadata.as_object() {
+                                for (key, value) in existing {
+                                    if key.starts_with("agentkit.") {
+                                        next.insert(key.clone(), value.clone());
+                                    }
+                                }
+                            }
+                            chat.metadata = Value::Object(next);
+                        }
+                        if let Some(title) = title {
+                            chat.title = Some(title);
+                        }
+                        if let Some(archived) = archived {
+                            chat.archived = archived;
+                        }
+                        Ok(chat.clone())
+                    })
+                    .await
+                    .map_err(store_error)?;
+                output(200, projections::chat(chat)?)
+            }
             "deleteChat" => {
                 store.delete_chat(chat_id).await.map_err(store_error)?;
                 output(204, Value::Null)

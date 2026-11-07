@@ -12,13 +12,17 @@ readme = "../../../README.md"
 [dependencies]
 agentkit-contracts = { path = "../contracts", version = "0.1.0" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# AGENTKIT-72 at-rest sealing. `ring` is already in the workspace Cargo.lock
+# (the rustls stack behind the `http` feature); this edge adds no new crate to
+# the build graph and keeps the pinned lockfile green.
+ring = "=0.17.14"
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2.workspace = true
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 
 [features]
 # Off by default: importing a TypeScript adapters-sqlite database is a migration

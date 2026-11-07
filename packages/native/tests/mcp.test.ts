@@ -34,6 +34,7 @@ import type {
   ToolResultJson,
 } from "../src/index.js";
 import { available, missing, required } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 if (required && !available)
   throw new Error(`native binding missing: ${missing.join(", ")}`);
@@ -430,6 +431,15 @@ nativeTest(
       // Full-auto authority so the write-effect descriptor can act in the
       // engine round-trip below; the ask-mode gate is its own test.
       jsToolAuthority: { configuredMode: "full_auto" },
+      // The engine round-trip stages exactly the contributed echo
+      // descriptor, and full-auto is what lets that host-write effect act
+      // without an approval.
+      profiles: [
+        testProfile("mcp-client", {
+          tools: ["mcp__fixture__echo"],
+          permissionMode: "full_auto",
+        }),
+      ],
     });
     try {
       const connection = await store.mcpConnect({
@@ -588,7 +598,16 @@ nativeTest(
     // DEFAULT authority (ask mode): a write-effect tool cannot act
     // without one human approval — the guard chain applies to MCP-
     // contributed descriptors exactly as to any JS tool.
-    const { store, service } = await withService();
+    const { store, service } = await withService({
+      // Ask is the mode this scenario starts in: the write descriptor must
+      // park on an approval; only that descriptor is staged.
+      profiles: [
+        testProfile("mcp-guard", {
+          tools: ["mcp__notes__echo"],
+          permissionMode: "ask",
+        }),
+      ],
+    });
     try {
       const connection = await store.mcpConnect({
         alias: "notes",
@@ -650,6 +669,15 @@ nativeTest(
     const log = fixtureLog();
     const { store, service } = await withService({
       jsToolAuthority: { configuredMode: "full_auto" },
+      // Both generations contribute the SAME descriptor name, so the run
+      // stages just that one; full-auto keeps the second turn's refusal the
+      // binding's stale-registration one, not an approval.
+      profiles: [
+        testProfile("mcp-generations", {
+          tools: ["mcp__dual__echo"],
+          permissionMode: "full_auto",
+        }),
+      ],
     });
     const spawn = (env: Record<string, string>) => ({
       kind: "stdio" as const,
@@ -1101,6 +1129,15 @@ nativeTest(
     const arm = join(disposableDir(), "init-arm");
     const { store, service } = await withService({
       jsToolAuthority: { configuredMode: "full_auto" },
+      // The cancelled run stages only the slow alias's echo descriptor;
+      // full-auto so the engine enters the tool lane (where the cancel
+      // lands) instead of parking on an approval.
+      profiles: [
+        testProfile("mcp-cancel", {
+          tools: ["mcp__slow__echo"],
+          permissionMode: "full_auto",
+        }),
+      ],
     });
     try {
       // One alias, two possible server generations: the first spawn

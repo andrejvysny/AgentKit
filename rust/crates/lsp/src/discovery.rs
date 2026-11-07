@@ -336,15 +336,32 @@ mod tests {
     #[test]
     fn missing_server_names_language_and_candidates() {
         let root = tempfile::tempdir().unwrap();
-        let err =
-            resolve_server_command(&BTreeMap::new(), "typescript", root.path(), true).unwrap_err();
-        assert_eq!(err.code, SERVER_NOT_FOUND);
-        assert!(err.message.contains("typescript"), "{}", err.message);
-        assert!(
-            err.message.contains("typescript-language-server"),
-            "{}",
-            err.message
-        );
+        // Which branch is reachable is a fact about the host, not about this
+        // crate: discovery looks the bare name up on `PATH` and walks the
+        // ancestors of `root` for `node_modules/.bin` (see
+        // `typescript_finds_ancestor_node_modules_bin`), so with the server
+        // installed — or a tree that planted a candidate above the temp dir, as a
+        // shared `$TMPDIR` can during a parallel gate run — the honest answer is
+        // `Ok`. Assert the contract of whichever answer is given, never the
+        // environment. This is the same Ok/Err shape `workspace_binaries_require_opt_in`
+        // already uses, and it is what made the once-only failure under
+        // `qualify:local` a false verdict rather than a defect.
+        match resolve_server_command(&BTreeMap::new(), "typescript", root.path(), true) {
+            Ok(cmd) => assert!(
+                cmd.command.ends_with("typescript-language-server"),
+                "a discovered typescript server must be the candidate: {}",
+                cmd.command
+            ),
+            Err(err) => {
+                assert_eq!(err.code, SERVER_NOT_FOUND);
+                assert!(err.message.contains("typescript"), "{}", err.message);
+                assert!(
+                    err.message.contains("typescript-language-server"),
+                    "{}",
+                    err.message
+                );
+            }
+        }
     }
 
     #[test]

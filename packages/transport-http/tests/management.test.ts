@@ -405,6 +405,78 @@ describe("provider CRUD", () => {
     );
   });
 
+  it("(k2) retires the credential BEFORE the row, and a failed retire leaves both intact", async () => {
+    // The crash-between-writes case for the delete path, mirroring (h2) for
+    // create/update. Deleting the ROW first and the secret second means a
+    // store that dies in between leaves a live key under a ref nothing names
+    // any more — the unrecoverable direction. Retiring the secret first turns
+    // the same failure into the recoverable one: nothing was written to or
+    // removed from the row, the credential is still filed, and the DELETE is
+    // simply retried.
+    const saved = new Map<string, string>();
+    const secrets = {
+      async get(ref: string) {
+        return saved.get(ref) ?? null;
+      },
+      async set(ref: string, value: string) {
+        saved.set(ref, value);
+      },
+      async delete() {
+        throw new Error("secret store is down");
+      },
+      async listRefs() {
+        return [...saved.keys()];
+      },
+    };
+    const f = await createHandlerFixture({ secrets });
+    const seeded = await f.handler(
+      request("PATCH", "/v1/providers/p1", { body: { apiKey: SECRET } }),
+    );
+    expect(seeded.status).toBe(200);
+
+    const res = await f.handler(request("DELETE", "/v1/providers/p1"));
+    await expectProblem(res, 500, "secret_delete_failed");
+    // The row survived the failed retirement WITH its credential: the delete
+    // is retryable, and at no point did a live key outlive the row naming it.
+    expect((await f.store.providers.getProvider("p1"))?.label).toBe("Mock");
+    expect(saved.get("provider/p1/api-key")).toBe(SECRET);
+  });
+
+  it("(k3) puts the retired credential back when the row delete fails", async () => {
+    // The other half of the inverted order: once the credential is retired, a
+    // row delete that fails must compensate by putting the captured value
+    // back, so the observed failure is all-or-nothing — a live provider never
+    // spends a turn with its key silently gone while waiting for a retry.
+    const secrets = new MemorySecretStore();
+    const f = await createHandlerFixture({ secrets });
+    await f.handler(
+      request("PATCH", "/v1/providers/p1", { body: { apiKey: SECRET } }),
+    );
+    expect(secrets.values.get("provider/p1/api-key")).toBe(SECRET);
+
+    const realDelete = f.store.providers.deleteProvider.bind(f.store.providers);
+    f.store.providers.deleteProvider = async () => {
+      throw new Error("store is down");
+    };
+    // A store fault maps through the handler's catch-all, unchanged from any
+    // other route's store failure.
+    await expectProblem(
+      await f.handler(request("DELETE", "/v1/providers/p1")),
+      500,
+      "internal_error",
+    );
+    // Nothing was lost: the row never left and neither did its key.
+    expect((await f.store.providers.getProvider("p1"))?.label).toBe("Mock");
+    expect(secrets.values.get("provider/p1/api-key")).toBe(SECRET);
+
+    // And with the store back, the retry finishes the job end to end.
+    f.store.providers.deleteProvider = realDelete;
+    const done = await f.handler(request("DELETE", "/v1/providers/p1"));
+    expect(done.status).toBe(204);
+    expect(await f.store.providers.getProvider("p1")).toBeNull();
+    expect(secrets.values.size).toBe(0);
+  });
+
   it("(l) 501s refresh and test without providerOps, serves them with it", async () => {
     const bare = await createHandlerFixture();
     await expectProblem(

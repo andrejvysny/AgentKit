@@ -1327,6 +1327,7 @@ impl SqliteStore {
 // ---------------------------------------------------------------------------
 
 /// A follow-up the settling turn converts into a task on its way out.
+#[derive(Clone)]
 pub struct StagedCandidate {
     pub input_id: String,
     pub task: SubmitTask,

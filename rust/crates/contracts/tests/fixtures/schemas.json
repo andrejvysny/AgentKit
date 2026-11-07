@@ -6597,6 +6597,26 @@
       },
       "providerId": {
         "type": "string"
+      },
+      "reasoningEffort": {
+        "anyOf": [
+          {
+            "const": "minimal",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "type": "string"
+          }
+        ]
       }
     },
     "type": "object"
@@ -8402,6 +8422,26 @@
       },
       "providerId": {
         "type": "string"
+      },
+      "reasoningEffort": {
+        "anyOf": [
+          {
+            "const": "minimal",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "type": "string"
+          }
+        ]
       }
     },
     "required": [

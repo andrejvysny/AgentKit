@@ -19,7 +19,12 @@
  * client holding an id from another run (or from a run whose log was pruned)
  * cannot be resumed from, and a full replay is the only answer that leaves it
  * consistent. It is also cheap to make idempotent client-side, which a partial
- * stream is not.
+ * stream is not. The replay is ANNOUNCED, never silent: the response carries
+ * `x-agentkit-stream-resync: unknown_last_event_id` and the body opens with an
+ * `agentkit.stream.resync` control frame (`{"reason":"unknown_last_event_id"}`)
+ * before the first replayed event — transport-owned like the settlement marker,
+ * no `id`, no `seq`, not a durable log row — so a client can tell a fresh
+ * stream from a full replay it must dedupe (AGENTKIT-81).
  *
  * Closing: THE TASK'S STATUS ENDS THE STREAM, NOT A TERMINAL RUN EVENT. A run
  * is not one pass — the host re-asks after a failed pass, after a
@@ -89,11 +94,42 @@ export const SSE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   "cache-control": "no-cache, no-transform",
 });
 
+/**
+ * Why the server is replaying the WHOLE log on a stream that asked to resume
+ * (AGENTKIT-81). An unknown (or other-run) `Last-Event-ID` still replays from
+ * the start — that is the contract — but the replay is never SILENT: the
+ * response carries {@link STREAM_RESYNC_HEADER} and the body opens with an
+ * {@link STREAM_RESYNC_EVENT} control frame before any replayed event, so a
+ * client can tell "the tail you missed" from "everything, because your cursor
+ * was unknown" without dedup archaeology.
+ */
+export type StreamResyncReason = "unknown_last_event_id";
+
+/** The control frame that announces a full replay (no `id`, no `seq`). */
+export const STREAM_RESYNC_EVENT = "agentkit.stream.resync";
+
+/** The response header that announces a full replay. */
+export const STREAM_RESYNC_HEADER = "x-agentkit-stream-resync";
+
+/** Where to start streaming, and whether the caller must be told it is a full replay. */
+export interface StreamStart {
+  /** The seq of the first event to send. */
+  startSeq: number;
+  /** Set exactly when a real `Last-Event-ID` could not be found and the stream replays everything. */
+  resyncReason: StreamResyncReason | null;
+}
+
 export interface RunEventStreamInput {
   tasks: TaskStore;
   taskId: string;
   /** Where to resume from: the seq of the first event to send. */
   startSeq: number;
+  /**
+   * Set when `startSeq` is a full replay earned by an unknown
+   * `Last-Event-ID`: the pump announces it with a
+   * {@link STREAM_RESYNC_EVENT} frame before the first event.
+   */
+  resyncReason?: StreamResyncReason;
   options: Required<RestStreamOptions>;
   /** The request's abort signal; aborting stops the timers and closes. */
   signal?: AbortSignal;
@@ -101,7 +137,8 @@ export interface RunEventStreamInput {
 }
 
 /**
- * The seq to start from, given a `Last-Event-ID` header.
+ * The seq to start from, given a `Last-Event-ID`, and whether the caller is
+ * about to receive a full replay it did not ask for.
  *
  * A scan of the log, because the port exposes no "find by eventId": an id is a
  * string the store dedups on, not an index. The scan happens once per
@@ -110,6 +147,44 @@ export interface RunEventStreamInput {
  * read that precedes a stream is bounded by the same number the stream itself
  * is. A resume against a very long run should not cost more before the first
  * frame than the whole replay costs after it.
+ *
+ * A short or empty page means the log ended without the id: the cursor names
+ * an event of another run (or one whose log was pruned). The start falls back
+ * to 0 — the documented answer — and `resyncReason` says so, because the
+ * silence was the defect: a client that cannot tell a full replay from a
+ * resume cannot log, meter, or reconcile it.
+ */
+export async function resolveStreamStart(
+  tasks: TaskStore,
+  taskId: string,
+  lastEventId: string | null,
+  batchSize: number = DEFAULT_STREAM_OPTIONS.readBatchSize,
+): Promise<StreamStart> {
+  if (lastEventId === null || lastEventId.trim() === "") {
+    return { startSeq: 0, resyncReason: null };
+  }
+  let cursor = 0;
+  for (;;) {
+    const batch = await readAfter(tasks, taskId, cursor, batchSize);
+    for (const event of batch) {
+      if (event.eventId === lastEventId)
+        return { startSeq: event.seq + 1, resyncReason: null };
+      cursor = Math.max(cursor, event.seq + 1);
+    }
+    // Short or empty means the log ended without the id: an event from another
+    // run, or from one whose log was pruned. Replay from the beginning — and
+    // say so (AGENTKIT-81).
+    if (batch.length === 0 || batch.length < batchSize) {
+      return { startSeq: 0, resyncReason: "unknown_last_event_id" };
+    }
+  }
+}
+
+/**
+ * The seq to start from, given a `Last-Event-ID` (see
+ * {@link resolveStreamStart} for the full contract; this is its number-only
+ * projection, kept stable for callers that do not care about the resync
+ * announcement).
  */
 export async function resolveStartSeq(
   tasks: TaskStore,
@@ -117,18 +192,8 @@ export async function resolveStartSeq(
   lastEventId: string | null,
   batchSize: number = DEFAULT_STREAM_OPTIONS.readBatchSize,
 ): Promise<number> {
-  if (lastEventId === null || lastEventId.trim() === "") return 0;
-  let cursor = 0;
-  for (;;) {
-    const batch = await readAfter(tasks, taskId, cursor, batchSize);
-    for (const event of batch) {
-      if (event.eventId === lastEventId) return event.seq + 1;
-      cursor = Math.max(cursor, event.seq + 1);
-    }
-    // Short or empty means the log ended without the id: an event from another
-    // run, or from one whose log was pruned. Replay from the beginning.
-    if (batch.length === 0 || batch.length < batchSize) return 0;
-  }
+  return (await resolveStreamStart(tasks, taskId, lastEventId, batchSize))
+    .startSeq;
 }
 
 /**
@@ -257,6 +322,19 @@ export function createRunEventStream(
           // that loses the connection on the very next byte already knows the
           // policy.
           if (!(await write(`retry: ${options.retryHintMs}\n\n`))) return;
+          // AGENTKIT-81: a full replay the client did not ask for (its
+          // `Last-Event-ID` named no event of this run) is announced before
+          // the first frame, so a client never has to infer a replay from
+          // dedup fallout. The frame is a transport control frame — no `id`,
+          // no `seq`, not part of the durable log — exactly like the
+          // settlement marker.
+          if (
+            input.resyncReason !== undefined &&
+            !(await write(
+              `event: ${STREAM_RESYNC_EVENT}\ndata: ${JSON.stringify({ reason: input.resyncReason })}\n\n`,
+            ))
+          )
+            return;
           let cursor = input.startSeq;
           let lastWriteAt = Date.now();
 

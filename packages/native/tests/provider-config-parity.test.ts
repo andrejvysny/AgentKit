@@ -11,6 +11,7 @@ import { expect, test } from "bun:test";
 
 import { available, missing, required } from "./helpers/binding.js";
 import { startProviderMock } from "./helpers/loopback-provider.js";
+import { testProfile } from "./helpers/profiles.js";
 import type { NativeSessionService, NativeStore } from "../src/index.js";
 
 let NativeStoreCtor: typeof NativeStore;
@@ -139,6 +140,9 @@ suite(
           "sk-loopback",
         );
       service = await store.createService({
+        // Admission-window witness only: every turn is plain text, no
+        // tool is staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerConfig: {
           protocol: "chat-completions",
           providerId: "catalog",
@@ -286,6 +290,12 @@ async function toolGateCase(
         "sk-loopback",
       );
     service = await store.createService({
+      // IDENTICAL policy for every toolCalling knob setting: the profile
+      // always stages `echo`, so on the off/auto cases it is the provider
+      // capability knob — not the allow-list — that keeps the tool off the
+      // wire, and on the on-case the same profile advertises and executes
+      // it. full_auto so the read-effect echo runs.
+      profiles: [testProfile("p1", { tools: ["echo"] })],
       providerConfig: {
         protocol: "chat-completions",
         providerId: "gate",
@@ -426,6 +436,9 @@ suite(
     const seen: Record<string, unknown>[] = [];
     try {
       accountService = await accountStore.createService({
+        // The JS adapter returns content; the witness is the payload shape,
+        // no tool is staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerAuthKind: "chatgpt-account",
       });
       accountService.setProvider((request) => {
@@ -462,7 +475,10 @@ suite(
     let keyService: NativeSessionService | undefined;
     const keySeen: Record<string, unknown>[] = [];
     try {
-      keyService = await keyStore.createService();
+      keyService = await keyStore.createService({
+        // Same no-tool policy on the API-key control lane.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
+      });
       keyService.setProvider((request) => {
         keySeen.push(request as unknown as Record<string, unknown>);
         return accountAdapter(request);
@@ -505,6 +521,9 @@ suite(
           "sk-loopback",
         );
       service = await store.createService({
+        // The revoked connection fails before transport; no tool is ever
+        // staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
         providerConfig: {
           protocol: "chat-completions",
           providerId: "revoked",

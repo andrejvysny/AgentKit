@@ -115,6 +115,15 @@ async fn deliver(
     if !account_backed || request.max_output_tokens.is_some() {
         payload["maxOutputTokens"] = request.max_output_tokens.into();
     }
+    // The descriptor's reasoning effort travels on BOTH lanes: the reference
+    // request builder carries it OUTSIDE the account-parameter gate
+    // (`packages/core/src/providers/responses-request.ts` sets
+    // `reasoning.effort` for a chatgpt-account client too), so it is not an
+    // undeclared sampling parameter an account adapter would reject. An
+    // absent effort means an OMITTED key, never a present-null parameter.
+    if let Some(effort) = request.reasoning_effort {
+        payload["reasoningEffort"] = json!(effort);
+    }
     let result = match Arc::clone(bridge)
         .request(PendingKind::Provider, &call_id, &payload, cancellation)
         .await

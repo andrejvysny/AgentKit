@@ -26,6 +26,7 @@ pub struct McpToolSet {
     aliases: BTreeMap<String, String>,
     client: Arc<dyn McpConnection>,
     read_only: bool,
+    model_capabilities: crate::ModelContentCapabilities,
 }
 impl McpToolSet {
     pub fn new(
@@ -40,6 +41,14 @@ impl McpToolSet {
     #[must_use]
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+    #[must_use]
+    pub fn with_model_content_capabilities(
+        mut self,
+        capabilities: crate::ModelContentCapabilities,
+    ) -> Self {
+        self.model_capabilities = capabilities;
         self
     }
     fn with_read_only_inner(
@@ -81,6 +90,7 @@ impl McpToolSet {
             aliases: normalized,
             client,
             read_only,
+            model_capabilities: crate::ModelContentCapabilities::default(),
         })
     }
     /// Validate the complete batch before returning any tool to a host registry.
@@ -205,6 +215,7 @@ impl McpToolSet {
             original: original.into(),
             alias: self.alias.clone(),
             binding,
+            model_capabilities: self.model_capabilities,
         })
     }
 }
@@ -218,6 +229,7 @@ struct RemoteTool {
     /// The connection this descriptor was listed from; dispatch is pinned to
     /// it. `None` only for a client that has no registrations at all.
     binding: Option<ToolBinding>,
+    model_capabilities: crate::ModelContentCapabilities,
 }
 #[async_trait]
 impl Tool for RemoteTool {
@@ -291,11 +303,22 @@ impl RemoteTool {
             }
         }
         let text = texts.join("\n");
+        let projected = crate::project_model_content(
+            &self.definition.capability,
+            &self.alias,
+            &self.original,
+            content.as_array().map(Vec::as_slice).unwrap_or_default(),
+            self.model_capabilities,
+        );
         let is_error = result.is_error == Some(true);
         let message = if is_error && text.is_empty() {
             format!("MCP tool {} reported an error.", self.definition.capability)
         } else {
-            text.clone()
+            if is_error {
+                text.clone()
+            } else {
+                projected.text.clone()
+            }
         };
         let (capped, truncated) = truncate(&message, context.limits.max_bytes);
         let mut data = json!({"canonicalId":self.definition.capability,"serverAlias":self.alias,"toolName":self.original,
@@ -313,8 +336,8 @@ impl RemoteTool {
             model["structured"] = structured;
         }
         let mut warnings = Vec::new();
-        if !is_error && !non_text.is_empty() {
-            warnings.push(format!("MCP tool returned non-text content ({}); only text parts were passed to the model.", non_text.join(", ")));
+        if !is_error && !projected.unsupported.is_empty() {
+            warnings.push(format!("MCP tool returned non-text content ({}); unsupported parts were not passed to the model.", projected.unsupported.join(", ")));
         }
         if !is_error && truncated {
             warnings.push(format!(
@@ -332,12 +355,13 @@ impl RemoteTool {
                 first_line(&message)
             }),
             status: (!is_error).then(|| "ok".into()),
-            sources: vec![],
+            sources: if is_error { vec![] } else { projected.sources },
             warnings,
             truncated,
             limits: context.limits,
 
-            model_content: None,
+            model_content: (!is_error && !projected.attachments.is_empty())
+                .then_some(projected.attachments),
         }
     }
     fn failure(&self, context: ToolContext, error: McpClientError) -> ToolResult {

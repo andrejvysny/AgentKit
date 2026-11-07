@@ -720,7 +720,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
                 type: "text";
                 text: string;
             } | {
-                detail?: "auto" | "low" | "high" | undefined;
+                detail?: "low" | "high" | "auto" | undefined;
                 type: "image";
                 source: {
                     kind: "url";
@@ -797,7 +797,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
                 type: "text";
                 text: string;
             } | {
-                detail?: "auto" | "low" | "high" | undefined;
+                detail?: "low" | "high" | "auto" | undefined;
                 type: "image";
                 source: {
                     kind: "url";
@@ -841,7 +841,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
             type: "text";
             text: string;
         } | {
-            detail?: "auto" | "low" | "high" | undefined;
+            detail?: "low" | "high" | "auto" | undefined;
             type: "image";
             source: {
                 kind: "url";
@@ -966,7 +966,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         warnings: string[];
         truncated: boolean;
         scopeKey: string;
-        risk: "medium" | "low" | "high" | "destructive";
+        risk: "low" | "medium" | "high" | "destructive";
     }[]>;
     approveProposal: (params: {
         proposalId: string;
@@ -1001,7 +1001,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         warnings: string[];
         truncated: boolean;
         scopeKey: string;
-        risk: "medium" | "low" | "high" | "destructive";
+        risk: "low" | "medium" | "high" | "destructive";
     }>;
     rejectProposal: (params: {
         proposalId: string;
@@ -1036,7 +1036,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         warnings: string[];
         truncated: boolean;
         scopeKey: string;
-        risk: "medium" | "low" | "high" | "destructive";
+        risk: "low" | "medium" | "high" | "destructive";
     }>;
     applyProposal: (params: {
         proposalId: string;
@@ -1071,7 +1071,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         warnings: string[];
         truncated: boolean;
         scopeKey: string;
-        risk: "medium" | "low" | "high" | "destructive";
+        risk: "low" | "medium" | "high" | "destructive";
     }>;
     listProviders: (opts?: RequestOptions) => Promise<{
         apiKeySecretRef?: string | undefined;
@@ -1139,7 +1139,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         metadata: {
             [x: string]: unknown;
         };
-        contextSizePreference: "small" | "medium" | "large";
+        contextSizePreference: "medium" | "small" | "large";
         writePolicyMode: "auto_readonly_confirm_writes" | "confirm_all_writes" | "auto_all";
         allowRawToolData: boolean;
     }>;
@@ -1151,7 +1151,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         metadata: {
             [x: string]: unknown;
         };
-        contextSizePreference: "small" | "medium" | "large";
+        contextSizePreference: "medium" | "small" | "large";
         writePolicyMode: "auto_readonly_confirm_writes" | "confirm_all_writes" | "auto_all";
         allowRawToolData: boolean;
     }>;
@@ -1163,7 +1163,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
             chatId: string;
             toolName: string;
             proposalKind: string;
-            maxRisk: "medium" | "low" | "high" | "destructive";
+            maxRisk: "low" | "medium" | "high" | "destructive";
             createdAt: string;
         }[];
     }>;
@@ -1174,7 +1174,7 @@ function createAgentKitClient(options: AgentKitClientOptions): {
         chatId: string;
         toolName: string;
         proposalKind: string;
-        maxRisk: "medium" | "low" | "high" | "destructive";
+        maxRisk: "low" | "medium" | "high" | "destructive";
         createdAt: string;
     }>;
     revokeAllowance: (params: {
@@ -1604,6 +1604,7 @@ id: TString;
 revision: TString;
 }>>>;
 }>>;
+reasoningEffort: TOptional<TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>>;
 model: TOptional<TString>;
 providerId: TOptional<TString>;
 metadata: TOptional<TRecord<TString, TUnknown>>;
@@ -1658,6 +1659,7 @@ id: TString;
 revision: TString;
 }>>>;
 }>>;
+reasoningEffort: TOptional<TUnion<[TLiteral<"minimal">, TLiteral<"low">, TLiteral<"medium">, TLiteral<"high">]>>;
 content: TUnion<[TString, TArray<TUnion<[TObject<    {
 type: TLiteral<"text">;
 text: TString;

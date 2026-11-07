@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseParitySummary } from "./qualification/parity-summary.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const directory =
@@ -44,24 +45,25 @@ for (const [name, implementation, issue] of suites) {
   });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   writeFileSync(join(directory, `${name}.log`), output);
-  const count = (kind) => {
-    const summary = output.match(new RegExp(`(?:^|\\n)\\s*(\\d+) ${kind}\\b`));
-    return summary
-      ? Number(summary[1])
-      : [...output.matchAll(new RegExp(`^\\(${kind}\\)`, "gm"))].length;
-  };
+  const summary = parseParitySummary(output);
+  // A lane killed by the per-suite timeout (e.g. spawnSync's 180 s cap
+  // under a loaded host) produces truncated output: its counts stay
+  // whatever the markers show, and `complete:false` plus `killed` tell the
+  // reader this lane proved nothing — never a pass, and never fabricated
+  // numbers either.
   const row = {
     name,
     implementation,
     workItem: `AGENTKIT-${issue}`,
     status: result.status,
-    pass: count("pass"),
-    fail: count("fail"),
-    skip: count("skip"),
-    todo: count("todo"),
+    pass: summary.pass,
+    fail: summary.fail,
+    skip: summary.skip,
+    todo: summary.todo,
     error: result.error?.message ?? null,
     signal: result.signal,
-    complete: /Ran \d+ tests? across/.test(output),
+    complete: summary.complete,
+    killed: result.signal != null || result.error != null,
   };
   results.push(row);
   console.log(JSON.stringify(row));

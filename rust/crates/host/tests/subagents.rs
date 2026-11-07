@@ -168,8 +168,10 @@ impl Harness {
             .create_session(&CreateSessionInput {
                 session_id: Some("parent".into()),
                 title: None,
-                profile_id: "p1".into(),
+                profile_id: "coding".into(),
                 profile_digest: None,
+                reasoning_effort: None,
+                content_selection: None,
                 provider_id: None,
                 model: Some("model".into()),
                 workspace: Some(json!({"root": workspace, "trusted": true})),
@@ -1169,8 +1171,10 @@ async fn unconfigured_custom_role_and_legacy_children_fail_closed_or_follow_conf
         .create_session(&CreateSessionInput {
             session_id: Some("legacy".into()),
             title: None,
-            profile_id: "agentkit.subagent".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -1242,8 +1246,10 @@ async fn writer_children_require_a_parent_workspace() {
         .create_session(&CreateSessionInput {
             session_id: Some("parent2".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -1335,8 +1341,10 @@ async fn restart_recovery_cancels_children_of_settled_parents() {
         .create_session(&CreateSessionInput {
             session_id: Some("parent".into()),
             title: None,
-            profile_id: "p1".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: None,
             workspace: None,
@@ -1451,6 +1459,8 @@ async fn enabled_delegation_guidance_reaches_every_session_turn() {
             title: None,
             profile_id: "chat".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -1642,7 +1652,7 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
         runtime: runtime.clone(),
         plan_approval: None,
         wake: None,
-    });
+    }).with_profiles(Arc::new(ProfileRegistry::new(&[json!({"id":"coding","tools":["subagent_spawn","subagent_await","subagent_list","subagent_message","subagent_terminate"]})]).unwrap()));
     let subagents = SubagentService::new(
         store.clone(),
         child_session,
@@ -1682,7 +1692,7 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
         runtime: runtime.clone(),
         plan_approval: None,
         wake: Some(host.wake_handle()),
-    });
+    }).with_profiles(Arc::new(ProfileRegistry::new(&[json!({"id":"coding","tools":["subagent_spawn","subagent_await","subagent_list","subagent_message","subagent_terminate"]})]).unwrap()));
     host.set_session_flush_planner(Arc::new(session.clone()))
         .await;
 
@@ -1693,8 +1703,10 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
             .create_session(&CreateSessionInput {
                 session_id: Some(name.into()),
                 title: None,
-                profile_id: "p1".into(),
+                profile_id: "coding".into(),
                 profile_digest: None,
+                reasoning_effort: None,
+                content_selection: None,
                 provider_id: None,
                 model: Some("model".into()),
                 workspace: Some(json!({
@@ -1925,8 +1937,10 @@ async fn spawn_adopts_a_child_chat_left_by_a_half_finished_create() {
         .create_session(&CreateSessionInput {
             session_id: Some(child_id.clone()),
             title: None,
-            profile_id: "agentkit.subagent".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: Some("model".into()),
             workspace: None,
@@ -1972,8 +1986,10 @@ async fn spawn_refuses_to_adopt_a_foreign_child_chat() {
         .create_session(&CreateSessionInput {
             session_id: Some(child_id.clone()),
             title: None,
-            profile_id: "agentkit.subagent".into(),
+            profile_id: "coding".into(),
             profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
             provider_id: None,
             model: None,
             workspace: None,

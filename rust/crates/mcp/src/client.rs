@@ -19,6 +19,8 @@ pub struct ClientOptions {
     pub request_timeout: Duration,
     pub max_tool_pages: usize,
     pub max_tools: usize,
+    pub elicitation: Option<std::sync::Arc<dyn crate::ElicitationHandler>>,
+    pub http_executor: Option<std::sync::Arc<dyn crate::McpHttpExecutor>>,
 }
 impl Default for ClientOptions {
     fn default() -> Self {
@@ -27,6 +29,8 @@ impl Default for ClientOptions {
             request_timeout: Duration::from_secs(5),
             max_tool_pages: 100,
             max_tools: 10_000,
+            elicitation: None,
+            http_executor: None,
         }
     }
 }
@@ -55,6 +59,10 @@ pub enum McpClientError {
     CircuitOpen,
     #[error("MCP secret reference is unavailable")]
     SecretMissing,
+    #[error("MCP OAuth authorization required")]
+    AuthRequired,
+    #[error("MCP remote account lacks permission")]
+    InvocationRefused,
     #[error("MCP reconnect attempts exhausted")]
     ReconnectExhausted,
     #[error("MCP dispatch authority revoked")]
@@ -79,6 +87,8 @@ impl McpClientError {
             Self::Configuration => "mcp_invalid_config",
             Self::CircuitOpen => "mcp_circuit_open",
             Self::SecretMissing => "mcp_secret_missing",
+            Self::AuthRequired => "mcp_auth_required",
+            Self::InvocationRefused => "mcp_invocation_refused",
             Self::ReconnectExhausted => "mcp_reconnect_exhausted",
             Self::Authority => "mcp_authority_revoked",
             Self::InvalidArguments => "mcp_invalid_arguments",
@@ -87,20 +97,54 @@ impl McpClientError {
     }
 }
 
-pub(crate) struct FrozenClient;
+pub(crate) struct FrozenClient {
+    options: ClientOptions,
+}
 impl ClientHandler for FrozenClient {
     fn get_info(&self) -> ClientConfig {
+        let mut capabilities = ClientCapabilities::default();
+        if self.options.elicitation.is_some() {
+            capabilities.elicitation = Some(
+                ElicitationCapability::new()
+                    .with_form(FormElicitationCapability::default())
+                    .with_url(UrlElicitationCapability::default()),
+            );
+        }
         ClientConfig::new(
-            ClientCapabilities::default(),
+            capabilities,
             Implementation::new("agentkit-mcp-client", "0.1.0"),
         )
         .with_protocol_version(ProtocolVersion::V_2025_11_25)
+    }
+    async fn create_elicitation(
+        &self,
+        params: ElicitRequestParams,
+        context: rmcp::service::RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
+        let Some(handler) = &self.options.elicitation else {
+            return Ok(ElicitResult::new(ElicitationAction::Decline));
+        };
+        let request = serde_json::to_value(params)
+            .map(|value| crate::json_boundary::restore(&value))
+            .map_err(|_| rmcp::ErrorData::invalid_params("Invalid MCP elicitation", None))?;
+        let cancellation = context.ct.child_token();
+        let _cancel_on_drop = cancellation.clone().drop_guard();
+        tokio::select! {
+            biased;
+            _ = context.ct.cancelled() => Ok(ElicitResult::new(ElicitationAction::Cancel)),
+            result = tokio::time::timeout(self.options.request_timeout,
+                handler.elicit(request.clone(), cancellation)) => {
+                let result = result.map_err(|_| rmcp::ErrorData::internal_error("MCP elicitation timed out", None))??;
+                crate::elicitation::validate_result(&request, result)
+            }
+        }
     }
 }
 
 pub struct McpClient {
     service: Mutex<Option<RunningService<RoleClient, FrozenClient>>>,
     options: ClientOptions,
+    http_wire_guard: bool,
 }
 
 impl McpClient {
@@ -118,11 +162,14 @@ impl McpClient {
             .kill_on_drop(true);
         let transport = crate::stdio_client::JsonChild::spawn(&mut command)
             .map_err(|_| McpClientError::Connect)?;
-        let service = tokio::time::timeout(options.connect_timeout, FrozenClient.serve(transport))
+        let handler = FrozenClient {
+            options: options.clone(),
+        };
+        let service = tokio::time::timeout(options.connect_timeout, handler.serve(transport))
             .await
             .map_err(|_| McpClientError::Timeout)?
             .map_err(|_| McpClientError::Connect)?;
-        Self::connected(service, options).await
+        Self::connected(service, options, false).await
     }
 
     pub async fn http(
@@ -139,6 +186,37 @@ impl McpClient {
         bearer_token: Option<&str>,
         headers: http::HeaderMap,
         options: ClientOptions,
+    ) -> Result<Self, McpClientError> {
+        Self::http_inner(endpoint, bearer_token, headers, options, None).await
+    }
+
+    /// Interactive authorization occurs only on explicit connection. Resource
+    /// requests may refresh credentials but never open a browser or replay a POST.
+    pub async fn http_with_oauth(
+        endpoint: &str,
+        headers: http::HeaderMap,
+        options: ClientOptions,
+        oauth: std::sync::Arc<crate::ManagedOAuthProvider>,
+    ) -> Result<Self, McpClientError> {
+        if url::Url::parse(endpoint)
+            .ok()
+            .as_ref()
+            .map(url::Url::as_str)
+            != Some(oauth.resource_url())
+            || headers.contains_key(http::header::AUTHORIZATION)
+        {
+            return Err(McpClientError::Configuration);
+        }
+        oauth.authorize().await?;
+        Self::http_inner(endpoint, None, headers, options, Some(oauth)).await
+    }
+
+    async fn http_inner(
+        endpoint: &str,
+        bearer_token: Option<&str>,
+        headers: http::HeaderMap,
+        options: ClientOptions,
+        oauth: Option<std::sync::Arc<crate::ManagedOAuthProvider>>,
     ) -> Result<Self, McpClientError> {
         validate_endpoint(endpoint)?;
         if bearer_token.is_some() && headers.contains_key(http::header::AUTHORIZATION)
@@ -174,19 +252,23 @@ impl McpClient {
             config = config.auth_header(token);
         }
         let transport = StreamableHttpClientTransport::with_client(
-            crate::http_client::JsonHttpClient(client),
+            crate::http_client::JsonHttpClient(client, oauth, options.http_executor.clone()),
             config,
         );
-        let service = tokio::time::timeout(options.connect_timeout, FrozenClient.serve(transport))
+        let handler = FrozenClient {
+            options: options.clone(),
+        };
+        let service = tokio::time::timeout(options.connect_timeout, handler.serve(transport))
             .await
             .map_err(|_| McpClientError::Timeout)?
             .map_err(|_| McpClientError::Connect)?;
-        Self::connected(service, options).await
+        Self::connected(service, options, true).await
     }
 
     async fn connected(
         mut service: RunningService<RoleClient, FrozenClient>,
         options: ClientOptions,
+        http_wire_guard: bool,
     ) -> Result<Self, McpClientError> {
         let valid = service.peer_info().is_some_and(|info| {
             crate::TS_PROTOCOL_VERSIONS.contains(&info.protocol_version.as_str())
@@ -198,6 +280,7 @@ impl McpClient {
         Ok(Self {
             service: Mutex::new(Some(service)),
             options,
+            http_wire_guard,
         })
     }
 
@@ -263,20 +346,50 @@ impl McpClient {
                 .as_object()
                 .cloned()
                 .expect("MCP arguments object");
-        crate::manager::check_dispatch(guard, &cancellation).await?;
-        let mut result = self
+        // HTTP must consult authority after its awaited OAuth token refresh.
+        // Stdio has no intervening network preparation, so it checks here.
+        if !self.http_wire_guard {
+            crate::manager::check_dispatch(guard.clone(), &cancellation).await?;
+        }
+        let wire_guard = crate::client_request::WireDispatch::new(guard, cancellation.clone());
+        let mut request = CallToolRequest::new(
+            CallToolRequestParams::new(name.to_owned()).with_arguments(arguments),
+        );
+        request.extensions.insert(wire_guard.clone());
+        let request = ClientRequest::CallToolRequest(request);
+        let pending = self
             .bounded(
-                // FOLLOW-UP: on timeout/cancel the request is only dropped
-                // locally; `notifications/cancelled` is not sent. rmcp's
-                // `Peer::call_tool` (which drives MRTR `input_required`
-                // rounds) does not expose the request id, and the cancellable
-                // path (`send_cancellable_request`) bypasses MRTR.
-                peer.call_tool(
-                    CallToolRequestParams::new(name.to_owned()).with_arguments(arguments),
+                peer.send_cancellable_request(
+                    request,
+                    rmcp::service::PeerRequestOptions::no_options(),
                 ),
                 &cancellation,
             )
             .await?;
+        let mut pending = crate::client_request::Pending::new(pending);
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(McpClientError::Cancelled),
+            result = tokio::time::timeout(self.options.request_timeout, &mut pending.handle().rx) => {
+                result.map_err(|_| McpClientError::Timeout)
+                    .and_then(|result| result.map_err(|_| McpClientError::Disconnected))
+                    .and_then(|result| result.map_err(classify_request))
+            }
+        };
+        if matches!(
+            result,
+            Err(McpClientError::Cancelled | McpClientError::Timeout)
+        ) {
+            pending.cancel().await;
+        } else {
+            pending.disarm();
+        }
+        if wire_guard.denied() {
+            return Err(McpClientError::Authority);
+        }
+        let ServerResult::CallToolResult(mut result) = result? else {
+            return Err(McpClientError::Request);
+        };
         result.map_json(crate::json_boundary::restore);
         Ok(result)
     }

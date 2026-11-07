@@ -99,7 +99,12 @@ transport versions: older servers without this frame fail closed with the new
 client. The frame is part of the coordinated, unpublished 0.6/0.7 candidates.
 Headless hooks also reconcile task status and final verification.
 Unknown cursors replay the retained log, with stable IDs and monotonic sequence
-numbers suppressing duplicates. Bounded client buffers may omit old events but
+numbers suppressing duplicates. The replay is announced, never silent: the
+response carries `x-agentkit-stream-resync: unknown_last_event_id` and the body
+opens with the `agentkit.stream.resync` control frame
+(`data: {"reason":"unknown_last_event_id"}`), which has no event ID or sequence
+and is not a durable run event, so a client can tell a full replay from a fresh
+stream. Bounded client buffers may omit old events but
 must not refold their replay as new progress.
 
 Unknown submission outcomes retain an immutable body and idempotency key across

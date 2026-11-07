@@ -31,7 +31,9 @@ import { join } from "node:path";
 // for exactly this comparison — no native path imports the retired pack.
 import descriptors from "./fixtures/coding-descriptors.json";
 import { NativeSessionService, NativeStore } from "../src/index.js";
+import type { NativeAgentProfile } from "../src/index.js";
 import { available } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 const nativeTest = available ? test : test.skip;
 
@@ -125,6 +127,7 @@ async function openNativeCoding(options: {
   script: Step[];
   codingMode: Mode;
   testCommands?: string[];
+  profiles?: readonly NativeAgentProfile[];
 }) {
   const provider = await serveProvider(options.script);
   const dir = mkdtempSync(join(tmpdir(), "agentkit-coding-native-"));
@@ -141,6 +144,9 @@ async function openNativeCoding(options: {
       connectionId,
       model: "loopback-model",
     },
+    // `profiles` is `undefined` for the scenarios that run on the
+    // built-in `coding` policy verbatim; `JSON.stringify` drops the key.
+    profiles: options.profiles,
   });
   await service.registerCodingTools({
     workspaceRoot: options.workspace,
@@ -402,6 +408,17 @@ nativeTest(
         { kind: "content", text: "done" },
       ],
       codingMode: "full_auto",
+      // The scenario proves the pack's write/read run for real with no
+      // approval step: mirror the built-in's kind, but allow-list exactly
+      // the two scripted pack tools and seed full_auto (the built-in
+      // `coding` seeds `ask`, which would park the write on an approval).
+      profiles: [
+        testProfile("coding", {
+          kind: "coding",
+          tools: ["write_file", "read_file"],
+          permissionMode: "full_auto",
+        }),
+      ],
     });
     try {
       const sent = await service.send(sessionId, { content: "write and read" });
@@ -454,6 +471,17 @@ nativeTest(
         { kind: "content", text: "green" },
       ],
       codingMode: "full_auto",
+      // The counter witness proves run_command executes WITHOUT asking:
+      // allow-list exactly the scripted command tool and seed full_auto
+      // (the built-in `coding` seeds `ask`, which would park the command
+      // before it ever spawned).
+      profiles: [
+        testProfile("coding", {
+          kind: "coding",
+          tools: ["run_command"],
+          permissionMode: "full_auto",
+        }),
+      ],
     });
     try {
       const sent = await service.send(sessionId, { content: "run the tests" });
@@ -680,6 +708,16 @@ nativeTest(
         { kind: "content", text: "unreachable" },
       ],
       codingMode: "full_auto",
+      // The process-group witness requires the command to actually spawn
+      // before the cancel: allow-list exactly the scripted command tool
+      // and seed full_auto so no approval gate precedes the spawn.
+      profiles: [
+        testProfile("coding", {
+          kind: "coding",
+          tools: ["run_command"],
+          permissionMode: "full_auto",
+        }),
+      ],
     });
     try {
       const sent = await service.send(sessionId, { content: "sleep please" });

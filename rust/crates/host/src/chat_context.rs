@@ -9,6 +9,27 @@ pub(crate) struct ContextBudget {
     pub(super) reserve: u64,
 }
 
+/// A native connection snapshot binds model metadata independently of live catalogs.
+fn frozen_provider_window(payload: &Value, model: &str) -> HostResult<Option<u64>> {
+    let snapshot = &payload["providerSnapshot"];
+    if snapshot["model"].as_str() != Some(model) {
+        return Ok(None);
+    }
+    let window = snapshot["connection"]["config"]["models"]
+        .as_array()
+        .and_then(|models| models.iter().find(|row| row["id"].as_str() == Some(model)))
+        .and_then(|row| row.get("context_window_tokens"))
+        .filter(|value| !value.is_null());
+    window
+        .map(|value| {
+            value
+                .as_u64()
+                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                .ok_or_else(|| HostError::Execution("invalid_provider_context_window".into()))
+        })
+        .transpose()
+}
+
 /// The chat's session descriptor with THIS turn's staged `sessionContext`
 /// snapshot overlaid — the single place the task payload is allowed to
 /// replace the live descriptor, shared by the budget and the context
@@ -20,11 +41,23 @@ pub(crate) async fn effective_session_descriptor(
     context: &ExecutionContext,
     chat_id: &str,
 ) -> HostResult<Option<Value>> {
-    let Some(chat) = context.store.get_chat(chat_id).await? else {
-        return Ok(None);
-    };
-    let Some(descriptor) = crate::session::read_session_descriptor(&chat.metadata) else {
-        return Ok(None);
+    if let Some(snapshot) = context.task.payload.get("sessionDescriptor") {
+        let metadata = json!({"agentkit.session": snapshot});
+        return crate::read_session_descriptor(&metadata)
+            .map(Some)
+            .ok_or_else(|| HostError::Execution("session_context_invalid".into()));
+    }
+    let descriptor = context
+        .store
+        .get_chat(chat_id)
+        .await?
+        .and_then(|chat| crate::read_session_descriptor(&chat.metadata));
+    let descriptor = match descriptor {
+        Some(descriptor) => descriptor,
+        None if context.task.payload.get("sessionContext").is_some() => {
+            json!({"version":1,"profile":{"id":"frozen"},"createdAt":"1970-01-01T00:00:00.000Z"})
+        }
+        None => return Ok(None),
     };
     crate::context_window::with_snapshot(descriptor, context.task.payload.get("sessionContext"))
         .map(Some)
@@ -41,7 +74,7 @@ pub(crate) struct ContextAssembly {
 
 /// The frozen session defaults (`turn-runner.ts`): the policy defaults to
 /// `transcript` — the native executor always replayed the active-path
-/// transcript — and tool-result elision is DEFAULT ON. A chat that is not a
+/// transcript — and tool-result elision is opt-in. A chat that is not a
 /// session assembles as it always did: full replay, no elision.
 pub(crate) async fn resolve_context_assembly(
     context: &ExecutionContext,
@@ -61,14 +94,9 @@ pub(crate) async fn resolve_context_assembly(
             // absent (or a non-session chat) is the frozen default.
             _ => super::history::HistoryPolicy::Transcript,
         },
-        elision: descriptor
-            .is_some()
-            .then(|| {
-                super::elision::resolve_tool_result_elision(
-                    options.and_then(|context| context.get("toolResultElision")),
-                )
-            })
-            .flatten(),
+        elision: options
+            .and_then(|context| context.get("toolResultElision"))
+            .and_then(|value| super::elision::resolve_tool_result_elision(Some(value))),
     })
 }
 
@@ -79,16 +107,30 @@ impl ContextBudget {
         provider: &str,
         model: &str,
     ) -> HostResult<Option<Self>> {
-        let Some(descriptor) = effective_session_descriptor(context, chat_id).await? else {
-            return Ok(None);
+        let descriptor = effective_session_descriptor(context, chat_id)
+            .await?
+            .unwrap_or_else(|| json!({}));
+        let (window, source) = if let Some(snapshot) =
+            context.task.payload.get("contextWindowTokens")
+        {
+            (
+                snapshot
+                    .as_u64()
+                    .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                    .ok_or_else(|| {
+                        HostError::Execution("invalid_context_window_snapshot".into())
+                    })?,
+                // A frozen per-turn override is part of the admitted descriptor authority.
+                "descriptor",
+            )
+        } else if descriptor["context"]["windowTokens"].as_u64().is_none()
+            && let Some(window) = frozen_provider_window(&context.task.payload, model)?
+        {
+            (window, "model")
+        } else {
+            crate::context_window::resolve(&context.store, &descriptor, Some(provider), Some(model))
+                .await?
         };
-        let (window, source) = crate::context_window::resolve(
-            &context.store,
-            &descriptor,
-            Some(provider),
-            Some(model),
-        )
-        .await?;
         let reserve = descriptor["context"]["reserveTokens"]
             .as_u64()
             .filter(|n| *n > 0)
@@ -116,7 +158,12 @@ impl ContextBudget {
                 "maxOutputTokens must be a positive safe integer.",
             ));
         }
-        let messages = input.messages.iter().map(message_tokens).sum::<u64>();
+        let messages = input
+            .selected_content
+            .iter()
+            .chain(input.messages.iter())
+            .map(message_tokens)
+            .sum::<u64>();
         let tools = if input.tools.is_empty() {
             0
         } else {
@@ -246,6 +293,72 @@ mod tests {
             event_gate: Arc::new(Mutex::new(())),
         };
         (store, context)
+    }
+
+    #[tokio::test]
+    async fn frozen_native_model_window_precedes_catalog_with_explicit_task_and_session_bounds() {
+        let (store, mut context) = fixture(session(None)).await;
+        store
+            .set_setting(
+                "http.provider-catalog",
+                "provider",
+                json!([{"modelId":"model","contextWindowTokens":32768}]),
+            )
+            .await
+            .unwrap();
+        context.task.payload = json!({"providerSnapshot":{"model":"model","connection":{"config":{"models":[{"id":"model","context_window_tokens":256}]}}}});
+        let budget = ContextBudget::resolve(&context, "chat", "provider", "model")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(budget.window, 256);
+        assert_eq!(budget.source, "model");
+        context.task.payload["sessionDescriptor"] =
+            session(Some(json!({"windowTokens":512})))["agentkit.session"].clone();
+        assert_eq!(
+            ContextBudget::resolve(&context, "chat", "provider", "model")
+                .await
+                .unwrap()
+                .unwrap()
+                .window,
+            512
+        );
+        context.task.payload["contextWindowTokens"] = json!(128);
+        assert_eq!(
+            ContextBudget::resolve(&context, "chat", "provider", "model")
+                .await
+                .unwrap()
+                .unwrap()
+                .window,
+            128
+        );
+    }
+
+    #[tokio::test]
+    async fn frozen_context_windows_emit_contract_valid_admission_events() {
+        let (_, mut context) = fixture(json!({})).await;
+        for (payload, expected) in [
+            (json!({"contextWindowTokens":256}), "descriptor"),
+            (
+                json!({"providerSnapshot":{"model":"model","connection":{"config":{"models":[{"id":"model","context_window_tokens":256}]}}}}),
+                "model",
+            ),
+        ] {
+            context.task.payload = payload;
+            let budget = ContextBudget::resolve(&context, "chat", "provider", "model")
+                .await
+                .unwrap()
+                .unwrap();
+            let data = budget
+                .admit(&mut ChatRequest::default(), "request".into(), true)
+                .unwrap();
+            let event = json!({"type":"run.context.admitted","runId":"run","timestamp":"2026-11-05T12:00:00.000Z","contractVersion":"0.7.0","eventId":"event","seq":0,"data":data});
+            let event: agentkit_contracts::AiRunEvent = serde_json::from_value(event)
+                .expect("the emitted admission event must satisfy the shared wire contract");
+            let roundtrip = serde_json::to_value(event).unwrap();
+            assert_eq!(roundtrip["data"]["windowSource"], expected);
+            assert_eq!(roundtrip["data"]["windowTokens"].as_f64(), Some(256.0));
+        }
     }
 
     fn session(context: Option<Value>) -> Value {
@@ -384,5 +497,51 @@ mod tests {
         request.max_output_tokens = Some(4);
         budget.admit(&mut request, "two".into(), false).unwrap();
         assert_eq!(request.max_output_tokens, Some(4));
+    }
+    #[test]
+    fn selected_content_tools_and_reply_reserve_share_the_exact_estimate_boundary() {
+        let mut request = ChatRequest { messages:vec![ChatMessage::text("user","abcd")],selected_content:vec![ChatMessage::text("system","skill")],tools:vec![serde_json::from_value(json!({"name":"t","version":"1","effect":"read","capability":"read","description":"","inputSchema":{}})).unwrap()],max_output_tokens:Some(99),..Default::default() };
+        // UTF-16/4 estimates: canonical 1, selection 2, tool schema 25, reply 8.
+        assert_eq!(serde_json::to_string(&request.tools).unwrap().len(), 98);
+        let budget = ContextBudget {
+            window: 36,
+            source: "descriptor",
+            reserve: 8,
+        };
+        assert!(budget.admit(&mut request, "fit".into(), true).is_ok());
+        assert_eq!(request.max_output_tokens, Some(8));
+        request.selected_content[0].content = "skillxxxx".into();
+        assert_eq!(
+            budget
+                .admit(&mut request, "over".into(), true)
+                .unwrap_err()
+                .code,
+            "context_overflow"
+        );
+        assert_eq!(request.messages[0].content, "abcd");
+        assert_eq!(request.selected_content[0].content, "skillxxxx");
+    }
+    #[tokio::test]
+    async fn admitted_context_survives_removed_live_session_metadata() {
+        for full_snapshot in [true, false] {
+            let metadata = session(Some(json!({"windowTokens":128,"reserveTokens":32})));
+            let (store, mut context) = fixture(metadata.clone()).await;
+            context.task.payload["sessionContext"] = json!({"windowTokens":128,"reserveTokens":32});
+            if full_snapshot {
+                context.task.payload["sessionDescriptor"] = metadata["agentkit.session"].clone();
+            }
+            store
+                .mutate_chat("chat", 1001, |chat| {
+                    chat.metadata = json!({});
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let budget = ContextBudget::resolve(&context, "chat", "provider", "model")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!((budget.window, budget.reserve), (128, 32));
+        }
     }
 }

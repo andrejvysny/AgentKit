@@ -2,7 +2,7 @@ use super::{
     chat_completions::usage_data,
     responses_request::{build_responses_request_with_warnings, make_continuation},
     responses_state::{ResponsesResult, ResponsesState},
-    transport::{dispatch, read_json},
+    transport::{dispatch, dispatch_guarded, read_json},
     AuthKind, ConnectionIdentity, TrustedTransport,
 };
 use crate::{sse::SseDecoder, ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream};
@@ -50,11 +50,12 @@ impl ResponsesProvider {
             if let Some(budget) = &input.budget {
                 budget.consume("providerRequests").await?;
             }
-            let response = dispatch(
+            let response = dispatch_guarded(
                 provider.transport.as_ref(),
                 &provider.identity,
                 "responses",
                 Some(body.clone()),
+                input.request_guard.clone(),
                 cancellation.clone(),
             )
             .await?;

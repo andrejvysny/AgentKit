@@ -51,26 +51,16 @@ impl DesktopBackend {
     }
 
     async fn submit_turn(&self, input: &OperationRequest) -> Result<OperationResponse, Problem> {
-        if input.body.get("contentSelection").is_some() {
-            return Err(optional(
-                "Native prompt templates and skills are not configured.",
-            ));
-        }
         if !self.host.supports("chat.turn") {
             return Err(Problem::host("executor_not_found", "chat.turn"));
         }
-        let settings = self
-            .host
-            .store()
-            .get_setting("http", "settings")
+        let store = self.host.store();
+        let chat_id = &input.params["chatId"];
+        let chat = store
+            .get_chat(chat_id)
             .await
             .map_err(store_error)?
-            .unwrap_or_else(|| json!({}));
-        let provider_id = input
-            .body
-            .get("providerId")
-            .and_then(Value::as_str)
-            .or_else(|| settings.get("defaultProviderId").and_then(Value::as_str));
+            .ok_or_else(|| missing("Chat", chat_id))?;
         let key = input.idempotency.as_ref().ok_or_else(|| {
             Problem::new(
                 400,
@@ -78,8 +68,6 @@ impl DesktopBackend {
                 "Idempotency-Key is required.",
             )
         })?;
-        let store = self.host.store();
-        let chat_id = &input.params["chatId"];
         if store
             .get_chat(chat_id)
             .await
@@ -91,8 +79,55 @@ impl DesktopBackend {
         if let Some(existing) = store.get_task(&key.task_id).await.map_err(store_error)? {
             return replay(self.host.store(), existing, input).await;
         }
+        let descriptor = crate::read_session_descriptor(&chat.metadata);
+        if descriptor.is_none()
+            && (self.session_profile.is_some()
+                || chat
+                    .metadata
+                    .get(agentkit_store::SESSION_METADATA_KEY)
+                    .is_some())
+        {
+            return Err(Problem::new(
+                400,
+                "session_required",
+                "A valid host-owned session descriptor is required.",
+            ));
+        }
+        let session_config = if descriptor.is_some() {
+            let service = crate::AgentSessionService::new(crate::AgentSessionServiceDeps {
+                store: store.clone(),
+                runtime: self.host.runtime().clone(),
+                plan_approval: None,
+                wake: None,
+            })
+            .with_profiles(self.profiles.clone());
+            let service = match &self.content_authority {
+                Some(authority) => service.with_content_authority(authority.clone()),
+                None => service,
+            };
+            service
+                .snapshot_turn_configuration(chat_id)
+                .await
+                .map_err(|e| Problem::new(400, "invalid_request", e.to_string()))?
+        } else {
+            json!({})
+        };
+        let settings = self
+            .host
+            .store()
+            .get_setting("http", "settings")
+            .await
+            .map_err(store_error)?
+            .unwrap_or_else(|| json!({}));
+        let provider_id = input
+            .body
+            .get("providerId")
+            .and_then(Value::as_str)
+            .or_else(|| session_config.get("providerId").and_then(Value::as_str))
+            .or_else(|| settings.get("defaultProviderId").and_then(Value::as_str));
         let dynamic = self.host.resolves_provider_snapshots();
         if !dynamic
+            && self.provider_factory.is_none()
             && let Some(provider) = provider_id
             && self.pinned_provider_id.as_deref() != Some(provider)
         {
@@ -148,9 +183,38 @@ impl DesktopBackend {
         };
         let assistant_id = format!("{}_assistant", key.task_id);
         let model = string(&input.body, "model")
+            .or_else(|| string(&session_config, "model"))
             .or_else(|| string(&settings, "defaultModel"))
             .unwrap_or_else(|| self.default_model.clone());
-        let provider_snapshot = if dynamic {
+        let provider_snapshot = if let Some(factory) = &self.provider_factory {
+            match provider_id {
+                Some(provider_id) => {
+                    let cancel = agentkit_core::CancellationToken::new();
+                    let _cancel_on_drop = cancel.clone().drop_guard();
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        factory.snapshot(provider_id, &model, cancel),
+                    )
+                    .await
+                    .map_err(|_| {
+                        Problem::new(
+                            504,
+                            "provider_snapshot_timeout",
+                            "Provider snapshot authority did not answer.",
+                        )
+                    })?
+                    .map_err(|error| match &error {
+                        HostError::Execution(code) if code == "unknown_provider" => Problem::new(
+                            400,
+                            "provider_not_bound",
+                            "Requested provider is not bound to this host executor.",
+                        ),
+                        _ => host_error(error),
+                    })?
+                }
+                None => None,
+            }
+        } else if dynamic {
             let id = provider_id.ok_or_else(|| {
                 Problem::new(
                     400,
@@ -176,14 +240,59 @@ impl DesktopBackend {
         } else {
             None
         };
+        let selection = input
+            .body
+            .get("contentSelection")
+            .map(|selection| {
+                let mut selected: crate::RunContentSelection =
+                    serde_json::from_value(selection.clone()).map_err(|e| {
+                        Problem::new(
+                            400,
+                            "invalid_request",
+                            format!("Invalid content selection: {e}"),
+                        )
+                    })?;
+                if let Some(base) = session_config.get("contentSelection") {
+                    let base: crate::RunContentSelection = serde_json::from_value(base.clone())
+                        .map_err(|e| Problem::host("invalid_content_selection", e.to_string()))?;
+                    for skill in base.skills {
+                        if !selected.skills.iter().any(|s| s.id == skill.id) {
+                            selected.skills.push(skill);
+                        }
+                    }
+                }
+                serde_json::to_value(selected)
+                    .map_err(|e| Problem::host("invalid_content_selection", e.to_string()))
+            })
+            .transpose()?;
+        let content_snapshot = match &selection {
+            Some(selection) => Some(
+                crate::run_content::freeze_run_content(
+                    store,
+                    selection.clone(),
+                    chat_id,
+                    self.content_authority.as_ref(),
+                )
+                .await
+                .map_err(host_error)?,
+            ),
+            None => None,
+        };
         let metadata = input.body.get("metadata").cloned().unwrap_or(json!({}));
-        let task = SubmitTask {
+        let reasoning_effort: Option<agentkit_core::ReasoningEffort> = input
+            .body
+            .get("reasoningEffort")
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|_| Problem::new(400, "invalid_request", "Invalid reasoningEffort."))?;
+        let mut task = SubmitTask {
             task_id: key.task_id.clone(),
             kind: "chat.turn".into(),
             scope_id: chat_id.clone(),
             payload: json!({"chatId":chat_id,"model":model,"providerId":provider_id,
                 "userMessageId":user_id,"assistantMessageId":assistant_id,"httpRequest":input.body,
-                "httpOperation":input.operation,"httpFingerprint":key.fingerprint,"httpTargetMessageId":input.params.get("messageId"),"providerSnapshot":provider_snapshot}),
+                "httpOperation":input.operation,"httpFingerprint":key.fingerprint,"httpTargetMessageId":input.params.get("messageId"),"providerSnapshot":provider_snapshot,"contentSnapshot":content_snapshot,"contentSelection":selection,"reasoningEffort":input.body.get("reasoningEffort")}),
             priority: 0,
             now: self.host.runtime().now_ms(),
             available_at: None,
@@ -191,6 +300,24 @@ impl DesktopBackend {
             parent_task_id: None,
             exclusive_scope: true,
         };
+        let mut payload = session_config.as_object().cloned().unwrap_or_default();
+        payload.extend(task.payload.as_object().expect("turn payload").clone());
+        if content_snapshot.is_none() {
+            for key in ["contentSnapshot", "contentSelection"] {
+                if let Some(value) = session_config.get(key) {
+                    payload.insert(key.into(), value.clone());
+                }
+            }
+        }
+        if let Some(effort) = reasoning_effort {
+            payload.insert(
+                "reasoningEffort".into(),
+                serde_json::to_value(effort).expect("effort"),
+            );
+        } else if let Some(value) = session_config.get("reasoningEffort") {
+            payload.insert("reasoningEffort".into(), value.clone());
+        }
+        task.payload = Value::Object(payload);
         let mut messages = Vec::new();
         if !regenerate {
             messages.push(MessageInput {

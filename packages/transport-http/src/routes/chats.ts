@@ -225,6 +225,9 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
     ...(validated.value.contentSelection === undefined
       ? {}
       : { contentSelection: validated.value.contentSelection }),
+    ...(validated.value.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: validated.value.reasoningEffort }),
     ...(validated.value.model === undefined
       ? {}
       : { model: validated.value.model }),
@@ -275,6 +278,7 @@ async function submitReplayMismatch(
     model: request.model ?? null,
     providerId: request.providerId ?? null,
     contentSelection: request.contentSelection ?? null,
+    reasoningEffort: request.reasoningEffort ?? null,
     parentMessageId:
       parentMessageId === undefined
         ? { append: true }
@@ -286,6 +290,7 @@ async function submitReplayMismatch(
     model: payload["model"] ?? null,
     providerId: payload["providerId"] ?? null,
     contentSelection: payload["contentSelection"] ?? null,
+    reasoningEffort: payload["reasoningEffort"] ?? null,
     parentMessageId:
       "parentMessageId" in payload
         ? { parent: payload["parentMessageId"] }
@@ -302,8 +307,9 @@ async function submitReplayMismatch(
  *
  * Its TARGET is already inside the derived task id (`deriveRegenerateTaskId`
  * hashes the message id), so two regenerates of two different answers can never
- * reach this path at all. What is left is `model` and `providerId`, both of
- * which the task payload records. `metadata` is not compared: the host merges
+ * reach this path at all. What is left is `model`, `providerId` and
+ * `reasoningEffort`, all three of which the task payload records. `metadata` is
+ * not compared: the host merges
  * it into the placeholder's own metadata bag alongside the `placeholder` flag,
  * and unmerging that to recover what the caller sent would be guessing.
  */
@@ -318,11 +324,13 @@ async function regenerateReplayMismatch(
     model: request.model ?? null,
     providerId: request.providerId ?? null,
     contentSelection: request.contentSelection ?? null,
+    reasoningEffort: request.reasoningEffort ?? null,
   });
   const recorded = await turnFingerprint({
     model: payload["model"] ?? null,
     providerId: payload["providerId"] ?? null,
     contentSelection: payload["contentSelection"] ?? null,
+    reasoningEffort: payload["reasoningEffort"] ?? null,
   });
   return asked === recorded ? null : keyMismatch(ctx);
 }
@@ -462,6 +470,9 @@ export async function regenerateMessage(ctx: RouteContext): Promise<Response> {
     ...(validated.value.contentSelection === undefined
       ? {}
       : { contentSelection: validated.value.contentSelection }),
+    ...(validated.value.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: validated.value.reasoningEffort }),
     ...(validated.value.model === undefined
       ? {}
       : { model: validated.value.model }),

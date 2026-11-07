@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { available, missing, required } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 import type {
   CreateSessionInputJson,
   NativeAgentError,
@@ -134,7 +135,14 @@ suite(
   "in-memory store runs a full chat turn through JS provider and JS tool",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // The turn stages exactly one tool — the JS `echo` registered below —
+      // and it is a read, so read_only is the tightest policy that still
+      // lets the scenario run it.
+      profiles: [
+        testProfile("p1", { tools: ["echo"], permissionMode: "read_only" }),
+      ],
+    });
     try {
       const providerCalls: ProviderRequest[] = [];
       service.setProvider((request) => {
@@ -246,7 +254,10 @@ suite(
       expect(secondError).toBeInstanceOf(NativeAgentErrorCtor);
       expect(codeOf(secondError)).toBe("already_owned");
       // Create a session, then close everything and reopen from disk.
-      const service = await first.createService();
+      const service = await first.createService({
+        // Only a session row is written and re-read; no tool is ever staged.
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
+      });
       await service.createSession({
         sessionId: "s-persist",
         profileId: "p1",
@@ -324,7 +335,10 @@ suite(
   "a provider that rejects fails the turn instead of faking success",
   async () => {
     const store = await NativeStoreCtor.inMemory();
-    const service = await store.createService();
+    const service = await store.createService({
+      // The provider throws before any tool could be staged; no tools.
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     try {
       service.setProvider(() => {
         throw new Error("provider exploded");

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { NativeStore, bindingId } from "../src/index.js";
 import { waitFor } from "../src/management.js";
 import { available, missing, required } from "./helpers/binding.js";
+import { testProfile } from "./helpers/profiles.js";
 
 if (required && !available)
   throw new Error(`native binding missing: ${missing.join(", ")}`);
@@ -59,7 +60,11 @@ nativeTest(
     const path = join(directory, "state.sqlite");
     try {
       let store = await NativeStore.open(path);
-      let service = await store.createService();
+      // Management surface only: the session is created, reconfigured and
+      // re-read; no provider call ever stages a tool.
+      let service = await store.createService({
+        profiles: [testProfile("p1", { permissionMode: "read_only" })],
+      });
       await service.createSession({
         sessionId: "s1",
         profileId: "p1",
@@ -116,7 +121,11 @@ nativeTest(
   "manual compaction runs before the next ordinary provider call",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    // Compaction and answers are plain provider calls; the stub never
+    // emits a tool call, so the profile stages nothing.
+    const service = await store.createService({
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     const requests: string[] = [];
     service.setProvider(async (request) => {
       const text = JSON.stringify(request.messages);
@@ -165,7 +174,11 @@ nativeTest(
   "queued inputs can be cancelled and cleared while a turn is active",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    // Queue control only: the parked provider never emits a tool call,
+    // so the profile stages nothing.
+    const service = await store.createService({
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     let release!: () => void;
     let entered!: () => void;
     const waiting = new Promise<void>((resolve) => {
@@ -222,7 +235,11 @@ nativeTest(
   "archive, unarchive, and delete drive the chat lifecycle through the store engine",
   async () => {
     const store = await NativeStore.inMemory();
-    const service = await store.createService();
+    // Lifecycle only: the stub provider always stops with content, so no
+    // tool is ever staged.
+    const service = await store.createService({
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
     try {
       service.setProvider(async () => ({
         content: "answer",

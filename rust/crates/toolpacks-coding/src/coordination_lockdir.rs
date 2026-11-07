@@ -315,14 +315,185 @@ enum Reclaimed {
     Contended(LockRecord),
 }
 
+/// Exclusive advisory `flock` on a per-lock-file `.flock` guard sidecar
+/// (AGENTKIT-74). Reclaim (rename → verify → restore) and creation
+/// (`hard_link`) rendezvous on the same guard, so taking a stale lock out
+/// of the way can no longer briefly free the name for a creation that
+/// strands the verified-live lock in its tombstone — the window
+/// [`reclaim`]'s comment used to call unclosable without "an `flock`-style
+/// lock held on the file itself". While a rename sequence holds the guard,
+/// `try_create` waits, and the restore always finds the name it expects.
+/// Nothing nests inside a guard (reclaim never creates; creation never
+/// reclaims), so no lock-ordering cycle exists. The guard file is durable
+/// infrastructure — unlinking it re-opens exactly the race it closes — and
+/// test directory listings filter the `.flock` suffix accordingly. Windows
+/// has no `flock(2)`; the module's fail-closed Windows policy already means
+/// a lock owner is never declared dead there, so `reclaim` never runs and
+/// the guard is a no-op.
+struct ReclaimGuard {
+    #[cfg(unix)]
+    file: std::os::fd::OwnedFd,
+}
+
+impl ReclaimGuard {
+    fn acquire(path: &str) -> Result<Self, CodingError> {
+        Self::lock(path, libc::LOCK_EX)
+    }
+
+    /// Non-blocking variant for best-effort sweeps: `None` when an active
+    /// reclaim/creation holds the guard — the sweep skips and the next
+    /// acquisition retries; correctness never depends on it sweeping.
+    fn try_acquire(path: &str) -> Option<Self> {
+        // SAFETY: `lock` only calls `flock(2)` with the given flag bits.
+        Self::lock(path, libc::LOCK_EX | libc::LOCK_NB).ok()
+    }
+
+    fn lock(path: &str, flags: i32) -> Result<Self, CodingError> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::{FromRawFd, IntoRawFd};
+            use std::os::unix::fs::OpenOptionsExt;
+            let guard = format!("{path}.flock");
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(&guard)
+                .map_err(|error| io_error(&error))?;
+            let fd = file.into_raw_fd();
+            // SAFETY: `fd` is the valid descriptor just opened; `flock(2)`
+            // only needs the descriptor. LOCK_EX blocks until the previous
+            // holder releases; LOCK_NB makes contention an immediate error.
+            // On failure the descriptor is closed.
+            let locked = unsafe { libc::flock(fd, flags) };
+            if locked != 0 {
+                let error = std::io::Error::last_os_error();
+                // SAFETY: ownership returns to the runtime for closing.
+                unsafe { drop(std::fs::File::from_raw_fd(fd)) };
+                return Err(io_error(&error));
+            }
+            // SAFETY: ownership of the locked descriptor transfers to the
+            // OwnedFd; Drop unlocks before close.
+            Ok(Self {
+                file: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) },
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, flags);
+            Ok(Self {})
+        }
+    }
+}
+
+impl Drop for ReclaimGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: the descriptor is ours; LOCK_UN is the documented
+            // release for a held LOCK_EX.
+            unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
+/// Test seam for the rename window (AGENTKIT-74): runs synchronously
+/// between the judged-stale rename and the verify, while the guard is
+/// held. Receives the lock path so a test can watch exactly one file.
+#[cfg(test)]
+type ReclaimHook = Arc<dyn Fn(&str) + Send + Sync>;
+#[cfg(test)]
+static RECLAIM_WINDOW_HOOK: LazyLock<Mutex<Option<ReclaimHook>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+fn enter_reclaim_window(path: &str) {
+    let hook = RECLAIM_WINDOW_HOOK.lock().expect("reclaim hook");
+    if let Some(hook) = hook.as_ref() {
+        (*hook)(path);
+    }
+}
+
+#[cfg(not(test))]
+#[inline]
+fn enter_reclaim_window(_path: &str) {}
+
+/// Grace window before a tombstone becomes sweep-eligible: fresh
+/// tombstones belong to a reclaim that may still be resolving, and the
+/// window also gives an operator a look before litter disappears.
+const TOMBSTONE_GRACE_MS: i64 = 60 * 60 * 1_000;
+
+/// AGENTKIT-74 cleanup sweep for tombstone litter. A reclaim whose
+/// restore lost the link race reports `Contended` and deliberately keeps
+/// the displaced record in its `.stale-*` tombstone for an operator —
+/// but nothing ever revisited those files, so a crashed owner's evidence
+/// outlived its owner forever. The sweep removes tombstones that are
+/// (a) past a grace window and (b) provably not evidence any more:
+/// unparseable, already gone, or recording a pid that is dead. A
+/// tombstone whose owner pid is alive stays (its holder may still be
+/// contending the name), and every candidate rendezvouses on the
+/// ORIGINAL lock's [`ReclaimGuard`] flock — the same rendezvous
+/// [`reclaim`] holds across rename→verify→restore — so a tombstone under
+/// active verification is never swept underneath its reclaim.
+fn sweep_tombstones_sync(dir: &str, min_age_ms: i64) -> Vec<String> {
+    let mut swept = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return swept;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some((stem, _nonce)) = name.split_once(".stale-") else {
+            continue;
+        };
+        let tomb = format!("{dir}/{name}");
+        let path = format!("{dir}/{stem}");
+        let age_ms = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .map_or(0, |age| age.as_millis() as i64);
+        if age_ms < min_age_ms {
+            continue;
+        }
+        // Rendezvous with any in-flight reclaim for this lock name —
+        // non-blocking: while reclaim verifies its displaced record the
+        // sweep skips this candidate (hygiene, never correctness).
+        let Some(_guard) = ReclaimGuard::try_acquire(&path) else {
+            continue;
+        };
+        let evidence_of_live_owner = match read_record_sync(&tomb) {
+            Ok(Read::Record(record)) => pid_alive(record.pid),
+            Ok(Read::Corrupt) | Ok(Read::Gone) => false,
+            Err(_) => continue,
+        };
+        if evidence_of_live_owner || remove_sync(&tomb).is_err() {
+            continue;
+        }
+        swept.push(tomb);
+    }
+    swept
+}
+
+/// Lock-dir hygiene, never correctness: every failure mode (unreadable
+/// directory, a tombstone removed elsewhere) is a silent no-op.
+async fn sweep_tombstones(dir: String, min_age_ms: i64) {
+    let _ = blocking(move || Ok::<_, CodingError>(sweep_tombstones_sync(&dir, min_age_ms))).await;
+}
+
 /// Take a stale (or corrupt) lock out of the way.
 ///
-/// Known limitation: judging staleness (read + `kill(pid, 0)`) and moving the
-/// file (`rename`) are separate steps, so a stale lock can be replaced by a
-/// fresh live one in between. The rename-then-verify below detects that and
-/// links the displaced lock back, but the window in which the name is briefly
-/// free cannot be closed without an `flock`-style lock held on the file
-/// itself.
+/// AGENTKIT-74 closed the historic rename window: the whole
+/// rename → re-read → unlink-or-restore sequence runs under the file's
+/// [`ReclaimGuard`] `flock`, and `try_create` takes the same guard for its
+/// link, so a live lock can neither be displaced mid-rename nor have its
+/// name taken while it waits to be restored. Judging staleness still
+/// happens before the guard (a lock judged from a stale read is detected
+/// and restored by the verify below), but detection can no longer lose the
+/// lock.
 async fn reclaim(
     path: &str,
     judged: &Judged,
@@ -331,9 +502,10 @@ async fn reclaim(
     // rename -> re-read -> unlink-or-restore is ONE synchronous closure on
     // the blocking pool: a spawned blocking task runs to completion even if
     // this future is dropped, so cancellation cannot strand a live lock in a
-    // tombstone.
+    // tombstone. The guard is held for the whole sequence.
     let (path, judged, on_error) = (path.to_owned(), judged.clone(), Arc::clone(on_error));
     blocking(move || {
+        let _guard = ReclaimGuard::acquire(&path)?;
         let tomb = format!("{path}.stale-{}", uuid::Uuid::new_v4());
         if let Err(error) = std::fs::rename(&path, &tomb) {
             if is_not_found(&error) {
@@ -341,6 +513,7 @@ async fn reclaim(
             }
             return Err(io_error(&error));
         }
+        enter_reclaim_window(&path);
         verify_displaced_sync(&path, &tomb, &judged, &on_error)
     })
     .await
@@ -573,13 +746,19 @@ async fn try_create(
     }
     .await;
     written?;
-    let result = match std::fs::hard_link(&temp, path) {
-        Ok(()) => {
-            locks.push(path.to_owned());
-            Ok(true)
+    let result = {
+        // AGENTKIT-74: creation rendezvouses with reclaim on the per-file
+        // guard, so a rename-verify-restore in flight can neither displace
+        // this link nor be displaced by it.
+        let _guard = ReclaimGuard::acquire(path)?;
+        match std::fs::hard_link(&temp, path) {
+            Ok(()) => {
+                locks.push(path.to_owned());
+                Ok(true)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(io_error(&error)),
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(error) => Err(io_error(&error)),
     };
     // After a successful link the lock is ours; a failed unlink is only litter.
     match remove(&temp).await {
@@ -1283,6 +1462,10 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         // recorded in this workspace's lock directory are reconciled — an
         // unreconciled live process group keeps the root quarantined.
         crate::process::startup_recovery().await;
+        // AGENTKIT-74 hygiene: tombstones a contended reclaim left behind
+        // for an operator are swept once their recorded owner is gone
+        // (bounded by the grace window); live-owner evidence always stays.
+        sweep_tombstones(self.dir.clone(), TOMBSTONE_GRACE_MS).await;
         self.reconcile_execution_intents(&input.root).await?;
         self.await_clear(&input.root, &input.cancellation, input.max_wait_ms)
             .await?;
@@ -1685,6 +1868,9 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
             })
+            // The `.flock` guard sidecars (AGENTKIT-74) are durable
+            // infrastructure, not lock records: they persist by design.
+            .filter(|name: &String| !name.ends_with(".flock"))
             .collect();
         names.sort();
         names
@@ -3225,5 +3411,194 @@ mod tests {
             .await
             .expect_err("blocked");
         assert!(error.message.contains("driver_panic"), "{error}");
+    }
+
+    // ---- AGENTKIT-74: the reclaim rename window is closed by flock ----
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn creation_waits_out_the_reclaim_rename_window() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // Regression: while reclaim renames a lock out of the way, the name
+        // must not be creatable. Pre-fix, a fresh `hard_link` could win the
+        // name inside the window, so the verified-live lock could not be
+        // linked back and BOTH holders believed they owned the workspace
+        // (the `Contended` outcome). Reclaim and creation now rendezvous on
+        // the per-file `flock` guard: the creator waits, the restore always
+        // finds the name, and exactly one live lock survives.
+        let dir = temp_dir("flock-window");
+        let on_error: OnError = Arc::new(|_| {});
+        let dead = dead_pid().await;
+        let path = format!("{dir}/exclusive.lock");
+        // The file on disk is a LIVE keeper lock; the caller judged a
+        // DIFFERENT (stale, dead-pid) record — the pre-rename race.
+        let keeper = record(i64::from(std::process::id()), "keeper-tool", "keeper");
+        std::fs::write(&path, Value::Object(keeper).to_string()).expect("seed keeper");
+        let mut stale = record(dead, "old-tool", "old");
+        stale.insert("runId".to_owned(), Value::from("stale-run"));
+        let judged = Judged::Record(Box::new(LockRecord {
+            pid: dead,
+            process_start: None,
+            tool: "old-tool".to_owned(),
+            label: "old".to_owned(),
+            chat_id: None,
+            run_id: Some("stale-run".to_owned()),
+            tool_call_id: None,
+            execution_id: None,
+        }));
+        let entered = Arc::new(AtomicBool::new(false));
+        let proceed = Arc::new(AtomicBool::new(false));
+        // Release the parked reclaim on EVERY exit path: a failing assertion
+        // below must not unwind through `block_on` while the spawned reclaim
+        // still spins (the runtime drop would join it forever).
+        struct WindowRelease(Arc<AtomicBool>);
+        impl Drop for WindowRelease {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+                *RECLAIM_WINDOW_HOOK.lock().expect("hook") = None;
+            }
+        }
+        let _release = WindowRelease(Arc::clone(&proceed));
+        {
+            let (entered, proceed, watched) =
+                (Arc::clone(&entered), Arc::clone(&proceed), path.clone());
+            *RECLAIM_WINDOW_HOOK.lock().expect("hook") = Some(Arc::new(move |seen: &str| {
+                if seen != watched {
+                    return;
+                }
+                entered.store(true, Ordering::SeqCst);
+                while !proceed.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }));
+        }
+        let (path_a, judged_a, errors_a) = (path.clone(), judged.clone(), Arc::clone(&on_error));
+        let reclaim_job = tokio::spawn(async move { reclaim(&path_a, &judged_a, &errors_a).await });
+        while !entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        // A second acquirer races the window: with the guard in place it
+        // cannot complete its link while the rename-verify sequence is in
+        // flight.
+        let created = Arc::new(AtomicBool::new(false));
+        let created_flag = Arc::clone(&created);
+        let (path_b, dir_b, errors_b) = (path.clone(), dir.clone(), Arc::clone(&on_error));
+        let creator = tokio::spawn(async move {
+            let mut locks = PendingLocks::new(&errors_b);
+            let result = try_create(
+                &dir_b,
+                &path_b,
+                &holder("new-run", "new-tool", "new"),
+                None,
+                &errors_b,
+                &mut locks,
+            )
+            .await?;
+            created_flag.store(true, Ordering::SeqCst);
+            // Hand the link off; the test inspects the directory itself.
+            Ok::<_, CodingError>((result, locks.consume()))
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !created.load(Ordering::SeqCst),
+            "try_create completed inside the reclaim rename window: the restored \
+             live lock and this new lock would coexist as two holders"
+        );
+        proceed.store(true, Ordering::SeqCst);
+        let reclaimed = reclaim_job.await.expect("reclaim task").expect("reclaim");
+        assert!(
+            matches!(reclaimed, Reclaimed::Live(_)),
+            "the displaced live lock must be detected and restored"
+        );
+        let (created_result, _held) = creator.await.expect("creator task").expect("create");
+        assert!(
+            !created_result,
+            "the restored live lock must still own the name; the creator must be refused"
+        );
+        let body: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("lock")).expect("json");
+        assert_eq!(
+            body["tool"],
+            Value::from("keeper-tool"),
+            "keeper lock restored"
+        );
+        assert_eq!(
+            entries(&dir),
+            vec!["exclusive.lock".to_owned()],
+            "no tombstone litter"
+        );
+        *RECLAIM_WINDOW_HOOK.lock().expect("hook") = None;
+    }
+
+    #[tokio::test]
+    async fn reclaim_tombstone_litter_is_swept_and_live_evidence_survives() {
+        // AGENTKIT-74 cleanup sweep: `.stale-*` tombstones whose recorded
+        // owner has since died (or that never parsed) are litter and must
+        // be swept; a tombstone naming a live pid is operator evidence of
+        // a still-contended lock and must stay; and a tombstone whose
+        // reclaim is in flight (guard held) must never be swept under it.
+        let dir = temp_dir("tomb-sweep");
+        let path = format!("{dir}/exclusive.lock");
+        // A pid that can never be alive (far above any pid_max) and can
+        // never be recycled by a concurrent test's spawn.
+        let dead = 2_000_000_001_i64;
+        let write_tomb = |nonce: &str, body: String| {
+            let tomb = format!("{path}.stale-{nonce}");
+            std::fs::write(&tomb, body).expect("tomb");
+            tomb
+        };
+        let gone = write_tomb(
+            "dead",
+            Value::Object(record(dead, "old-tool", "old")).to_string(),
+        );
+        let litter = write_tomb("broken", "not json".to_owned());
+        let live = write_tomb(
+            "alive",
+            Value::Object(record(i64::from(std::process::id()), "holder", "h")).to_string(),
+        );
+        let in_flight = write_tomb(
+            "inflight",
+            Value::Object(record(i64::from(std::process::id()), "racing", "r")).to_string(),
+        );
+        // Simulate a reclaim mid-verify on this lock name: the sweep must
+        // rendezvous on the guard and leave the candidate alone.
+        let guard = ReclaimGuard::acquire(&path).expect("guard");
+        assert_eq!(
+            sweep_tombstones_sync(&dir, 0),
+            Vec::<String>::new(),
+            "no sweep while a reclaim holds the lock's guard"
+        );
+        drop(guard);
+        // Grace window: nothing is eligible before it lapses.
+        assert!(
+            sweep_tombstones_sync(&dir, i64::MAX / 2).is_empty(),
+            "grace"
+        );
+        let swept = sweep_tombstones_sync(&dir, 0);
+        assert_eq!(
+            swept.len(),
+            2,
+            "dead-owner and unparseable tombstones swept: {swept:?}"
+        );
+        assert!(!std::path::Path::new(&gone).exists() && !std::path::Path::new(&litter).exists());
+        assert!(
+            std::path::Path::new(&live).exists(),
+            "a tombstone naming a live pid is evidence and stays"
+        );
+        assert!(
+            std::path::Path::new(&in_flight).exists(),
+            "swept after the guard released: it should have been removed"
+        );
+        // The sweep removed its candidates but never the live evidence;
+        // a second sweep is a no-op (idempotent hygiene).
+        assert!(sweep_tombstones_sync(&dir, 0).is_empty(), "idempotent");
+        assert_eq!(
+            entries(&dir),
+            vec![
+                "exclusive.lock.stale-alive".to_owned(),
+                "exclusive.lock.stale-inflight".to_owned(),
+            ],
+            "only the live-evidence tombstone remains (plus guard sidecars, filtered)"
+        );
     }
 }

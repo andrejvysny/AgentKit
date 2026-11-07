@@ -297,6 +297,106 @@ async fn delete_snapshot_rollback_preserves_model_catalog_and_connection() {
     database.reject_snapshot(false);
 }
 
+#[tokio::test]
+async fn failed_secret_retirement_keeps_config_row_retryable() {
+    // AGENTKIT-37, order pin 1: a DELETE whose secret deletion fails must
+    // not leave the config row deleted — that is the silently orphaned
+    // credential. The row must survive so the retry finishes the job.
+    let database = Database::new();
+    let secrets = Arc::new(Secrets::default());
+    let first = fixture(&database.path(), secrets.clone()).await;
+    let original = create(&first, "provider").await;
+    let durable = snapshot(&first).await;
+    secrets.fail_delete.store(true, Ordering::SeqCst);
+    let error = first
+        .backend
+        .dispatch(provider_request("deleteProvider", "provider", Value::Null))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "secret_write_failed");
+    // Still live and still addressed: row, durable snapshot and the
+    // credential itself all intact — no residue, no silent half-delete.
+    assert_eq!(first.connections.get(&original.id).unwrap(), original);
+    assert_eq!(snapshot(&first).await, durable);
+    assert!(
+        first
+            .secrets
+            .get(&first.native.credential_key(&original.id).unwrap())
+            .await
+            .is_ok()
+    );
+    // The retry with the fault cleared completes the deletion.
+    let credential = first.native.credential_key(&original.id).unwrap();
+    secrets.fail_delete.store(false, Ordering::SeqCst);
+    first
+        .backend
+        .dispatch(provider_request("deleteProvider", "provider", Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(
+        first.connections.get(&original.id),
+        Err(ConnectionError::NotFound)
+    );
+    assert!(matches!(
+        first.secrets.get(&credential).await,
+        Err(ConnectionError::SecretMissing)
+    ));
+}
+
+#[tokio::test]
+async fn delete_retires_secret_before_committing_the_row_removal() {
+    // AGENTKIT-37, order pin 2: the secret is retired BEFORE the durable
+    // commit that removes the config row. Failing the commit (SQL trigger)
+    // must therefore observe both secret deletes while the row is still
+    // there, and the rolled-back delete puts the credential back —
+    // all-or-nothing on observed failures.
+    let database = Database::new();
+    let secrets = Arc::new(Secrets::default());
+    let first = fixture(&database.path(), secrets.clone()).await;
+    let original = create(&first, "provider").await;
+    database.reject_snapshot(true);
+    assert!(
+        first
+            .backend
+            .dispatch(provider_request("deleteProvider", "provider", Value::Null))
+            .await
+            .is_err()
+    );
+    // Credential + header slots were deleted before the commit was even
+    // attempted (the old ordering committed the row first: 0 deletes here).
+    assert_eq!(secrets.deletes.load(Ordering::SeqCst), 2);
+    assert_eq!(first.connections.get(&original.id).unwrap(), original);
+    assert!(
+        first
+            .secrets
+            .get(&first.native.credential_key(&original.id).unwrap())
+            .await
+            .is_ok()
+    );
+    assert!(
+        first
+            .secrets
+            .get(&first.native.header_key(&original.id).unwrap())
+            .await
+            .is_err()
+    );
+    database.reject_snapshot(false);
+    let credential = first.native.credential_key(&original.id).unwrap();
+    first
+        .backend
+        .dispatch(provider_request("deleteProvider", "provider", Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(
+        first.connections.get(&original.id),
+        Err(ConnectionError::NotFound)
+    );
+    assert!(matches!(
+        first.secrets.get(&credential).await,
+        Err(ConnectionError::SecretMissing)
+    ));
+}
+
 async fn concurrent_update_refused(first: &Fixture) {
     let concurrent = DesktopBackend::open(first.host.clone(), actor(), TOKEN, "model")
         .await

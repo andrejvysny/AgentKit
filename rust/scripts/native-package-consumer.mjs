@@ -98,7 +98,23 @@ if (mode === "run") {
   rmSync(`${dbPath}-wal`, { force: true });
   rmSync(`${dbPath}-shm`, { force: true });
   const store = await NativeStore.open(dbPath);
-  const service = await store.createService({ closeTimeoutMs: 5000 });
+  // Host-enforced profile admission: createSession's profileId resolves
+  // against the service ProfileRegistry (built-ins + options.profiles), so
+  // the packed consumer declares the profile its scenario runs under —
+  // exactly the tool allow-list and initial mode the lifecycle below needs.
+  const service = await store.createService({
+    closeTimeoutMs: 5000,
+    profiles: [
+      {
+        id: "p1",
+        kind: "automation",
+        instructions: "",
+        tools: ["run_cmd", "run_slow"],
+        permissionMode: "auto_edit",
+        limits: { maxToolIterations: 30 },
+      },
+    ],
+  });
   let providerCalls = 0;
   let releaseSlow;
   const slowGate = new Promise((resolve) => {

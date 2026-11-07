@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { available, missing, required } from "./helpers/binding.js";
 import { startProviderMock } from "./helpers/loopback-provider.js";
+import { testProfile } from "./helpers/profiles.js";
 import type { NativeSessionService, NativeStore } from "../src/index.js";
 
 let NativeStoreCtor: typeof NativeStore;
@@ -124,6 +125,14 @@ suite(
           connectionId,
           model: "model-a",
         },
+        // The scenario reads the workspace instructions and answers: no tool
+        // is staged, and the profile must leave project instructions ON.
+        profiles: [
+          testProfile("p1", {
+            permissionMode: "read_only",
+            projectInstructions: true,
+          }),
+        ],
       });
       await service.createSession({
         sessionId: "ws-1",
@@ -185,6 +194,14 @@ suite(
           connectionId,
           model: "model-a",
         },
+        // The scenario reads the workspace instructions and answers: no tool
+        // is staged, and the profile must leave project instructions ON.
+        profiles: [
+          testProfile("p1", {
+            permissionMode: "read_only",
+            projectInstructions: true,
+          }),
+        ],
       });
       // Untrusted root: every section carries the verbatim notice.
       await service.createSession({

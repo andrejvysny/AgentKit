@@ -683,6 +683,8 @@ interface CreateProposalInput {
 // @public (undocumented)
 export interface CreateSessionInputJson {
     // (undocumented)
+    contentSelection?: Record<string, unknown>;
+    // (undocumented)
     context?: unknown;
     // (undocumented)
     executionMode?: string;
@@ -696,6 +698,8 @@ export interface CreateSessionInputJson {
     profileId: string;
     // (undocumented)
     providerId?: string;
+    // (undocumented)
+    reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
     // (undocumented)
     sessionId?: string;
     // (undocumented)
@@ -1105,6 +1109,46 @@ export class NativeAgentError extends Error {
 }
 
 // @public
+export interface NativeAgentProfile {
+    extends?: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    instructions: string;
+    // (undocumented)
+    kind: "chat" | "coding" | "research" | "automation";
+    // (undocumented)
+    label?: string;
+    // (undocumented)
+    limits?: {
+        maxToolIterations?: number;
+        maxToolCallsPerIteration?: number;
+        historyLimit?: number;
+        attemptBudgetMs?: number;
+        maxOutputTokens?: number;
+    };
+    // (undocumented)
+    model?: string;
+    // (undocumented)
+    permissionMode: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+    // (undocumented)
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
+    // (undocumented)
+    resources?: {
+        skills?: ReadonlyArray<{
+            id: string;
+            revision: string;
+        }>;
+        projectInstructions?: boolean;
+        resources?: ReadonlyArray<string>;
+    };
+    // (undocumented)
+    role?: "implementer" | "reviewer" | "supervisor";
+    // (undocumented)
+    tools: ReadonlyArray<string>;
+}
+
+// @public
 export class NativeAssistantStore implements AssistantStore {
     constructor(options: NativeAssistantStoreOptions);
     // (undocumented)
@@ -1473,6 +1517,7 @@ export interface NativeServiceOptions {
         planToolNames?: string[];
         planGrantMode?: "read_only" | "ask" | "auto_edit" | "full_auto";
     };
+    profiles?: ReadonlyArray<NativeAgentProfile>;
     providerAuthKind?: "api-key" | "chatgpt-account";
     providerConfig?: NativeProviderConfig;
     subagentMaxConcurrency?: number;

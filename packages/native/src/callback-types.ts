@@ -7,6 +7,17 @@ export interface ProviderRequest {
   temperature?: number | null;
   maxOutputTokens?: number | null;
   /**
+   * The session descriptor's reasoning effort, carried verbatim from the
+   * durable turn (`rust/crates/napi/src/provider.rs`). Absent means the run
+   * has none — the key is omitted rather than sent as `null`, exactly as the
+   * TypeScript reference request builder omits an undefined effort
+   * (`packages/core/src/providers/responses-request.ts`). Adapters that
+   * support effort should pass it through; ones that do not simply ignore
+   * it, since an effort is not a sampling parameter an account-backed
+   * adapter rejects.
+   */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  /**
    * Aborts when the host has given up on this callback — run cancellation
    * (`cancel` notification) or `close()` (`discard`/drain). The provider is
    * expected to thread it into its fetch; the bridge settles the call as

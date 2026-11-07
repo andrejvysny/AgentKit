@@ -118,7 +118,25 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             .ok_or_else(|| HostError::Execution(format!("unknown session execution mode {mode}")))
     }
 
-    /// `Some(true)` only when the session's durable state carries a plan
+    async fn role_of(&self, ctx: &PermissionContext) -> HostResult<Option<CodingRole>> {
+        let Some(session_id) = ctx.chat_id.as_deref() else {
+            return Ok(None);
+        };
+        let state = match self.service.get_state(session_id).await {
+            Ok(state) => state,
+            Err(error) if error.code == "session_not_found" => return Ok(None),
+            Err(error) => return Err(HostError::Execution(error.to_string())),
+        };
+        match state.descriptor["profileSnapshot"]["role"].as_str() {
+            Some("implementer") => Ok(Some(CodingRole::Implementer)),
+            Some("reviewer") => Ok(Some(CodingRole::Reviewer)),
+            Some("supervisor") => Ok(Some(CodingRole::Supervisor)),
+            None => Ok(None),
+            Some(_) => Err(HostError::Execution("invalid_profile_role".into())),
+        }
+    }
+
+    /// Some(true) only when the session's durable state carries a plan
     /// grant for THIS exact digest; `Some(false)` when the session exists
     /// but no such approval is recorded (with or without any execution
     /// state yet — an unanswered plan is an unanswered plan). A malformed

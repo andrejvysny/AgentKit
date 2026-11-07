@@ -70,6 +70,16 @@ pub fn read_session_descriptor(metadata: &Value) -> Option<Value> {
         profile_next.insert("digest".into(), digest.as_str()?.into());
     }
     let mut next = Map::new();
+    if let Some(snapshot) = raw.get("profileSnapshot") {
+        let profile: crate::AgentProfile = serde_json::from_value(snapshot.clone()).ok()?;
+        profile.validate().ok()?;
+        if profile.id != id
+            || profile_next.get("digest").and_then(Value::as_str) != Some(profile.digest().as_str())
+        {
+            return None;
+        }
+        next.insert("profileSnapshot".into(), snapshot.clone());
+    }
     next.insert("version".into(), Value::from(1));
     next.insert("profile".into(), Value::Object(profile_next));
     for key in ["providerId", "model"] {
@@ -85,6 +95,14 @@ pub fn read_session_descriptor(metadata: &Value) -> Option<Value> {
         next.insert("reasoningEffort".into(), effort.into());
     }
     next.insert("createdAt".into(), raw.get("createdAt")?.as_str()?.into());
+    if let Some(selection) = raw.get("contentSelection") {
+        let selection: crate::RunContentSelection =
+            serde_json::from_value(selection.clone()).ok()?;
+        next.insert(
+            "contentSelection".into(),
+            serde_json::to_value(selection).ok()?,
+        );
+    }
     // Absent optional keys stay omitted; a malformed one (present but
     // rejected) invalidates the whole descriptor instead of being dropped.
     for (key, field) in [
@@ -290,9 +308,28 @@ pub fn turn_config(descriptor: &Value) -> serde_json::Map<String, Value> {
 /// Skills. `None` when there are none, so a session without Skills submits
 /// exactly the payload it did before.
 pub fn session_content_selection(descriptor: &Value) -> Option<Value> {
-    let skills = descriptor["skills"].as_array()?;
-    if skills.is_empty() {
+    let mut selection: crate::RunContentSelection = serde_json::from_value(
+        descriptor
+            .get("contentSelection")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .ok()?;
+    let mut skills: Vec<crate::SkillSelection> = serde_json::from_value(
+        descriptor
+            .get("skills")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .ok()?;
+    for skill in selection.skills {
+        if !skills.iter().any(|selected| selected.id == skill.id) {
+            skills.push(skill);
+        }
+    }
+    selection.skills = skills;
+    if selection.template.is_none() && selection.skills.is_empty() {
         return None;
     }
-    Some(serde_json::json!({ "skills": skills }))
+    serde_json::to_value(selection).ok()
 }

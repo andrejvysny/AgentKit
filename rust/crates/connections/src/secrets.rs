@@ -49,7 +49,11 @@ impl SecretKey {
         self
     }
 
-    #[cfg(feature = "os-keychain")]
+    /// Stable host-vault address. Contains scoped metadata, never credential bytes.
+    pub fn reference(&self) -> String {
+        format!("agentkit:secret:v1:{}", self.keychain_account())
+    }
+
     fn keychain_account(&self) -> String {
         let app = self.app_id.as_str();
         let connection = self.connection_id.as_str();

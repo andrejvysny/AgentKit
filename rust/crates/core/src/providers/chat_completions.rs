@@ -55,10 +55,11 @@ impl ChatCompletionsProvider {
             let response = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CoreError::new("cancelled", "aborted")),
-                response = self.transport.request(
+                response = self.transport.request_guarded(
                     &self.identity,
                     "chat/completions",
                     Some(body.clone()),
+                    input.request_guard.clone(),
                     cancellation.clone(),
                 ) => response,
             };
@@ -322,9 +323,10 @@ impl ChatProvider for ChatCompletionsProvider {
     }
 }
 fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
+    content::validate_selected(&input.selected_content)?;
     let mut messages = vec![];
     let mut roles = vec![];
-    for message in &input.messages {
+    for message in input.selected_content.iter().chain(input.messages.iter()) {
         let (content, dropped) = content::parts(message, false, true)?;
         if dropped && !roles.contains(&message.role) {
             roles.push(message.role.clone());
@@ -365,6 +367,9 @@ fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
             "include_usage": true,
         },
     });
+    if let Some(value) = input.reasoning_effort {
+        body["reasoning_effort"] = serde_json::to_value(value).expect("enum serialization");
+    }
     if let Some(value) = input.temperature {
         body["temperature"] = value.into();
     }

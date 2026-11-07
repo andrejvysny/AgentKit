@@ -28,6 +28,7 @@
  * harness trouble.
  */
 import { NativeSessionService, NativeStore } from "../../src/index.js";
+import { testProfile } from "../helpers/profiles.js";
 
 interface Options {
   storePath: string;
@@ -82,6 +83,10 @@ async function main(): Promise<number> {
   let service: NativeSessionService | undefined;
   try {
     service = await store.createService({
+      // Phase 1's session (profileId `p-continuity`) is a pure provider-
+      // lane turn — text in, encrypted reasoning replay out — so the
+      // profile stages no tools. Later phases only continue that session.
+      profiles: [testProfile("p-continuity", { permissionMode: "read_only" })],
       providerConfig: {
         protocol: "responses",
         providerId: options.providerId ?? "continuity",

@@ -41,11 +41,23 @@ pub(crate) async fn response(
         ));
     }
     let batch_size = options.read_batch_size.max(1);
-    let start = resolve_cursor(&*backend, &actor, run_id, last_id, batch_size).await?;
+    let cursor = resolve_cursor(&*backend, &actor, run_id, last_id, batch_size).await?;
+    let resync = matches!(cursor, Cursor::Unknown);
+    let start = match cursor {
+        Cursor::Resumed(seq) => Some(seq),
+        Cursor::Fresh | Cursor::Unknown => None,
+    };
     let run_id = run_id.to_owned();
     let heartbeat = options.heartbeat_interval.max(Duration::from_millis(1));
     let stream = async_stream::try_stream! {
         yield Event::default().retry(options.retry_hint);
+        if resync {
+            // The full replay this stream is about to send is not what the
+            // client asked for; say so before the first event so a client
+            // can tell "the tail you missed" from "everything, because your
+            // cursor was unknown" without dedup archaeology.
+            yield Event::default().event("agentkit.stream.resync").data("{\"reason\":\"unknown_last_event_id\"}");
+        }
         let mut cursor = start;
         let mut settled = false;
         loop {
@@ -81,21 +93,41 @@ pub(crate) async fn response(
     response
         .headers_mut()
         .insert("cache-control", "no-cache, no-transform".parse().unwrap());
+    if resync {
+        response.headers_mut().insert(
+            "x-agentkit-stream-resync",
+            "unknown_last_event_id".parse().unwrap(),
+        );
+    }
     Ok(response)
+}
+
+/// Where a `Last-Event-ID` resolves to.
+enum Cursor {
+    /// No usable cursor: the client never had one (a fresh stream).
+    Fresh,
+    /// The id was found: start one past its sequence.
+    Resumed(f64),
+    /// A real cursor that names no event of this run: full replay, and the
+    /// client MUST be told explicitly (header + `agentkit.stream.resync`
+    /// frame) that this stream replays everything instead of the missed tail.
+    Unknown,
 }
 
 /// An unknown (or other-run) `Last-Event-ID` replays the run from the start,
 /// matching the TypeScript transport's `resolveStartSeq`. Clients must dedupe
-/// by `eventId`/`seq`.
+/// by `eventId`/`seq` — but the full replay is never SILENT: `Cursor::Unknown`
+/// makes `response` announce it with the `x-agentkit-stream-resync` header and
+/// an `agentkit.stream.resync` control frame ahead of the replayed events.
 async fn resolve_cursor(
     backend: &dyn Backend,
     actor: &Actor,
     run_id: &str,
     last_id: Option<&str>,
     limit: usize,
-) -> Result<Option<f64>, Problem> {
+) -> Result<Cursor, Problem> {
     let Some(id) = last_id.filter(|s| !s.trim().is_empty()) else {
-        return Ok(None);
+        return Ok(Cursor::Fresh);
     };
     let mut cursor = None;
     loop {
@@ -117,11 +149,11 @@ async fn resolve_cursor(
             }
             cursor = Some(seq);
             if event["eventId"].as_str() == Some(id) {
-                return Ok(cursor);
+                return Ok(Cursor::Resumed(seq));
             }
         }
         if count < limit {
-            return Ok(None);
+            return Ok(Cursor::Unknown);
         }
     }
 }
