@@ -729,6 +729,107 @@ async fn chat_stream_emits_incremental_reasoning_deltas() {
     assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Event {data,..}) if data["content"]=="fort"&&data["reasoningContent"]=="thinking")));
 }
 #[tokio::test]
+async fn chat_stream_surfaces_url_citation_annotations_on_delta_and_completed() {
+    // Mirrors the OpenAI-compatible citation lane the mock provider emits:
+    // an annotation-carrying chunk with `content: ""` + `annotations[]`,
+    // plain content chunks, and a `citations`-shaped chunk (with a duplicate
+    // url and a bare-string citation) — ONEMIND-352.
+    let stream = sse(&[
+        json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"","annotations":[
+            {"index":0,"type":"url_citation","url_citation":{
+                "title":"Example Capital Report",
+                "url":"https://example.com/capital-report",
+                "start_index":47,"end_index":68}}
+        ]},"finish_reason":null}]}),
+        json!({"choices":[{"index":0,"delta":{"content":"Paris."}}]}),
+        json!({"choices":[{"index":0,"delta":{"citations":[
+            {"url":"https://demo.example/census","title":"Demo Census"},
+            "https://plain.example/only",
+            {"url":"https://example.com/capital-report"}
+        ]}}]}),
+        json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+    ]) + "data: [DONE]\n\n";
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, stream)]))
+            .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    let citation_frames: Vec<&Value> = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ProviderEvent::Event { kind, data })
+                if kind == "run.message.delta" && data.get("citations").is_some() =>
+            {
+                Some(data)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(citation_frames.len(), 2, "{citation_frames:?}");
+    assert_eq!(
+        citation_frames[0],
+        &json!({"delta":"","citations":[
+            {"url":"https://example.com/capital-report","title":"Example Capital Report"}
+        ]})
+    );
+    assert_eq!(
+        citation_frames[1],
+        &json!({"delta":"","citations":[
+            {"url":"https://demo.example/census","title":"Demo Census"},
+            {"url":"https://plain.example/only"}
+        ]})
+    );
+    // Text deltas stay plain `Delta` events — the citation frames never
+    // replace or swallow them.
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Ok(ProviderEvent::Delta(text)) if text == "Paris.")));
+    // The completed event carries every citation the call attested.
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(ProviderEvent::Event { kind, data })
+            if kind == "run.message.completed"
+                && data["citations"] == json!([
+                    {"url":"https://example.com/capital-report","title":"Example Capital Report"},
+                    {"url":"https://demo.example/census","title":"Demo Census"},
+                    {"url":"https://plain.example/only"}
+                ])
+    )),
+        "{events:?}");
+}
+#[tokio::test]
+async fn chat_stream_without_annotations_never_adds_a_citations_field() {
+    // Byte-compatibility of the ordinary lane: no annotations in, no
+    // `citations` key out (additive-only contract).
+    let stream = sse(&[json!({"choices":[{"delta":{"content":"plain"},"finish_reason":"stop"}]})])
+        + "data: [DONE]\n\n";
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, stream)]))
+            .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        Ok(ProviderEvent::Event { kind, data })
+            if kind == "run.message.delta"
+    )));
+    assert!(events.iter().all(|event| !matches!(
+        event,
+        Ok(ProviderEvent::Event { data, .. }) if data.get("citations").is_some()
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(ProviderEvent::Event { kind, data })
+            if kind == "run.message.completed" && data["content"] == "plain"
+    )));
+}
+#[tokio::test]
 async fn chat_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
     let reported = sse(&[
         json!({"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}),

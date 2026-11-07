@@ -8,6 +8,7 @@ import { dedupeToolCallIds } from "../tools/tool-calls.js";
 import type { AiChatRequest, AiProviderClient } from "./client.js";
 import type {
   AiChatRole,
+  AiCitation,
   AiContentPart,
   AiMessageContent,
   AiProviderCapabilities,
@@ -269,6 +270,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
 
     let aggregatedContent = "";
     let aggregatedReasoning = "";
+    const citationUrls = new Set<string>();
+    const aggregatedCitations: AiCitation[] = [];
     let droppedSseLines = 0;
     const toolCallState = newToolCallState();
     let finishReason: string | undefined;
@@ -367,6 +370,22 @@ export class OpenAiCompatibleClient implements AiProviderClient {
                 acc.argumentsJson += fn.arguments;
             }
           }
+        }
+        // OpenAI-compatible web-research lanes attest sources per chunk:
+        // `annotations[].url_citation` (ChatGPT-style) and the plain
+        // `citations` shape. Normalize both to the contract's `{url,title}`
+        // and surface NEW ones on an additive `run.message.delta` frame
+        // (`delta: ""`) so the durable log, SSE replay and the UI all see
+        // them; the full set also rides the completed event.
+        const freshCitations = acceptCitations(delta, citationUrls);
+        if (freshCitations.length > 0) {
+          aggregatedCitations.push(...freshCitations);
+          yield stamp({
+            type: "run.message.delta" as const,
+            runId,
+            timestamp: nowIso(),
+            data: { delta: "", citations: freshCitations },
+          });
         }
         if (choice.finish_reason) {
           finishReason = choice.finish_reason;
@@ -480,6 +499,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         toolCalls: calls,
         reasoningContent: aggregatedReasoning || undefined,
         finishReason,
+        citations: aggregatedCitations.length > 0 ? aggregatedCitations : undefined,
       },
     });
 
@@ -914,6 +934,56 @@ function assembleToolCalls(state: ToolCallState): {
   return dedupeToolCallIds(assembled);
 }
 
+/**
+ * Fold every citation the chunk attests into the per-call set and return the
+ * ones not seen before (mirror of `ChatState::accept_citations` in the Rust
+ * provider). Accepted shapes: an `annotations` entry of `type:
+ * "url_citation"` (or untyped with a `url_citation` object) carrying
+ * `{url, title?}`, and the plain `citations` array of bare URL strings or
+ * `{url, title?}` objects. Anything malformed is dropped, never fatal —
+ * citations are decoration, not protocol.
+ */
+function acceptCitations(
+  delta: {
+    annotations?: Array<{
+      type?: string;
+      url_citation?: { url?: string; title?: string };
+    }>;
+    citations?: Array<string | { url?: string; title?: string }>;
+  },
+  seen: Set<string>,
+): AiCitation[] {
+  const fresh: AiCitation[] = [];
+  const offer = (candidate: {
+    url?: string;
+    title?: string;
+  }): void => {
+    const url = typeof candidate.url === "string" && candidate.url.length > 0 ? candidate.url : undefined;
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    const title =
+      typeof candidate.title === "string" && candidate.title.length > 0
+        ? candidate.title
+        : undefined;
+    fresh.push(title === undefined ? { url } : { url, title });
+  };
+  for (const entry of delta.annotations ?? []) {
+    if (entry === null || typeof entry !== "object") continue;
+    if (entry.type !== undefined && entry.type !== "url_citation") continue;
+    const inner = entry.url_citation;
+    if (inner === null || typeof inner !== "object") continue;
+    offer(inner);
+  }
+  for (const entry of delta.citations ?? []) {
+    if (typeof entry === "string") {
+      offer({ url: entry });
+    } else if (entry !== null && typeof entry === "object") {
+      offer(entry);
+    }
+  }
+  return fresh;
+}
+
 interface OpenAiUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
@@ -938,6 +1008,13 @@ interface OpenAiStreamChunk {
         type?: string;
         function?: { name?: string; arguments?: string };
       }>;
+      /** ChatGPT-style web-research annotations on this chunk. */
+      annotations?: Array<{
+        type?: string;
+        url_citation?: { url?: string; title?: string };
+      }>;
+      /** Plain citations shape some providers emit instead. */
+      citations?: Array<string | { url?: string; title?: string }>;
     };
     finish_reason?: string;
   }>;

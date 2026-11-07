@@ -78,10 +78,32 @@ export const AiRunStartedEventSchema = Type.Object({
 });
 export type AiRunStartedEvent = Static<typeof AiRunStartedEventSchema>;
 
+/**
+ * A provider-attested source for (part of) an assistant answer — the
+ * normalized form of OpenAI-compatible `url_citation` annotations and the
+ * plain `citations` shape. Additive: older clients ignore the `citations`
+ * fields entirely; emitters only ever ADD them to a delta/completed payload.
+ */
+export const AiCitationSchema = Type.Object({
+  url: Type.String({ description: "Absolute source URL." }),
+  title: Type.Optional(
+    Type.String({ description: "Provider-supplied source title, when known." }),
+  ),
+});
+export type AiCitation = Static<typeof AiCitationSchema>;
+
+/** Shared description for the additive `citations` payload on message events. */
+const citationsField = Type.Optional(
+  Type.Array(AiCitationSchema, {
+    description:
+      "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+  }),
+);
+
 export const AiRunMessageDeltaEventSchema = Type.Object({
   type: Type.Literal("run.message.delta"),
   ...runEventBaseFields,
-  data: Type.Object({ delta: Type.String() }),
+  data: Type.Object({ delta: Type.String(), citations: citationsField }),
 });
 export type AiRunMessageDeltaEvent = Static<
   typeof AiRunMessageDeltaEventSchema
@@ -116,6 +138,7 @@ export const AiRunMessageCompletedEventSchema = Type.Object({
           'Raw provider finish_reason for this turn (e.g. "stop", "length", "tool_calls"), or the synthetic "incomplete" when the stream ended without one (see the stream_incomplete warning).',
       }),
     ),
+    citations: citationsField,
   }),
 });
 export type AiRunMessageCompletedEvent = Static<

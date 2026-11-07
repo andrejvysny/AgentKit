@@ -9,7 +9,7 @@ fn schemas_match_frozen_typescript_exports_and_compile() {
         serde_json::to_value(schemas()).unwrap(),
         fixture("schemas.json")
     );
-    assert_eq!(schemas().len(), 101);
+    assert_eq!(schemas().len(), 102);
     for (name, schema) in schemas() {
         compile_schema(schema).unwrap_or_else(|error| panic!("{name}: {error}"));
     }

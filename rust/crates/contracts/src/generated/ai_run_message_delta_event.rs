@@ -16,6 +16,12 @@ crate::impl_json_via_serde!(AiRunMessageDeltaEventType);
 pub struct AiRunMessageDeltaEventData {
     #[serde(rename = "delta")]
     pub delta: AiProviderKind,
+    #[serde(
+        rename = "citations",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub citations: Optional<Vec<AiCitation>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -23,6 +29,7 @@ crate::impl_json_deserialize!(AiRunMessageDeltaEventData, |value: Value| {
     let mut object = crate::json_object(value)?;
     let output = Self {
         delta: crate::required_field(&mut object, "delta")?,
+        citations: crate::optional_field(&mut object, "citations")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)

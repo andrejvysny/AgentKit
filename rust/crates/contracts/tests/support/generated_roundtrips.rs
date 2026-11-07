@@ -4,6 +4,7 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<AiAudioPart>("AiAudioPartSchema");
     support::roundtrip::<AiChatMessage>("AiChatMessageSchema");
     support::roundtrip::<AiChatRole>("AiChatRoleSchema");
+    support::roundtrip::<AiCitation>("AiCitationSchema");
     support::roundtrip::<AiContentPart>("AiContentPartSchema");
     support::roundtrip::<AiContextBindingRole>("AiContextBindingRoleSchema");
     support::roundtrip::<AiContextBinding>("AiContextBindingSchema");
