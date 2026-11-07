@@ -21,12 +21,29 @@ fn allowed(from: TaskStatus, to: TaskStatus) -> bool {
             | (Interrupted, Queued | Cancelled)
             | (
                 Running,
-                Interrupted | WaitingApproval | Completed | Failed | Cancelled
+                Interrupted
+                    | WaitingApproval
+                    | WaitingChild
+                    | Uncertain
+                    | Completed
+                    | Failed
+                    | Cancelled
             )
             | (
                 WaitingApproval,
                 Running | Queued | Completed | Failed | Cancelled
             )
+            // AGENTKIT-88 parks. A child wait resumes only through the
+            // queue (a fresh attempt), never back into `Running` directly:
+            // an attempt is minted by `claim`, not by a status write.
+            | (
+                WaitingChild,
+                Queued | Interrupted | Completed | Failed | Cancelled
+            )
+            // AGENTKIT-88 reconciliation. An uncertain outcome settles only
+            // to a terminal state or back to the queue for a new attempt;
+            // it never walks into `Running` — same rule as above.
+            | (Uncertain, Queued | Completed | Failed | Cancelled)
     )
 }
 

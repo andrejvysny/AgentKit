@@ -192,13 +192,17 @@ impl SqliteStore {
                 task.cancel_requested = true;
                 if matches!(
                     task.status,
-                    TaskStatus::Queued | TaskStatus::Interrupted | TaskStatus::WaitingApproval
+                    TaskStatus::Queued
+                        | TaskStatus::Interrupted
+                        | TaskStatus::WaitingApproval
+                        | TaskStatus::WaitingChild
                 ) || task.retry_pending
                 {
                     // Nothing is running to notice: a queued, interrupted,
-                    // backoff-parked, or approval-parked turn cancels now.
-                    // A parked turn holds no lease, and the approver may
-                    // never answer, so waiting for an answer would strand it.
+                    // backoff-parked, approval-parked, or child-parked turn
+                    // cancels now. A parked turn holds no lease, and the
+                    // approver (or a stranded child) may never answer, so
+                    // waiting for one would strand it.
                     task.status = TaskStatus::Cancelled;
                     task.finished_at = Some(now);
                     task.retry_pending = false;

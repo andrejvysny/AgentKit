@@ -15,8 +15,12 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// orphan-reaper flows project child-task state onto these rows) and the
 /// advisor findings ledger the explicit/watchdog advice sources append to;
 /// version 14 adds the persistent agent identity registry (immutable ids,
-/// scope, lifecycle) and its append-only configuration-revision ledger.
-pub const SCHEMA_VERSION: i64 = 14;
+/// scope, lifecycle) and its append-only configuration-revision ledger;
+/// version 15 adds the durable teammate admission ledger (idempotency key
+/// → logical task, AGENTKIT-88) and the agent addressing column on
+/// `agent_inputs` that turns the durable input queue into a per-agent
+/// ordered mailbox.
+pub const SCHEMA_VERSION: i64 = 15;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -254,6 +258,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 14 {
             migrate_agent_records(&mut connection)?;
         }
+        if version < 15 {
+            migrate_teammate_admission(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -359,7 +366,63 @@ fn schema_sql(version: i64) -> String {
     if version >= 14 {
         sql.push_str(AGENTS_SCHEMA);
     }
+    if version >= 15 {
+        sql.push_str(TEAMMATES_SCHEMA);
+    }
     sql
+}
+
+/// Durable teammate admission (AGENTKIT-88), additive at schema version 15.
+/// `agent_admissions` is the idempotency ledger: one row per admission
+/// key, naming the agent identity it was admitted under and the ONE
+/// logical task that key created. The task row itself carries the binding
+/// (agent id, immutable revision, key) but the ledger is the authority a
+/// competing duplicate resolves against — a second insert with the same
+/// key returns the recorded task, it never creates a second one. The FK
+/// to `tasks` makes the pair atomic in fact, not by convention: an
+/// admission row without its logical task cannot commit.
+/// `agent_inputs.agent_id` (added here, NULL for every pre-88 row and
+/// every session input) lets the existing durable input queue address
+/// rows to a persistent agent — the per-agent ordered mailbox — without a
+/// second queue table drifting from the first.
+///
+/// The fresh-database form: the current schema builds the whole ladder in
+/// one batch, so the ledger is created plainly and the mailbox column is
+/// added inline, before its index.
+const TEAMMATES_SCHEMA: &str = r#"
+CREATE TABLE agent_admissions(admission_key TEXT PRIMARY KEY, agent_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, created_at INTEGER NOT NULL);
+CREATE INDEX agent_admissions_agent ON agent_admissions(agent_id);
+ALTER TABLE agent_inputs ADD COLUMN agent_id TEXT;
+CREATE INDEX agent_inputs_agent ON agent_inputs(agent_id,status);
+"#;
+
+/// The upgrade form of the same version-15 step. Unlike the fresh batch it
+/// must be idempotent: the v13-upgrade cell downgrades a version-15 file
+/// and re-applies every step, so a re-run may find the ledger, the index
+/// or the column already in place. `ALTER TABLE ADD COLUMN` has no `IF NOT
+/// EXISTS`, so the column add is guarded on `pragma_table_info` — like the
+/// search backfill's guard at v9, a re-applied migration is a no-op, never
+/// a duplicate-column error.
+const TEAMMATES_MIGRATION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_admissions(admission_key TEXT PRIMARY KEY, agent_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS agent_admissions_agent ON agent_admissions(agent_id);
+CREATE INDEX IF NOT EXISTS agent_inputs_agent ON agent_inputs(agent_id,status);
+"#;
+
+fn migrate_teammate_admission(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_inputs') WHERE name='agent_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_column {
+        transaction.execute("ALTER TABLE agent_inputs ADD COLUMN agent_id TEXT", [])?;
+    }
+    transaction.execute_batch(TEAMMATES_MIGRATION_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 15)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 /// Durable provider-connection state (P1-E), additive at schema version 6.

@@ -25,6 +25,7 @@ mod runner;
 mod session;
 mod subagents;
 mod subscription;
+mod teammates;
 
 pub use advisor::*;
 pub use agents::*;
@@ -45,6 +46,7 @@ pub use runner::*;
 pub use session::*;
 pub use subagents::*;
 pub use subscription::*;
+pub use teammates::*;
 
 use agentkit_store::{LeaseFence, SqliteStore, StoreError, TaskRecord};
 use serde_json::{Value, json};
@@ -144,5 +146,34 @@ impl ExecutionContext {
             return Err(HostError::Cancelled);
         }
         Ok(())
+    }
+
+    /// AGENTKIT-88: park the RUNNING attempt on unfinished child tasks
+    /// (the parent-wait mirror of the human-request park). One store
+    /// transaction moves the task to `WaitingChild`, ends the attempt,
+    /// and releases the lease; the runner then skips settlement because
+    /// the park already ended the attempt. The task keeps owning its
+    /// agent lane while waiting, and the pool slot returns immediately —
+    /// waiting never spins. `false` means no child is unfinished: the
+    /// caller proceeds to settle normally under the still-live lease.
+    pub async fn park_on_children(&self) -> HostResult<bool> {
+        // Same discipline as the approval park: hold the suspension guard
+        // across the lease-releasing park so heartbeat renewal cannot see
+        // a window where the lease is gone but the suspension is not yet
+        // published.
+        let mut suspension = self.suspension.lock().await;
+        let parked = self
+            .store
+            .wait_for_children(self.fence.clone(), self.runtime.now_ms())
+            .await?;
+        if parked {
+            *suspension = Some(agentkit_core::HumanRequestSpec {
+                request_id: format!("childwait:{}", self.task.task_id),
+                content: json!({"kind": "child_wait"}),
+                content_hash: String::new(),
+                expires_at: None,
+            });
+        }
+        Ok(parked)
     }
 }

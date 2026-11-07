@@ -1541,6 +1541,11 @@ impl SubagentService {
             TaskStatus::Running | TaskStatus::WaitingApproval | TaskStatus::Interrupted => {
                 "running"
             }
+            // AGENTKIT-88 statuses on a child turn: a child parked on its
+            // own children is still in flight; an unresolved outcome is
+            // not a completed child and never a silent success.
+            TaskStatus::WaitingChild => "running",
+            TaskStatus::Uncertain => "interrupted",
             TaskStatus::Completed => "completed",
             TaskStatus::Failed => "failed",
             TaskStatus::Cancelled => "cancelled",

@@ -835,8 +835,16 @@ async fn a_version_thirteen_database_upgrades_non_destructively() {
         .unwrap();
     drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE agent_config_revisions; DROP TABLE agents;")
-        .unwrap();
+    // "True v13": every post-13 object goes, not just the v14 pair — the
+    // v15 admissions ledger, its agent_inputs index, and the mailbox
+    // column (dropped last so the index dependency is already gone).
+    db.execute_batch(
+        "DROP INDEX agent_inputs_agent; \
+         DROP TABLE agent_admissions; \
+         DROP TABLE agent_config_revisions; DROP TABLE agents; \
+         ALTER TABLE agent_inputs DROP COLUMN agent_id;",
+    )
+    .unwrap();
     db.pragma_update(None, "user_version", 13).unwrap();
     drop(db);
     // Reopening migrates 13 -> 14 inside open(), non-destructively: the
@@ -890,12 +898,12 @@ async fn a_version_thirteen_database_upgrades_non_destructively() {
     let tables: i64 = db
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE name IN \
-             ('agents','agent_config_revisions','agents_scope')",
+             ('agents','agent_config_revisions','agents_scope','agent_admissions')",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(tables, 3);
+    assert_eq!(tables, 4);
 }
 
 // ---------------------------------------------------------------------------
