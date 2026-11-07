@@ -1,4 +1,18 @@
 import type { ConnectionRecord } from "@agentkit/contracts";
+import type {
+  AgentDto,
+  AgentRevisionDto,
+  AgentTaskDto,
+  AgentTaskStatusDto,
+  CreateAgentRequest,
+  RunProfileExplanationDto,
+  SetAgentModelRequest,
+  SubmitTeammateTaskRequest,
+  SubmitTeammateTaskResponse,
+  TaskEventEnvelope,
+  TaskEventPageDto,
+  UpdateAgentRequest,
+} from "@agentkit/contracts";
 import type { PromptTemplateService, SkillService } from "@agentkit/host";
 /**
  * What the adapter needs from a host, and nothing more.
@@ -141,6 +155,105 @@ export interface McpServerConfigOperations {
 }
 
 /**
+ * The persistent-teammate services behind the AGENTKIT-90 routes: agent
+ * lifecycle, the configuration ledger, admission, task status/history, event
+ * replay and run-profile explanation.
+ *
+ * The EXECUTION OWNER is the Rust backend (`AgentDefinitionService`,
+ * `TeammateService`, `RunProfileService` in `rust/crates/host`); this port is
+ * the host-wired seam those services hang off when a host serves the HTTP
+ * surface itself. The port therefore carries NO execution logic of its own:
+ * every method is a call into the host's own store/service boundary, and the
+ * DTOs in/out are the contract's — the wire adds nothing the services do not
+ * already guarantee.
+ *
+ * Two conventions the routes rely on:
+ *
+ * - **Absence is the not-found answer.** The read/mutate methods that name
+ *   one record return `null` when the id names nothing; the route turns that
+ *   into a 404. Never throw for "no such row".
+ * - **State violations are host errors.** A stale `expectedRevision` throws
+ *   `AgentKitHostError("revision_conflict", …)`, an illegal transition
+ *   `invalid_task_transition`, and so on — the closed codes
+ *   `problem.ts` already maps to 409. Inventing new error shapes here would
+ *   put a second error vocabulary on a surface that has exactly one.
+ *
+ * `scope`/`owner` are never port arguments: the agent's scope and owner are
+ * the HOST's assignment from its authenticated actor, the same way the
+ * contract says the request cannot name them.
+ */
+export interface TeammateApiPort {
+  /** Mint the identity under the caller's scope; the host stamps scope and owner. */
+  createAgent(request: CreateAgentRequest): Promise<AgentDto>;
+  /** The caller's scope's agents, archived included, insertion-ordered. */
+  listAgents(query: { limit?: number }): Promise<AgentDto[]>;
+  getAgent(agentId: string): Promise<AgentDto | null>;
+  /** Replace the effective definition; a stale `expectedRevision` throws `revision_conflict`. */
+  updateAgent(
+    agentId: string,
+    request: UpdateAgentRequest,
+  ): Promise<AgentDto | null>;
+  /** Move the model preference under the SAME identity — a `model_change` revision, never a new agent. */
+  setAgentModel(
+    agentId: string,
+    request: SetAgentModelRequest,
+  ): Promise<AgentDto | null>;
+  /** Refuse NEW admissions; history stays readable. */
+  archiveAgent(agentId: string): Promise<AgentDto | null>;
+  /** Open admissions again. */
+  restoreAgent(agentId: string): Promise<AgentDto | null>;
+  /** The append-only configuration ledger, oldest first. */
+  listAgentRevisions(
+    agentId: string,
+    query: { limit?: number },
+  ): Promise<AgentRevisionDto[]>;
+  /**
+   * The ONE admission path: idempotent on the body's `admissionKey`, so a
+   * duplicate answers with the task the first call created and
+   * `replayed: true` — and creates nothing. `null` when `agentId` names no
+   * agent; an archived agent's refusal is a host error, not a null.
+   */
+  submitTeammateTask(
+    agentId: string,
+    request: SubmitTeammateTaskRequest,
+  ): Promise<SubmitTeammateTaskResponse | null>;
+  /** The agent's logical tasks, insertion-ordered (history load). */
+  listAgentTasks(
+    agentId: string,
+    query: { limit?: number },
+  ): Promise<AgentTaskDto[]>;
+  getAgentTask(taskId: string): Promise<AgentTaskDto | null>;
+  /** Request cancellation; the running attempt lands it through the lease heartbeat. */
+  cancelAgentTask(taskId: string): Promise<AgentTaskDto | null>;
+  /** One bounded page of the task's durable event log, ordered by `seq`. */
+  listAgentTaskEvents(
+    taskId: string,
+    query: { after?: number; limit?: number },
+  ): Promise<TaskEventPageDto>;
+  /**
+   * The normalized status of one task, or `null` when it names nothing —
+   * the existence check and the close signal for {@link
+   * RestHandlerDeps.teammates}'s SSE route, which ends a stream on a
+   * terminal status exactly as the run pump does.
+   */
+  taskStatus(taskId: string): Promise<AgentTaskStatusDto | null>;
+  /**
+   * The durable log for the stream pump: events at or after `afterSeq`
+   * (all of them when absent), at most `limit`, in `seq` order. The same
+   * pages {@link TeammateApiPort.listAgentTaskEvents} serves, read through
+   * the shape the pump reads.
+   */
+  events(
+    taskId: string,
+    options: { afterSeq?: number; limit?: number },
+  ): Promise<TaskEventEnvelope[]>;
+  /** The sealed effective profile the admission pinned, verified by digest; `null` when the task names nothing. */
+  getAgentTaskRunProfile(
+    taskId: string,
+  ): Promise<RunProfileExplanationDto | null>;
+}
+
+/**
  * SSE tuning. All four have defaults that suit a UI on a local network; a
  * deployment behind a proxy that kills idle connections lowers
  * `heartbeatIntervalMs`, and one with a slow store raises `pollIntervalMs`.
@@ -263,6 +376,19 @@ export interface RestHandlerDeps {
    * path (namespaces, guards and unbound pruning included).
    */
   toolCatalog?: ToolCatalog;
+  /**
+   * The persistent-teammate routes (AGENTKIT-90): agents, revisions,
+   * admissions, task status/history, event replay and run-profile
+   * explanation. Absent, all fifteen answer 501 — the routes exist in the
+   * contract, and a host that runs the teammate services nowhere cannot
+   * serve them any better by pretending.
+   *
+   * The Rust backend (`rust/crates/host`) is the execution owner of this
+   * lane; this port is how a host that embeds it (or an equivalent) hangs
+   * those services off the HTTP adapter. See {@link TeammateApiPort} for
+   * the null-means-absent and host-error conventions the routes rely on.
+   */
+  teammates?: TeammateApiPort;
   /** Reported by `getVersion` as `packages`, for an identifiable build. */
   packages?: Record<string, string>;
   /**

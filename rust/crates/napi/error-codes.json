@@ -44,6 +44,7 @@
     "receipt_not_uncertain",
     "receipt_run_active",
     "recovery_unreadable",
+    "revision_conflict",
     "service_closed",
     "service_unavailable",
     "session_not_found",

@@ -13,6 +13,7 @@ mod provider_commit;
 mod provider_config;
 mod provider_secrets;
 mod providers;
+mod teammates;
 mod turns;
 
 use crate::{AgentHost, HostError};
@@ -44,6 +45,11 @@ pub struct DesktopBackend {
     tool_catalog: Option<Arc<dyn ToolCatalogPort>>,
     provider_operations: Option<Arc<dyn ProviderOperations>>,
     provider_factory: Option<Arc<dyn crate::ChatProviderFactory>>,
+    /// AGENTKIT-90: the host defaults the `RunProfileService` resolves
+    /// against when an admission asks for a sealed effective profile.
+    /// `None` is the service's documented default (native provider,
+    /// `ask` ceiling, no ambient tools) — never a per-request value.
+    run_profile_defaults: Option<crate::RunProfileDefaults>,
 }
 
 impl DesktopBackend {
@@ -83,6 +89,7 @@ impl DesktopBackend {
             tool_catalog: None,
             provider_operations: None,
             provider_factory: None,
+            run_profile_defaults: None,
         })
     }
 
@@ -224,6 +231,14 @@ impl DesktopBackend {
         self
     }
 
+    /// AGENTKIT-90: host-wide defaults for effective-run-profile
+    /// resolution (native provider id, permission ceiling, ambient tool
+    /// allowlist). Set once at wiring; a request can never choose these.
+    pub fn with_run_profile_defaults(mut self, defaults: crate::RunProfileDefaults) -> Self {
+        self.run_profile_defaults = Some(defaults);
+        self
+    }
+
     pub fn into_router(self: Arc<Self>, config: agentkit_transport_http::Config) -> axum::Router {
         agentkit_transport_http::router(self, config)
     }
@@ -264,6 +279,9 @@ impl DesktopBackend {
         if let Some(output) = self.turns(input).await? {
             return Ok(output);
         }
+        if let Some(output) = self.teammates(input).await? {
+            return Ok(output);
+        }
         self.management(input).await
     }
 }
@@ -286,7 +304,27 @@ impl Backend for DesktopBackend {
         }
     }
     async fn authorize(&self, input: &OperationRequest) -> Result<(), Problem> {
-        self.ensure_actor(&input.actor).await
+        self.ensure_actor(&input.actor).await?;
+        // SSE visibility is decided BEFORE the first event frame, and
+        // through the same doors as the JSON routes: a `streamRun` id
+        // must name a chat run, a `streamAgentTask` id must name a task
+        // under one of the caller's own agents. Foreign and unknown ids
+        // are indistinguishable refusals — the stream never becomes an
+        // existence oracle.
+        match input.operation.as_str() {
+            "streamRun" => {
+                self.read_run(&input.params["runId"]).await?;
+            }
+            "streamAgentTask" => {
+                self.owned_agent_task(
+                    &input.params["taskId"],
+                    &teammates::actor_scope(&input.actor),
+                )
+                .await?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
     async fn dispatch(&self, input: OperationRequest) -> Result<OperationResponse, Problem> {
         self.ensure_actor(&input.actor).await?;
@@ -301,31 +339,38 @@ impl Backend for DesktopBackend {
         limit: usize,
     ) -> Result<Vec<Value>, Problem> {
         self.ensure_actor(actor).await?;
-        self.read_run(run_id).await?;
-        Ok(self
+        let task = self
+            .stream_task(actor, run_id)
+            .await?
+            .ok_or_else(|| missing("Run", run_id))?;
+        let records = self
             .host
             .store()
             .events_after_number(run_id, after, limit)
             .await
-            .map_err(store_error)?
+            .map_err(store_error)?;
+        // Agent-task replay passes through the consumer redactor
+        // (credential-named values, header/env bags, oversized tool
+        // texts). Chat replay keeps its established bytes: existing
+        // Chat/Code clients parse those frames today, and this lane is
+        // additive compatibility.
+        let agent_bound = task.agent_id.is_some();
+        Ok(records
             .into_iter()
-            .map(|e| e.event)
+            .map(|e| {
+                if agent_bound {
+                    agentkit_store::redact_event(&e.event)
+                } else {
+                    e.event
+                }
+            })
             .collect())
     }
     async fn run_status(&self, actor: &Actor, run_id: &str) -> Result<Option<String>, Problem> {
         self.ensure_actor(actor).await?;
-        let Some(task) = self
-            .host
-            .store()
-            .get_task(run_id)
-            .await
-            .map_err(store_error)?
-        else {
+        let Some(task) = self.stream_task(actor, run_id).await? else {
             return Ok(None);
         };
-        if task.payload["chatId"].as_str().is_none_or(str::is_empty) {
-            return Ok(None);
-        }
         Ok(serde_json::to_value(task.status)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned)))

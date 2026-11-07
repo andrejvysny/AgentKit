@@ -110,7 +110,7 @@ export async function buildFixtures(): Promise<Map<string, string>> {
         )
           ? ["Idempotency-Key"]
           : [],
-        ...(operation === "streamRun"
+        ...(operation === "streamRun" || operation === "streamAgentTask"
           ? {
               responseContentType: "text/event-stream",
               resumeHeader: "Last-Event-ID",

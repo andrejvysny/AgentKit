@@ -288,6 +288,24 @@ describe("resourceForOperation — over the whole route table", () => {
       createMcpServer: "mcp_config",
       updateMcpServer: "mcp_config",
       deleteMcpServer: "mcp_config",
+      // AGENTKIT-90: agents authorize as the AGENT their path names —
+      // including `submitTeammateTask`, admitted into a not-yet-existing
+      // task — and tasks as the AGENT_TASK their path names.
+      createAgent: "agent",
+      listAgents: "agent",
+      getAgent: "agent",
+      updateAgent: "agent",
+      setAgentModel: "agent",
+      archiveAgent: "agent",
+      restoreAgent: "agent",
+      listAgentRevisions: "agent",
+      submitTeammateTask: "agent",
+      listAgentTasks: "agent",
+      getAgentTask: "agent_task",
+      cancelAgentTask: "agent_task",
+      listAgentTaskEvents: "agent_task",
+      streamAgentTask: "agent_task",
+      getAgentTaskRunProfile: "agent_task",
       listTools: "tools",
       getVersion: null,
     });

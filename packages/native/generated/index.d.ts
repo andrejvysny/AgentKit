@@ -17,6 +17,16 @@ export declare class NativeRunHandle {
 
 export declare class NativeStore {
   /**
+   * Create the persistent-teammate surface over this store: the host's
+   * definition service, teammate admission service, and run-profile
+   * service — the SAME services the HTTP host routes to, no second
+   * ledger. `optionsJson` may carry `runProfileDefaults` (the host's
+   * default layer for profile resolution: provider id, model,
+   * permission mode, tool set, budget ceilings, environment digests,
+   * routing policy); an unsupported shape fails with `invalid_input`.
+   */
+  createTeammates(optionsJson?: string | undefined | null): Promise<NativeTeammates>
+  /**
    * Connect one MCP server. `configJson` is the crate's `ServerConfig`
    * shape: `{alias, transport: {kind:"stdio", command, args?, env?} |
    * {kind:"http", url, headers?}, secretRefs?, enabled?, toolAliases?,
@@ -126,6 +136,106 @@ export declare class NativeStore {
    * call. See `SessionService::build`.
    */
   createService(onEvent: ((err: Error | null, arg: string) => any), optionsJson?: string | undefined | null): Promise<SessionService>
+}
+
+/**
+ * The teammate surface over one store: the three host services built on
+ * the store's single actor and the shared system runtime. Cheap to build;
+ * one per caller, all sharing the store behind it. `close()` releases
+ * every store clone this lane holds, so a caller can close the store and
+ * reopen the same file deterministically without waiting on the GC.
+ */
+export declare class NativeTeammates {
+  /**
+   * Release every store clone this lane holds. Idempotent; later calls
+   * through this handle fail with `closed`, exactly like the store's
+   * own gate.
+   */
+  close(): void
+  /**
+   * Create a persistent agent in the caller-named scope under
+   * `ownerId`. `definitionJson` is the `AgentDefinition` document;
+   * unknown fields are refused (`deny_unknown_fields`), so a payload can
+   * never smuggle a secret value or a foreign scope. Returns the
+   * `AgentRecord` JSON at revision 1.
+   */
+  createAgent(scope: string, ownerId: string, definitionJson: string): Promise<string>
+  /**
+   * The live agents (active and archived) of one scope. Other scopes are
+   * absence, not an error: the listing never leaks them.
+   */
+  listAgents(scope: string): Promise<string>
+  /**
+   * One live agent; archived is readable, tombstoned and unknown are
+   * `not_found`.
+   */
+  getAgent(agentId: string): Promise<string>
+  /**
+   * Replace the effective definition under optimistic concurrency: the
+   * caller must name the revision it read; a stale `expectedRevision`
+   * conflicts with code `revision_conflict` and applies NOTHING.
+   */
+  updateAgent(agentId: string, expectedRevision: number, definitionJson: string): Promise<string>
+  /**
+   * Move only the model preference of an existing agent; identity,
+   * scope, owner, and the whole ledger stay, and the append carries
+   * `model_change` provenance. Stale revisions conflict like
+   * [`Self::update_agent`].
+   */
+  setAgentModel(agentId: string, expectedRevision: number, model?: string | undefined | null, reasoningEffort?: string | undefined | null): Promise<string>
+  /**
+   * Archive an agent: new admission refuses, history stays readable,
+   * the row and its ledger stay durable. Idempotent.
+   */
+  archiveAgent(agentId: string): Promise<string>
+  /**
+   * Restore an archived agent to active, recording a `restore` revision.
+   * Idempotent.
+   */
+  restoreAgent(agentId: string): Promise<string>
+  /** The append-only configuration ledger of one agent, oldest first. */
+  listAgentRevisions(agentId: string): Promise<string>
+  /**
+   * Admit work under an agent — the only admission path. The admission
+   * JSON: `{ agentId, admissionKey, kind, payload?, priority?,
+   * dependsOn?, parentTaskId?, taskId? }` plus, for profile pinning,
+   * `taskProfile?`, `projectSources?`, `approvals?`. Profile pinning is
+   * SERVER-side: when the caller asks for a profile the sealed value is
+   * [`RunProfileService::resolve`]'s resolution, never whatever the
+   * caller sent, and the pin rides the admission transaction. Returns
+   * `{ task, replayed }`: a duplicate `admissionKey` answers with the
+   * SAME logical task and `replayed: true`, creating nothing.
+   */
+  submitTeammateTask(admissionJson: string): Promise<string>
+  /** The task records of one agent, in admission order. */
+  listAgentTasks(agentId: string): Promise<string>
+  /**
+   * The bounded projection of one task: the canonical row plus the
+   * derived event-window views. PURE and recomputed on every read, so
+   * it reconstructs identically after a store reopen. Unknown usage
+   * stays unknown: counters are `null`, never a reassuring `0`.
+   */
+  getAgentTaskProjection(taskId: string, window?: number | undefined | null): Promise<string>
+  /**
+   * Request cancellation: a queued, parked, or backoff-parked task
+   * settles NOW; a running attempt observes the durable flag through
+   * its lease. Idempotent — a settled task answers with the same
+   * record, never an error.
+   */
+  cancelAgentTask(taskId: string): Promise<string>
+  /**
+   * One page of a task's durable event log, REDACTED: credential-named
+   * values and oversized tool text never cross the boundary; the
+   * durable record stays untouched. `after` is the numeric sequence
+   * cursor from a previous page's `nextCursor`.
+   */
+  listAgentTaskEvents(taskId: string, after?: number | undefined | null, limit?: number | undefined | null): Promise<string>
+  /**
+   * The explanation of one admitted task's sealed run profile — the
+   * SAME pinned value, never a re-resolution. Honest absence: a task
+   * admitted without a profile answers `null`, not an empty profile.
+   */
+  getAgentTaskRunProfile(taskId: string): Promise<string | null>
 }
 
 export declare class SessionService {

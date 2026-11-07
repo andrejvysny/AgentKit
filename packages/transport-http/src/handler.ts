@@ -79,6 +79,23 @@ import { searchMessages } from "./routes/search.js";
 import { getSettings, updateSettings } from "./routes/settings.js";
 import { listToolEvents } from "./routes/tool-events.js";
 import {
+  archiveAgent,
+  cancelAgentTask,
+  createAgent,
+  getAgent,
+  getAgentTask,
+  getAgentTaskRunProfile,
+  listAgentRevisions,
+  listAgentTaskEvents,
+  listAgentTasks,
+  listAgents,
+  restoreAgent,
+  setAgentModel,
+  streamAgentTask,
+  submitTeammateTask,
+  updateAgent,
+} from "./routes/teammates.js";
+import {
   grantAllowance,
   listAllowances,
   revokeAllowance,
@@ -134,6 +151,21 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
   updateMcpServer,
   deleteMcpServer,
   listTools,
+  createAgent,
+  listAgents,
+  getAgent,
+  updateAgent,
+  setAgentModel,
+  archiveAgent,
+  restoreAgent,
+  listAgentRevisions,
+  submitTeammateTask,
+  listAgentTasks,
+  getAgentTask,
+  cancelAgentTask,
+  listAgentTaskEvents,
+  streamAgentTask,
+  getAgentTaskRunProfile,
   getVersion,
 });
 

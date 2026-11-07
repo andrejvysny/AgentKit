@@ -54,7 +54,10 @@ pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
 pub use subagents::*;
-pub use tasks::TaskAging;
+pub use tasks::{
+    MAX_TOOL_TEXT_BYTES, TaskAging, TaskProjection, TaskProjectionApproval, TaskProjectionUsage,
+    derive_task_projection, redact_event,
+};
 pub use teammates::*;
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;

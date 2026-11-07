@@ -82,7 +82,41 @@ export {
   AiRunEventSchema,
 } from "./run-events.js";
 
-export { TaskEventEnvelopeSchema } from "./task-events.js";
+export {
+  TaskEventEnvelopeSchema,
+  TaskEventStatusSchema,
+  TaskEventApprovalSchema,
+  TaskEventUsageSchema,
+} from "./task-events.js";
+
+// AGENTKIT-90: the persistent-teammate surface (agent lifecycle +
+// definition versions, task submission/status/history, event pages,
+// effective-run-profile inspection).
+export {
+  AgentBudgetsDtoSchema,
+  AgentSkillSelectionDtoSchema,
+  AgentDefinitionDtoSchema,
+  AgentLifecycleDtoSchema,
+  AgentDtoSchema,
+  AgentRevisionSourceDtoSchema,
+  AgentRevisionDtoSchema,
+  CreateAgentRequestSchema,
+  UpdateAgentRequestSchema,
+  SetAgentModelRequestSchema,
+  TaskProfileOverridesDtoSchema,
+  ContextUnitDtoSchema,
+  SelectedSourceDtoSchema,
+  ApprovalGrantRefDtoSchema,
+  SubmitTeammateTaskRequestSchema,
+  AgentTaskStatusDtoSchema,
+  AgentTaskDtoSchema,
+  SubmitTeammateTaskResponseSchema,
+  TaskEventPageDtoSchema,
+  TaskEventUsageTotalsDtoSchema,
+  TaskProjectionApprovalDtoSchema,
+  AgentTaskProjectionDtoSchema,
+  RunProfileExplanationDtoSchema,
+} from "./teammates.js";
 
 // REST v1 DTOs. The route table (`REST_ROUTES`) and `REST_API_VERSION` are
 // deliberately absent: this barrel is schemas and nothing else.

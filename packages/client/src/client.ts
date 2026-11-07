@@ -28,9 +28,13 @@ import type {
  * `@agentkit/contracts` itself.
  */
 import type {
+  AgentDto,
+  AgentRevisionDto,
+  AgentTaskDto,
   AiRunEvent,
   ApplyProposalRequest,
   ChatDto,
+  CreateAgentRequest,
   CreateChatRequest,
   CreateMcpServerRequest,
   CreateProviderRequest,
@@ -48,12 +52,18 @@ import type {
   RegenerateMessageRequest,
   RestOperation,
   RunDto,
+  RunProfileExplanationDto,
+  SetAgentModelRequest,
   SettingsDto,
   SubmitMessageRequest,
   SubmitMessageResponse,
+  SubmitTeammateTaskRequest,
+  SubmitTeammateTaskResponse,
+  TaskEventPageDto,
   TestProviderResponse,
   ToolDefinitionDto,
   ToolEventDto,
+  UpdateAgentRequest,
   UpdateChatRequest,
   UpdateMcpServerRequest,
   UpdateProviderRequest,
@@ -465,6 +475,168 @@ export function createAgentKitClient(options: AgentKitClientOptions) {
     /** The chat-independent tool catalogue; 501 where a host has none. */
     listTools: (opts?: RequestOptions) =>
       transport.json<ToolDefinitionDto[]>("listTools", { options: opts }),
+
+    // -----------------------------------------------------------------------
+    // Teammates: agents, revisions, admissions, task history
+    // -----------------------------------------------------------------------
+
+    /**
+     * Mint a persistent agent identity. The scope and owner are the
+     * SERVER's answer (from the authenticated actor) — the body can name
+     * neither, so no caller can create into another's scope.
+     */
+    createAgent: (body: CreateAgentRequest, opts?: RequestOptions) =>
+      transport.json<AgentDto>("createAgent", { body, options: opts }),
+
+    /** The live agents of the caller's scope, archived included. */
+    listAgents: (params: { limit?: number } = {}, opts?: RequestOptions) =>
+      transport.json<AgentDto[]>("listAgents", {
+        query: { limit: params.limit },
+        options: opts,
+      }),
+
+    getAgent: (params: { agentId: string }, opts?: RequestOptions) =>
+      transport.json<AgentDto>("getAgent", { path: params, options: opts }),
+
+    /**
+     * Replace the effective definition under optimistic concurrency:
+     * `expectedRevision` from a stale read is a 409 `revision_conflict`
+     * that applied nothing.
+     */
+    updateAgent: (
+      params: { agentId: string },
+      body: UpdateAgentRequest,
+      opts?: RequestOptions,
+    ) =>
+      transport.json<AgentDto>("updateAgent", {
+        path: params,
+        body,
+        options: opts,
+      }),
+
+    /** Move the model preference under the SAME identity — a revision, not a new agent. */
+    setAgentModel: (
+      params: { agentId: string },
+      body: SetAgentModelRequest,
+      opts?: RequestOptions,
+    ) =>
+      transport.json<AgentDto>("setAgentModel", {
+        path: params,
+        body,
+        options: opts,
+      }),
+
+    /** Archive: the agent refuses NEW admissions; history stays readable. */
+    archiveAgent: (params: { agentId: string }, opts?: RequestOptions) =>
+      transport.json<AgentDto>("archiveAgent", {
+        path: params,
+        options: opts,
+      }),
+
+    /** Restore an archived agent: admissions open again. */
+    restoreAgent: (params: { agentId: string }, opts?: RequestOptions) =>
+      transport.json<AgentDto>("restoreAgent", {
+        path: params,
+        options: opts,
+      }),
+
+    /** The append-only configuration ledger, oldest first. */
+    listAgentRevisions: (
+      params: { agentId: string; limit?: number },
+      opts?: RequestOptions,
+    ) =>
+      transport.json<AgentRevisionDto[]>("listAgentRevisions", {
+        path: { agentId: params.agentId },
+        query: { limit: params.limit },
+        options: opts,
+      }),
+
+    /**
+     * The ONE admission path. Idempotent on the body's `admissionKey` —
+     * unlike {@link submitMessage} this route mints no `Idempotency-Key`
+     * header, because its key is in the validated body and survives a
+     * client that cannot set headers; a duplicate returns the same task
+     * with `replayed: true` and creates nothing.
+     */
+    submitTeammateTask: (
+      params: { agentId: string },
+      body: SubmitTeammateTaskRequest,
+      opts?: RequestOptions,
+    ) =>
+      transport.json<SubmitTeammateTaskResponse>("submitTeammateTask", {
+        path: params,
+        body,
+        options: opts,
+      }),
+
+    /** The agent's logical tasks, insertion-ordered (history load). */
+    listAgentTasks: (
+      params: { agentId: string; limit?: number },
+      opts?: RequestOptions,
+    ) =>
+      transport.json<AgentTaskDto[]>("listAgentTasks", {
+        path: { agentId: params.agentId },
+        query: { limit: params.limit },
+        options: opts,
+      }),
+
+    /** One logical task by id — the reconnect/status read. */
+    getAgentTask: (params: { taskId: string }, opts?: RequestOptions) =>
+      transport.json<AgentTaskDto>("getAgentTask", {
+        path: params,
+        options: opts,
+      }),
+
+    /** 202: cancellation is a request; a running attempt lands it through the lease heartbeat. */
+    cancelAgentTask: (params: { taskId: string }, opts?: RequestOptions) =>
+      transport.json<AgentTaskDto>("cancelAgentTask", {
+        path: params,
+        options: opts,
+      }),
+
+    /**
+     * One bounded page of the task's durable event log, ordered by `seq`.
+     * Pass the page's `nextCursor` back as `after`; absent means the log
+     * ran dry. Paging by `seq` — never offset — is what keeps a page
+     * stable beside a live emitter.
+     */
+    listAgentTaskEvents: (
+      params: { taskId: string; after?: number; limit?: number },
+      opts?: RequestOptions,
+    ) =>
+      transport.json<TaskEventPageDto>("listAgentTaskEvents", {
+        path: { taskId: params.taskId },
+        query: { after: params.after, limit: params.limit },
+        options: opts,
+      }),
+
+    /**
+     * Open the task's SSE stream and hand back the raw response — the
+     * frames are the caller's to parse (`parseSseStream` is exported for
+     * exactly that). Resume with a `last-event-id` header in `opts`; an
+     * unknown cursor replays from the start, announced, never silent.
+     *
+     * Deliberately NOT the `streamRun` iteration lane: agent-task events
+     * are the task vocabulary, not `AiRunEvent`s, and a second
+     * reconnect/dedupe loop that only differs by type is a copy nobody
+     * maintains.
+     */
+    streamAgentTask: (params: { taskId: string }, opts?: RequestOptions) =>
+      transport.request("streamAgentTask", {
+        path: params,
+        accept: "text/event-stream",
+        options: opts,
+      }),
+
+    /** Explain the sealed effective run profile the admission pinned; absent fields mean none was pinned. */
+    getAgentTaskRunProfile: (
+      params: { taskId: string },
+      opts?: RequestOptions,
+    ) =>
+      transport.json<RunProfileExplanationDto>("getAgentTaskRunProfile", {
+        path: params,
+        options: opts,
+      }),
 
     /** Contract version and REST surface version — they move independently. */
     getVersion: (opts?: RequestOptions) =>

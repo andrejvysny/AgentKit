@@ -218,6 +218,62 @@ export const REST_ROUTES = {
   deleteMcpServer: { method: "DELETE", path: "/v1/mcp/servers/:serverId" },
 
   listTools: { method: "GET", path: "/v1/tools" },
+
+  // -------------------------------------------------------------------------
+  // AGENTKIT-90 — persistent teammates (AGENTKIT-87/88/89 services made
+  // reachable through the supported HTTP surface). All additive: no route
+  // above changed. Every list/detail/event route is scope-authorized on
+  // the server — an agent outside the caller's scope is indistinguishable
+  // from one that does not exist — and reads/replays create nothing:
+  // the only work-creating operation here is `submitTeammateTask`, whose
+  // `admissionKey` makes even its replay create nothing.
+  // -------------------------------------------------------------------------
+
+  /** Mint a persistent agent identity under the caller's scope. The
+   * scope and owner come from the authenticated actor, never the body. */
+  createAgent: { method: "POST", path: "/v1/agents" },
+  /** The live agents of the CALLER's scope (archived included: archive
+   * means "no new runs", not "gone"). */
+  listAgents: { method: "GET", path: "/v1/agents" },
+  getAgent: { method: "GET", path: "/v1/agents/:agentId" },
+  /** Replace the effective definition under optimistic concurrency:
+   * `expectedRevision` from a stale read is a `revision_conflict` 409. */
+  updateAgent: { method: "PATCH", path: "/v1/agents/:agentId" },
+  /** Move the model preference under the SAME identity (a new revision,
+   * never a new agent). */
+  setAgentModel: { method: "POST", path: "/v1/agents/:agentId/model" },
+  /** Archive: the agent refuses NEW admissions; history stays readable. */
+  archiveAgent: { method: "POST", path: "/v1/agents/:agentId/archive" },
+  /** Restore an archived agent: admissions open again. */
+  restoreAgent: { method: "POST", path: "/v1/agents/:agentId/restore" },
+  /** The append-only configuration ledger, oldest first. */
+  listAgentRevisions: { method: "GET", path: "/v1/agents/:agentId/revisions" },
+  /** The ONE admission path (AGENTKIT-88): idempotent on the body's
+   * `admissionKey` — a duplicate returns the same logical task and
+   * creates nothing, so this route needs no `Idempotency-Key` header. */
+  submitTeammateTask: { method: "POST", path: "/v1/agents/:agentId/tasks" },
+  /** The agent's logical tasks, insertion-ordered (history load). */
+  listAgentTasks: { method: "GET", path: "/v1/agents/:agentId/tasks" },
+  /** One logical task by id — reconnect/status load; creates nothing. */
+  getAgentTask: { method: "GET", path: "/v1/agent-tasks/:taskId" },
+  /** Request cancellation; the running attempt observes it through the
+   * lease heartbeat. */
+  cancelAgentTask: { method: "POST", path: "/v1/agent-tasks/:taskId/cancel" },
+  /** A BOUNDED page of the task's durable event log, ordered by `seq`,
+   * paged by `?after=<seq>&limit=`. Pure read; replays create nothing. */
+  listAgentTaskEvents: { method: "GET", path: "/v1/agent-tasks/:taskId/events" },
+  /** SSE over the same durable log. Resumes on `Last-Event-ID` (an
+   * `eventId`); an unknown cursor replays from the start — never
+   * silently: `agentkit.stream.resync` says so. */
+  streamAgentTask: { method: "GET", path: "/v1/agent-tasks/:taskId/stream" },
+  /** Explain the sealed effective run profile the admission pinned
+   * (AGENTKIT-89), verified against its digest. Absent fields mean the
+   * admission pinned no profile — unknown, not empty. */
+  getAgentTaskRunProfile: {
+    method: "GET",
+    path: "/v1/agent-tasks/:taskId/run-profile",
+  },
+
   getVersion: { method: "GET", path: "/v1/version" },
 } as const satisfies Readonly<Record<string, RouteDef>>;
 

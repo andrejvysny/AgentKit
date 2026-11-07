@@ -290,6 +290,98 @@
       "requiredHeaders": []
     },
     {
+      "method": "POST",
+      "operation": "createAgent",
+      "path": "/v1/agents",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listAgents",
+      "path": "/v1/agents",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "getAgent",
+      "path": "/v1/agents/:agentId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "PATCH",
+      "operation": "updateAgent",
+      "path": "/v1/agents/:agentId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "setAgentModel",
+      "path": "/v1/agents/:agentId/model",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "archiveAgent",
+      "path": "/v1/agents/:agentId/archive",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "restoreAgent",
+      "path": "/v1/agents/:agentId/restore",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listAgentRevisions",
+      "path": "/v1/agents/:agentId/revisions",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "submitTeammateTask",
+      "path": "/v1/agents/:agentId/tasks",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listAgentTasks",
+      "path": "/v1/agents/:agentId/tasks",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "getAgentTask",
+      "path": "/v1/agent-tasks/:taskId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "cancelAgentTask",
+      "path": "/v1/agent-tasks/:taskId/cancel",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listAgentTaskEvents",
+      "path": "/v1/agent-tasks/:taskId/events",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "streamAgentTask",
+      "path": "/v1/agent-tasks/:taskId/stream",
+      "requiredHeaders": [],
+      "responseContentType": "text/event-stream",
+      "resumeHeader": "Last-Event-ID"
+    },
+    {
+      "method": "GET",
+      "operation": "getAgentTaskRunProfile",
+      "path": "/v1/agent-tasks/:taskId/run-profile",
+      "requiredHeaders": []
+    },
+    {
       "method": "GET",
       "operation": "getVersion",
       "path": "/v1/version",

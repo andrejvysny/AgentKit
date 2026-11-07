@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 test.skipIf(!nativeBackendAvailable)(
-  "all 48 REST operations exercise native host and explicit optional-service boundaries",
+  "all 63 REST operations exercise native host and explicit optional-service boundaries",
   async () => {
     const client = server.client;
     const covered = new Set<RestOperation>();
@@ -325,12 +325,69 @@ test.skipIf(!nativeBackendAvailable)(
       await assertManagedServiceLive(operation);
       covered.add(operation);
     }
+    // AGENTKIT-90. The teammate lane's per-route answer is the Rust side's
+    // contract — pinned where the native tests live, not here. What THIS
+    // lane pins is the boundary: the routes are registered on the native
+    // server, authentication reaches them, and the answer is honest — not
+    // a 404 for a routed path, and not a 5xx escaping a stub.
+    for (const operation of [
+      "createAgent",
+      "listAgents",
+      "getAgent",
+      "updateAgent",
+      "setAgentModel",
+      "archiveAgent",
+      "restoreAgent",
+      "listAgentRevisions",
+      "submitTeammateTask",
+      "listAgentTasks",
+      "getAgentTask",
+      "cancelAgentTask",
+      "listAgentTaskEvents",
+      "streamAgentTask",
+      "getAgentTaskRunProfile",
+    ] as const satisfies readonly RestOperation[]) {
+      await assertTeammateRouteBoundary(operation);
+      covered.add(operation);
+    }
     expect([...covered].sort()).toEqual(
       (Object.keys(REST_ROUTES) as RestOperation[]).sort(),
     );
   },
   60_000,
 );
+
+/**
+ * The teammate routes, asserted only to their boundary: unauthenticated is
+ * 401 (auth applies to the whole lane, the same door every other native
+ * route answers at), and authenticated is below 500 — every honest answer
+ * is legal here (a DTO, a 400 refusal, a 404 for the placeholder ids, a
+ * 409 for a stale revision) but a crash escaping a stub is not. What each
+ * route ANSWERS is the native side's own contract and pinned with it.
+ */
+async function assertTeammateRouteBoundary(
+  operation: RestOperation,
+): Promise<void> {
+  const route = REST_ROUTES[operation];
+  const path = route.path.replace(/:[A-Za-z]+/g, "unconfigured");
+  const input: RequestInit = {
+    method: route.method,
+    ...(route.method === "GET" || route.method === "DELETE"
+      ? {}
+      : { body: "{}" }),
+  };
+  const unauthorized = await fetch(`${server.baseUrl}${path}`, input);
+  expect(unauthorized.status, `${operation} requires authentication`).toBe(401);
+  const response = await fetch(`${server.baseUrl}${path}`, {
+    ...input,
+    headers: {
+      authorization: `Bearer ${server.token}`,
+      "content-type": "application/json",
+    },
+  });
+  expect(response.status, operation).not.toBe(401);
+  expect(response.status, operation).toBeLessThan(500);
+}
 
 async function assertManagedServiceUnavailable(
   operation: RestOperation,

@@ -25,6 +25,10 @@ export * from "./task-events.js";
 // adapter serves them yet (docs/non-goals.md).
 export * from "./rest.js";
 
+// AGENTKIT-90: persistent teammates — lifecycle, admission, status/history,
+// event pages, effective-run-profile inspection DTOs.
+export * from "./teammates.js";
+
 // The schema values again, as one enumerable barrel (validation/codegen/docs).
 export * from "./schemas.js";
 export * from "./provider-continuation.js";

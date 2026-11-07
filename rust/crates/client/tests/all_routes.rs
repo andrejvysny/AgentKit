@@ -121,7 +121,7 @@ impl Fixture {
             self.covered.keys().cloned().collect::<BTreeSet<_>>(),
             expected
         );
-        assert_eq!(self.covered.len(), 48);
+        assert_eq!(self.covered.len(), 63);
         let audit: Value = reqwest::Client::new()
             .get(&self.announcement.evidence_url)
             .bearer_auth(&self.announcement.evidence_token)
@@ -174,6 +174,19 @@ fn request(path: &[(&str, &str)], body: Option<Value>) -> Call {
         ..Call::default()
     }
 }
+fn agent_definition() -> Value {
+    serde_json::json!({
+        "name": "all-routes-agent",
+        "purpose": "exercise the 501 gate",
+        "instructions": "none",
+        "resources": [],
+        "skills": [],
+        "permissionMode": "ask",
+        "allowedTools": [],
+        "budgets": {},
+        "secretRefs": [],
+    })
+}
 fn check(value: &Value, schema: &str) {
     if schema.is_empty() {
         assert!(value.is_null());
@@ -190,7 +203,7 @@ fn id(value: &Value, field: &str) -> String {
 }
 
 #[tokio::test]
-async fn rust_client_exercises_all_48_operations_against_the_actual_typescript_host() {
+async fn rust_client_exercises_all_63_operations_against_the_actual_typescript_host() {
     if support::ts_interop_skipped() {
         return;
     }
@@ -213,13 +226,49 @@ async fn rust_client_exercises_all_48_operations_against_the_actual_typescript_h
         Op::DeletePromptTemplate,
         Op::RenderPromptTemplate,
         Op::ListSkills,
+        // AGENTKIT-90: the fifteen teammate routes ship in the contract and
+        // the router; without a `teammates` port the TS transport answers
+        // 501 (the Rust host owns execution), exactly like the optional
+        // services above.
+        Op::CreateAgent,
+        Op::ListAgents,
+        Op::GetAgent,
+        Op::UpdateAgent,
+        Op::SetAgentModel,
+        Op::ArchiveAgent,
+        Op::RestoreAgent,
+        Op::ListAgentRevisions,
+        Op::SubmitTeammateTask,
+        Op::ListAgentTasks,
+        Op::GetAgentTask,
+        Op::CancelAgentTask,
+        Op::ListAgentTaskEvents,
+        Op::StreamAgentTask,
+        Op::GetAgentTaskRunProfile,
     ] {
         fixture.covered.insert(op.as_str().into(), 501);
         let case = fixture.expected_requests.len().to_string();
         fixture
             .expected_requests
             .insert(case.clone(), (op.as_str().into(), 501));
-        let mut call = Call::default();
+        let body = match op {
+            // The client validates request schemas before the socket; these
+            // four carry bodies, so they need schema-valid ones to reach the
+            // transport's 501 gate at all.
+            Op::CreateAgent => Some(serde_json::json!({"definition": agent_definition()})),
+            Op::UpdateAgent => Some(serde_json::json!({
+                "expectedRevision": 1,
+                "definition": agent_definition(),
+            })),
+            Op::SetAgentModel => Some(serde_json::json!({"expectedRevision": 1, "model": "m1"})),
+            Op::SubmitTeammateTask => Some(serde_json::json!({
+                "admissionKey": "all-routes-501",
+                "kind": "chat.turn",
+                "payload": {},
+            })),
+            _ => None,
+        };
+        let mut call = request(&[], body);
         for segment in op.route().path.split('/') {
             if let Some(name) = segment.strip_prefix(':') {
                 call.path.insert(name.into(), "optional-service".into());
@@ -229,10 +278,14 @@ async fn rust_client_exercises_all_48_operations_against_the_actual_typescript_h
             .insert("x-agentkit-case", case.parse().unwrap());
         call.headers
             .insert("x-agentkit-operation", op.as_str().parse().unwrap());
-        assert!(matches!(
-            fixture.client.call(op, call).await,
-            Err(agentkit_client::ClientError::Http { status: 501, .. })
-        ));
+        let result = fixture.client.call(op, call).await;
+        assert!(
+            matches!(
+                result,
+                Err(agentkit_client::ClientError::Http { status: 501, .. })
+            ),
+            "{op}: {result:?}"
+        );
     }
     fixture.verify().await;
 }

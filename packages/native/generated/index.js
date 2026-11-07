@@ -773,9 +773,10 @@ if (
   }
 }
 
-const { NativeRunHandle, NativeStore, SessionService, StoreTransactionHandle, SubscriptionHandle, bindingSmoke, claimCall, endRunProvider, isRunCallbackActive, pushRunProviderEvent, registerProviderConnection, reserveRunProviderRequest, resolveCall, revokeProviderConnection } = nativeBinding
+const { NativeRunHandle, NativeStore, NativeTeammates, SessionService, StoreTransactionHandle, SubscriptionHandle, bindingSmoke, claimCall, endRunProvider, isRunCallbackActive, pushRunProviderEvent, registerProviderConnection, reserveRunProviderRequest, resolveCall, revokeProviderConnection } = nativeBinding
 export { NativeRunHandle }
 export { NativeStore }
+export { NativeTeammates }
 export { SessionService }
 export { StoreTransactionHandle }
 export { SubscriptionHandle }
