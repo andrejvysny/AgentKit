@@ -45,6 +45,12 @@ pub struct AgentInputRecord {
     pub input_id: String,
     /// The chat id.
     pub session_id: String,
+    /// AGENTKIT-88: the persistent agent this input is addressed to, set
+    /// only for teammate-mailbox rows. Absence is the honest projection
+    /// for a session input — there is no default that could misattribute
+    /// an input to some agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     pub kind: AgentInputKind,
     pub status: AgentInputStatus,
     #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
@@ -313,7 +319,7 @@ pub fn validate_create_agent_input(input: &CreateAgentInput) -> Result<()> {
     Ok(())
 }
 
-fn next_order(db: &Connection) -> Result<i64> {
+pub(crate) fn next_order(db: &Connection) -> Result<i64> {
     let current: i64 = db.query_row(
         "SELECT value FROM counters WHERE name='input_order'",
         [],
@@ -339,6 +345,10 @@ pub(crate) fn insert_input(
         if existing.session_id != input.session_id
             || existing.kind != input.kind
             || existing.content_hash != input.content_hash
+            // AGENTKIT-88: a session input and an agent-mailbox input are
+            // different objects even under equal facts; a session-path
+            // replay must never be satisfied by a mailbox row.
+            || existing.agent_id.is_some()
         {
             return Err(StoreError::Duplicate(format!(
                 "input_conflict: input {} already exists with different kind, session, or content.",
@@ -350,6 +360,7 @@ pub(crate) fn insert_input(
     let record = AgentInputRecord {
         input_id: input.input_id,
         session_id: input.session_id,
+        agent_id: None,
         kind: input.kind,
         status: AgentInputStatus::Pending,
         content: input.content,
@@ -367,7 +378,7 @@ pub(crate) fn insert_input(
         updated_at: now_text.into(),
     };
     db.execute(
-        "INSERT INTO agent_inputs VALUES(?,?,?,?,?,?)",
+        "INSERT INTO agent_inputs VALUES(?,?,?,?,?,?,?)",
         params![
             record.input_id,
             record.session_id,
@@ -375,6 +386,7 @@ pub(crate) fn insert_input(
             status_text(record.status),
             record.target_task_id,
             json(db, &record)?,
+            record.agent_id,
         ],
     )?;
     Ok((record, true))
@@ -401,7 +413,8 @@ pub(crate) fn list_inputs(
 ) -> Result<Vec<AgentInputRecord>> {
     let mut statement = db.prepare(
         "SELECT record FROM agent_inputs WHERE session_id=?1 \
-         AND (?2 IS NULL OR target_task_id=?2)",
+         AND (?2 IS NULL OR target_task_id=?2) \
+         AND agent_id IS NULL",
     )?;
     let rows = statement.query_map(params![query.session_id, query.target_task_id], |row| {
         row.get::<_, String>(0)
@@ -462,7 +475,13 @@ pub(crate) fn transition_input(
 }
 
 pub(crate) fn delete_session_inputs(db: &Connection, session_id: &str) -> Result<u64> {
-    Ok(db.execute("DELETE FROM agent_inputs WHERE session_id=?", [session_id])? as u64)
+    // AGENTKIT-88: teammate-mailbox rows carry `agent_id`; deleting a
+    // session's inputs must never reach them, even if a caller pinned an
+    // agent id equal to a chat id.
+    Ok(db.execute(
+        "DELETE FROM agent_inputs WHERE session_id=? AND agent_id IS NULL",
+        [session_id],
+    )? as u64)
 }
 
 pub(crate) fn kind_text(kind: AgentInputKind) -> &'static str {

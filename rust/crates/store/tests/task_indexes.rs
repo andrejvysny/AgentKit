@@ -171,8 +171,12 @@ async fn a_version_eleven_database_upgrades_and_keeps_its_tasks() {
     let before = store.list_tasks(None).await.unwrap();
     drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch("DROP INDEX tasks_status; DROP INDEX tasks_parent; DROP TABLE agents; DROP TABLE agent_config_revisions;")
-        .unwrap();
+    db.execute_batch(
+        "DROP INDEX tasks_status; DROP INDEX tasks_parent; DROP TABLE agents; \
+         DROP TABLE agent_config_revisions; DROP TABLE agent_admissions; \
+         DROP INDEX agent_inputs_agent; ALTER TABLE agent_inputs DROP COLUMN agent_id;",
+    )
+    .unwrap();
     downgrade_provider_authority(&db);
     db.pragma_update(None, "user_version", 11).unwrap();
     drop(db);
@@ -185,7 +189,7 @@ async fn a_version_eleven_database_upgrades_and_keeps_its_tasks() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 14);
+    assert_eq!(SCHEMA_VERSION, 15);
     let indexes: i64 = db
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE name IN ('tasks_status','tasks_parent')",

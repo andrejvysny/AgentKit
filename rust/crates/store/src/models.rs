@@ -14,6 +14,17 @@ pub enum TaskStatus {
     Running,
     Interrupted,
     WaitingApproval,
+    /// AGENTKIT-88: a durable park on unfinished child tasks. Like
+    /// `WaitingApproval` it is NON-terminal and holds no execution slot
+    /// (waiting must not spin or reserve the pool), but it keeps owning
+    /// its agent lane until the wait resolves.
+    WaitingChild,
+    /// AGENTKIT-88: an attempt ended without a decidable outcome (its
+    /// lease expired while running and reconciliation had not classified
+    /// the result). Non-terminal, lane-owning, unclaimable: only an
+    /// explicit [`crate::SqliteStore::resolve_uncertain`] settles it, so
+    /// a late or duplicated worker can never restate finished work.
+    Uncertain,
     Completed,
     Failed,
     Cancelled,
@@ -79,6 +90,33 @@ pub struct TaskRecord {
     #[serde(default)]
     /// Durable request to interrupt the running turn at a safe boundary.
     pub interrupt_requested: bool,
+    /// AGENTKIT-88: the persistent agent identity this logical task runs
+    /// under, written once at admission and never mutated. `None` is an
+    /// unbound task (every pre-88 row); absence is the honest projection,
+    /// not a default that could drift from the admission ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// AGENTKIT-88: the IMMUTABLE definition revision pinned at admission
+    /// (the `agent_config_revisions` row this run executes under). A
+    /// later definition edit never moves it — the ledger resolves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_revision: Option<i64>,
+    /// AGENTKIT-88: the caller's idempotency key, present exactly for
+    /// admitted tasks. The durable admission ledger is authoritative;
+    /// this copy is the readable receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_key: Option<String>,
+}
+
+/// The agent binding an admitted task carries: identity plus the
+/// immutable definition revision plus the idempotency key that admitted
+/// it. Written once, inside the admission transaction, never again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskBinding {
+    pub agent_id: String,
+    pub agent_revision: i64,
+    pub admission_key: String,
 }
 
 #[derive(Clone, Debug)]

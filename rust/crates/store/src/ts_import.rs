@@ -1172,6 +1172,11 @@ impl<'a> Importer<'a> {
                 runtime_state: None,
                 retry_pending: false,
                 interrupt_requested: false,
+                // Same for the AGENTKIT-88 binding: a source that predates
+                // agent admission imports unbound, never bound by guess.
+                agent_id: None,
+                agent_revision: None,
+                admission_key: None,
             };
             let status = self.status_text(&task.status)?;
             let scope = task.scope_id.clone();
@@ -2591,8 +2596,11 @@ impl<'a> Importer<'a> {
             );
             if self.insert_keeping("agent input", &id, |db| {
                 Ok(db.execute(
-                    "INSERT INTO agent_inputs VALUES(?,?,?,?,?,?) ON CONFLICT(input_id) DO NOTHING",
-                    params![id, session, kind, status, target, text],
+                    "INSERT INTO agent_inputs VALUES(?,?,?,?,?,?,?) ON CONFLICT(input_id) DO NOTHING",
+                    // A TypeScript import carries no agent mailbox: the
+                    // source schema predates AGENTKIT-88, so `agent_id`
+                    // lands NULL honestly, never guessed.
+                    params![id, session, kind, status, target, text, Option::<String>::None],
                 )?)
             })? {
                 self.report.agent_inputs += 1;

@@ -22,6 +22,7 @@ mod session_ops;
 mod settings_commit;
 mod subagents;
 mod tasks;
+mod teammates;
 mod timestamp;
 mod transaction;
 #[cfg(feature = "ts-import")]
@@ -52,6 +53,7 @@ pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
 pub use subagents::*;
 pub use tasks::TaskAging;
+pub use teammates::*;
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
 #[cfg(feature = "ts-import")]

@@ -108,6 +108,18 @@ pub(crate) fn lifecycle_event(
 }
 
 pub(crate) fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
+    insert_bound(db, input, None)
+}
+
+/// The single task-insert path. `binding` is the AGENTKIT-88 agent
+/// binding (identity, immutable revision, idempotency key); it is written
+/// exactly here, exactly once, by the admission transaction. Unbound
+/// submits pass `None` and land records byte-identical to pre-88 rows.
+pub(crate) fn insert_bound(
+    db: &Connection,
+    input: SubmitTask,
+    binding: Option<TaskBinding>,
+) -> Result<TaskRecord> {
     if get::<TaskRecord>(db, "tasks", "id", &input.task_id)?.is_some() {
         return Err(StoreError::Duplicate(input.task_id));
     }
@@ -156,6 +168,11 @@ pub(crate) fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
         runtime_state: None,
         retry_pending: false,
         interrupt_requested: false,
+        agent_id: binding.as_ref().map(|binding| binding.agent_id.clone()),
+        agent_revision: binding.as_ref().map(|binding| binding.agent_revision),
+        admission_key: binding
+            .as_ref()
+            .map(|binding| binding.admission_key.clone()),
     };
     db.execute(
         "INSERT INTO tasks VALUES(?,?,?,?)",
@@ -299,10 +316,15 @@ impl SqliteStore {
                 ));
             }
             let transaction = crate::transaction::atomic(db)?;
-            // Only these statuses can occupy a slot, block a scope, or be claimed.
+            // Only these statuses can occupy a slot, block a lane, or be
+            // claimed. `waiting_child` and `uncertain` join the scan purely
+            // as lane blockers (AGENTKIT-88): they hold their agent's lane
+            // so no second state-mutating attempt starts beside them, yet
+            // the claimable filter below never selects them, so a parked
+            // or unresolved run reserves no pool slot and never spins.
             let mut tasks: Vec<TaskRecord> = select(
                 &transaction,
-                "SELECT record FROM tasks WHERE status IN ('queued','running','waiting_approval') ORDER BY rowid",
+                "SELECT record FROM tasks WHERE status IN ('queued','running','waiting_approval','waiting_child','uncertain') ORDER BY rowid",
                 [],
             )?;
             let occupied = tasks
@@ -345,10 +367,18 @@ impl SqliteStore {
                 if input.busy_scopes.contains(&task.scope_id)
                     || tasks.iter().any(|t| {
                         t.task_id != task.task_id
-                            && t.scope_id == task.scope_id
+                            && (t.scope_id == task.scope_id
+                                // AGENTKIT-88: an admitted task also runs
+                                // in its agent's lane — one active
+                                // state-mutating attempt per persistent
+                                // agent, across scopes.
+                                || (task.agent_id.is_some() && t.agent_id == task.agent_id))
                             && (matches!(
                                 t.status,
-                                TaskStatus::Running | TaskStatus::WaitingApproval
+                                TaskStatus::Running
+                                    | TaskStatus::WaitingApproval
+                                    | TaskStatus::WaitingChild
+                                    | TaskStatus::Uncertain
                             ) || t.retry_pending && t.status == TaskStatus::Queued)
                     })
                 {
