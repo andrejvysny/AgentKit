@@ -109,9 +109,25 @@ fn map_event(event: Value) -> std::result::Result<ProviderEvent, CoreError> {
             data["errorMessage"].as_str().unwrap_or("Provider failed"),
         )),
         "run.cancelled" => Err(CoreError::new("cancelled", "aborted")),
-        "run.message.delta" => Ok(ProviderEvent::Delta(
-            data["delta"].as_str().unwrap_or("").into(),
-        )),
+        "run.message.delta" => {
+            // ONEMIND-352: a TypeScript reference provider surfaces
+            // provider citations on an additive `run.message.delta` frame
+            // carrying `citations` alongside EMPTY text (text streams stay
+            // on the plain Delta lane — the reference emitter never mixes
+            // text and citations on one frame). Forward such frames on the
+            // Event lane so the data survives verbatim into the durable
+            // event; a plain text delta keeps accumulating into the turn.
+            if data.get("citations").is_some() && data["delta"].as_str().unwrap_or("").is_empty() {
+                Ok(ProviderEvent::Event {
+                    kind: kind.into(),
+                    data,
+                })
+            } else {
+                Ok(ProviderEvent::Delta(
+                    data["delta"].as_str().unwrap_or("").into(),
+                ))
+            }
+        }
         "run.tool.requested" => Ok(ProviderEvent::ToolRequested(ToolCall {
             id: data["toolCallId"].as_str().unwrap_or("").into(),
             name: data["toolName"].as_str().unwrap_or("").into(),

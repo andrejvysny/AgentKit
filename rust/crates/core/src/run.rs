@@ -539,7 +539,7 @@ impl State {
                     | ProviderEvent::ToolRequested(_)
                     | ProviderEvent::Usage(_)
                     | ProviderEvent::Activity
-            ) || matches!(&event, ProviderEvent::Event {kind,..} if kind == "run.message.completed" || kind == "run.message.reasoning-delta")
+            ) || matches!(&event, ProviderEvent::Event {kind,..} if kind == "run.message.completed" || kind == "run.message.reasoning-delta" || kind == "run.message.delta")
             {
                 first = false;
                 last_activity = tokio::time::Instant::now();

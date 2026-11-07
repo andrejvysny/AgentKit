@@ -261,6 +261,22 @@
       }
     ]
   },
+  "AiCitationSchema": {
+    "properties": {
+      "title": {
+        "description": "Provider-supplied source title, when known.",
+        "type": "string"
+      },
+      "url": {
+        "description": "Absolute source URL.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  },
   "AiContentPartSchema": {
     "anyOf": [
       {
@@ -1582,6 +1598,26 @@
           },
           "data": {
             "properties": {
+              "citations": {
+                "description": "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+                "items": {
+                  "properties": {
+                    "title": {
+                      "description": "Provider-supplied source title, when known.",
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Absolute source URL.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "delta": {
                 "type": "string"
               }
@@ -1686,6 +1722,26 @@
           },
           "data": {
             "properties": {
+              "citations": {
+                "description": "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+                "items": {
+                  "properties": {
+                    "title": {
+                      "description": "Provider-supplied source title, when known.",
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Absolute source URL.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "content": {
                 "type": "string"
               },
@@ -3059,6 +3115,26 @@
       },
       "data": {
         "properties": {
+          "citations": {
+            "description": "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+            "items": {
+              "properties": {
+                "title": {
+                  "description": "Provider-supplied source title, when known.",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Absolute source URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "content": {
             "type": "string"
           },
@@ -3145,6 +3221,26 @@
       },
       "data": {
         "properties": {
+          "citations": {
+            "description": "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+            "items": {
+              "properties": {
+                "title": {
+                  "description": "Provider-supplied source title, when known.",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Absolute source URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "delta": {
             "type": "string"
           }
@@ -6823,6 +6919,26 @@
           },
           "data": {
             "properties": {
+              "citations": {
+                "description": "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+                "items": {
+                  "properties": {
+                    "title": {
+                      "description": "Provider-supplied source title, when known.",
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Absolute source URL.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "delta": {
                 "type": "string"
               }
@@ -6927,6 +7043,26 @@
           },
           "data": {
             "properties": {
+              "citations": {
+                "description": "Provider-attested sources surfaced by this call (annotation-carrying delta chunks and/or the completed message). Additive: absent when the provider reported no citations.",
+                "items": {
+                  "properties": {
+                    "title": {
+                      "description": "Provider-supplied source title, when known.",
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Absolute source URL.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "content": {
                 "type": "string"
               },

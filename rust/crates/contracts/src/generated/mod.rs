@@ -4,6 +4,8 @@ mod ai_chat_message;
 pub use ai_chat_message::*;
 mod ai_chat_role;
 pub use ai_chat_role::*;
+mod ai_citation;
+pub use ai_citation::*;
 mod ai_content_part;
 pub use ai_content_part::*;
 mod ai_context_binding_role;

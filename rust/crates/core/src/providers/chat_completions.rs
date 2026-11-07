@@ -263,6 +263,9 @@ impl ChatCompletionsProvider {
             if !state.reasoning.is_empty() {
                 data["reasoningContent"] = state.reasoning.into();
             }
+            if !state.citations.is_empty() {
+                data["citations"] = state.citations.into();
+            }
             if let Some(reason) = state.finish {
                 data["finishReason"] = reason.into();
             }
@@ -422,6 +425,8 @@ async fn read_body(
 struct ChatState {
     content: String,
     reasoning: String,
+    citations: Vec<Value>,
+    citation_urls: std::collections::HashSet<String>,
     calls: Vec<ToolCall>,
     by_index: HashMap<u64, usize>,
     by_id: HashMap<String, usize>,
@@ -437,6 +442,8 @@ impl Default for ChatState {
         Self {
             content: String::new(),
             reasoning: String::new(),
+            citations: vec![],
+            citation_urls: std::collections::HashSet::new(),
             calls: vec![],
             by_index: HashMap::new(),
             by_id: HashMap::new(),
@@ -496,6 +503,19 @@ impl ChatState {
                 self.tool_delta(call)?;
             }
         }
+        // OpenAI-compatible web-research lanes attest sources per chunk:
+        // `annotations[].url_citation` (ChatGPT-style) and the plain
+        // `citations` shape. Normalize both to the contract's `{url,title}`
+        // and surface NEW ones on an additive `run.message.delta` frame
+        // (`delta: ""`) so the durable log, SSE replay and the UI all see
+        // them; the full set also rides the completed event.
+        let fresh = self.accept_citations(&[&delta["annotations"], &delta["citations"]]);
+        if !fresh.is_empty() {
+            events.push(ProviderEvent::Event {
+                kind: "run.message.delta".into(),
+                data: json!({"delta": "", "citations": fresh}),
+            });
+        }
         if let Some(reason) = choice["finish_reason"]
             .as_str()
             .filter(|reason| !reason.is_empty())
@@ -503,6 +523,56 @@ impl ChatState {
             self.finish = Some(reason.into());
         }
         Ok(events)
+    }
+    /// Fold every citation the chunk attests into the per-call set and
+    /// return the ones not seen before. Accepted shapes: an `annotations`
+    /// entry of `type: "url_citation"` (or untyped with a `url_citation`
+    /// object) carrying `{url, title?}`, and the plain `citations` array of
+    /// bare URL strings or `{url, title?}` objects. Anything malformed is
+    /// dropped, never fatal — citations are decoration, not protocol.
+    fn accept_citations(&mut self, fields: &[&Value]) -> Vec<Value> {
+        let mut fresh = Vec::new();
+        for field in fields {
+            let Some(entries) = field.as_array() else {
+                continue;
+            };
+            for entry in entries {
+                let candidate = if let Some(inner) = entry.get("url_citation") {
+                    if entry
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind != "url_citation")
+                    {
+                        continue;
+                    }
+                    inner
+                } else {
+                    entry
+                };
+                let citation = match candidate {
+                    Value::String(url) if !url.is_empty() => json!({"url": url}),
+                    Value::Object(_) => match candidate["url"].as_str() {
+                        Some(url) if !url.is_empty() => {
+                            match candidate["title"]
+                                .as_str()
+                                .filter(|title| !title.is_empty())
+                            {
+                                Some(title) => json!({"url": url, "title": title}),
+                                None => json!({"url": url}),
+                            }
+                        }
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+                let url = citation["url"].as_str().unwrap_or_default();
+                if self.citation_urls.insert(url.to_owned()) {
+                    self.citations.push(citation.clone());
+                    fresh.push(citation);
+                }
+            }
+        }
+        fresh
     }
     fn tool_delta(&mut self, delta: &Value) -> Result<(), CoreError> {
         let id = delta["id"].as_str().unwrap_or("");

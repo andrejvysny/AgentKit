@@ -36,6 +36,12 @@ pub struct AiRunMessageCompletedEventData {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub finish_reason: Optional<AiProviderKind>,
+    #[serde(
+        rename = "citations",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub citations: Optional<Vec<AiCitation>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -47,6 +53,7 @@ crate::impl_json_deserialize!(AiRunMessageCompletedEventData, |value: Value| {
         tool_calls: crate::optional_field(&mut object, "toolCalls")?,
         reasoning_content: crate::optional_field(&mut object, "reasoningContent")?,
         finish_reason: crate::optional_field(&mut object, "finishReason")?,
+        citations: crate::optional_field(&mut object, "citations")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)
