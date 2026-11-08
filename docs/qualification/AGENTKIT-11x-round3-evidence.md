@@ -78,10 +78,18 @@ answer (`crates/store/src/native_exec.rs`) both consult it.
 `BROKER_AUTHORIZE_BUDGET_MS = 360 s` (≥ 300 s human approval window +
 30 s clamp margin), broker `call_timeout_ms = 120 s`, and
 `BROKER_MCP_REQUEST_BUDGET_MS = 540 s` (> authorize budget + call
-timeout). A 300-second approval can no longer time out the outer MCP
-call before the advertised window elapses;
-`deadline_chain_stays_compatible_by_construction` locks the ladder
-(compile-time `const { assert! … }` for the approval-window leg).
+timeout). **Correction (round 4):** this round's claim that a
+300-second approval "can no longer time out the outer MCP call" was
+WRONG as written — the constants were compatible but the MCP server
+was still constructed with `max_call_duration = call_timeout_ms`, the
+120 s EFFECT timeout, enclosing authorize+execute; an approval beyond
+the effect timeout still failed. Round 4 derived the INSTALLED server
+deadline from the ladder (authorize budget + effect timeout + 30 s
+overhead) and proved it with an assembly test; see
+`AGENTKIT-11x-round4-evidence.md` §F2.
+`deadline_chain_stays_compatible_by_construction` always locked only
+the constant chain (compile-time `const { assert! … }` for the
+approval-window leg), never the installed configuration.
 Cancellation/timeout/write-failure on the authorize and execute paths
 pair every `live_call` with `finish_live_call` — no abandoned park leaks
 gauge or credit (`abandoned_park_leaks_no_gauge_or_credit`,
