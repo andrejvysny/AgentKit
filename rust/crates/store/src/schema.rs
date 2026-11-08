@@ -22,7 +22,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
 /// full scans.
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -314,6 +314,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 17 {
             migrate_native_exec(&mut connection)?;
         }
+        if version < 18 {
+            migrate_native_continuations(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -428,6 +431,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 17 {
         sql.push_str(NATIVE_EXEC_SCHEMA);
     }
+    if version >= 18 {
+        sql.push_str(NATIVE_CONTINUATION_SCHEMA);
+    }
     sql
 }
 
@@ -511,6 +517,32 @@ fn migrate_native_exec(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(NATIVE_EXEC_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 17)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Scoped continuation bindings and durable broker call receipts (review
+/// §2.3 / §2.7), additive at schema version 18. `native_continuations`
+/// pins the FULL provenance scope an exact vendor-session resume was
+/// proven against (conversation, selected parent, acknowledged history
+/// position, backend, executable, config identity, system-prompt revision)
+/// with the owning attempt: a vendor session id alone is mutable state,
+/// not an immutable transcript snapshot. The index keys the actual scoped
+/// lookup, never a global session scan. `native_call_receipts` gives every
+/// governed broker call a per-invocation durable receipt — argument digests
+/// are integrity, never identity.
+const NATIVE_CONTINUATION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS native_continuations(binding_id TEXT PRIMARY KEY, conversation TEXT NOT NULL, parent TEXT NOT NULL, history_position INTEGER NOT NULL, backend TEXT NOT NULL, executable TEXT NOT NULL, config_identity TEXT NOT NULL, system_prompt_revision TEXT, vendor_session_id TEXT NOT NULL, owning_attempt_id TEXT NOT NULL, owning_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, state TEXT NOT NULL CHECK(state IN ('active','superseded','retired')), committed_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS native_continuations_scope ON native_continuations(conversation,parent,history_position,backend,executable,config_identity,state);
+CREATE INDEX IF NOT EXISTS native_continuations_attempt ON native_continuations(owning_attempt_id);
+CREATE TABLE IF NOT EXISTS native_call_receipts(receipt_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, invocation_id TEXT NOT NULL, tool_name TEXT NOT NULL, content_hash TEXT NOT NULL, record TEXT NOT NULL, recorded_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS native_call_receipts_invocation ON native_call_receipts(attempt_id,invocation_id);
+"#;
+
+fn migrate_native_continuations(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(NATIVE_CONTINUATION_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 18)?;
     transaction.commit()?;
     Ok(())
 }

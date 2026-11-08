@@ -70,6 +70,30 @@ pub enum NativeEvent {
     },
     /// The vendor denied a tool call at its permission layer.
     PermissionDenied { tool_name: String },
+    /// Vendor rate-limit signal (`rate_limit_event` frame). Progress
+    /// information only: never terminal-affecting (AGENTKIT-111).
+    RateLimit {
+        /// Vendor-reported status, e.g. `"allowed"`, `"warn"`, `"rejected"`.
+        status: String,
+        /// `resetsAt`: when the vendor says the limit resets, when reported.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resets_at: Option<String>,
+        /// Fraction of the limit window consumed, when reported.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utilization: Option<f64>,
+    },
+    /// Vendor stream status line (`system` subtype `status`), e.g.
+    /// `"compacting"`; absent/null status is a documented clear signal.
+    Status {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+    /// Vendor context-compaction boundary (`system` subtype
+    /// `compact_boundary`); the trigger is vendor-reported when present.
+    CompactBoundary {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<String>,
+    },
 }
 
 /// Token counts as reported by the vendor; absent means unknown, never zero.

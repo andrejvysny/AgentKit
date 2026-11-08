@@ -308,18 +308,42 @@ async fn submit_and_project_are_atomic_idempotent_and_scope_bound() {
             .content,
         json!("done")
     );
+    // A retry of the same task may re-project its own settled row (replacing
+    // a provisional output), and the event log keeps both audit entries.
+    store
+        .append_projected(
+            lease.fence(),
+            vec![event(1, "final-retry")],
+            vec![final_message.clone()],
+            1002,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_message("placeholder")
+            .await
+            .unwrap()
+            .unwrap()
+            .content,
+        json!("done")
+    );
+    // A row never written by a projection is untouchable.
+    let mut hijack = message("user", "s", Some("a"));
+    hijack.role = "user".into();
+    hijack.content = json!("rewritten");
     assert!(
         store
             .append_projected(
                 lease.fence(),
-                vec![event(1, "duplicate-final")],
-                vec![final_message],
-                1002
+                vec![event(2, "hijack")],
+                vec![hijack],
+                1003
             )
             .await
             .is_err()
     );
-    assert_eq!(store.next_seq("a").await.unwrap(), 1);
+    assert_eq!(store.next_seq("a").await.unwrap(), 2);
 }
 
 #[tokio::test]

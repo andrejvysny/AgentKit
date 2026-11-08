@@ -667,7 +667,7 @@ impl AdvisorEngine {
                 .session
                 .steer_live(
                     &request.chat_id,
-                    &crate::SteerInput {
+                    &crate::SteerInput { frozen_payload: None,
                         content: Value::String(note),
                         input_id: Some(request_id),
                         turn_id: None,

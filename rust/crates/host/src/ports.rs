@@ -33,6 +33,19 @@ pub trait TaskExecutor: Send + Sync {
     fn resolves_provider_snapshots(&self) -> bool {
         false
     }
+    /// Target-aware view of [`Self::handles_verification`]. Wrappers that
+    /// route by the frozen execution target MUST override this (and the
+    /// sibling below) so the wrapped routes keep the capabilities they
+    /// declared — a dispatch wrapper must never silently reclassify a
+    /// turn's verification or provider-snapshot behaviour (review §3.4).
+    /// Unwrapped executors inherit their flag unchanged.
+    fn handles_verification_for(&self, _payload: &Value) -> bool {
+        self.handles_verification()
+    }
+    /// Target-aware view of [`Self::resolves_provider_snapshots`].
+    fn resolves_provider_snapshots_for(&self, _payload: &Value) -> bool {
+        self.resolves_provider_snapshots()
+    }
     async fn execute(&self, context: ExecutionContext) -> HostResult<()>;
 }
 

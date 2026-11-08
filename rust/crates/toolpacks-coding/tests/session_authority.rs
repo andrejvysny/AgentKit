@@ -245,6 +245,7 @@ async fn plan_mode_escalates_by_grant_and_the_approved_write_reaches_the_workspa
                 when_busy: WhenBusy::Reject,
                 turn_id: None,
                 on_settled: None,
+                frozen_payload: None,
             },
         )
         .await
@@ -384,6 +385,7 @@ async fn start_turn(f: &Fixture, text: &str) -> String {
                 when_busy: WhenBusy::Reject,
                 turn_id: None,
                 on_settled: None,
+                frozen_payload: None,
             },
         )
         .await

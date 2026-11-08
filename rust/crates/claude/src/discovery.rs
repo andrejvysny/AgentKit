@@ -35,6 +35,15 @@ use tokio::process::Command;
 /// Below this floor the support matrix marks the driver unqualified.
 pub const QUALIFIED_FLOOR: (u32, u32, u32) = (2, 1, 259);
 
+/// Honest qualification ledger (review §3: minimum feature compatibility is
+/// not tested readiness). A capability flag reaches
+/// [`agentkit_native::CapabilityState::Supported`] only once a live
+/// qualification run is RECORDED here — the run id lives in the entry and
+/// its evidence in `docs/qualification/AGENTKIT-118-evidence.md`. Every
+/// other floor-satisfying flag is `Capable`: admitted, but never presented
+/// as tested. Entries are plain flag names.
+pub const RECORDED_QUALIFIED: &[&str] = &[];
+
 /// Default bound for one probe subprocess (`--version`, `auth status`).
 pub const DEFAULT_PROBE_TIMEOUT_MS: u64 = 10_000;
 
@@ -389,7 +398,25 @@ impl ExecutableLocator for ClaudeLocator {
             .map(str::to_owned);
         let policy = match &config_directory {
             Some(dir) => policy_state(Path::new(dir)),
-            None => PolicyState::Unknown,
+            // User layer unobservable without a reported directory: the
+            // system-managed surface still decides when it has evidence,
+            // otherwise the observation stays honestly Unknown.
+            None => {
+                let system_dirs = system_managed_dirs();
+                let system = system_dirs
+                    .iter()
+                    .map(PathBuf::as_path)
+                    .map(observe_managed_settings);
+                match merge_observations(system) {
+                    ManagedObservation::Absent | ManagedObservation::Unreadable(_) => {
+                        PolicyState::Unknown
+                    }
+                    ManagedObservation::Present { restrictive: true } => PolicyState::Conflicting,
+                    ManagedObservation::Present { restrictive: false } => {
+                        PolicyState::PresentCompatible
+                    }
+                }
+            }
         };
         if !classify_status_exit(code) {
             // Non-zero exit: documented "not logged in" regardless of body.
@@ -430,8 +457,86 @@ impl ExecutableLocator for ClaudeLocator {
 /// material (the file is the documented managed-policy surface).
 enum ManagedObservation {
     Absent,
-    Unreadable,
+    Unreadable(Option<String>),
     Present { restrictive: bool },
+}
+
+/// Documented system-managed policy locations per OS (Claude Code docs).
+/// A system-managed `managed-settings.json` governs the install no matter
+/// what the user configuration directory reports — it must be observed
+/// separately (review §3: the user-dir check alone returned a wrong
+/// "absent" beside a real system policy).
+#[must_use]
+pub fn system_managed_dirs() -> Vec<PathBuf> {
+    // Injection seam for qualification harnesses/tests; production default
+    // is the documented OS locations only.
+    if let Ok(list) = std::env::var("AGENTKIT_MANAGED_SETTINGS_SYSTEM_DIRS") {
+        return list
+            .split(':')
+            .filter(|entry| !entry.is_empty())
+            .map(PathBuf::from)
+            .collect();
+    }
+    if cfg!(target_os = "macos") {
+        vec![PathBuf::from("/Library/Application Support/ClaudeCode")]
+    } else if cfg!(target_os = "linux") {
+        vec![PathBuf::from("/etc/claude-code")]
+    } else if cfg!(windows) {
+        vec![PathBuf::from(r"C:\Program Files\ClaudeCode")]
+    } else {
+        vec![]
+    }
+}
+
+/// Merge observations: the most restrictive evidence wins — a restrictive
+/// system policy is a conflict even if the user directory is clean; an
+/// unreadable file only ever degrades to honest `Unknown` when nothing
+/// stricter was seen.
+fn merge_observations(
+    observations: impl Iterator<Item = ManagedObservation>,
+) -> ManagedObservation {
+    let mut saw_present_compatible = false;
+    let mut saw_unreadable = false;
+    for observation in observations {
+        match observation {
+            ManagedObservation::Present { restrictive: true } => {
+                return ManagedObservation::Present { restrictive: true };
+            }
+            ManagedObservation::Present { restrictive: false } => {
+                saw_present_compatible = true;
+            }
+            ManagedObservation::Unreadable(_) => saw_unreadable = true,
+            ManagedObservation::Absent => {}
+        }
+    }
+    if saw_present_compatible {
+        ManagedObservation::Present { restrictive: false }
+    } else if saw_unreadable {
+        ManagedObservation::Unreadable(None)
+    } else {
+        ManagedObservation::Absent
+    }
+}
+
+fn policy_state_for(config_dir: Option<&Path>, system_dirs: &[PathBuf]) -> PolicyState {
+    match observe_managed_settings_all(config_dir, system_dirs) {
+        ManagedObservation::Absent => PolicyState::None,
+        ManagedObservation::Unreadable(_) => PolicyState::Unknown,
+        ManagedObservation::Present { restrictive: true } => PolicyState::Conflicting,
+        ManagedObservation::Present { restrictive: false } => PolicyState::PresentCompatible,
+    }
+}
+
+fn observe_managed_settings_all(
+    config_dir: Option<&Path>,
+    system_dirs: &[PathBuf],
+) -> ManagedObservation {
+    merge_observations(
+        config_dir
+            .into_iter()
+            .chain(system_dirs.iter().map(PathBuf::as_path))
+            .map(observe_managed_settings),
+    )
 }
 
 fn observe_managed_settings(config_dir: &Path) -> ManagedObservation {
@@ -440,7 +545,7 @@ fn observe_managed_settings(config_dir: &Path) -> ManagedObservation {
         return ManagedObservation::Absent;
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return ManagedObservation::Unreadable;
+        return ManagedObservation::Unreadable(Some(path.display().to_string().into()));
     };
     // Conservative restrictive markers: a permissions block gating bypass
     // mode, or any allow-list-style MCP server key the official CLI honors.
@@ -457,22 +562,28 @@ fn observe_managed_settings(config_dir: &Path) -> ManagedObservation {
 }
 
 fn policy_state(config_dir: &Path) -> PolicyState {
-    match observe_managed_settings(config_dir) {
-        ManagedObservation::Absent => PolicyState::None,
-        ManagedObservation::Unreadable => PolicyState::Unknown,
-        ManagedObservation::Present { restrictive: true } => PolicyState::Conflicting,
-        ManagedObservation::Present { restrictive: false } => PolicyState::PresentCompatible,
-    }
+    policy_state_for(Some(config_dir), &system_managed_dirs())
 }
 
 /// Driver-level managed-policy check exposed for preflight (AGENTKIT-109).
-/// Returns a human-actionable reason when the documented managed settings
-/// file exists inside the official configuration directory reported by
-/// `auth status`; restrictions are respected, never bypassed.
+/// Returns a human-actionable reason when a documented managed settings
+/// file exists — in the official configuration directory reported by
+/// `auth status` OR at an OS system-managed location. Restrictions are
+/// respected, never bypassed.
 pub fn managed_policy_conflict(config_dir: &Path) -> Option<String> {
-    match observe_managed_settings(config_dir) {
+    managed_policy_conflict_for(Some(config_dir), &system_managed_dirs())
+}
+
+fn managed_policy_conflict_for(
+    config_dir: Option<&Path>,
+    system_dirs: &[std::path::PathBuf],
+) -> Option<String> {
+    match observe_managed_settings_all(config_dir, system_dirs) {
         ManagedObservation::Absent => None,
-        ManagedObservation::Unreadable => Some("managed policy unreadable".to_owned()),
+        ManagedObservation::Unreadable(path) => Some(match path {
+            Some(path) => format!("managed policy unreadable: {path}"),
+            None => "managed policy unreadable".to_owned(),
+        }),
         ManagedObservation::Present { restrictive: true } => {
             Some("managed policy present".to_owned())
         }
@@ -515,15 +626,31 @@ impl ClaudeSupportMatrix {
             "safe-mode",
             "strict-mcp-config",
         ];
+        // Honest qualification ledger lives at module level:
+        // `RECORDED_QUALIFIED`.
         let qualified_version = version.unwrap_or("unknown").to_owned();
         match qualified {
             Some(triple) if version_at_least(triple, QUALIFIED_FLOOR) => {
                 for flag in supported_flags {
+                    // Two honest tiers (review §3): a flag is `Supported`
+                    // only when a live qualification run is RECORDED for it;
+                    // everything else the floor covers is `Capable` —
+                    // admitted, but presented as "compatible, not yet
+                    // qualified", never as "tested".
                     flags.insert(
                         flag.to_owned(),
-                        CapabilityState::Supported {
-                            qualified_version: qualified_version.clone(),
-                            evidence: "docs/adr/0021".to_owned(),
+                        if RECORDED_QUALIFIED.contains(&flag) {
+                            CapabilityState::Supported {
+                                qualified_version: qualified_version.clone(),
+                                evidence: "qualification:AGENTKIT-118".to_owned(),
+                            }
+                        } else {
+                            CapabilityState::Capable {
+                                reason: format!(
+                                    "version floor {}.{}.{} met; docs-declared, no recorded live qualification",
+                                    QUALIFIED_FLOOR.0, QUALIFIED_FLOOR.1, QUALIFIED_FLOOR.2
+                                ),
+                            }
                         },
                     );
                 }
@@ -949,10 +1076,10 @@ mod tests {
     #[tokio::test]
     async fn managed_policy_conflict_reports_reasons() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(managed_policy_conflict(dir.path()), None);
+        assert_eq!(managed_policy_conflict_for(Some(dir.path()), &[]), None);
         std::fs::write(dir.path().join("managed-settings.json"), "{}").unwrap();
         assert_eq!(
-            managed_policy_conflict(dir.path()).as_deref(),
+            managed_policy_conflict_for(Some(dir.path()), &[]).as_deref(),
             Some("managed policy file present")
         );
         std::fs::write(
@@ -961,13 +1088,73 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            managed_policy_conflict(dir.path()).as_deref(),
+            managed_policy_conflict_for(Some(dir.path()), &[]).as_deref(),
             Some("managed policy present")
         );
         std::fs::write(dir.path().join("managed-settings.json"), "not json").unwrap();
+        assert!(
+            managed_policy_conflict_for(Some(dir.path()), &[])
+                .is_some_and(|reason| reason.starts_with("managed policy unreadable")),
+            "unreadable must name itself (and may name the path)"
+        );
+    }
+
+    /// Review §3: system-managed policy governs the install regardless of
+    /// what the user configuration directory reports — observing only the
+    /// user directory used to claim "absent" beside a real system policy.
+    #[test]
+    fn system_managed_policy_is_observed_beyond_the_user_directory() {
+        let user = tempfile::tempdir().unwrap();
+        let system = tempfile::tempdir().unwrap();
+        let system_dir = system.path().to_path_buf();
+
+        // Clean on both layers: none.
         assert_eq!(
-            managed_policy_conflict(dir.path()).as_deref(),
-            Some("managed policy unreadable")
+            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            PolicyState::None
+        );
+
+        // A restrictive SYSTEM policy is a conflict even when the user
+        // directory is perfectly clean (the old user-dir-only check missed
+        // this entirely).
+        std::fs::write(
+            system.path().join("managed-settings.json"),
+            r#"{"customAllowedMcpServers":["only-this"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            PolicyState::Conflicting
+        );
+        assert_eq!(
+            managed_policy_conflict_for(Some(user.path()), &[system_dir.clone()]).as_deref(),
+            Some("managed policy present")
+        );
+
+        // Non-restrictive system file: present-compatible.
+        std::fs::write(system.path().join("managed-settings.json"), "{}").unwrap();
+        assert_eq!(
+            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            PolicyState::PresentCompatible
+        );
+
+        // Unreadable system file degrades to honest Unknown when nothing
+        // stricter was seen — never a guessed None or a fake "compatible".
+        std::fs::write(system.path().join("managed-settings.json"), "!!!").unwrap();
+        assert_eq!(
+            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            PolicyState::Unknown
+        );
+
+        // Restrictive user file dominates an unreadable system file.
+        std::fs::write(
+            user.path().join("managed-settings.json"),
+            r#"{"permissions":{"disableBypassPermissionsMode":"disable"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy_state_for(Some(user.path()), &[system_dir]),
+            PolicyState::Conflicting
         );
     }
 
@@ -1004,8 +1191,16 @@ mod tests {
         assert_eq!(snap.qualified_version, "2.1.310");
         for flag in REQUIRED_WHEN_QUALIFIED {
             assert!(
-                matches!(snap.state(flag), CapabilityState::Supported { .. }),
-                "{flag} must be supported at 2.1.310"
+                snap.state(flag).is_capable(),
+                "{flag} must be admitted at 2.1.310"
+            );
+            // Honest tiers (review §3): only the RECORDED_QUALIFIED ledger
+            // earns `Supported`; everything else the floor covers is
+            // `Capable` — never presented as tested.
+            assert_eq!(
+                snap.state(flag).is_supported(),
+                crate::discovery::RECORDED_QUALIFIED.contains(&flag),
+                "{flag}: Supported must mirror the recorded-qualification ledger"
             );
         }
         // Out of scope is never supported, on any version.

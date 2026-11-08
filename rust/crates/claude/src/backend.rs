@@ -196,11 +196,16 @@ impl NativeBackend for ClaudeCodeBackend {
     }
 
     fn encode_input(&self, input: &TurnInput) -> Result<Vec<u8>, NativeRefusal> {
-        // Context blocks render as inert labelled sections ahead of the new
-        // user text (AGENTKIT-113: seed/context are data, never instructions
-        // to execute).
+        // Seed history renders FIRST, then context blocks, then the new
+        // user text; both render as inert labelled sections (AGENTKIT-113:
+        // seed/context are data, never instructions to execute). Exact
+        // resume carries no seed, so the order degrades to today's shape.
         let mut prompt = String::new();
-        for block in &input.context_blocks {
+        let seed_blocks: &[agentkit_native::ContextBlock] = match &input.resume {
+            agentkit_native::TurnResume::Fresh { seed_history } => seed_history,
+            _ => &[],
+        };
+        for block in seed_blocks.iter().chain(input.context_blocks.iter()) {
             prompt.push_str("<agentkit-context kind=\"");
             prompt.push_str(&block.kind);
             prompt.push_str("\" identity=\"");
@@ -598,6 +603,53 @@ mod tests {
         assert!(frame.contains(&input.text));
         // The prompt never lands in argv-style form here; it is stdin bytes.
         assert!(frame.contains("\\n") || frame.contains('\n'));
+    }
+
+    #[test]
+    fn encode_input_renders_seed_history_before_context_and_user_text() {
+        let backend = ClaudeCodeBackend::new("/tmp/unused");
+        let mut input = turn_input(TurnResume::Fresh {
+            seed_history: vec![agentkit_native::ContextBlock {
+                kind: "seed-history".into(),
+                content_identity: "msg:seed-1@r1".into(),
+                text: "SEED-SENTINEL-ancestry".into(),
+            }],
+        });
+        input.context_blocks.push(agentkit_native::ContextBlock {
+            kind: "selected-source".into(),
+            content_identity: "note:42@r3".into(),
+            text: "CTX-SENTINEL-context".into(),
+        });
+        input.text = "USER-TEXT-new".into();
+        let bytes = backend.encode_input(&input).unwrap();
+        let frame = String::from_utf8(bytes).expect("utf8 frame");
+        assert!(frame.starts_with("{\"type\":\"user\",\"client_composed\":true"));
+        // Inspect the decoded prompt: seed block, then context block, then
+        // the user text — the seed sentinel must be ahead of both.
+        let json: serde_json::Value = serde_json::from_str(frame.trim_end()).unwrap();
+        let content = json["message"]["content"].as_str().expect("string content");
+        let seed = content
+            .find("SEED-SENTINEL-ancestry")
+            .expect("seed sentinel rendered");
+        let ctx = content
+            .find("CTX-SENTINEL-context")
+            .expect("context sentinel rendered");
+        let user = content
+            .find("USER-TEXT-new")
+            .expect("user text rendered");
+        assert!(
+            seed < ctx && ctx < user,
+            "order must be seed, context, user: {content}"
+        );
+        assert!(content.contains("kind=\"seed-history\" identity=\"msg:seed-1@r1\""));
+        // Exact resume renders no seed section at all.
+        let exact = turn_input(TurnResume::Exact {
+            vendor_session_id: "sess-9".into(),
+        });
+        let bytes = backend.encode_input(&exact).unwrap();
+        let frame = String::from_utf8(bytes).unwrap();
+        assert!(!frame.contains("seed-history"), "{frame}");
+        assert!(frame.contains("hello"));
     }
 
     #[test]

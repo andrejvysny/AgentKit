@@ -48,6 +48,13 @@ impl ChatLaunchProfiles {
     pub const MCP_MAX_TURNS: u32 = 30;
 }
 
+/// Vendor-side HTTP MCP request budget (`MCP_TOOL_TIMEOUT`, ms) for the
+/// owned-broker profile. MUST exceed the broker call timeout
+/// (`BrokerLimits::default().call_timeout_ms`, 120 000 ms) so the broker —
+/// not the vendor transport's 60 s default — is the first to bound a slow
+/// governed call (review §2.9: one coherent deadline model).
+pub const BROKER_MCP_REQUEST_BUDGET_MS: i64 = 150_000;
+
 /// Build the frozen launch plan for one attempt.
 ///
 /// `per_run_dir` must already exist (created by the caller with 0700);
@@ -171,7 +178,7 @@ pub fn build_launch_plan(
 
     // Additive environment only; never credential material. Background work
     // and nonessential traffic are pinned off for unattended Chat.
-    let env = vec![
+    let mut env = vec![
         (
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS".into(),
             "1".to_owned(),
@@ -181,6 +188,19 @@ pub fn build_launch_plan(
             "1".to_owned(),
         ),
     ];
+    if mcp.is_some() {
+        // One coherent deadline model (review §2.9): the vendor's HTTP MCP
+        // request default is 60s, which would kill a broker call — and its
+        // human approval wait — long before the broker's own 120s call
+        // budget or the host idle budget. Pin the vendor-side request
+        // budget ABOVE the broker call timeout (BrokerLimits default
+        // 120 000 ms) so the broker, not the transport, is the first to
+        // decide a slow governed call.
+        env.push((
+            "MCP_TOOL_TIMEOUT".into(),
+            BROKER_MCP_REQUEST_BUDGET_MS.to_string(),
+        ));
+    }
 
     let fingerprint = config_identity(target, &argv, &env);
 
@@ -434,6 +454,8 @@ fn require_supported(target: &NativeExecutionTarget, flag: &str) -> Result<(), N
         .unwrap_or(CapabilityState::Unknown)
     {
         CapabilityState::Supported { .. } => Ok(()),
+        // Version floor met: admitted, but honestly unqualified (review §3).
+        CapabilityState::Capable { .. } => Ok(()),
         CapabilityState::Unsupported { reason } => Err(NativeRefusal::new(
             "capability_unsupported",
             format!("{flag} is unsupported: {reason}"),

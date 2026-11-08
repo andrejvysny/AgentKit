@@ -873,14 +873,18 @@ async fn a_version_thirteen_database_upgrades_non_destructively() {
     // "True v13": every post-13 object goes, not just the v14 pair — the
     // v15 admissions ledger, its agent_inputs index, and the mailbox
     // column (dropped last so the index dependency is already gone), plus
-    // the v17 native-execution ledger (AGENTKIT-112/113) and its indexes.
+    // the v17 native-execution ledger (AGENTKIT-112/113) and its indexes,
+    // and the v18 continuation ledger and broker receipts.
     db.execute_batch(
         "DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; \
          DROP TABLE agent_admissions; \
          DROP TABLE agent_config_revisions; DROP TABLE agents; \
          ALTER TABLE agent_inputs DROP COLUMN agent_id; \
          DROP INDEX native_session_bindings_task; DROP TABLE native_session_bindings; \
-         DROP INDEX native_interactions_task; DROP TABLE native_interactions;",
+         DROP INDEX native_interactions_task; DROP TABLE native_interactions; \
+         DROP INDEX native_continuations_scope; DROP INDEX native_continuations_attempt; \
+         DROP TABLE native_continuations; \
+         DROP INDEX native_call_receipts_invocation; DROP TABLE native_call_receipts;",
     )
     .unwrap();
     db.pragma_update(None, "user_version", 13).unwrap();

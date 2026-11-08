@@ -165,6 +165,11 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS native_session_bindings;
          DROP INDEX IF EXISTS native_interactions_task;
          DROP TABLE IF EXISTS native_interactions;
+         DROP INDEX IF EXISTS native_continuations_scope;
+         DROP INDEX IF EXISTS native_continuations_attempt;
+         DROP TABLE IF EXISTS native_continuations;
+         DROP INDEX IF EXISTS native_call_receipts_invocation;
+         DROP TABLE IF EXISTS native_call_receipts;
          DROP INDEX IF EXISTS tasks_agent;
          DROP INDEX IF EXISTS tasks_status;
          DROP INDEX IF EXISTS tasks_parent;

@@ -15,6 +15,7 @@ mod faults;
 mod managed_content;
 mod models;
 mod native_exec;
+mod native_continuations;
 mod proposals;
 mod provider_catalog;
 mod provider_connections;
@@ -44,6 +45,9 @@ pub use execution_resolution::*;
 pub use managed_content::*;
 pub use models::*;
 pub use native_exec::{BindNativeSession, InteractionRow, NativeSessionBinding};
+pub use native_continuations::{
+    CommitContinuation, NativeCallReceipt, NativeContinuationBinding,
+};
 pub use proposals::*;
 pub use provider_catalog::*;
 pub use provider_connections::{

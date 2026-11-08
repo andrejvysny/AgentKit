@@ -248,7 +248,17 @@ impl ServerHandler for NativeHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let scope = self.scope()?;
+        let mut scope = self.scope()?;
+        // The exact JSON-RPC id travels to the backend so a governed
+        // consumer can tell a proven client redelivery (same id) apart
+        // from an independent new call.
+        scope.request_id = serde_json::to_value(&context.id)
+            .ok()
+            .and_then(|value| match value {
+                serde_json::Value::String(text) => Some(text),
+                serde_json::Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            });
         self.bounded(&context, &scope, async {
             let entries = self.backend.list_tools(&scope).await.map_err(redact)?;
             let tool = entries

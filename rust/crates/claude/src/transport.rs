@@ -206,6 +206,37 @@ fn group_live_count(_pgid: u32) -> usize {
     0
 }
 
+/// Whether process-group liveness is observable at all. Non-Linux
+/// [`group_live_count`] reports 0 unconditionally; that must never be read
+/// as cleanup certainty (AGENTKIT-110).
+#[cfg(target_os = "linux")]
+fn group_liveness_observable() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "linux"))]
+fn group_liveness_observable() -> bool {
+    false
+}
+
+/// Build a successful ladder receipt: on platforms where group liveness is
+/// unobservable the receipt stays honest with `cleanup_uncertain` and a
+/// detail noting descendants were never verified (AGENTKIT-110).
+fn success_receipt(label: &str, sigterm: bool, sigkill: bool, note: &str) -> InterruptReceipt {
+    let observable = group_liveness_observable();
+    InterruptReceipt {
+        terminated: true,
+        escalated_to_sigterm: sigterm,
+        escalated_to_sigkill: sigkill,
+        cleanup_uncertain: !observable,
+        detail: Some(if observable {
+            format!("policy={label}; {note}")
+        } else {
+            format!("policy={label}; {note}; process-group descendants unverified")
+        }),
+    }
+}
+
 /// One ladder rung: the leader must be reaped and the whole group must go
 /// quiet within `ms`.
 async fn await_rung(shared: &Arc<SharedChild>, ms: i64) -> bool {
@@ -266,39 +297,31 @@ async fn interrupt_shared(
     }
 
     if await_rung(shared, limits.interrupt_grace_ms).await {
-        let receipt = InterruptReceipt {
-            terminated: true,
-            escalated_to_sigterm: false,
-            escalated_to_sigkill: false,
-            cleanup_uncertain: false,
-            detail: Some(format!("policy={label}; exited after SIGINT")),
-        };
+        // Leader reaped: where group liveness is unobservable, sweep the
+        // group one last time best-effort and stay honest in the receipt.
+        if !group_liveness_observable() {
+            let _ = group_kill(shared.pgid, SIGKILL);
+        }
+        let receipt = success_receipt(label, false, false, "exited after SIGINT");
         shared.store_receipt(&receipt);
         return receipt;
     }
 
     let _ = group_kill(shared.pgid, SIGTERM);
     if await_rung(shared, limits.terminate_grace_ms).await {
-        let receipt = InterruptReceipt {
-            terminated: true,
-            escalated_to_sigterm: true,
-            escalated_to_sigkill: false,
-            cleanup_uncertain: false,
-            detail: Some(format!("policy={label}; exited after SIGTERM")),
-        };
+        if !group_liveness_observable() {
+            // Leader reaped: final best-effort group sweep (C6).
+            let _ = group_kill(shared.pgid, SIGKILL);
+        }
+        let receipt = success_receipt(label, true, false, "exited after SIGTERM");
         shared.store_receipt(&receipt);
         return receipt;
     }
 
     let _ = group_kill(shared.pgid, SIGKILL);
     if await_rung(shared, limits.cleanup_timeout_ms).await {
-        let receipt = InterruptReceipt {
-            terminated: true,
-            escalated_to_sigterm: true,
-            escalated_to_sigkill: true,
-            cleanup_uncertain: false,
-            detail: Some(format!("policy={label}; exited after SIGKILL")),
-        };
+        // The group SIGKILL above already swept unobservable descendants.
+        let receipt = success_receipt(label, true, true, "exited after SIGKILL");
         shared.store_receipt(&receipt);
         return receipt;
     }
@@ -325,14 +348,23 @@ fn deregister(live: &Arc<Mutex<HashMap<u32, std::sync::Weak<SharedChild>>>>, s: 
 }
 
 /// Framed stdout reader: incremental newline framing with a hard
-/// per-frame byte bound; oversized frames produce a single
-/// `frame_overflow` fault and stop reading (AGENTKIT-110).
+/// per-frame byte bound; the bound is checked BEFORE every extension and
+/// BEFORE sending a completed line, so an oversized frame can never be
+/// assembled or delivered. Oversized frames produce a single
+/// `frame_overflow` fault and stop reading (AGENTKIT-110). A frame of
+/// exactly `max_frame_bytes` (newline excluded) passes.
 fn spawn_stdout_reader(
     mut stdout: tokio::process::ChildStdout,
     tx: mpsc::Sender<FrameLine>,
     max_frame_bytes: usize,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let overflow = || {
+            FrameLine::Fault(fault(
+                "frame_overflow",
+                format!("stdout frame exceeded {max_frame_bytes} bytes"),
+            ))
+        };
         let mut chunk = vec![0u8; 16 * 1024];
         let mut line: Vec<u8> = Vec::new();
         loop {
@@ -342,6 +374,12 @@ fn spawn_stdout_reader(
             };
             let mut rest = &chunk[..n];
             while let Some(pos) = rest.iter().position(|&b| b == b'\n') {
+                // The completed frame is `line` plus `pos` bytes: reject
+                // before it is ever built or sent.
+                if line.len() + pos > max_frame_bytes {
+                    let _ = tx.send(overflow()).await;
+                    return;
+                }
                 line.extend_from_slice(&rest[..pos]);
                 rest = &rest[pos + 1..];
                 let framed = std::mem::take(&mut line);
@@ -349,16 +387,13 @@ fn spawn_stdout_reader(
                     return;
                 }
             }
-            line.extend_from_slice(rest);
-            if line.len() > max_frame_bytes {
-                let _ = tx
-                    .send(FrameLine::Fault(fault(
-                        "frame_overflow",
-                        format!("stdout frame exceeded {max_frame_bytes} bytes"),
-                    )))
-                    .await;
+            // Un-terminated residue: bound checked before the extension,
+            // never after it.
+            if line.len() + rest.len() > max_frame_bytes {
+                let _ = tx.send(overflow()).await;
                 return;
             }
+            line.extend_from_slice(rest);
         }
         if !line.is_empty() {
             let _ = tx.send(FrameLine::Line(line)).await;
@@ -423,6 +458,43 @@ impl OwnedChild {
                 return raw;
             }
             tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+}
+
+impl Drop for OwnedChild {
+    /// An abandoned (never finalized) handle must not orphan its child:
+    /// the reader/stdin tasks are aborted here, and a detached bounded
+    /// cleanup task drives the same SIGINT→SIGTERM→SIGKILL ladder the
+    /// supervisor owns, then deregisters (AGENTKIT-110). `kill_on_drop(false)`
+    /// keeps the reaper task as the single waiter, so the dropped process is
+    /// still reaped once the ladder terminates it. Without a runtime in
+    /// context the strongest honest fallback is an immediate group SIGKILL.
+    fn drop(&mut self) {
+        if self.terminal {
+            return;
+        }
+        self.terminal = true;
+        for t in self.reader_tasks.drain(..) {
+            t.abort();
+        }
+        for t in self.stdin_tasks.drain(..) {
+            t.cancel();
+        }
+        let shared = Arc::clone(&self.shared);
+        let limits = self.limits.clone();
+        let live = Arc::clone(&self.live);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    interrupt_shared(&shared, InterruptPolicy::HostShutdown, &limits).await;
+                    deregister(&live, &shared);
+                });
+            }
+            Err(_) => {
+                let _ = group_kill(shared.pgid, SIGKILL);
+                deregister(&live, &shared);
+            }
         }
     }
 }
@@ -1144,5 +1216,89 @@ mod tests {
 
         assert!(child_a.wait().await.after_interrupt);
         assert!(child_b.wait().await.after_interrupt);
+    }
+
+    /// AGENTKIT-110 (C5): the frame bound is enforced BEFORE every
+    /// extension and BEFORE sending a completed line. A 9-byte frame under
+    /// an 8-byte cap must fault once with `frame_overflow` — including when
+    /// the frame is assembled across two writes — while a frame of exactly
+    /// the cap (newline excluded) passes.
+    #[tokio::test]
+    async fn frame_bound_enforced_before_send() {
+        let dir = TempDir::new().unwrap();
+        let mut limits = tight_limits();
+        limits.max_frame_bytes = 8;
+
+        // 9 bytes under an 8-byte cap → single frame_overflow fault.
+        let exe = fixture(&dir, "nine.sh", "printf '123456789\\n'");
+        let sup = OwnedProcessSupervisor::new();
+        let mut child = spawn_child(&sup, exe, &dir, &limits).await;
+        match read_frame(child.as_mut(), 5_000).await {
+            Some(FrameLine::Fault(f)) => assert_eq!(f.code, "frame_overflow"),
+            other => panic!("expected frame_overflow, got {other:?}"),
+        }
+        assert_eq!(child.next_frame().await, None);
+        let _ = child.wait().await;
+
+        // The same frame completed across two writes must fault instead of
+        // ever sending a 9-byte line: `cat` flushes per stage, guaranteeing
+        // the reader sees the 7-byte prefix before the completing "89\n".
+        let exe = fixture(
+            &dir,
+            "nine_split.sh",
+            "printf '1234567' | cat\nsleep 0.3\nprintf '89\\n' | cat",
+        );
+        let sup = OwnedProcessSupervisor::new();
+        let mut child = spawn_child(&sup, exe, &dir, &limits).await;
+        match read_frame(child.as_mut(), 5_000).await {
+            Some(FrameLine::Fault(f)) => assert_eq!(f.code, "frame_overflow"),
+            other => panic!("expected frame_overflow for split frame, got {other:?}"),
+        }
+        assert_eq!(child.next_frame().await, None);
+        let _ = child.wait().await;
+
+        // Exactly the cap passes (newline excluded from the count).
+        let exe = fixture(&dir, "eight.sh", "printf '12345678\\n'");
+        let sup = OwnedProcessSupervisor::new();
+        let mut child = spawn_child(&sup, exe, &dir, &limits).await;
+        assert_eq!(
+            read_frame(child.as_mut(), 5_000).await,
+            Some(line(b"12345678"))
+        );
+        assert_eq!(child.next_frame().await, None);
+        let _ = child.wait().await;
+    }
+
+    /// AGENTKIT-110 (C6): dropping the owned handle — never `wait`ed or
+    /// `interrupt`ed — and then the supervisor must leave no live process:
+    /// the detached bounded cleanup ladder terminates the child and the
+    /// supervisor's reaper (sole waiter, `kill_on_drop(false)`) reaps it.
+    #[tokio::test]
+    async fn dropped_handle_and_supervisor_reap_the_child() {
+        let dir = TempDir::new().unwrap();
+        let exe = fixture(&dir, "sleepy.sh", "printf 'r\\n'\nsleep 60");
+        let sup = OwnedProcessSupervisor::new();
+        let mut child = spawn_child(&sup, exe, &dir, &tight_limits()).await;
+        assert_eq!(read_frame(child.as_mut(), 5_000).await, Some(line(b"r")));
+        let pid = child.pid();
+        assert!(
+            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "child is alive before the drop"
+        );
+
+        drop(child);
+        drop(sup);
+
+        // Poll until the leader is gone from /proc: cleanup is bounded
+        // (grace+terminate+cleanup ≈ 7s worst case), so plain absence is
+        // the check — no group-label assumptions.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "child {pid} survived dropping its handle and supervisor"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 }

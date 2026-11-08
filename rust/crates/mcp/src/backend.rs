@@ -8,6 +8,11 @@ pub struct SessionScope {
     pub principal: Value,
     pub chat_id: Option<String>,
     pub actor_id: String,
+    /// JSON-RPC id of the EXACT request that produced this call, when the
+    /// transport had one. Backends use it to distinguish a proven client
+    /// redelivery (same id) from an independent new call; identity of a
+    /// call itself stays a fresh per-dispatch value (AGENTKIT-115).
+    pub request_id: Option<String>,
     pub cancellation: CancellationToken,
 }
 

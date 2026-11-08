@@ -16,6 +16,7 @@
 //! * revocation is immediate: at attempt settlement, cancellation or lease
 //! * loss, tokens stop authenticating and live calls are cancelled.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,6 +51,15 @@ pub struct BrokerInvocation {
     /// Stable identity of the calling vendor session, as observed.
     pub actor_id: String,
     pub tool_name: String,
+    /// UNIQUE per-dispatch identity, minted at broker ingress (AGENTKIT-115
+    /// hardening): approvals, effects and durable receipts key on the
+    /// invocation, never on argument digests. Argument hashes stay
+    /// integrity evidence only.
+    pub invocation_id: String,
+    /// JSON-RPC request id when the transport carried one: the only
+    /// evidence that can PROVE a redelivery (as opposed to a new call that
+    /// happens to carry identical arguments).
+    pub request_id: Option<String>,
 }
 
 /// Successful in-band execution result.
@@ -133,6 +143,32 @@ pub struct BrokerBackend {
     limits: BrokerLimits,
     authority: Arc<dyn BrokerAuthority>,
     live: Mutex<Live>,
+    /// In-flight gauge: calls currently parked in the authority (approval
+    /// waits, effects). Unlike `live.calls` (a lifetime quota, never
+    /// decremented) this returns to zero as calls settle — the host reads
+    /// it to distinguish broker-bound stdout silence from inference
+    /// silence (review §2.9).
+    in_flight: std::sync::atomic::AtomicUsize,
+    /// Cumulative milliseconds spent inside `BrokerAuthority::authorize`
+    /// (human approval waits; the effect path is separately bounded by
+    /// `call_timeout_ms`). The stream loop CREDITS this against the turn
+    /// deadline: a parked approval is a human decision, not inference
+    /// time, and the consumer's own approval timeout bounds the wait
+    /// (review §2.9: an approval answered inside the displayed deadline
+    /// succeeds).
+    parked_ms: std::sync::atomic::AtomicU64,
+    /// Starts of the CURRENTLY pending authorization gates (empty when no
+    /// call is parked). Credit is LIVE: a human who has not answered yet
+    /// must already be exempt from the turn deadline, not reimbursed only
+    /// after they answer. Live credit measures from the OLDEST active
+    /// park; completed parks move into `parked_ms`.
+    park_gate: Mutex<Vec<std::time::Instant>>,
+    /// Proven-redelivery memo: a call whose transport RESTATES the same
+    /// JSON-RPC request id replays the first outcome instead of executing
+    /// twice (AGENTKIT-115: only the exact request id proves redelivery;
+    /// identical arguments never do).
+    memos: Mutex<HashMap<String, CallToolResult>>,
+    inflight: Mutex<HashSet<String>>,
     cancellation: CancellationToken,
 }
 
@@ -188,6 +224,11 @@ impl BrokerBackend {
             limits,
             authority,
             live: Mutex::new(Live::default()),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
+            parked_ms: std::sync::atomic::AtomicU64::new(0),
+            park_gate: Mutex::new(Vec::new()),
+            memos: Mutex::new(HashMap::new()),
+            inflight: Mutex::new(HashSet::new()),
             cancellation,
         }))
     }
@@ -210,6 +251,31 @@ impl BrokerBackend {
         self.cancellation.cancel();
     }
 
+    /// Calls currently parked in the authority (approval waits, effects):
+    /// the host consults this to tell a legitimate broker-bound silence
+    /// from inference silence (review §2.9).
+    #[must_use]
+    pub fn live_calls(&self) -> usize {
+        self.in_flight.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Cumulative ms the authority spent (and is still spending) in
+    /// `authorize` (approval parks); the stream loop credits this against
+    /// the turn deadline.
+    #[must_use]
+    pub fn parked_ms(&self) -> u64 {
+        let done = self.parked_ms.load(std::sync::atomic::Ordering::Relaxed);
+        let live = self
+            .park_gate
+            .lock()
+            .expect("park gate lock")
+            .iter()
+            .map(|start| start.elapsed().as_millis() as u64)
+            .max()
+            .unwrap_or(0);
+        done.saturating_add(live)
+    }
+
     fn denied(&self, code: &str, message: impl Into<String>) -> CallToolResult {
         let message = message.into();
         let denial = json!({"denied": true, "code": code, "message": message});
@@ -221,10 +287,99 @@ impl BrokerBackend {
                 generation: 0,
                 actor_id: String::new(),
                 tool_name: String::new(),
+                invocation_id: String::new(),
+                request_id: None,
             },
             &denial,
         );
         CallToolResult::error(vec![ContentBlock::text(denial.to_string())])
+    }
+
+    /// Authorization + execution once the call passed mechanical bounds.
+    /// Every terminal outcome is recorded durably by the authority under
+    /// the exact invocation identity.
+    async fn dispatch_authorized(
+        &self,
+        invocation: &BrokerInvocation,
+        arguments: Value,
+    ) -> CallToolResult {
+        if let Err(denial) = {
+            // Timing the human gate: approval parks are credited (LIVE,
+            // while unanswered) against the turn deadline by the stream
+            // loop — a human decision is not inference time. Only
+            // authorize is timed; the effect path below stays charged and
+            // call_timeout-bound.
+            let gate = std::time::Instant::now();
+            self.park_gate.lock().expect("park gate lock").push(gate);
+            let outcome = self.authority.authorize(invocation, &arguments).await;
+            {
+                let mut gate_slots = self.park_gate.lock().expect("park gate lock");
+                if let Some(position) = gate_slots.iter().position(|start| *start == gate) {
+                    gate_slots.swap_remove(position);
+                }
+            }
+            self.parked_ms
+                .fetch_add(gate.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+            outcome
+        } {
+            let payload = json!({"denied": true, "code": denial.code, "message": denial.message});
+            self.authority.record(invocation, &payload);
+            return CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
+        }
+        let executed = tokio::time::timeout(
+            Duration::from_millis(self.limits.call_timeout_ms.max(1) as u64),
+            self.authority.execute(invocation, arguments),
+        )
+        .await;
+        match executed {
+            Err(_) => {
+                let payload = json!({
+                    "denied": true, "code": "call_timeout",
+                    "message": format!("call exceeded {} ms", self.limits.call_timeout_ms),
+                });
+                self.authority.record(invocation, &payload);
+                CallToolResult::error(vec![ContentBlock::text(payload.to_string())])
+            }
+            Ok(Err(denial)) => {
+                let payload =
+                    json!({"denied": true, "code": denial.code, "message": denial.message});
+                self.authority.record(invocation, &payload);
+                CallToolResult::error(vec![ContentBlock::text(payload.to_string())])
+            }
+            Ok(Ok(result)) => {
+                let mut parts = Vec::new();
+                for part in &result.content {
+                    parts.push(ContentBlock::text(part.to_string()));
+                }
+                if parts.is_empty() {
+                    parts.push(ContentBlock::text("{}".to_owned()));
+                }
+                let serialized = serde_json::to_string(&result.content)
+                    .unwrap_or_default()
+                    .len();
+                if serialized > self.limits.max_result_bytes {
+                    // Never silently truncate: the model sees the bound.
+                    let payload = json!({
+                        "denied": true, "code": "quota_result",
+                        "message": format!("result exceeds {} bytes", self.limits.max_result_bytes),
+                    });
+                    self.authority.record(invocation, &payload);
+                    return CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
+                }
+                let outcome = json!({
+                    "executed": true,
+                    "tool": invocation.tool_name,
+                    "invocationId": invocation.invocation_id,
+                    "content": result.content,
+                    "structured": result.structured,
+                });
+                self.authority.record(invocation, &outcome);
+                let mut response = CallToolResult::success(parts);
+                response.structured_content = result.structured;
+                response.is_error = Some(false);
+                response
+            }
+        }
     }
 }
 
@@ -268,18 +423,52 @@ impl Backend for BrokerBackend {
                 format!("arguments exceed {} bytes", self.limits.max_args_bytes),
             ));
         }
+        // Proven redelivery BEFORE any budget spend: the same JSON-RPC
+        // request id restated on this attempt replays the recorded outcome
+        // — it is the same call, not a second one. Different request ids
+        // (or none) are independent calls even for byte-identical
+        // arguments (AGENTKIT-115).
+        let request_id = scope.request_id.clone();
+        if let Some(key) = request_id.as_deref() {
+            if let Some(replay) = self
+                .memos
+                .lock()
+                .expect("broker memos")
+                .get(key)
+                .cloned()
+            {
+                return Ok(replay);
+            }
+            if !self
+                .inflight
+                .lock()
+                .expect("broker inflight")
+                .insert(key.to_owned())
+            {
+                return Ok(self.denied(
+                    "duplicate_in_progress",
+                    "the identical request is still executing; retry after it settles",
+                ));
+            }
+        }
         // Count the call before authorize: approvals that park also spend
-        // the attempt's budget (no infinite approval loops).
+        // the attempt's CALL QUOTA (no infinite approval loops), even
+        // though their wall time is credited against the turn deadline.
         {
             let mut live = self.live.lock().expect("broker lock");
             live.calls += 1;
             if live.calls > self.limits.max_calls {
+                if let Some(key) = request_id.as_deref() {
+                    self.inflight.lock().expect("broker inflight").remove(key);
+                }
                 return Ok(self.denied(
                     "quota_calls",
                     format!("attempt call budget {} exhausted", self.limits.max_calls),
                 ));
             }
         }
+        // Unique per-dispatch identity, minted at ingress: approvals,
+        // effects and receipts key on THIS invocation, never on arguments.
         let invocation = BrokerInvocation {
             task_id: self.task_id.clone(),
             attempt_id: self.attempt_id.clone(),
@@ -287,73 +476,23 @@ impl Backend for BrokerBackend {
             generation,
             actor_id: scope.actor_id.clone(),
             tool_name: name.to_owned(),
+            invocation_id: format!("inv_{}", uuid::Uuid::new_v4().simple()),
+            request_id: request_id.clone(),
         };
-        if let Err(denial) = self.authority.authorize(&invocation, &arguments).await {
-            let payload = json!({"denied": true, "code": denial.code, "message": denial.message});
-            self.authority.record(&invocation, &payload);
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                payload.to_string(),
-            )]));
+        let outcome = {
+            self.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let outcome = self.dispatch_authorized(&invocation, arguments).await;
+            self.in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            outcome
+        };
+        if let Some(key) = request_id.as_deref() {
+            self.inflight.lock().expect("broker inflight").remove(key);
+            self.memos
+                .lock()
+                .expect("broker memos")
+                .insert(key.to_owned(), outcome.clone());
         }
-        let executed = tokio::time::timeout(
-            Duration::from_millis(self.limits.call_timeout_ms.max(1) as u64),
-            self.authority.execute(&invocation, arguments),
-        )
-        .await;
-        match executed {
-            Err(_) => {
-                let payload = json!({
-                    "denied": true, "code": "call_timeout",
-                    "message": format!("call exceeded {} ms", self.limits.call_timeout_ms),
-                });
-                self.authority.record(&invocation, &payload);
-                Ok(CallToolResult::error(vec![ContentBlock::text(
-                    payload.to_string(),
-                )]))
-            }
-            Ok(Err(denial)) => {
-                let payload =
-                    json!({"denied": true, "code": denial.code, "message": denial.message});
-                self.authority.record(&invocation, &payload);
-                Ok(CallToolResult::error(vec![ContentBlock::text(
-                    payload.to_string(),
-                )]))
-            }
-            Ok(Ok(result)) => {
-                let mut parts = Vec::new();
-                for part in &result.content {
-                    parts.push(ContentBlock::text(part.to_string()));
-                }
-                if parts.is_empty() {
-                    parts.push(ContentBlock::text("{}".to_owned()));
-                }
-                let serialized = serde_json::to_string(&result.content)
-                    .unwrap_or_default()
-                    .len();
-                if serialized > self.limits.max_result_bytes {
-                    // Never silently truncate: the model sees the bound.
-                    let payload = json!({
-                        "denied": true, "code": "quota_result",
-                        "message": format!("result exceeds {} bytes", self.limits.max_result_bytes),
-                    });
-                    self.authority.record(&invocation, &payload);
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(
-                        payload.to_string(),
-                    )]));
-                }
-                let outcome = json!({
-                    "executed": true,
-                    "tool": name,
-                    "content": result.content,
-                    "structured": result.structured,
-                });
-                self.authority.record(&invocation, &outcome);
-                let mut response = CallToolResult::success(parts);
-                response.structured_content = result.structured;
-                response.is_error = Some(false);
-                Ok(response)
-            }
-        }
+        Ok(outcome)
     }
 
     fn revoke_actor(&self, _actor_id: &str) {
@@ -487,10 +626,41 @@ impl AttemptBroker {
         &self.backend
     }
 
+    /// Calls currently parked in the authority (approval waits, effects).
+    /// While nonzero, vendor stdout silence is LEGITIMATE — the CLI is
+    /// waiting on this broker, not thinking — so the host's idle budget
+    /// must not preempt such a wait (review §2.9: a human decision is not
+    /// inference silence; the turn deadline and the broker call budget
+    /// still bound it).
+    #[must_use]
+    pub fn live_calls(&self) -> usize {
+        self.backend.live_calls()
+    }
+
+    /// Cumulative ms parked behind approval gates; the stream loop credits
+    /// this against the wall-clock turn deadline (review §2.9).
+    #[must_use]
+    pub fn parked_ms(&self) -> u64 {
+        self.backend.parked_ms()
+    }
+
     /// Stop serving and revoke every token; bounded, idempotent.
     pub async fn shutdown(&self) {
         self.backend.revoke();
         self.server.close().await;
+        self.cancellation.cancel();
+        self.serve.abort();
+    }
+}
+
+/// Dropped without an explicit shutdown (aborted execution future, failed
+/// settlement): the broker must stop authenticating and stop serving
+/// IMMEDIATELY — a detached HTTP endpoint is a live tool door after the
+/// attempt that owned it is gone. Aborting the serve task is synchronous
+/// and bounded; `server.close()` remains the graceful path.
+impl Drop for AttemptBroker {
+    fn drop(&mut self) {
+        self.backend.revoke();
         self.cancellation.cancel();
         self.serve.abort();
     }
@@ -576,6 +746,7 @@ mod tests {
             principal: json!({"attempt":"att-1"}),
             chat_id: None,
             actor_id: "vendor-session-1".into(),
+            request_id: None,
             cancellation: CancellationToken::new(),
         }
     }
@@ -647,6 +818,103 @@ mod tests {
             .unwrap();
         assert_eq!(denial_of(&result).unwrap()["code"], "attempt_not_live");
         assert_eq!(authority.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// Review §2.9 support: the host reads `live_calls()` to keep a turn
+    /// alive while a call is parked in the authority (approval wait or
+    /// effect). The gauge must rise exactly while parked and fall to zero
+    /// as the call settles.
+    #[tokio::test]
+    async fn in_flight_gauge_tracks_parked_calls() {
+        struct ParkingAuthority {
+            release: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+            entered: tokio::sync::Notify,
+        }
+        #[async_trait]
+        impl BrokerAuthority for ParkingAuthority {
+            fn attempt_generation(&self) -> Option<u64> {
+                Some(1)
+            }
+            async fn authorize(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: &Value,
+            ) -> Result<(), BrokerDenial> {
+                self.entered.notify_waiters();
+                let rx = { self.release.lock().expect("gate").take() };
+                if let Some(rx) = rx {
+                    let _ = rx.await;
+                }
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: Value,
+            ) -> Result<BrokerExecuted, BrokerDenial> {
+                Ok(BrokerExecuted {
+                    content: vec![],
+                    structured: None,
+                })
+            }
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let authority = Arc::new(ParkingAuthority {
+            release: std::sync::Mutex::new(Some(rx)),
+            entered: tokio::sync::Notify::new(),
+        });
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(backend.live_calls(), 0);
+        let entered = authority.entered.notified();
+        let calling = {
+            let backend = Arc::clone(&backend);
+            tokio::spawn(async move {
+                backend
+                    .call_tool("search_notes", Default::default(), &scope())
+                    .await
+            })
+        };
+        entered.await;
+        assert_eq!(
+            backend.live_calls(),
+            1,
+            "a call parked on approval is broker-bound silence, not idle"
+        );
+        // Review §2.9: the credit is LIVE — the human has not answered
+        // yet and the turn deadline must already be standing still.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            backend.parked_ms() >= 10,
+            "a parked approval accrues turn-deadline credit while unanswered, got {}",
+            backend.parked_ms()
+        );
+        tx.send(()).expect("release the parked call");
+        let result = calling.await.unwrap().unwrap();
+        assert!(denial_of(&result).is_none(), "the call settled normally");
+        assert_eq!(
+            backend.live_calls(),
+            0,
+            "the gauge returns to zero as the call settles"
+        );
+        // Settled: the wait is remembered (still credited) but no longer
+        // grows — unbounded retroactive credit would defeat the deadline.
+        let settled_credit = backend.parked_ms();
+        assert!(settled_credit >= 10);
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(
+            backend.parked_ms(),
+            settled_credit,
+            "credit stops accruing once the call settles"
+        );
     }
 
     #[tokio::test]

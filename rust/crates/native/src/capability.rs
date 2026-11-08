@@ -48,6 +48,11 @@ pub enum CapabilityState {
         /// qualification run id). Never a secret.
         evidence: String,
     },
+    /// The version floor is met, so the driver ADMITS the capability, but
+    /// no live qualification run has been recorded for it (review §3:
+    /// minimum feature compatibility is not tested readiness). UI wording
+    /// must be "compatible, not yet qualified" — never "tested".
+    Capable { reason: String },
     /// Explicitly not supported for this delivery (out of scope or proven
     /// unsuitable), e.g. native subagents, bare mode, image input.
     Unsupported { reason: String },
@@ -59,6 +64,14 @@ pub enum CapabilityState {
 impl CapabilityState {
     pub fn is_supported(&self) -> bool {
         matches!(self, CapabilityState::Supported { .. })
+    }
+
+    /// Admission semantics: recorded qualification OR a met version floor.
+    pub fn is_capable(&self) -> bool {
+        matches!(
+            self,
+            CapabilityState::Supported { .. } | CapabilityState::Capable { .. }
+        )
     }
 }
 
@@ -95,7 +108,7 @@ impl CapabilitySnapshot {
     }
 
     pub fn supports(&self, flag: &str) -> bool {
-        self.state(flag).is_supported()
+        self.state(flag).is_capable()
     }
 }
 
@@ -227,6 +240,9 @@ fn validate_native_target(native: &NativeExecutionTarget) -> Result<(), Vec<Capa
 fn require(native: &NativeExecutionTarget, flag: &str, violations: &mut Vec<CapabilityViolation>) {
     match native.capabilities.state(flag) {
         CapabilityState::Supported { .. } => {}
+        // Floor met but not live-qualified: admitted (review §3 splits
+        // compatibility from tested readiness; admission is the former).
+        CapabilityState::Capable { .. } => {}
         CapabilityState::Unsupported { reason } => violations.push(CapabilityViolation {
             code: "capability_unsupported",
             detail: format!("{flag} unsupported: {reason}"),

@@ -281,6 +281,13 @@ impl crate::SqliteStore {
     /// stored record so answers cannot be replayed across attempts or
     /// against changed content. The first settlement stands; the same
     /// `answer_id` redelivered is an idempotent `Duplicate`.
+    ///
+    /// `require_live_authority` (AGENTKIT-115 hardening): when set, the
+    /// settlement additionally happens in the SAME transaction against
+    /// LIVE authority — the task must still be `running`/`waiting_approval`
+    /// and its lease must still name the attempt. A stale UI answer to an
+    /// interaction whose attempt is gone is refused `stale_attempt`
+    /// instead of silently settling a dead row.
     pub async fn answer_interaction(
         &self,
         submission: &AnswerSubmission,
@@ -289,6 +296,54 @@ impl crate::SqliteStore {
         expected_generation: u64,
         expected_content_hash: &str,
         now: i64,
+    ) -> Result<AnswerDisposition> {
+        self.answer_interaction_inner(
+            submission,
+            expected_task_id,
+            expected_attempt_id,
+            expected_generation,
+            expected_content_hash,
+            now,
+            false,
+        )
+        .await
+    }
+
+    /// Fenced settlement: identical to [`Self::answer_interaction`] plus
+    /// the live-authority transaction check (task live, lease names the
+    /// attempt). Required for durable approval UIs (review §2.7).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_interaction_fenced(
+        &self,
+        submission: &AnswerSubmission,
+        expected_task_id: &str,
+        expected_attempt_id: &str,
+        expected_generation: u64,
+        expected_content_hash: &str,
+        now: i64,
+    ) -> Result<AnswerDisposition> {
+        self.answer_interaction_inner(
+            submission,
+            expected_task_id,
+            expected_attempt_id,
+            expected_generation,
+            expected_content_hash,
+            now,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_interaction_inner(
+        &self,
+        submission: &AnswerSubmission,
+        expected_task_id: &str,
+        expected_attempt_id: &str,
+        expected_generation: u64,
+        expected_content_hash: &str,
+        now: i64,
+        require_live_authority: bool,
     ) -> Result<AnswerDisposition> {
         let submission = submission.clone();
         let expected_task_id = expected_task_id.to_owned();
@@ -355,6 +410,36 @@ impl crate::SqliteStore {
                 return Ok(AnswerDisposition::Rejected {
                     reason: InteractionRejection::Expired,
                 });
+            }
+            if require_live_authority {
+                // Live authority, in the settlement transaction: the task
+                // must still be live and its lease must still name the
+                // attempt. A stale UI answer cannot settle a dead row.
+                let task_status: Option<String> = transaction
+                    .query_row(
+                        "SELECT status FROM tasks WHERE id=?1",
+                        params![record.task_id],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                let task_live = matches!(
+                    task_status.as_deref(),
+                    Some("running") | Some("waiting_approval")
+                );
+                let lease_attempt = transaction
+                    .query_row(
+                        "SELECT record FROM leases WHERE task_id=?1",
+                        params![record.task_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<crate::Lease>(&raw).ok())
+                    .map(|lease| lease.attempt_id);
+                if !task_live || lease_attempt.as_deref() != Some(record.attempt_id.as_str()) {
+                    return Ok(AnswerDisposition::Rejected {
+                        reason: InteractionRejection::StaleAttempt,
+                    });
+                }
             }
             let updated = transaction.execute(
                 "UPDATE native_interactions SET status='answered', answer=?2, answered_at_ms=?3 WHERE interaction_id=?1 AND status='pending'",
@@ -902,6 +987,92 @@ mod tests {
         broken.interaction_id = "int-broken".into();
         broken.expires_at_ms = broken.issued_at_ms;
         assert!(store.open_interaction(broken).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fenced_answer_requires_live_task_and_lease_for_the_attempt() {
+        let store = store();
+        submit_task(&store, "task-1").await;
+        let claimed = store
+            .claim(crate::ClaimInput {
+                owner_id: "w-1".into(),
+                now: 4_000,
+                ttl_ms: 600_000,
+                kinds: vec!["native.turn".into()],
+                busy_scopes: vec![],
+                max_attempts: 5,
+            })
+            .await
+            .unwrap()
+            .expect("claimable");
+        let live_attempt = claimed.lease.attempt_id.clone();
+        // An interaction owned by an attempt the lease does NOT name:
+        // fenced settlement refuses it as a stale attempt.
+        let mut stale = record("task-1", "att-dead");
+        stale.interaction_id = "int-task-1-att-dead".into();
+        store.open_interaction(stale).await.unwrap();
+        let stale_submission = AnswerSubmission {
+            interaction_id: "int-task-1-att-dead".into(),
+            answer_id: "a-0".into(),
+            decision: Decision::Allow,
+            note: None,
+        };
+        let refused = store
+            .answer_interaction_fenced(&stale_submission, "task-1", "att-dead", 3, "hash-a", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            refused,
+            AnswerDisposition::Rejected {
+                reason: InteractionRejection::StaleAttempt
+            },
+            "lease names a different attempt: no live authority"
+        );
+        assert_eq!(
+            store
+                .get_interaction("int-task-1-att-dead")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending",
+            "refusal must not settle"
+        );
+        // The plain compatibility path (no live-authority requirement)
+        // still settles, preserving pre-hardening consumer behavior.
+        let loose = store
+            .answer_interaction(&stale_submission, "task-1", "att-dead", 3, "hash-a", 5_000)
+            .await
+            .unwrap();
+        assert!(
+            matches!(loose, AnswerDisposition::Accepted { .. }),
+            "compat path unchanged: {loose:?}"
+        );
+        // The interaction the live lease names settles atomically.
+        let live = record("task-1", &live_attempt);
+        let live_id = live.interaction_id.clone();
+        store.open_interaction(live).await.unwrap();
+        let submission = AnswerSubmission {
+            interaction_id: live_id,
+            answer_id: "a-1".into(),
+            decision: Decision::Allow,
+            note: None,
+        };
+        let accepted = store
+            .answer_interaction_fenced(
+                &submission,
+                "task-1",
+                &live_attempt,
+                3,
+                "hash-a",
+                5_000,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(accepted, AnswerDisposition::Accepted { .. }),
+            "live lease-backed attempt must settle: {accepted:?}"
+        );
     }
 
     async fn submit_task(store: &crate::SqliteStore, id: &str) {

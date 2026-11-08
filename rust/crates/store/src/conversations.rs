@@ -148,13 +148,20 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
     let Some(mut message) = existing else {
         return append(db, input, now);
     };
+    // A fenced projection owns the row it wrote: its own placeholder, or a
+    // row an earlier attempt of the same task already settled (a retry must
+    // be able to replace a provisional failure output). Rows never written
+    // by a projection — human or legacy content — are untouchable, and the
+    // lease fence plus validate_projection keep ownership task-scoped.
+    let projected_before = message.metadata.get("projection") == Some(&Value::Bool(true));
     if message.chat_id != input.chat_id
         || message.run_id != input.run_id
         || message.role != input.role
-        || message.metadata.get("placeholder") != Some(&Value::Bool(true))
+        || !(message.metadata.get("placeholder") == Some(&Value::Bool(true)) || projected_before)
     {
         return Err(StoreError::InvalidInput(
-            "projection may only replace its own placeholder".into(),
+            "projection may only replace its own placeholder or a row it already projected"
+                .into(),
         ));
     }
     message.content = input.content;
@@ -163,7 +170,8 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
         .metadata
         .as_object_mut()
         .ok_or_else(|| StoreError::InvalidInput("message metadata must be an object".into()))?;
-    metadata.entry("placeholder").or_insert(Value::Bool(false));
+    metadata.insert("placeholder".into(), Value::Bool(false));
+    metadata.insert("projection".into(), Value::Bool(true));
     message.tool_call_id = input.tool_call_id;
     message.tool_calls = input.tool_calls;
     message.model_result_json = input.model_result_json;

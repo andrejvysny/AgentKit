@@ -20,6 +20,10 @@
 //! * `{"type":"system","subtype":"api_retry","attempt":N,"max_retries":N,
 //!    "error":S|null,...}`
 //! * `{"type":"system","subtype":"permission_denied","tool_name":S?}`
+//! * `{"type":"system","subtype":"status","status":S|null}`
+//! * `{"type":"system","subtype":"compact_boundary","trigger":S?}`
+//! * `{"type":"rate_limit_event","rate_limit":{"status":S,
+//!    "resetsAt":S?,"utilization":F?},"session_id":S?}`
 //! * `{"type":"result","subtype":"success"|"error_max_turns"|
 //!    "error_during_execution","is_error":B,"result":S|null,"session_id":S,
 //!    "usage":{...}|null,"total_cost_usd":F|null,"permission_denials":[..]?}`
@@ -83,20 +87,37 @@ enum TerminalSignal {
     Deferred(String),
 }
 
+/// One root-visible text segment (AGENTKIT-111 segment model): accumulated
+/// `text_delta`s until a complete block from the same message supersedes
+/// them; then the authoritative complete text.
+#[derive(Clone, Debug)]
+struct TextSegment {
+    text: String,
+    /// True once a complete root text block owns this segment's text.
+    complete: bool,
+    /// Vendor message id when observed (`message.id` /
+    /// `event.message.id`); never guessed.
+    message_id: Option<String>,
+}
+
 /// Incremental decoder from framed stdout lines to normalized events.
 ///
-/// Text accumulation rule (AGENTKIT-111): one user-visible text sequence
-/// per turn equals the **latest complete assistant message text** if any
-/// complete root message arrived, else the **concatenated `text_delta`s**.
-/// A complete message that equals the accumulated deltas therefore
-/// supersedes them without duplication; child-scoped blocks
-/// (`parent_tool_use_id` non-null) never touch the root accumulator.
+/// Text accumulation rule (AGENTKIT-111, segment model): the user-visible
+/// text sequence per turn is the **complete root segments joined with
+/// `\n\n`** once any complete block arrived (multiple text blocks of one
+/// message and multiple messages per turn all appear, never overwritten),
+/// else the **concatenated root `text_delta`s**. A complete block supersedes
+/// the still-incomplete deltas of its own message without duplication;
+/// child-scoped frames (`parent_tool_use_id` non-null) never touch the root
+/// accumulator at all.
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeStreamAdapter {
-    /// Concatenated visible `text_delta`s seen so far (root stream only).
-    delta_acc: String,
-    /// Latest complete root assistant message text; supersedes deltas.
-    last_complete: Option<String>,
+    /// Ordered root text segments: deltas superseded in place, complete
+    /// blocks appended.
+    segments: Vec<TextSegment>,
+    /// Last root message id observed on a stream/assistant frame; lets a
+    /// complete block recognize its own segment without guessing.
+    current_message_id: Option<String>,
     /// Model identity from the most recent `init` frame.
     init_model: Option<String>,
     /// Parsed root result facts, set once by the first root `result` frame.
@@ -113,17 +134,78 @@ impl ClaudeStreamAdapter {
         Self::default()
     }
 
-    /// Concatenated visible root text: latest complete message text if any
-    /// complete root message arrived, else accumulated deltas; `None` when
-    /// no root text was seen at all.
+    /// Concatenated visible root text: all complete segment texts joined
+    /// with `\n\n` once any complete root block arrived (multiple blocks
+    /// and messages all appear, never overwritten), else the accumulated
+    /// root deltas; `None` when no root text was seen at all.
     pub fn partial_text(&self) -> Option<String> {
-        if let Some(complete) = &self.last_complete {
-            return Some(complete.clone());
+        let complete: Vec<&str> = self
+            .segments
+            .iter()
+            .filter(|s| s.complete)
+            .map(|s| s.text.as_str())
+            .collect();
+        if !complete.is_empty() {
+            return Some(complete.join("\n\n"));
         }
-        if self.delta_acc.is_empty() {
+        let deltas: Vec<&str> = self
+            .segments
+            .iter()
+            .filter(|s| !s.complete)
+            .map(|s| s.text.as_str())
+            .collect();
+        let joined = deltas.concat();
+        if joined.is_empty() {
             None
         } else {
-            Some(self.delta_acc.clone())
+            Some(joined)
+        }
+    }
+
+    /// Record a complete root text block under the segment model (C4): it
+    /// supersedes the last segment only while that segment still holds
+    /// unpromoted deltas of the same message (identity matched where known
+    /// on either side); anything else appends a new complete segment, so
+    /// multiple blocks of one message and multiple messages per turn all
+    /// appear, never overwritten.
+    fn record_complete(&mut self, text: String, message_id: Option<String>) {
+        let supersedes_last = match self.segments.last() {
+            Some(last) if !last.complete => {
+                last.message_id.is_none()
+                    || message_id.is_none()
+                    || last.message_id == message_id
+            }
+            _ => false,
+        };
+        if supersedes_last {
+            let last = self.segments.last_mut().expect("checked above");
+            last.text = text;
+            last.complete = true;
+            last.message_id = message_id;
+        } else {
+            self.segments.push(TextSegment {
+                text,
+                complete: true,
+                message_id,
+            });
+        }
+    }
+
+    /// Append a root `text_delta`: into the last segment while it still
+    /// holds deltas, else as a new segment.
+    fn record_delta(&mut self, text: &str) {
+        match self.segments.last_mut() {
+            Some(last) if !last.complete => {
+                last.text.push_str(text);
+                if last.message_id.is_none() {
+                    last.message_id = self.current_message_id.clone();
+                }
+            }
+            _ => self.segments.push(TextSegment {
+                text: text.to_owned(),
+                complete: false,
+                message_id: self.current_message_id.clone(),
+            }),
         }
     }
 
@@ -196,6 +278,7 @@ impl ClaudeStreamAdapter {
             Some("user") => self.on_user(frame),
             Some("stream_event") => self.on_stream_event(frame),
             Some("result") => self.on_result(frame),
+            Some("rate_limit_event") => self.on_rate_limit_event(frame),
             // Qualified additive metadata (ignored): plugin-install and
             // prompt-suggestion frames.
             Some("plugin_install") | Some("prompt_suggestion") => Ok(Vec::new()),
@@ -223,6 +306,20 @@ impl ClaudeStreamAdapter {
         match subtype {
             "init" => self.on_init(frame),
             "api_retry" => on_api_retry(frame),
+            // Documented progress metadata: the vendor's current stream
+            // status (`"compacting"` or null = cleared) and the compaction
+            // boundary marker. Never terminal-affecting (AGENTKIT-111).
+            "status" => {
+                let status =
+                    opt_str(frame, "status", "system_status_type")?.map(str::to_owned);
+                Ok(vec![NativeEvent::Status { status }])
+            }
+            "compact_boundary" => {
+                let trigger =
+                    opt_str(frame, "trigger", "compact_boundary_trigger_type")?
+                        .map(str::to_owned);
+                Ok(vec![NativeEvent::CompactBoundary { trigger }])
+            }
             "permission_denied" => {
                 let tool_name = frame
                     .get("tool_name")
@@ -290,11 +387,21 @@ impl ClaudeStreamAdapter {
                         })?
                         .to_owned();
                     // Child-scoped text belongs to the vendor's substream:
-                    // never overwrite root text and never surface as root
-                    // user-visible text.
+                    // never touches the root accumulator and never surfaces
+                    // as root user-visible text.
                     if parent.is_none() {
-                        // Complete message supersedes overlapping deltas.
-                        self.last_complete = Some(text.clone());
+                        // The complete block supersedes the still-incomplete
+                        // deltas of its own message; earlier complete text
+                        // is accumulated, never overwritten.
+                        let message_id = frame
+                            .get("message")
+                            .and_then(|m| m.get("id"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        if message_id.is_some() {
+                            self.current_message_id = message_id.clone();
+                        }
+                        self.record_complete(text.clone(), message_id);
                         events.push(NativeEvent::MessageCompleted { text });
                     }
                 }
@@ -383,6 +490,11 @@ impl ClaudeStreamAdapter {
     }
 
     fn on_stream_event(&mut self, frame: &Value) -> Result<Vec<NativeEvent>, ProtocolViolation> {
+        // Child-scoped deltas belong to the vendor's substream: they must
+        // never pollute the root accumulator (AGENTKIT-111).
+        if parent_id(frame)?.is_some() {
+            return Ok(Vec::new());
+        }
         let event = frame
             .get("event")
             .and_then(Value::as_object)
@@ -392,6 +504,15 @@ impl ClaudeStreamAdapter {
                     "stream_event without event object",
                 )
             })?;
+        // Message identity from `message_start` / partial message envelopes
+        // when the vendor carries it; never guessed.
+        if let Some(id) = event
+            .get("message")
+            .and_then(|m| m.get("id"))
+            .and_then(Value::as_str)
+        {
+            self.current_message_id = Some(id.to_owned());
+        }
         let Some(event_type) = event.get("type").and_then(Value::as_str) else {
             return Err(violation(
                 "stream_event_missing_type",
@@ -424,9 +545,45 @@ impl ClaudeStreamAdapter {
         let text = delta.get("text").and_then(Value::as_str).ok_or_else(|| {
             violation("text_delta_missing_text", "text_delta without string text")
         })?;
-        self.delta_acc.push_str(text);
+        self.record_delta(text);
         Ok(vec![NativeEvent::TextDelta {
             text: text.to_owned(),
+        }])
+    }
+
+    /// Top-level `rate_limit_event` frame: a progress signal, never
+    /// terminal-affecting (AGENTKIT-111). Strict shape: a non-object
+    /// `rate_limit` or a missing/non-string `status` is a violation.
+    fn on_rate_limit_event(&self, frame: &Value) -> Result<Vec<NativeEvent>, ProtocolViolation> {
+        let rate = frame
+            .get("rate_limit")
+            .filter(|r| r.is_object())
+            .ok_or_else(|| {
+                violation(
+                    "rate_limit_shape",
+                    "rate_limit_event without rate_limit object",
+                )
+            })?;
+        let status = required_str(rate, "status").ok_or_else(|| {
+            violation("rate_limit_shape", "rate_limit without string status")
+        })?;
+        let resets_at = opt_str(rate, "resetsAt", "rate_limit_shape")?.map(str::to_owned);
+        let utilization = match rate.get("utilization") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(n)) => Some(n.as_f64().ok_or_else(|| {
+                violation("rate_limit_shape", "rate_limit utilization not a finite number")
+            })?),
+            Some(other) => {
+                return Err(violation(
+                    "rate_limit_shape",
+                    format!("rate_limit utilization must be number or null, got {other}"),
+                ));
+            }
+        };
+        Ok(vec![NativeEvent::RateLimit {
+            status: status.to_owned(),
+            resets_at,
+            utilization,
         }])
     }
 
@@ -666,9 +823,11 @@ fn violation(code: &str, message: impl Into<String>) -> ProtocolViolation {
 }
 
 /// Encode the admitted turn input as one NDJSON stdin frame:
-/// `{"type":"user","message":{"role":"user","content":text}}` + `\n`.
-/// Content newlines are JSON-escaped by the serializer, so the frame is
-/// always exactly one NDJSON line (AGENTKIT-110/113).
+/// `{"type":"user","client_composed":true,"message":{"role":"user",
+/// "content":text}}` + `\n`. `client_composed` is the literal Anthropic
+/// wire field (snake_case) marking the frame as host-composed literal
+/// input. Content newlines are JSON-escaped by the serializer, so the
+/// frame is always exactly one NDJSON line (AGENTKIT-110/113).
 pub fn claude_input_frame(text: &str) -> Result<Vec<u8>, NativeRefusal> {
     if text.trim().is_empty() {
         return Err(NativeRefusal::new(
@@ -679,6 +838,7 @@ pub fn claude_input_frame(text: &str) -> Result<Vec<u8>, NativeRefusal> {
     }
     let frame = serde_json::json!({
         "type": "user",
+        "client_composed": true,
         "message": { "role": "user", "content": text },
     });
     let mut bytes = serde_json::to_vec(&frame).map_err(|e| {
@@ -1047,6 +1207,27 @@ mod tests {
             (
                 r#"{"type":"assistant","message":{"content":[]},"session_id":"s","parent_tool_use_id":7}"#,
                 "parent_tool_use_id_type",
+            ),
+            (
+                r#"{"type":"system","subtype":"status","status":7}"#,
+                "system_status_type",
+            ),
+            (
+                r#"{"type":"system","subtype":"compact_boundary","trigger":7}"#,
+                "compact_boundary_trigger_type",
+            ),
+            (r#"{"type":"rate_limit_event"}"#, "rate_limit_shape"),
+            (
+                r#"{"type":"rate_limit_event","rate_limit":"allowed"}"#,
+                "rate_limit_shape",
+            ),
+            (
+                r#"{"type":"rate_limit_event","rate_limit":{"resetsAt":"soon"}}"#,
+                "rate_limit_shape",
+            ),
+            (
+                r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed","utilization":"full"}}"#,
+                "rate_limit_shape",
             ),
         ];
         for (line, code) in cases {
@@ -1594,7 +1775,12 @@ mod tests {
         let bytes = claude_input_frame("hello world").expect("frame");
         assert_eq!(
             bytes,
-            b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello world\"}}\n"
+            b"{\"type\":\"user\",\"client_composed\":true,\"message\":{\"role\":\"user\",\"content\":\"hello world\"}}\n"
+        );
+        assert!(
+            bytes.windows(b"\"client_composed\":true".len())
+                .any(|w| w == b"\"client_composed\":true"),
+            "literal-input marker present verbatim (snake_case wire field)"
         );
         // Newlines inside content are JSON-escaped, never injected raw.
         let bytes = claude_input_frame("line one\nline two\r\n\ntab\there").expect("frame");
@@ -1616,6 +1802,164 @@ mod tests {
             assert_eq!(refusal.code, "empty_input");
             assert!(!refusal.retryable);
         }
+    }
+
+    #[test]
+    fn rate_limit_and_status_and_compact_boundary_are_tolerated_progress() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        // Documented full shape.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed","resetsAt":"2026-11-08T09:00:00Z","utilization":0.42},"session_id":"sess-1"}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::RateLimit {
+                status: "allowed".into(),
+                resets_at: Some("2026-11-08T09:00:00Z".into()),
+                utilization: Some(0.42),
+            }]
+        );
+        // Minimal shape: status only.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"warn"}}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::RateLimit {
+                status: "warn".into(),
+                resets_at: None,
+                utilization: None,
+            }]
+        );
+        // system/status: documented "compacting" and the null clear.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::Status {
+                status: Some("compacting".into())
+            }]
+        );
+        let events = push(
+            &mut adapter,
+            r#"{"type":"system","subtype":"status","status":null}"#,
+        );
+        assert_eq!(events, vec![NativeEvent::Status { status: None }]);
+        let events = push(&mut adapter, r#"{"type":"system","subtype":"status"}"#);
+        assert_eq!(events, vec![NativeEvent::Status { status: None }]);
+        // system/compact_boundary, with and without trigger.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"system","subtype":"compact_boundary","trigger":"auto"}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::CompactBoundary {
+                trigger: Some("auto".into())
+            }]
+        );
+        let events = push(
+            &mut adapter,
+            r#"{"type":"system","subtype":"compact_boundary"}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::CompactBoundary { trigger: None }]
+        );
+        // Never terminal-affecting: with no root result, the progress
+        // frames alone still yield Uncertain on a clean exit…
+        match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
+            NativeTerminalOutcome::Uncertain { .. } => {}
+            other => panic!("progress frames must not complete a turn: {other:?}"),
+        }
+        // …and a full successful stream keeps completing identically.
+        let mut adapter = ClaudeStreamAdapter::new();
+        for line in [INIT, DELTA_HEL, DELTA_LO, MSG_HELLO] {
+            push(&mut adapter, line);
+        }
+        for line in [
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed"}}"#,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+            r#"{"type":"system","subtype":"compact_boundary","trigger":"auto"}"#,
+            RESULT_OK,
+        ] {
+            push(&mut adapter, line);
+        }
+        match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
+            NativeTerminalOutcome::Completed { text, .. } => assert_eq!(text, "Hello"),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        // Unknown subtypes stay violations (the `telepathy` case above
+        // covers the table; assert the boundary stays strict here too).
+        let err = adapter
+            .push_line(r#"{"type":"system","subtype":"compact_boundry"}"#.as_bytes())
+            .expect_err("typo subtype is unknown");
+        assert_eq!(err.code, "unknown_subtype");
+    }
+
+    #[test]
+    fn complete_root_blocks_and_messages_accumulate() {
+        // Two complete text blocks of ONE message: both appear, joined.
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        let two_blocks = r#"{"type":"assistant","message":{"id":"msg_1","content":[{"type":"text","text":"first block"},{"type":"tool_use","id":"t1","name":"Read","input":{}},{"type":"text","text":"second block"}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        let events = push(&mut adapter, two_blocks);
+        let completed: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, NativeEvent::MessageCompleted { .. }))
+            .collect();
+        assert_eq!(completed.len(), 2, "both text blocks surface");
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("first block\n\nsecond block")
+        );
+        // A SECOND root message: appended, never overwriting the first.
+        let second = r#"{"type":"assistant","message":{"id":"msg_2","content":[{"type":"text","text":"follow-up"}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        push(&mut adapter, second);
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("first block\n\nsecond block\n\nfollow-up")
+        );
+        // A complete block supersedes the incomplete deltas of its own
+        // message (same id) without duplicating them.
+        let mut adapter = ClaudeStreamAdapter::new();
+        let d1 = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"},"message":{"id":"msg_9"}},"session_id":"sess-1"}"#;
+        let d2 = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"},"message":{"id":"msg_9"}},"session_id":"sess-1"}"#;
+        push(&mut adapter, d1);
+        push(&mut adapter, d2);
+        assert_eq!(adapter.partial_text().as_deref(), Some("Hello"));
+        let complete = r#"{"type":"assistant","message":{"id":"msg_9","content":[{"type":"text","text":"Hello there"}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        push(&mut adapter, complete);
+        assert_eq!(adapter.partial_text().as_deref(), Some("Hello there"));
+    }
+
+    #[test]
+    fn child_stream_deltas_never_touch_root_accumulators() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(&mut adapter, DELTA_HEL);
+        let child_delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SECRET-CHILD-OUTPUT"}},"parent_tool_use_id":"toolu_parent","session_id":"sess-1"}"#;
+        assert!(
+            push(&mut adapter, child_delta).is_empty(),
+            "child-scoped delta emits no root event"
+        );
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("Hel"),
+            "child delta must not pollute root deltas"
+        );
+        // Child complete text likewise never overwrites the root text.
+        let child_msg = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"CHILD"}]},"session_id":"sess-1","parent_tool_use_id":"toolu_parent"}"#;
+        assert!(push(&mut adapter, child_msg).is_empty());
+        assert_eq!(adapter.partial_text().as_deref(), Some("Hel"));
+        // A child delta alone produces no root text at all.
+        let mut fresh = ClaudeStreamAdapter::new();
+        push(&mut fresh, child_delta);
+        assert_eq!(fresh.partial_text(), None);
     }
 
     #[test]

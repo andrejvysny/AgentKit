@@ -32,6 +32,11 @@ fn version_one(path: &Path) {
         DROP TABLE native_session_bindings;
         DROP INDEX native_interactions_task;
         DROP TABLE native_interactions;
+        DROP INDEX native_continuations_scope;
+        DROP INDEX native_continuations_attempt;
+        DROP TABLE native_continuations;
+        DROP INDEX native_call_receipts_invocation;
+        DROP TABLE native_call_receipts;
         DROP INDEX tasks_status;
         DROP INDEX tasks_parent;
         DROP TRIGGER messages_search_insert;

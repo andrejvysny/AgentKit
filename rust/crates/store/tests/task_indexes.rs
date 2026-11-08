@@ -176,7 +176,7 @@ async fn a_version_eleven_database_upgrades_and_keeps_its_tasks() {
          DROP TABLE agent_config_revisions; DROP TABLE agent_admissions; \
          DROP INDEX agent_inputs_agent; ALTER TABLE agent_inputs DROP COLUMN agent_id; \
          DROP INDEX native_session_bindings_task; DROP TABLE native_session_bindings; \
-         DROP INDEX native_interactions_task; DROP TABLE native_interactions;",
+         DROP INDEX native_interactions_task; DROP TABLE native_interactions; DROP INDEX native_call_receipts_invocation; DROP TABLE native_call_receipts; DROP INDEX native_continuations_scope; DROP INDEX native_continuations_attempt; DROP TABLE native_continuations;",
     )
     .unwrap();
     downgrade_provider_authority(&db);
@@ -191,7 +191,6 @@ async fn a_version_eleven_database_upgrades_and_keeps_its_tasks() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 17);
     let indexes: i64 = db
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE name IN ('tasks_status','tasks_parent')",

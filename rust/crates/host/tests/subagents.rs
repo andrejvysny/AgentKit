@@ -1477,7 +1477,7 @@ async fn enabled_delegation_guidance_reaches_every_session_turn() {
     service
         .follow_up(
             "guided",
-            &FollowUpInput {
+            &FollowUpInput { frozen_payload: None,
                 content: Value::String("hello".into()),
                 input_id: Some("g1".into()),
             },
@@ -1728,7 +1728,7 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
         session
             .follow_up(
                 name,
-                &FollowUpInput {
+                &FollowUpInput { frozen_payload: None,
                     content: Value::String(format!("DELEGATE-{}", name.to_uppercase())),
                     input_id: Some(key.into()),
                 },
