@@ -60,8 +60,19 @@ pub const CONTINUATION_SCOPE_PAYLOAD_KEY: &str = "continuationScope";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContinuationScope {
     pub conversation: String,
+    /// The conversation position this turn was SUBMITTED from — the input
+    /// side. The exact-resume lookup binds here, and nothing else.
     pub parent: String,
     pub history_position: i64,
+    /// Where the COMPLETED conversation ends — normally the assistant
+    /// message the vendor answer materialises into. The commit binds
+    /// here, never at the input position (review AGENTKIT-113): a vendor
+    /// session is a cursor advanced through the history, so committing
+    /// at the input position would let a regeneration — or an explicit
+    /// completed-assistant parent — select the session that already
+    /// contains the very answer being discarded or replaced.
+    pub commit_parent: String,
+    pub commit_history_position: i64,
     pub backend: String,
     pub executable: String,
     pub config_identity: String,
@@ -70,6 +81,39 @@ pub struct ContinuationScope {
 }
 
 impl ContinuationScope {
+    /// Full-shape validation: every identity component present, positions
+    /// ordered. Enforced at admission (`validate_frozen_stanza`) AND at
+    /// claim, so a malformed scope is refused at send, never discovered
+    /// mid-turn.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("conversation", &self.conversation),
+            ("parent", &self.parent),
+            ("commit_parent", &self.commit_parent),
+            ("backend", &self.backend),
+            ("executable", &self.executable),
+            ("config_identity", &self.config_identity),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("{name} must be non-empty"));
+            }
+        }
+        if self.history_position < 0 {
+            return Err("history_position must not be negative".into());
+        }
+        if self.commit_history_position <= self.history_position {
+            return Err(
+                "commit_history_position must be strictly ahead of the input position".into(),
+            );
+        }
+        if self.commit_parent.trim() == self.parent.trim() {
+            return Err(
+                "commit_parent must name the completed answer, not the input parent".into(),
+            );
+        }
+        Ok(())
+    }
+
     /// A frozen scope must agree with the frozen target it ships beside:
     /// two sources of the same facts are allowed, drift is not.
     fn agrees_with(&self, target: &NativeExecutionTarget) -> Option<String> {
@@ -142,6 +186,14 @@ pub struct AttemptBrokerContext<'a> {
     pub catalog: Vec<BrokerToolDefinition>,
     pub limits: BrokerLimits,
     pub cancellation: CancellationToken,
+    /// Durable execution authority of the attempt the broker dispatches
+    /// under (AGENTKIT-115). The consumer MUST hand this to every
+    /// state-mutating tool execution (`ToolContext::dispatch_guard`) and
+    /// check it immediately before dispatch: an in-memory cancellation
+    /// token is a convenience, never authority — a cancelled or
+    /// lease-superseded attempt must be refused from the durable task
+    /// row, not from process-local state.
+    pub dispatch_guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
 }
 
 /// Consumer-supplied authority source: the factory owns the
@@ -186,6 +238,11 @@ pub struct AttemptOwner {
     store: SqliteStore,
     attempt_id: String,
     supervisor: Arc<dyn ProcessSupervisor>,
+    /// Identity of the process THIS attempt spawned (pid + generation),
+    /// attached right after spawn. Drop terminates exactly this process —
+    /// never the supervisor's other live children, which belong to other
+    /// concurrent attempts sharing the runtime supervisor (AGENTKIT-110).
+    child: std::sync::Mutex<Option<(u32, u64)>>,
     broker: Option<Arc<AttemptBroker>>,
     per_run_dir: Option<std::path::PathBuf>,
     settled: std::sync::atomic::AtomicBool,
@@ -203,10 +260,17 @@ impl AttemptOwner {
             store,
             attempt_id: attempt_id.to_owned(),
             supervisor,
+            child: std::sync::Mutex::new(None),
             broker,
             per_run_dir,
             settled: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Record the spawned process so an aborted attempt cleans up exactly
+    /// its own process generation.
+    fn attach_child(&self, pid: u32, generation: u64) {
+        *self.child.lock().unwrap() = Some((pid, generation));
     }
 
     fn set_per_run_dir(&mut self, dir: std::path::PathBuf) {
@@ -232,15 +296,22 @@ impl Drop for AttemptOwner {
         let store = self.store.clone();
         let attempt_id = self.attempt_id.clone();
         let supervisor = self.supervisor.clone();
+        let child = self.child.lock().unwrap().take();
         let broker = self.broker.take();
         let per_run_dir = self.per_run_dir.take();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                // The supervisor owns every process it ever spawned: drain
-                // reaps the child even though the request future (and its
+                // Scoped to THIS attempt's process generation: the child
+                // is reaped even though the request future (and its
                 // handle) is gone — no `?`, no await, no abort can strand
-                // a vendor process (review §2.5, AGENTKIT-110).
-                supervisor.drain_owned(InterruptPolicy::Quarantine).await;
+                // a vendor process, and no sibling attempt is touched
+                // (review §2.5, AGENTKIT-110). Whole-runtime shutdown owns
+                // the global drain, not the per-attempt destructor.
+                if let Some((pid, generation)) = child {
+                    supervisor
+                        .terminate_owned(pid, generation, InterruptPolicy::Quarantine)
+                        .await;
+                }
                 if let Some(broker) = broker {
                     broker.shutdown().await;
                 }
@@ -348,8 +419,9 @@ impl NativeAgentExecutor {
                     .map_err(|e| e.to_string()),
                 CONTINUATION_SCOPE_PAYLOAD_KEY => {
                     serde_json::from_value::<ContinuationScope>(value.clone())
-                        .map(|_| ())
                         .map_err(|e| e.to_string())
+                        .and_then(|scope| scope.validate().map_err(|e| e.to_string()))
+                        .map(|_| ())
                 }
                 _ => unreachable!("checked against ALLOWED above"),
             };
@@ -516,22 +588,25 @@ impl TaskExecutor for NativeAgentExecutor {
         // durable continuation ledger and completed turns commit a
         // binding. Absent ⇒ legacy generic path (host-global observed
         // identity) is kept for consumers without frozen provenance.
-        let continuation_scope: Option<ContinuationScope> = match context
-            .task
-            .payload
-            .get(CONTINUATION_SCOPE_PAYLOAD_KEY)
-        {
-            None | Some(Value::Null) => None,
-            Some(raw) => Some(serde_json::from_value::<ContinuationScope>(raw.clone()).map_err(
-                |e| {
-                    self.terminal(
-                        "continuation_scope_invalid",
-                        format!("invalid '{CONTINUATION_SCOPE_PAYLOAD_KEY}': {e}"),
-                    )
-                },
-            )?),
-        };
+        let continuation_scope: Option<ContinuationScope> =
+            match context.task.payload.get(CONTINUATION_SCOPE_PAYLOAD_KEY) {
+                None | Some(Value::Null) => None,
+                Some(raw) => Some(
+                    serde_json::from_value::<ContinuationScope>(raw.clone()).map_err(|e| {
+                        self.terminal(
+                            "continuation_scope_invalid",
+                            format!("invalid '{CONTINUATION_SCOPE_PAYLOAD_KEY}': {e}"),
+                        )
+                    })?,
+                ),
+            };
         if let Some(scope) = &continuation_scope {
+            if let Err(detail) = scope.validate() {
+                return Err(self.terminal(
+                    "continuation_scope_invalid",
+                    format!("invalid '{CONTINUATION_SCOPE_PAYLOAD_KEY}': {detail}"),
+                ));
+            }
             if let Some(drift) = scope.agrees_with(&target) {
                 return Err(self.terminal(
                     "continuation_scope_mismatch",
@@ -572,6 +647,7 @@ impl TaskExecutor for NativeAgentExecutor {
                                     &scope.backend,
                                     &scope.executable,
                                     &scope.config_identity,
+                                    scope.system_prompt_revision.as_deref(),
                                 )
                                 .await?;
                             match active.as_ref() {
@@ -594,25 +670,19 @@ impl TaskExecutor for NativeAgentExecutor {
                                     ));
                                 }
                             }
-                        } else if self
-                            .store
-                            .is_observed_native_session(vendor_session_id)
-                            .await?
-                        {
-                            Some(vendor_session_id.clone())
-                        } else if let Some(binding) = binding {
-                            return Err(self.terminal(
-                                "lineage_mismatch",
-                                format!(
-                                    "exact resume asks '{vendor_session_id}' but the observed lineage is '{}'",
-                                    binding.vendor_session_id
-                                ),
-                            ));
                         } else {
+                            // No frozen scope ⇒ no authority (AGENTKIT-113).
+                            // A host-global "we have seen this id" check
+                            // proves only that some attempt somewhere on
+                            // this machine observed the id — not that this
+                            // conversation, this configuration and this
+                            // history position own it. The generic path is
+                            // retired: exact resume requires the complete
+                            // scoped binding.
                             return Err(self.terminal(
-                                "lineage_missing",
+                                "continuation_scope_missing",
                                 format!(
-                                    "exact resume of '{vendor_session_id}' has no observed lineage"
+                                    "exact resume of '{vendor_session_id}' was submitted without a frozen continuation scope; refusing an unscoped resume"
                                 ),
                             ));
                         }
@@ -684,6 +754,10 @@ impl TaskExecutor for NativeAgentExecutor {
                     max_args_bytes: l.max_args_bytes,
                     max_result_bytes: l.max_result_bytes,
                     call_timeout_ms: l.call_timeout_ms,
+                    // The human-gate budget is a host policy, not a
+                    // consumer wire field (review R5): consumers tune the
+                    // effect timeout, never the approval deadline.
+                    authorize_timeout_ms: self.options.broker_limits.authorize_timeout_ms,
                 });
             let broker = factory
                 .start(&AttemptBrokerContext {
@@ -694,6 +768,10 @@ impl TaskExecutor for NativeAgentExecutor {
                     catalog,
                     limits,
                     cancellation: context.cancellation.clone(),
+                    // The durable lease fence travels with the broker:
+                    // governed tool dispatch is authorised from the task
+                    // row, never from process-local state (AGENTKIT-115).
+                    dispatch_guard: Some(context.dispatch_guard()),
                 })
                 .await?;
             Some(broker)
@@ -807,6 +885,9 @@ impl TaskExecutor for NativeAgentExecutor {
                 }));
             }
         };
+        // The owner now carries this attempt's process identity: an
+        // aborted future terminates THIS generation and only this one.
+        owner.attach_child(child.pid(), child.generation());
         if let Err(error) = self
             .emit(
                 &context,
@@ -845,14 +926,14 @@ impl TaskExecutor for NativeAgentExecutor {
             }
         };
         if let Some(fault) = child.deliver_input(&input_bytes, true).await.err() {
-            if let Err(error) = self
+            let emission = self
                 .emit(
                     &context,
                     "native.input.fault",
                     json!({"code": fault.code, "message": fault.message}),
                 )
-                .await
-            {
+                .await;
+            if let Err(error) = emission {
                 let _ = child.interrupt(InterruptPolicy::Quarantine).await;
                 let _ = child.wait().await;
                 self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
@@ -1150,8 +1231,13 @@ impl TaskExecutor for NativeAgentExecutor {
                 }
                 // Durable continuation binding: the FULL provenance scope
                 // this completed turn establishes for a later exact resume
-                // (review §2.3). A binding the ledger refuses (fenced
-                // prior owner, frozen facts) is surfaced, never silent —
+                // (review §2.3). The binding records the COMPLETED
+                // position — the assistant message this answer becomes —
+                // never the input position: regenerating from the input
+                // must then miss this binding instead of resuming a
+                // session that already contains the discarded answer. A
+                // binding the ledger refuses (fenced prior owner, frozen
+                // facts, missing authority) is surfaced, never silent —
                 // and never converts a completed turn into a failure: the
                 // next turn then honestly falls to Fresh with seeded
                 // ancestry instead of guessing.
@@ -1160,8 +1246,8 @@ impl TaskExecutor for NativeAgentExecutor {
                         .store
                         .commit_continuation(agentkit_store::CommitContinuation {
                             conversation: scope.conversation.clone(),
-                            parent: scope.parent.clone(),
-                            history_position: scope.history_position,
+                            parent: scope.commit_parent.clone(),
+                            history_position: scope.commit_history_position,
                             backend: scope.backend.clone(),
                             executable: scope.executable.clone(),
                             config_identity: scope.config_identity.clone(),
@@ -1834,6 +1920,29 @@ mod tests {
                 detail: None,
             }]
         }
+        async fn terminate_owned(
+            &self,
+            pid: u32,
+            generation: u64,
+            policy: InterruptPolicy,
+        ) -> Option<agentkit_native::InterruptReceipt> {
+            // Mirrors the real supervisor's scoping: only the live child
+            // with the exact identity is terminated; all others survive.
+            if pid != 4242 || generation != 7 {
+                return None;
+            }
+            if !self.shared.child_live.swap(false, Ordering::SeqCst) {
+                return None;
+            }
+            self.shared.interrupts.lock().unwrap().push(policy);
+            Some(agentkit_native::InterruptReceipt {
+                terminated: true,
+                escalated_to_sigterm: false,
+                escalated_to_sigkill: false,
+                cleanup_uncertain: false,
+                detail: None,
+            })
+        }
     }
 
     struct FakeLocator;
@@ -2200,7 +2309,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exact_resume_requires_observed_lineage() {
+    async fn unscoped_exact_resume_is_refused() {
+        // AGENTKIT-113: the host-global "observed somewhere" fallback is
+        // retired. Without a frozen scope there is no conversation,
+        // configuration or position to authorise the resume.
         let h = harness();
         let input = turn_input(TurnResume::Exact {
             vendor_session_id: "v-old".into(),
@@ -2221,7 +2333,7 @@ mod tests {
                 .await
                 .unwrap_err(),
         );
-        assert_eq!(code.as_deref(), Some("lineage_missing"));
+        assert_eq!(code.as_deref(), Some("continuation_scope_missing"));
         assert_eq!(h.shared.spawn_count.load(Ordering::SeqCst), 0);
     }
 
@@ -2356,10 +2468,13 @@ mod tests {
 
     #[tokio::test]
     async fn cross_task_exact_resume_uses_previous_tasks_lineage() {
-        // Reviewer P1-2 / ONEMIND-341 regression: a brand-new OneMind
-        // conversation asks to resume the vendor session a *previous* task
-        // observed. The lineage lives on the earlier task, not this one;
-        // refusing it (the pre-fix behavior) killed every second turn.
+        // Reviewer P1-2 / ONEMIND-341 regression: a follow-up turn asks to
+        // resume the vendor session a *previous* task observed. The
+        // lineage lives on the earlier task's committed binding, not this
+        // task; refusing it (the pre-fix behavior) killed every second
+        // turn. AGENTKIT-113: the resume is authorised by the scoped
+        // binding — this turn is submitted from the position the previous
+        // answer completed at.
         let h = harness();
         // Task one starts fresh and the vendor mints the session.
         h.shared
@@ -2367,10 +2482,11 @@ mod tests {
         h.shared.set_outcome(Shared::completed("v-shared", "first"));
         h.submit(
             "t-first",
-            &payload(
+            &scoped_payload(
                 &native_target(NativeProfile::PlainChat, false),
                 &fresh_input(),
                 None,
+                Some(&scope("convo-a", "parent-0", 0)),
             ),
         )
         .await;
@@ -2380,7 +2496,8 @@ mod tests {
             .await
             .expect("first turn completes");
 
-        // Task two is a brand-new task record resuming that exact session.
+        // Task two is a brand-new task record resuming that exact session,
+        // submitted from the position task one's answer completed at.
         let input = turn_input(TurnResume::Exact {
             vendor_session_id: "v-shared".into(),
         });
@@ -2388,10 +2505,11 @@ mod tests {
             .set_outcome(Shared::completed("v-shared", "second"));
         h.submit(
             "t-second",
-            &payload(
+            &scoped_payload(
                 &native_target(NativeProfile::PlainChat, false),
                 &input,
                 None,
+                Some(&scope("convo-a", "parent-0:answer", 1)),
             ),
         )
         .await;
@@ -2477,7 +2595,26 @@ mod tests {
                 .await
                 .unwrap_err(),
         );
-        assert_eq!(code.as_deref(), Some("lineage_missing"));
+        assert_eq!(code.as_deref(), Some("continuation_scope_missing"));
+        // The scoped form is refused too — the ledger holds no binding.
+        h.submit(
+            "t3",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&scope("convo-x", "parent-9", 3)),
+            ),
+        )
+        .await;
+        let claimed = h.claim("t3").await;
+        let (code, _) = Harness::failure(
+            h.executor()
+                .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(code.as_deref(), Some("continuation_mismatch"));
         assert_eq!(
             h.shared.spawn_count.load(Ordering::SeqCst),
             1,
@@ -2490,6 +2627,10 @@ mod tests {
             conversation: conversation.into(),
             parent: parent.into(),
             history_position: position,
+            // The answer this turn produces becomes its own message at
+            // the next position; the commit binds there (AGENTKIT-113).
+            commit_parent: format!("{parent}:answer"),
+            commit_history_position: position + 1,
             backend: BACKEND.into(),
             executable: "/usr/bin/claude".into(),
             config_identity: "cfg-digest".into(),
@@ -2515,7 +2656,8 @@ mod tests {
     #[tokio::test]
     async fn completed_turn_commits_scoped_continuation_binding() {
         let h = harness();
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
         h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
         h.submit(
             "t1",
@@ -2534,12 +2676,36 @@ mod tests {
             .expect("turn completes");
         let binding = h
             .store
-            .active_continuation("convo-a", "parent-1", 1, BACKEND, "/usr/bin/claude", "cfg-digest")
+            .active_continuation(
+                "convo-a",
+                "parent-1:answer",
+                2,
+                BACKEND,
+                "/usr/bin/claude",
+                "cfg-digest",
+                None,
+            )
             .await
             .unwrap()
-            .expect("completion commits the durable binding");
+            .expect("completion commits the durable binding at the COMPLETED position");
         assert_eq!(binding.vendor_session_id, "vendor-1");
         assert_eq!(binding.owning_task_id, "t1");
+        assert!(
+            h.store
+                .active_continuation(
+                    "convo-a",
+                    "parent-1",
+                    1,
+                    BACKEND,
+                    "/usr/bin/claude",
+                    "cfg-digest",
+                    None
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "the INPUT position must carry no binding — regenerating from it must miss"
+        );
         assert!(
             h.event_types("t1")
                 .await
@@ -2553,7 +2719,8 @@ mod tests {
     async fn exact_resume_rejects_foreign_scope_binding() {
         let h = harness();
         // Establish vendor-1 under conversation A.
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
         h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
         h.submit(
             "t1",
@@ -2606,12 +2773,18 @@ mod tests {
     #[tokio::test]
     async fn exact_resume_follows_selected_history_position() {
         let h = harness();
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
         h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
         let target = native_target(NativeProfile::PlainChat, false);
         h.submit(
             "t1",
-            &scoped_payload(&target, &fresh_input(), None, Some(&scope("convo-a", "parent-1", 1))),
+            &scoped_payload(
+                &target,
+                &fresh_input(),
+                None,
+                Some(&scope("convo-a", "parent-1", 1)),
+            ),
         )
         .await;
         let claimed = h.claim("t1").await;
@@ -2620,15 +2793,22 @@ mod tests {
             .await
             .unwrap();
 
-        // Same frozen scope: the binding is the attestation — accepted.
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
+        // The follow-up is submitted from the position the first answer
+        // completed at — the binding committed there is the attestation.
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
         h.shared.set_outcome(Shared::completed("vendor-1", "again"));
         let input = turn_input(TurnResume::Exact {
             vendor_session_id: "vendor-1".into(),
         });
         h.submit(
             "t2",
-            &scoped_payload(&target, &input, None, Some(&scope("convo-a", "parent-1", 1))),
+            &scoped_payload(
+                &target,
+                &input,
+                None,
+                Some(&scope("convo-a", "parent-1:answer", 2)),
+            ),
         )
         .await;
         let claimed = h.claim("t2").await;
@@ -2649,7 +2829,12 @@ mod tests {
         // position means no exact continuation — fail closed.
         h.submit(
             "t3",
-            &scoped_payload(&target, &input, None, Some(&scope("convo-a", "parent-0", 0))),
+            &scoped_payload(
+                &target,
+                &input,
+                None,
+                Some(&scope("convo-a", "parent-0", 0)),
+            ),
         )
         .await;
         let claimed = h.claim("t3").await;
@@ -2670,12 +2855,18 @@ mod tests {
     #[tokio::test]
     async fn changed_configuration_refuses_exact_resume() {
         let h = harness();
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
         h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
         let target = native_target(NativeProfile::PlainChat, false);
         h.submit(
             "t1",
-            &scoped_payload(&target, &fresh_input(), None, Some(&scope("convo-a", "parent-1", 1))),
+            &scoped_payload(
+                &target,
+                &fresh_input(),
+                None,
+                Some(&scope("convo-a", "parent-1", 1)),
+            ),
         )
         .await;
         let claimed = h.claim("t1").await;
@@ -2684,10 +2875,13 @@ mod tests {
             .await
             .unwrap();
 
-        // Same conversation/parent/position, different admitted config:
-        // the binding's config identity must hold the turn out.
+        // The binding EXISTS at the position the first answer completed
+        // at; only the changed config identity differs. The store's exact
+        // lookup must filter it out on config identity, and a changed
+        // prompt revision must break the match just as decisively.
         let mut reconfigured = target.clone();
         reconfigured.config_identity = "cfg-changed".into();
+        reconfigured.system_prompt_revision = Some("prompt-v2".into());
         let input = turn_input(TurnResume::Exact {
             vendor_session_id: "vendor-1".into(),
         });
@@ -2699,7 +2893,8 @@ mod tests {
                 None,
                 Some(&ContinuationScope {
                     config_identity: "cfg-changed".into(),
-                    ..scope("convo-a", "parent-1", 1)
+                    system_prompt_revision: Some("prompt-v2".into()),
+                    ..scope("convo-a", "parent-1:answer", 2)
                 }),
             ),
         )
@@ -2798,7 +2993,9 @@ mod tests {
                     .is_err();
                 let interrupts = format!("{:?}", *h.shared.interrupts.lock().unwrap());
                 let live = h.shared.child_live.load(Ordering::SeqCst);
-                panic!("broker serving or child un-quarantined: tools_err={tools_dbg} call_err={call_dbg} interrupts={interrupts} child_live={live}")
+                panic!(
+                    "broker serving or child un-quarantined: tools_err={tools_dbg} call_err={call_dbg} interrupts={interrupts} child_live={live}"
+                )
             }
         };
         let (tools_text, call_text) = refusal;
@@ -2809,10 +3006,83 @@ mod tests {
         );
     }
 
+    /// AGENTKIT-110 lifecycle hardening: the attempt destructor is scoped
+    /// to the attempt's OWN process generation. Dropping attempt A must
+    /// never quarantine-interrupt a child belonging to a concurrent
+    /// attempt B on the shared runtime supervisor; dropping the owner that
+    /// DID attach a child must terminate exactly that child.
+    #[tokio::test]
+    async fn dropping_an_attempt_owner_never_interrupts_a_sibling_child() {
+        let shared = Shared::default();
+        let sup: Arc<dyn ProcessSupervisor> = Arc::new(FakeSupervisor {
+            shared: shared.clone(),
+        });
+        let plan = LaunchPlan {
+            argv: vec!["claude".into()],
+            env: vec![],
+            cwd: "/tmp".into(),
+            per_run_dir: "/tmp/run".into(),
+            permission_policy: PermissionPromptPolicy::None,
+            max_vendor_turns: None,
+            native_session_id: None,
+            fingerprint: "fp-scope".into(),
+        };
+        let mut child = sup
+            .spawn(&plan, &ResourceLimits::default(), &CancellationToken::new())
+            .await
+            .expect("spawn sibling child");
+        assert!(shared.child_live.load(Ordering::SeqCst));
+
+        // Attempt A owns no process: dropping it must leave B untouched.
+        let owner_a = AttemptOwner::new(
+            SqliteStore::memory(64).unwrap(),
+            "attempt-a",
+            sup.clone(),
+            None,
+            None,
+        );
+        drop(owner_a);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            shared.interrupts.lock().unwrap().is_empty(),
+            "dropping an owner with no attached process must not interrupt the sibling"
+        );
+        assert!(
+            shared.child_live.load(Ordering::SeqCst),
+            "the sibling child must survive another attempt's drop"
+        );
+
+        // Attempt B owns the live child: its drop terminates exactly it.
+        let owner_b = AttemptOwner::new(
+            SqliteStore::memory(64).unwrap(),
+            "attempt-b",
+            sup.clone(),
+            None,
+            None,
+        );
+        owner_b.attach_child(child.pid(), child.generation());
+        drop(owner_b);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while shared.child_live.load(Ordering::SeqCst) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the owner that attached the child must terminate its own process"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            &*shared.interrupts.lock().unwrap(),
+            &[InterruptPolicy::Quarantine],
+            "exactly one quarantine interrupt — the attached generation only"
+        );
+        let _ = child.wait().await;
+    }
+
     #[tokio::test]
     async fn post_spawn_persistence_failure_reaps_the_child() {
         let h = harness();
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#]);
         h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
         h.submit(
             "t1",
@@ -2858,7 +3128,11 @@ mod tests {
                 .iter()
                 .any(|policy| matches!(policy, InterruptPolicy::HostShutdown)
                     || matches!(policy, InterruptPolicy::Quarantine))
-                && !h.event_types("t1").await.iter().any(|t| t == "native.completed"),
+                && !h
+                    .event_types("t1")
+                    .await
+                    .iter()
+                    .any(|t| t == "native.completed"),
             "no completion may be claimed for the failed attempt"
         );
     }
@@ -3231,8 +3505,11 @@ mod tests {
                 snapshots: true,
             }),
         };
-        let native_payload =
-            payload(&native_target(NativeProfile::PlainChat, false), &fresh_input(), None);
+        let native_payload = payload(
+            &native_target(NativeProfile::PlainChat, false),
+            &fresh_input(),
+            None,
+        );
         let model_payload = json!({
             EXECUTION_TARGET_PAYLOAD_KEY: {
                 "modelLoop": { "schemaVersion": 1, "providerId": "p", "model": "m" }

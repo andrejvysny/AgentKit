@@ -52,6 +52,8 @@ fn continuation_scope(conversation: &str, parent: &str, position: i64) -> Value 
         "conversation": conversation,
         "parent": parent,
         "historyPosition": position,
+        "commitParent": format!("{parent}:answer"),
+        "commitHistoryPosition": position + 1,
         "backend": "claude-code",
         "executable": "/usr/bin/claude",
         "configIdentity": "cfg-test"
@@ -210,6 +212,143 @@ async fn queued_frozen_stanza_survives_the_flush() {
     );
 }
 
+/// Review R9: a native session whose turn carries NO `turnInput` anywhere
+/// in the merged view is refused at SEND time — the executor could only
+/// fail it at dispatch.
+#[tokio::test]
+async fn native_admission_without_turn_input_is_refused() {
+    let (_store, service) = fixture();
+    create(
+        &service,
+        Some(json!({ "executionTarget": { "native": native_target() } })),
+    )
+    .await;
+    let error = service
+        .send(
+            "native-chat",
+            &SendInput {
+                content: json!("hello"),
+                input_id: Some("i1".into()),
+                when_busy: WhenBusy::Queue,
+                turn_id: None,
+                on_settled: None,
+                frozen_payload: None,
+            },
+        )
+        .await
+        .expect_err("a native turn must carry its frozen input");
+    assert_eq!(error.code, "invalid_input");
+    assert!(
+        error.message.contains("turnInput"),
+        "the refusal names the missing key: {}",
+        error.message
+    );
+}
+
+/// Review R9 mirror: a per-turn input cannot hide a missing execution
+/// target — the MERGED view must be complete either way.
+#[tokio::test]
+async fn native_admission_without_execution_target_is_refused() {
+    let (_store, service) = fixture();
+    create(&service, None).await;
+    let error = service
+        .send(
+            "native-chat",
+            &send_input("hello", "i1", frozen_with_input("i1", "hello")),
+        )
+        .await
+        .expect_err("an inherited target is part of the contract");
+    assert_eq!(error.code, "invalid_input");
+    assert!(
+        error.message.contains("executionTarget"),
+        "the refusal names the missing key: {}",
+        error.message
+    );
+}
+
+/// Review R9 (R3's admission half): exact resume requires the complete
+/// scoped binding at the door, mirroring the executor's
+/// `continuation_scope_missing` dispatch refusal.
+#[tokio::test]
+async fn exact_resume_without_continuation_scope_is_refused() {
+    let (_store, service) = fixture();
+    create(
+        &service,
+        Some(json!({ "executionTarget": { "native": native_target() } })),
+    )
+    .await;
+    let mut frozen = Map::new();
+    frozen.insert(
+        "turnInput".into(),
+        json!({
+            "inputId": "i1",
+            "text": "resume me",
+            "contextBlocks": [],
+            "resume": {"mode": "exact", "vendorSessionId": "vs-1"},
+            "turnDeadlineMs": 5000
+        }),
+    );
+    let error = service
+        .send("native-chat", &send_input("resume me", "i1", frozen))
+        .await
+        .expect_err("unscoped exact resume is refused, not queued to fail");
+    assert_eq!(error.code, "invalid_input");
+    assert!(
+        error.message.contains("continuationScope"),
+        "the refusal names the missing binding: {}",
+        error.message
+    );
+}
+
+/// Review R9: a queued input restated under the SAME `inputId` with
+/// DIFFERENT frozen bytes is an `input_conflict` — never a silent replay
+/// of the original target. The identical restatement still replays.
+#[tokio::test]
+async fn queued_replay_with_swapped_frozen_bytes_conflicts() {
+    let (_store, service) = fixture();
+    create(
+        &service,
+        Some(json!({ "executionTarget": { "native": native_target() } })),
+    )
+    .await;
+    let _first = service
+        .send(
+            "native-chat",
+            &send_input("one", "i1", frozen_with_input("i1", "one")),
+        )
+        .await
+        .unwrap();
+    let mut second = frozen_with_input("i2", "two");
+    second.insert(
+        "continuationScope".into(),
+        continuation_scope("conv-1", "msg-1", 2),
+    );
+    let queued = service
+        .send("native-chat", &send_input("two", "i2", second.clone()))
+        .await
+        .unwrap();
+    assert!(matches!(queued, AgentSendResult::Queued { .. }));
+    // The faithful restatement replays the queued input.
+    let again = service
+        .send("native-chat", &send_input("two", "i2", second.clone()))
+        .await
+        .expect("identical restatement replays");
+    assert!(matches!(again, AgentSendResult::Queued { .. }));
+    // Same id, changed frozen identity: conflict, not a silent replay.
+    let mut swapped = second.clone();
+    swapped.insert("turnInput".into(), turn_input("i2", "TWO DIFFERENT"));
+    let error = service
+        .send("native-chat", &send_input("two", "i2", swapped))
+        .await
+        .expect_err("a swapped frozen target must conflict");
+    assert!(
+        error.message.contains("input_conflict"),
+        "expected an input_conflict, got {}: {}",
+        error.code,
+        error.message
+    );
+}
+
 #[tokio::test]
 async fn malformed_native_admission_is_refused_at_send() {
     let (store, service) = fixture();
@@ -238,11 +377,7 @@ async fn malformed_native_admission_is_refused_at_send() {
     );
     assert!(store.get_task("turn:bad-1").await.unwrap().is_none());
     assert!(
-        store
-            .get_input("bad-1".into())
-            .await
-            .unwrap()
-            .is_none(),
+        store.get_input("bad-1".into()).await.unwrap().is_none(),
         "a refused send leaves no queued input behind"
     );
 }
@@ -291,6 +426,23 @@ async fn malformed_session_native_stanza_is_refused_at_creation() {
             profile_id: "coding".into(),
             turn_kind: Some("onemind.chat".into()),
             metadata: Some(json!({ "agentkit.nativeExecution": "claude" })),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_input");
+
+    // Review round-3 F5: an INHERITED stanza is typed at creation, not
+    // just present — a garbage execution target can never become a
+    // session whose turns only die after queueing and claim.
+    let error = service
+        .create_session(&CreateSessionInput {
+            session_id: Some("native-chat".into()),
+            profile_id: "coding".into(),
+            turn_kind: Some("onemind.chat".into()),
+            metadata: Some(json!({
+                "agentkit.nativeExecution": { "executionTarget": "garbage" }
+            })),
             ..Default::default()
         })
         .await

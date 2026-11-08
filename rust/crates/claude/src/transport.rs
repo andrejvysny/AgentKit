@@ -82,6 +82,11 @@ struct SharedChild {
     /// kills can never target an arbitrary foreign process tree.
     pgid: u32,
     generation: u64,
+    /// The attempt's REAL configured limits, kept beside the registry's
+    /// weak handle so supervisor-driven cleanup (terminate_owned /
+    /// shutdown drain) honours operator grace timeouts instead of
+    /// substituting defaults (review round-3 F3).
+    limits: ResourceLimits,
     exit: Mutex<Option<RawExit>>,
     interrupt_requested: AtomicBool,
     interrupt_policy: Mutex<Option<String>>,
@@ -427,6 +432,11 @@ fn spawn_stderr_reader(
 /// The owned child handle (AGENTKIT-110). Carries its generation so a
 /// stale handle can never be mistaken for a live authority, and the
 /// reader/stdin task handles so `wait` leaves no task leaks.
+///
+/// Stream EOF, observed process exit and completed cleanup are THREE
+/// separate facts: stdout EOF alone never disarms drop cleanup (AGENTKIT-
+/// 110 lifecycle hardening — a child that closed stdout and kept running
+/// must still be terminated when its handle is abandoned).
 struct OwnedChild {
     shared: Arc<SharedChild>,
     limits: ResourceLimits,
@@ -436,13 +446,19 @@ struct OwnedChild {
     written_stdin: usize,
     reader_tasks: Vec<JoinHandle<()>>,
     stdin_tasks: Vec<CancellationToken>,
-    terminal: bool,
+    /// The stdout frame channel closed; no further frames will arrive.
+    /// NOT a claim about process exit.
+    frames_exhausted: bool,
+    /// Cleanup ran to completion through `wait`/`interrupt`/drop: tasks
+    /// are stopped and the child is deregistered. Only this disarms Drop.
+    finalized: bool,
     live: Arc<Mutex<HashMap<u32, std::sync::Weak<SharedChild>>>>,
 }
 
 impl OwnedChild {
     fn finalize(&mut self) {
-        self.terminal = true;
+        self.frames_exhausted = true;
+        self.finalized = true;
         for t in self.reader_tasks.drain(..) {
             t.abort();
         }
@@ -470,16 +486,29 @@ impl Drop for OwnedChild {
     /// keeps the reaper task as the single waiter, so the dropped process is
     /// still reaped once the ladder terminates it. Without a runtime in
     /// context the strongest honest fallback is an immediate group SIGKILL.
+    ///
+    /// Stdout EOF does NOT excuse cleanup: only `finalized` (cleanup
+    /// already completed) or a reaper-confirmed exit skips the ladder.
     fn drop(&mut self) {
-        if self.terminal {
+        if self.finalized {
             return;
         }
-        self.terminal = true;
+        self.finalized = true;
         for t in self.reader_tasks.drain(..) {
             t.abort();
         }
         for t in self.stdin_tasks.drain(..) {
             t.cancel();
+        }
+        // Exit already observed by the reaper (EOF-then-exit, handle
+        // dropped without `wait`): the LEADER is gone, but a same-group
+        // tool descendant may survive — abandon means no survivors, so
+        // best-effort sweep the group like the success receipt does,
+        // then deregister (review round-3 F2).
+        if self.shared.exit_now().is_some() {
+            let _ = group_kill(self.shared.pgid, SIGKILL);
+            deregister(&self.live, &self.shared);
+            return;
         }
         let shared = Arc::clone(&self.shared);
         let limits = self.limits.clone();
@@ -510,13 +539,16 @@ impl OwnedChildHandle for OwnedChild {
     }
 
     async fn next_frame(&mut self) -> Option<FrameLine> {
-        if self.terminal {
+        if self.finalized || self.frames_exhausted {
             return None;
         }
         match self.rx.recv().await {
             Some(frame) => Some(frame),
             None => {
-                self.terminal = true;
+                // Channel closed: no more frames. The process may still be
+                // running — drop cleanup stays armed until `wait` or the
+                // reaper-confirmed exit retires it.
+                self.frames_exhausted = true;
                 None
             }
         }
@@ -676,6 +708,7 @@ impl ProcessSupervisor for OwnedProcessSupervisor {
             pid,
             pgid: pid,
             generation,
+            limits: limits.clone(),
             exit: Mutex::new(None),
             interrupt_requested: AtomicBool::new(false),
             interrupt_policy: Mutex::new(None),
@@ -735,7 +768,8 @@ impl ProcessSupervisor for OwnedProcessSupervisor {
             written_stdin: 0,
             reader_tasks: vec![stdout_task, stderr_task],
             stdin_tasks: Vec::new(),
-            terminal: false,
+            frames_exhausted: false,
+            finalized: false,
             live: Arc::clone(&self.live),
         }))
     }
@@ -747,12 +781,56 @@ impl ProcessSupervisor for OwnedProcessSupervisor {
             map.clear();
             live
         };
-        let limits = ResourceLimits::default();
         let mut receipts = Vec::with_capacity(live.len());
         for shared in live {
-            receipts.push(interrupt_shared(&shared, policy, &limits).await);
+            receipts.push(interrupt_shared(&shared, policy, &shared.limits).await);
         }
         receipts
+    }
+
+    /// Per-attempt scoped cleanup: terminate exactly the live child whose
+    /// registry identity is `(pid, generation)` and nothing else. A stale
+    /// generation (pid reused after exit) matches nothing, so a late
+    /// cleanup can never kill a newer sibling process.
+    async fn terminate_owned(
+        &self,
+        pid: u32,
+        generation: u64,
+        policy: InterruptPolicy,
+    ) -> Option<InterruptReceipt> {
+        let shared = {
+            let map = self.live.lock().unwrap();
+            map.get(&pid)
+                .and_then(std::sync::Weak::upgrade)
+                .filter(|s| s.generation == generation)
+        }?;
+        let receipt = interrupt_shared(&shared, policy, &shared.limits).await;
+        let mut map = self.live.lock().unwrap();
+        if let Some(weak) = map.get(&pid)
+            && weak.as_ptr() == Arc::as_ptr(&shared)
+        {
+            map.remove(&pid);
+        }
+        Some(receipt)
+    }
+}
+
+/// The whole-runtime shutdown owner (review round-3 F1, AGENTKIT-110):
+/// once the last reference to the supervisor is gone, every still-live
+/// registered vendor process is an orphan of a retired runtime and must
+/// not outlive it. Synchronous group SIGKILL is honest best-effort here:
+/// no runtime is required, and any surviving reaper task still reaps.
+impl Drop for OwnedProcessSupervisor {
+    fn drop(&mut self) {
+        let live: Vec<Arc<SharedChild>> = {
+            let mut map = self.live.lock().unwrap();
+            let live = map.values().filter_map(std::sync::Weak::upgrade).collect();
+            map.clear();
+            live
+        };
+        for shared in live {
+            let _ = group_kill(shared.pgid, SIGKILL);
+        }
     }
 }
 
@@ -1300,5 +1378,133 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// AGENTKIT-110 lifecycle hardening: stdout EOF is NOT process exit.
+    /// A child that closes stdout and keeps running must still be driven
+    /// through the shutdown ladder when its handle is abandoned — the EOF
+    /// alone must never disarm drop cleanup.
+    #[tokio::test]
+    async fn stdout_eof_does_not_disarm_drop_cleanup() {
+        let dir = TempDir::new().unwrap();
+        // Emit one frame, close stdout, then KEEP RUNNING for 30 s.
+        let exe = fixture(
+            &dir,
+            "eof_then_sleep.sh",
+            "printf 'r\\n'\nexec 1>&-\nsleep 30",
+        );
+        let sup = OwnedProcessSupervisor::new();
+        let mut child = spawn_child(&sup, exe, &dir, &tight_limits()).await;
+        assert_eq!(read_frame(child.as_mut(), 5_000).await, Some(line(b"r")));
+        // EOF: the frame channel closes while the process is still alive.
+        assert_eq!(child.next_frame().await, None);
+        let pid = child.pid();
+        assert!(
+            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "child must still be running at EOF"
+        );
+
+        drop(child);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "child {pid} survived EOF + drop: EOF wrongly disarmed cleanup"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// AGENTKIT-110 lifecycle hardening: `terminate_owned` touches exactly
+    /// the `(pid, generation)` it is given — a sibling child keeps running,
+    /// a stale generation is fenced, and unknown identities report `None`.
+    #[tokio::test]
+    async fn terminate_owned_is_scoped_to_one_generation() {
+        let dir = TempDir::new().unwrap();
+        let live_script = "sleep 30 & p=$!\ntrap 'kill $p 2>/dev/null; wait $p 2>/dev/null; exit 0' INT\nprintf 'r\\n'\nwait";
+        let sup = OwnedProcessSupervisor::new();
+        let a = fixture(&dir, "scoped_a.sh", live_script);
+        let b = fixture(&dir, "scoped_b.sh", live_script);
+
+        let mut child_a = spawn_child(&sup, a, &dir, &tight_limits()).await;
+        assert_eq!(read_frame(child_a.as_mut(), 5_000).await, Some(line(b"r")));
+        let (pid_a, gen_a) = (child_a.pid(), child_a.generation());
+        let mut child_b = spawn_child(&sup, b, &dir, &tight_limits()).await;
+        assert_eq!(read_frame(child_b.as_mut(), 5_000).await, Some(line(b"r")));
+        let (pid_b, gen_b) = (child_b.pid(), child_b.generation());
+
+        // Foreign identity and stale generation are refused, nothing dies.
+        assert!(
+            sup.terminate_owned(pid_a + 1000, gen_a, InterruptPolicy::Quarantine)
+                .await
+                .is_none()
+        );
+        assert!(
+            sup.terminate_owned(pid_b, gen_b.saturating_sub(1), InterruptPolicy::Quarantine)
+                .await
+                .is_none()
+        );
+
+        // Only A's exact identity is terminated.
+        let receipt = sup
+            .terminate_owned(pid_a, gen_a, InterruptPolicy::Quarantine)
+            .await
+            .expect("A is live under its exact identity");
+        assert!(receipt.terminated, "{receipt:?}");
+        let exit_a = child_a.wait().await;
+        assert!(exit_a.after_interrupt, "A was interrupt-terminated");
+
+        // B survived: the whole-runtime drain finds exactly B still live.
+        let receipts = sup.drain_owned(InterruptPolicy::HostShutdown).await;
+        assert_eq!(receipts.len(), 1, "only B remained owned and live");
+        assert!(receipts[0].terminated, "{:?}", receipts[0]);
+        let exit_b = child_b.wait().await;
+        assert!(exit_b.after_interrupt, "B was terminated only by the drain");
+
+        // Deregistered identities now report None (no re-kill path).
+        assert!(
+            sup.terminate_owned(pid_a, gen_a, InterruptPolicy::Quarantine)
+                .await
+                .is_none()
+        );
+        assert!(
+            sup.terminate_owned(pid_b, gen_b, InterruptPolicy::Quarantine)
+                .await
+                .is_none()
+        );
+    }
+
+    /// Review round-3 F1: the supervisor Drop is the whole-runtime
+    /// shutdown owner. A vendor child whose handle was LEAKED (no OwnedChild
+    /// Drop ladder ever runs) must not outlive the retired supervisor.
+    #[tokio::test]
+    async fn supervisor_drop_sweeps_orphaned_children() {
+        let dir = TempDir::new().unwrap();
+        let live_script = "sleep 30 & p=$!\ntrap 'kill $p 2>/dev/null; wait $p 2>/dev/null; exit 0' INT\nprintf 'r\\n'\nwait";
+        let sup = OwnedProcessSupervisor::new();
+        let a = fixture(&dir, "orphan_a.sh", live_script);
+        let mut child_a = spawn_child(&sup, a, &dir, &tight_limits()).await;
+        assert_eq!(read_frame(child_a.as_mut(), 5_000).await, Some(line(b"r")));
+        let pid = child_a.pid();
+        assert!(
+            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "the fixture child is alive before shutdown"
+        );
+
+        // Leak the handle: no per-child Drop ladder runs; the supervisor
+        // destructor is the only cleanup left standing.
+        std::mem::forget(child_a);
+        drop(sup);
+
+        // The group SIGKILL is issued synchronously in Drop; poll honestly
+        // (reaping is delegated to the still-running reaper task).
+        for _ in 0..500 {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("orphaned vendor child {pid} outlived the supervisor shutdown");
     }
 }

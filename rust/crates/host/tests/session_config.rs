@@ -42,7 +42,8 @@ fn create_input() -> CreateSessionInput {
 }
 
 fn send_input(content: Value, input_id: &str, when_busy: WhenBusy) -> SendInput {
-    SendInput { frozen_payload: None,
+    SendInput {
+        frozen_payload: None,
         content,
         input_id: Some(input_id.into()),
         when_busy,

@@ -160,8 +160,7 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
         || !(message.metadata.get("placeholder") == Some(&Value::Bool(true)) || projected_before)
     {
         return Err(StoreError::InvalidInput(
-            "projection may only replace its own placeholder or a row it already projected"
-                .into(),
+            "projection may only replace its own placeholder or a row it already projected".into(),
         ));
     }
     message.content = input.content;

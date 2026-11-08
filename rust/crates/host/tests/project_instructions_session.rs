@@ -134,7 +134,8 @@ async fn a_symlinked_agents_md_skips_with_a_durable_warning_and_never_leaks() {
     let sent = service
         .send(
             "s1",
-            &SendInput { frozen_payload: None,
+            &SendInput {
+                frozen_payload: None,
                 content: json!("hi"),
                 input_id: Some("in1".into()),
                 when_busy: WhenBusy::Reject,

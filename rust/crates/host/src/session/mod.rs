@@ -831,7 +831,13 @@ impl AgentSessionService {
             .clone()
             .ok_or_else(|| SessionError::invalid_input("inputId is required to steer."))?;
         if let Some(prior) = self
-            .prior_receipt(session_id, QueueKind::Steer, &input_id, &input.content)
+            .prior_receipt(
+                session_id,
+                QueueKind::Steer,
+                &input_id,
+                &input.content,
+                None,
+            )
             .await?
         {
             return Ok(prior);
@@ -847,7 +853,7 @@ impl AgentSessionService {
                     session_id: session_id.to_owned(),
                     kind: AgentInputKind::Steer,
                     content: envelope.clone(),
-                    content_hash: self.hash_of(QueueKind::Steer, &envelope["content"]),
+                    content_hash: self.hash_of(QueueKind::Steer, &envelope),
                     target_task_id: None,
                     on_settled: Some(AgentInputSettlePolicy::Cancel),
                     attempt_id: None,
@@ -1713,7 +1719,7 @@ impl AgentSessionService {
         // lands verbatim — the flushed turn carries exactly the bytes the
         // sender submitted, validated against the same admission contract.
         if let Some(frozen) = &frozen {
-            self.check_frozen(Some(frozen))?;
+            self.check_frozen(Some(frozen), descriptor)?;
             for (key, value) in frozen {
                 payload.insert(key.clone(), value.clone());
             }
@@ -1953,16 +1959,22 @@ impl AgentSessionService {
         intent: QueueIntent,
         frozen: Option<&Map<String, Value>>,
     ) -> SessionResult<AgentSendResult> {
-        self.check_frozen(frozen)?;
+        self.check_frozen(frozen, descriptor)?;
         if let Some(existing) = &intent.input_id
             && let Some(prior) = self
-                .prior_receipt(session_id, kind, existing, &content)
+                .prior_receipt(session_id, kind, existing, &content, frozen)
                 .await?
         {
             return Ok(prior);
         }
         match self
-            .submit_turn(session_id, descriptor, &content, intent.input_id.as_deref(), frozen)
+            .submit_turn(
+                session_id,
+                descriptor,
+                &content,
+                intent.input_id.as_deref(),
+                frozen,
+            )
             .await
         {
             Ok(result) => {
@@ -2043,7 +2055,7 @@ impl AgentSessionService {
                 &envelope,
             )
             .await?;
-        let content_hash = self.hash_of(kind, &envelope["content"]);
+        let content_hash = self.hash_of(kind, &envelope);
         let admission = self
             .store()
             .queue_or_stage_turn(QueueOrStage {
@@ -2089,10 +2101,15 @@ impl AgentSessionService {
         kind: QueueKind,
         input_id: &str,
         content: &Value,
+        frozen: Option<&Map<String, Value>>,
     ) -> SessionResult<Option<AgentSendResult>> {
         if let Some(existing) = self.store().get_input(input_id.to_owned()).await? {
-            // createInput is the idempotency check: same input replays, a
-            // different one is `input_conflict`.
+            // createInput is the idempotency check: same input (content AND
+            // frozen stanza) replays, a different one is `input_conflict`.
+            let mut envelope = json!({"content": content.clone()});
+            if let Some(stanza) = frozen {
+                envelope["frozen"] = Value::Object(stanza.clone());
+            }
             let (record, _) = self
                 .store()
                 .create_input(
@@ -2100,8 +2117,8 @@ impl AgentSessionService {
                         input_id: input_id.to_owned(),
                         session_id: session_id.to_owned(),
                         kind: kind.input_kind(),
-                        content: json!({"content": content.clone()}),
-                        content_hash: self.hash_of(kind, content),
+                        content: envelope.clone(),
+                        content_hash: self.hash_of(kind, &envelope),
                         target_task_id: existing.target_task_id.clone(),
                         on_settled: existing.on_settled,
                         attempt_id: None,
@@ -2133,43 +2150,108 @@ impl AgentSessionService {
         })
     }
 
-    fn hash_of(&self, kind: QueueKind, content: &Value) -> String {
-        let envelope = json!({"kind": kind.as_str(), "content": content});
-        sha256_hex(&serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into()))
+    /// The idempotency digest covers the WHOLE durable envelope, including
+    /// any frozen native stanza: a replay that silently swaps the execution
+    /// target or turn input under the same `inputId` is an
+    /// `input_conflict`, not a silent replay of the original bytes
+    /// (AGENTKIT-112).
+    fn hash_of(&self, kind: QueueKind, envelope: &Value) -> String {
+        let hashed = json!({"kind": kind.as_str(), "envelope": envelope});
+        sha256_hex(&serde_json::to_string(&hashed).unwrap_or_else(|_| "{}".into()))
     }
 
-    /// Validate a consumer-supplied frozen native stanza at ADMISSION time.
-    /// With the native lane compiled in, this is the executor's own typed
-    /// contract; without it, the key whitelist still holds (the host has no
-    /// native executor to mis-admit to, but the payload keys are frozen
-    /// wire names).
-    fn check_frozen(&self, frozen: Option<&Map<String, Value>>) -> SessionResult<()> {
-        let Some(stanza) = frozen else {
+    /// Validate native admission BEFORE it becomes durable (AGENTKIT-112,
+    /// review R9): the contract is checked on the MERGED view the
+    /// executor will actually see — the per-send frozen stanza plus the
+    /// session-frozen `nativeExecution` block it inherits — so an
+    /// inherited target cannot hide a missing per-turn input, and a
+    /// per-turn input cannot hide a missing target. An admission that is
+    /// native at all (either half present) must carry the COMPLETE
+    /// executable identity: `executionTarget` and `turnInput` somewhere
+    /// in the merge, and `continuationScope` whenever the turn asks for
+    /// an EXACT resume (R3 retired the unscoped fallback at dispatch —
+    /// admission must not queue an attempt that can only fail there).
+    /// With the native lane compiled in each present key is checked
+    /// against the executor's own typed contract; without it, the key
+    /// whitelist still holds.
+    fn check_frozen(
+        &self,
+        frozen: Option<&Map<String, Value>>,
+        descriptor: &Value,
+    ) -> SessionResult<()> {
+        let native = descriptor.get("nativeExecution").and_then(Value::as_object);
+        if frozen.is_none() && native.is_none() {
             return Ok(());
+        }
+        let merged_has = |key: &str| {
+            frozen.is_some_and(|stanza| stanza.contains_key(key))
+                || native.is_some_and(|block| block.contains_key(key))
         };
+        let mut detail: Vec<String> = ["executionTarget", "turnInput"]
+            .into_iter()
+            .filter(|key| !merged_has(key))
+            .map(|key| {
+                format!("native admission is missing required key '{key}' in the merged stanza")
+            })
+            .collect();
+        // Exact resume without its complete scoped binding is refused at
+        // the door (mirror of the executor's `continuation_scope_missing`).
+        let exact_resume = frozen
+            .as_ref()
+            .and_then(|stanza| stanza.get("turnInput"))
+            .or_else(|| native.and_then(|block| block.get("turnInput")))
+            .and_then(|input| input.get("resume"))
+            .and_then(|resume| resume.get("mode"))
+            .and_then(Value::as_str)
+            == Some("exact");
+        if exact_resume && !merged_has("continuationScope") {
+            detail.push(
+                "exact resume requires a frozen 'continuationScope' in the merged stanza"
+                    .to_owned(),
+            );
+        }
         #[cfg(feature = "http")]
         {
-            crate::native_executor::NativeAgentExecutor::validate_frozen_stanza(stanza)
-                .map_err(SessionError::invalid_input)
+            // Review round-3 F5: the typed contract is checked on the
+            // MERGED stanza the executor will actually see — an inherited
+            // descriptor half that merely PRESENTS `executionTarget` must
+            // still parse against the executor's own types, or a garbage
+            // target queues a task+messages pair that only dies at claim
+            // (the exact AGENTKIT-112 outcome this gate exists to stop).
+            let mut merged = native.cloned().unwrap_or_default();
+            if let Some(stanza) = frozen {
+                for (key, value) in stanza {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+            if !merged.is_empty() {
+                detail.extend(
+                    crate::native_executor::NativeAgentExecutor::validate_frozen_stanza(&merged)
+                        .err()
+                        .map(|e| vec![e])
+                        .unwrap_or_default(),
+                );
+            }
         }
         #[cfg(not(feature = "http"))]
-        {
+        if let Some(stanza) = frozen {
             const ALLOWED: [&str; 4] = [
                 "executionTarget",
                 "turnInput",
                 "broker",
                 "continuationScope",
             ];
-            let detail: Vec<String> = stanza
-                .keys()
-                .filter(|key| !ALLOWED.contains(&key.as_str()))
-                .map(|key| format!("unknown frozen key '{key}'"))
-                .collect();
-            if detail.is_empty() {
-                Ok(())
-            } else {
-                Err(SessionError::invalid_input(detail.join("; ")))
-            }
+            detail.extend(
+                stanza
+                    .keys()
+                    .filter(|key| !ALLOWED.contains(&key.as_str()))
+                    .map(|key| format!("unknown frozen key '{key}'")),
+            );
+        }
+        if detail.is_empty() {
+            Ok(())
+        } else {
+            Err(SessionError::invalid_input(detail.join("; ")))
         }
     }
 
@@ -2182,9 +2264,9 @@ impl AgentSessionService {
         frozen: Option<&Map<String, Value>>,
     ) -> SessionResult<AgentSendResult> {
         // Native admission is validated BEFORE the first mint: a malformed
-        // stanza is refused at send time, never discovered after the task
-        // was queued and claimed (AGENTKIT-112).
-        self.check_frozen(frozen)?;
+        // or incomplete stanza is refused at send time, never discovered
+        // after the task was queued and claimed (AGENTKIT-112).
+        self.check_frozen(frozen, descriptor)?;
         // Refused before the first mint: a turn whose kind no executor
         // handles would be a task+messages batch the worker can never
         // claim. Nothing above this line writes.

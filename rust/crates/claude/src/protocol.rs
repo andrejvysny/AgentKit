@@ -22,8 +22,15 @@
 //! * `{"type":"system","subtype":"permission_denied","tool_name":S?}`
 //! * `{"type":"system","subtype":"status","status":S|null}`
 //! * `{"type":"system","subtype":"compact_boundary","trigger":S?}`
-//! * `{"type":"rate_limit_event","rate_limit":{"status":S,
-//!    "resetsAt":S?,"utilization":F?},"session_id":S?}`
+//! * `{"type":"rate_limit_event","rate_limit_info":{"status":S,
+//!    "resetsAt":N?,"utilization":F?,"rateLimitType":S?},"session_id":S?}`
+//!   — the public Agent SDK shape (`SDKRateLimitEvent`); the older
+//!   `rate_limit` envelope and string-encoded `resetsAt` are tolerated,
+//!   numeric reset timestamps are preserved verbatim
+//! * `{"type":"tool_progress","tool_use_id":S,"tool_name":S,
+//!    "elapsed_time_seconds":F?,"parent_tool_use_id":S|null,
+//!    "session_id":S?}` — documented tool-execution heartbeat (including
+//!   the ~30 s foreground heartbeat); progress metadata, never terminal
 //! * `{"type":"result","subtype":"success"|"error_max_turns"|
 //!    "error_during_execution","is_error":B,"result":S|null,"session_id":S,
 //!    "usage":{...}|null,"total_cost_usd":F|null,"permission_denials":[..]?}`
@@ -72,6 +79,14 @@ pub struct ResultEvidence {
     /// `usage: null` — unknown, never zero.
     pub usage: Option<NativeUsage>,
     pub permission_denials: Vec<String>,
+    /// Vendor `errors[]` details from an error result, preserved bounded
+    /// and redacted (strings kept as-is; object entries reduced to their
+    /// message-ish field or raw JSON text; first 8 kept with a visible
+    /// omission entry, each clipped to 300 chars, credential-shaped runs
+    /// replaced). Never dropped in favour of the bare subtype
+    /// (AGENTKIT-111 diagnostics, R10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
     /// Model identity observed in the `init` frame.
     pub observed_model: Option<String>,
 }
@@ -137,23 +152,33 @@ impl ClaudeStreamAdapter {
     /// Concatenated visible root text: all complete segment texts joined
     /// with `\n\n` once any complete root block arrived (multiple blocks
     /// and messages all appear, never overwritten), else the accumulated
-    /// root deltas; `None` when no root text was seen at all.
+    /// root deltas; `None` when no root text was seen at all. Deltas that
+    /// arrive **after** the last complete block are the in-flight partial
+    /// text of the next message and are appended after the completed text
+    /// with the same `\n\n` joiner — an interrupted turn must not lose the
+    /// answer being streamed (partial + completed retained, never
+    /// duplicated).
     pub fn partial_text(&self) -> Option<String> {
-        let complete: Vec<&str> = self
-            .segments
-            .iter()
-            .filter(|s| s.complete)
-            .map(|s| s.text.as_str())
-            .collect();
-        if !complete.is_empty() {
-            return Some(complete.join("\n\n"));
+        let last_complete = self.segments.iter().rposition(|s| s.complete);
+        if let Some(last_complete) = last_complete {
+            let complete: Vec<&str> = self.segments[..=last_complete]
+                .iter()
+                .filter(|s| s.complete)
+                .map(|s| s.text.as_str())
+                .collect();
+            let tail: String = self.segments[last_complete + 1..]
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .concat();
+            let joined = complete.join("\n\n");
+            return Some(if tail.is_empty() {
+                joined
+            } else {
+                format!("{joined}\n\n{tail}")
+            });
         }
-        let deltas: Vec<&str> = self
-            .segments
-            .iter()
-            .filter(|s| !s.complete)
-            .map(|s| s.text.as_str())
-            .collect();
+        let deltas: Vec<&str> = self.segments.iter().map(|s| s.text.as_str()).collect();
         let joined = deltas.concat();
         if joined.is_empty() {
             None
@@ -171,9 +196,7 @@ impl ClaudeStreamAdapter {
     fn record_complete(&mut self, text: String, message_id: Option<String>) {
         let supersedes_last = match self.segments.last() {
             Some(last) if !last.complete => {
-                last.message_id.is_none()
-                    || message_id.is_none()
-                    || last.message_id == message_id
+                last.message_id.is_none() || message_id.is_none() || last.message_id == message_id
             }
             _ => false,
         };
@@ -279,6 +302,14 @@ impl ClaudeStreamAdapter {
             Some("stream_event") => self.on_stream_event(frame),
             Some("result") => self.on_result(frame),
             Some("rate_limit_event") => self.on_rate_limit_event(frame),
+            // Documented tool-execution heartbeat (foreground heartbeats
+            // arrive every ~30 s while a tool runs): progress metadata,
+            // never terminal. Validated loosely — an unusable heartbeat
+            // must not kill an otherwise healthy tool turn (AGENTKIT-111).
+            Some("tool_progress") => {
+                parent_id(frame)?;
+                Ok(Vec::new())
+            }
             // Qualified additive metadata (ignored): plugin-install and
             // prompt-suggestion frames.
             Some("plugin_install") | Some("prompt_suggestion") => Ok(Vec::new()),
@@ -310,14 +341,12 @@ impl ClaudeStreamAdapter {
             // status (`"compacting"` or null = cleared) and the compaction
             // boundary marker. Never terminal-affecting (AGENTKIT-111).
             "status" => {
-                let status =
-                    opt_str(frame, "status", "system_status_type")?.map(str::to_owned);
+                let status = opt_str(frame, "status", "system_status_type")?.map(str::to_owned);
                 Ok(vec![NativeEvent::Status { status }])
             }
             "compact_boundary" => {
                 let trigger =
-                    opt_str(frame, "trigger", "compact_boundary_trigger_type")?
-                        .map(str::to_owned);
+                    opt_str(frame, "trigger", "compact_boundary_trigger_type")?.map(str::to_owned);
                 Ok(vec![NativeEvent::CompactBoundary { trigger }])
             }
             "permission_denied" => {
@@ -328,10 +357,11 @@ impl ClaudeStreamAdapter {
                     .to_owned();
                 Ok(vec![NativeEvent::PermissionDenied { tool_name }])
             }
-            // Hook lifecycle and plugin-install system frames are additive
-            // progress metadata; correctness of the turn does not depend on
-            // them (AGENTKIT-111 tolerance list).
-            "hook_started" | "hook_progress" | "hook_response" | "plugin_install" => Ok(Vec::new()),
+            // Hook lifecycle, plugin-install and tool-progress system
+            // frames are additive progress metadata; correctness of the
+            // turn does not depend on them (AGENTKIT-111 tolerance list).
+            "hook_started" | "hook_progress" | "hook_response" | "plugin_install"
+            | "tool_progress" => Ok(Vec::new()),
             other => Err(violation(
                 "unknown_subtype",
                 format!("unknown system subtype '{other}'"),
@@ -552,39 +582,92 @@ impl ClaudeStreamAdapter {
     }
 
     /// Top-level `rate_limit_event` frame: a progress signal, never
-    /// terminal-affecting (AGENTKIT-111). Strict shape: a non-object
-    /// `rate_limit` or a missing/non-string `status` is a violation.
+    /// terminal-affecting (AGENTKIT-111). The public Agent SDK shape
+    /// carries a `rate_limit_info` object (`status` string, numeric
+    /// `resetsAt` Unix seconds, `utilization`, `rateLimitType`); the older
+    /// `rate_limit` envelope is accepted as an alias and a string-encoded
+    /// numeric `resetsAt` is preserved as the same value. Strict where the
+    /// frame identifies the signal (envelope object, string `status`);
+    /// malformed progress VALUES (non-numeric reset/utilization) are
+    /// surfaced as a non-fatal [`NativeEvent::Warning`] instead of
+    /// terminating an otherwise healthy turn — progress metadata must
+    /// never be terminal-affecting.
     fn on_rate_limit_event(&self, frame: &Value) -> Result<Vec<NativeEvent>, ProtocolViolation> {
         let rate = frame
-            .get("rate_limit")
+            .get("rate_limit_info")
+            .or_else(|| frame.get("rate_limit"))
             .filter(|r| r.is_object())
             .ok_or_else(|| {
                 violation(
                     "rate_limit_shape",
-                    "rate_limit_event without rate_limit object",
+                    "rate_limit_event without rate_limit_info object",
                 )
             })?;
-        let status = required_str(rate, "status").ok_or_else(|| {
-            violation("rate_limit_shape", "rate_limit without string status")
-        })?;
-        let resets_at = opt_str(rate, "resetsAt", "rate_limit_shape")?.map(str::to_owned);
-        let utilization = match rate.get("utilization") {
+        let status = required_str(rate, "status")
+            .ok_or_else(|| violation("rate_limit_shape", "rate_limit without string status"))?;
+        let mut events = Vec::new();
+        let mut malformed = |key: &str, detail: String| {
+            events.push(NativeEvent::Warning {
+                code: "rate_limit_shape".to_owned(),
+                message: format!("rate_limit {key} unusable, got {detail}"),
+            });
+        };
+        let resets_at = match rate.get("resetsAt").or_else(|| rate.get("resets_at")) {
             None | Some(Value::Null) => None,
-            Some(Value::Number(n)) => Some(n.as_f64().ok_or_else(|| {
-                violation("rate_limit_shape", "rate_limit utilization not a finite number")
-            })?),
+            Some(Value::Number(n)) => match n.as_f64() {
+                Some(v) => Some(v),
+                None => {
+                    malformed("resetsAt", n.to_string());
+                    None
+                }
+            },
+            Some(Value::String(s)) => match s.trim().parse::<f64>() {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    malformed("resetsAt", format!("{s:?}"));
+                    None
+                }
+            },
             Some(other) => {
-                return Err(violation(
-                    "rate_limit_shape",
-                    format!("rate_limit utilization must be number or null, got {other}"),
-                ));
+                malformed("resetsAt", other.to_string());
+                None
             }
         };
-        Ok(vec![NativeEvent::RateLimit {
-            status: status.to_owned(),
-            resets_at,
-            utilization,
-        }])
+        let utilization = match rate.get("utilization") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(n)) => match n.as_f64() {
+                Some(v) => Some(v),
+                None => {
+                    malformed("utilization", n.to_string());
+                    None
+                }
+            },
+            Some(other) => {
+                malformed("utilization", other.to_string());
+                None
+            }
+        };
+        let rate_limit_type = match rate
+            .get("rateLimitType")
+            .or_else(|| rate.get("rate_limit_type"))
+        {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(other) => {
+                malformed("rateLimitType", other.to_string());
+                None
+            }
+        };
+        events.insert(
+            0,
+            NativeEvent::RateLimit {
+                status: status.to_owned(),
+                resets_at,
+                utilization,
+                rate_limit_type,
+            },
+        );
+        Ok(events)
     }
 
     fn on_result(&mut self, frame: &Value) -> Result<Vec<NativeEvent>, ProtocolViolation> {
@@ -624,6 +707,7 @@ impl ClaudeStreamAdapter {
             .map(str::to_owned);
         let usage = result_usage(frame);
         let permission_denials = result_denials(frame);
+        let errors = result_errors(frame);
         // Child-scoped result: the vendor deferred work into a child
         // stream; never a root completion (AGENTKIT-116).
         if let Some(parent) = parent_id(frame)? {
@@ -641,6 +725,7 @@ impl ClaudeStreamAdapter {
                 || existing.is_error != is_error
                 || existing.result_text != result_text
                 || existing.session_id != session_id
+                || existing.errors != errors
             {
                 return Err(violation(
                     "conflicting_root_result",
@@ -656,6 +741,7 @@ impl ClaudeStreamAdapter {
             session_id,
             usage: usage.clone(),
             permission_denials: permission_denials.clone(),
+            errors,
             observed_model: self.init_model.clone(),
         };
         self.root_result = Some(evidence);
@@ -766,6 +852,157 @@ fn result_denials(frame: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Cap on retained vendor `errors[]` diagnostics: the first
+/// [`MAX_ERROR_DETAILS`] usable entries, each clipped to
+/// [`MAX_ERROR_DETAIL_CHARS`] characters, plus an honest omission entry
+/// when rows were dropped. These strings become user-visible failure text
+/// and durable evidence — unbounded vendor payloads are neither displayable
+/// nor storable, and credential-shaped substrings are redacted before
+/// retention (R10: details survive, bounded and redacted, never flattened
+/// into the bare subtype).
+const MAX_ERROR_DETAILS: usize = 8;
+const MAX_ERROR_DETAIL_CHARS: usize = 300;
+
+/// Collect vendor `errors[]` details from an error `result` frame. String
+/// entries are kept as-is; object entries contribute their most
+/// message-like field (`message`/`detail`/`error`/`type`, else the raw
+/// JSON text) so diagnostics survive to the user-visible failure. The
+/// result is bounded ([`MAX_ERROR_DETAILS`] / [`MAX_ERROR_DETAIL_CHARS`],
+/// with a visible omission entry) and secret-redacted
+/// ([`redact_secret_ish`]).
+fn result_errors(frame: &Value) -> Vec<String> {
+    let Some(items) = frame.get("errors").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let collected: Vec<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
+            Value::Object(_) => ["message", "detail", "error", "type"]
+                .iter()
+                .find_map(|key| item.get(*key).and_then(Value::as_str))
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_owned)
+                .or_else(|| Some(item.to_string())),
+            _ => None,
+        })
+        .collect();
+    let mut details: Vec<String> = collected
+        .iter()
+        .take(MAX_ERROR_DETAILS)
+        .map(|text| bounded_error_detail(text))
+        .collect();
+    let omitted = collected.len().saturating_sub(MAX_ERROR_DETAILS);
+    if omitted > 0 {
+        details.push(format!(
+            "… {omitted} further vendor error detail(s) omitted"
+        ));
+    }
+    details
+}
+
+/// Clip one vendor error detail to the character cap (never splitting a
+/// character) and redact credential-shaped substrings from it.
+fn bounded_error_detail(text: &str) -> String {
+    let count = text.chars().count();
+    let clipped: String = text.chars().take(MAX_ERROR_DETAIL_CHARS).collect();
+    let clipped = if count > MAX_ERROR_DETAIL_CHARS {
+        format!("{clipped}…")
+    } else {
+        clipped
+    };
+    redact_secret_ish(&clipped)
+}
+
+/// The character set of a credential run: base64-ish plus token punctuation.
+fn is_secret_run_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'_' | b'-' | b'+' | b'/' | b'=' | b'.' | b'~' | b'%' | b':'
+        )
+}
+
+fn secret_run_end(bytes: &[u8], from: usize) -> usize {
+    let mut end = from;
+    while end < bytes.len() && is_secret_run_byte(bytes[end]) {
+        end += 1;
+    }
+    end
+}
+
+/// Redact credential-shaped substrings from vendor-supplied text before it
+/// becomes durable/user-visible. Two shapes, bounded string scans only
+/// (no regexes, O(len) per marker). Token prefixes — `sk-…`, `ghp_…`,
+/// `github_pat_…`, `AIza…` — replace the whole marker+run when the run is
+/// credibly long (≥ 6). Secret labels — `Bearer …`, `x-api-key`, `api_key`,
+/// `apikey`, `api-key`, `access_token`, `authorization` — replace only the
+/// run after the label's separators, and only when credibly long (≥ 8).
+/// A marker never starts inside a larger word (the preceding byte must not
+/// be a run byte), so prose like "task-force" survives intact.
+fn redact_secret_ish(text: &str) -> String {
+    const REDACTION: &str = "[redacted]";
+    const PREFIX_TOKENS: [&str; 4] = ["sk-", "ghp_", "github_pat_", "aiza"];
+    const SECRET_LABELS: [&str; 7] = [
+        "bearer",
+        "x-api-key",
+        "api_key",
+        "apikey",
+        "api-key",
+        "access_token",
+        "authorization",
+    ];
+    let bytes = text.as_bytes();
+    let lower: Vec<u8> = bytes.iter().map(u8::to_ascii_lowercase).collect();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    'scan: while index < bytes.len() {
+        let word_bounded = index == 0 || !is_secret_run_byte(bytes[index - 1]);
+        if word_bounded {
+            for marker in PREFIX_TOKENS {
+                if !lower[index..].starts_with(marker.as_bytes()) {
+                    continue;
+                }
+                let run_start = index + marker.len();
+                let run_end = secret_run_end(bytes, run_start);
+                if run_end - run_start >= 6 {
+                    out.extend_from_slice(REDACTION.as_bytes());
+                    index = run_end;
+                    continue 'scan;
+                }
+            }
+            for label in SECRET_LABELS {
+                if !lower[index..].starts_with(label.as_bytes()) {
+                    continue;
+                }
+                let after_label = index + label.len();
+                let mut run_start = after_label;
+                while run_start < lower.len()
+                    && matches!(lower[run_start], b' ' | b'\t' | b':' | b'=' | b'"' | b'\'')
+                {
+                    run_start += 1;
+                }
+                // The value must be separated from the label ("authorization
+                // header" is prose; only a separated value is a secret).
+                if run_start == after_label {
+                    continue;
+                }
+                let run_end = secret_run_end(bytes, run_start);
+                if run_end - run_start >= 8 {
+                    out.extend_from_slice(&bytes[index..run_start]);
+                    out.extend_from_slice(REDACTION.as_bytes());
+                    index = run_end;
+                    continue 'scan;
+                }
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(out)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 /// `parent_tool_use_id`: absent or null = root; string = child identity.
@@ -911,12 +1148,25 @@ fn terminal_core(
                     observed_effort: None,
                 };
             }
+            let mut message = ev
+                .result_text
+                .clone()
+                .unwrap_or_else(|| format!("vendor result subtype '{}'", ev.subtype));
+            if !ev.errors.is_empty() {
+                // Vendor error details survive into the failure: appended
+                // unless the result text already carries them verbatim.
+                let detail = ev.errors.join("; ");
+                if !message.contains(&detail) {
+                    message = if message.trim().is_empty() {
+                        detail
+                    } else {
+                        format!("{message} — vendor errors: {detail}")
+                    };
+                }
+            }
             NativeTerminalOutcome::Failed {
                 class: classify_result(ev),
-                message: ev
-                    .result_text
-                    .clone()
-                    .unwrap_or_else(|| format!("vendor result subtype '{}'", ev.subtype)),
+                message,
                 partial_text: partial,
             }
         }
@@ -986,9 +1236,10 @@ fn classify_result(ev: &ResultEvidence) -> FailureClass {
         return FailureClass::TurnDeadline;
     }
     let haystack = format!(
-        "{} {}",
+        "{} {} {}",
         ev.subtype,
-        ev.result_text.clone().unwrap_or_default()
+        ev.result_text.clone().unwrap_or_default(),
+        ev.errors.join(" ")
     )
     .to_lowercase();
     if haystack.contains("expired") {
@@ -1223,10 +1474,6 @@ mod tests {
             ),
             (
                 r#"{"type":"rate_limit_event","rate_limit":{"resetsAt":"soon"}}"#,
-                "rate_limit_shape",
-            ),
-            (
-                r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed","utilization":"full"}}"#,
                 "rate_limit_shape",
             ),
         ];
@@ -1778,7 +2025,8 @@ mod tests {
             b"{\"type\":\"user\",\"client_composed\":true,\"message\":{\"role\":\"user\",\"content\":\"hello world\"}}\n"
         );
         assert!(
-            bytes.windows(b"\"client_composed\":true".len())
+            bytes
+                .windows(b"\"client_composed\":true".len())
                 .any(|w| w == b"\"client_composed\":true"),
             "literal-input marker present verbatim (snake_case wire field)"
         );
@@ -1807,30 +2055,48 @@ mod tests {
     #[test]
     fn rate_limit_and_status_and_compact_boundary_are_tolerated_progress() {
         let mut adapter = ClaudeStreamAdapter::new();
-        // Documented full shape.
+        // Public Agent SDK shape (`SDKRateLimitEvent`): `rate_limit_info`
+        // with numeric `resetsAt` Unix seconds, utilization and limit type.
         let events = push(
             &mut adapter,
-            r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed","resetsAt":"2026-11-08T09:00:00Z","utilization":0.42},"session_id":"sess-1"}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1762592400,"utilization":0.42,"rateLimitType":"weekly"},"uuid":"u-1","session_id":"sess-1"}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::RateLimit {
+                status: "allowed_warning".into(),
+                resets_at: Some(1762592400.0),
+                utilization: Some(0.42),
+                rate_limit_type: Some("weekly".into()),
+            }]
+        );
+        // Legacy `rate_limit` envelope with a string-encoded numeric
+        // reset: the same timestamp survives, never dropped.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed","resetsAt":"1762592400","utilization":0.42},"session_id":"sess-1"}"#,
         );
         assert_eq!(
             events,
             vec![NativeEvent::RateLimit {
                 status: "allowed".into(),
-                resets_at: Some("2026-11-08T09:00:00Z".into()),
+                resets_at: Some(1762592400.0),
                 utilization: Some(0.42),
+                rate_limit_type: None,
             }]
         );
         // Minimal shape: status only.
         let events = push(
             &mut adapter,
-            r#"{"type":"rate_limit_event","rate_limit":{"status":"warn"}}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}"#,
         );
         assert_eq!(
             events,
             vec![NativeEvent::RateLimit {
-                status: "warn".into(),
+                status: "rejected".into(),
                 resets_at: None,
                 utilization: None,
+                rate_limit_type: None,
             }]
         );
         // system/status: documented "compacting" and the null clear.
@@ -1866,10 +2132,7 @@ mod tests {
             &mut adapter,
             r#"{"type":"system","subtype":"compact_boundary"}"#,
         );
-        assert_eq!(
-            events,
-            vec![NativeEvent::CompactBoundary { trigger: None }]
-        );
+        assert_eq!(events, vec![NativeEvent::CompactBoundary { trigger: None }]);
         // Never terminal-affecting: with no root result, the progress
         // frames alone still yield Uncertain on a clean exit…
         match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
@@ -1960,6 +2223,257 @@ mod tests {
         let mut fresh = ClaudeStreamAdapter::new();
         push(&mut fresh, child_delta);
         assert_eq!(fresh.partial_text(), None);
+    }
+
+    #[test]
+    fn tool_progress_heartbeats_are_nonterminal_metadata() {
+        // Documented top-level tool-progress frame (including the ~30 s
+        // foreground heartbeat): accepted, never terminal, no root events.
+        let mut adapter = ClaudeStreamAdapter::new();
+        for line in [INIT, DELTA_HEL, DELTA_LO, MSG_HELLO] {
+            push(&mut adapter, line);
+        }
+        for _ in 0..6 {
+            let events = push(
+                &mut adapter,
+                r#"{"type":"tool_progress","tool_use_id":"toolu_bash_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":30.5,"uuid":"hb","session_id":"sess-1"}"#,
+            );
+            assert!(events.is_empty(), "heartbeat emits no root event");
+        }
+        // Child-scoped heartbeat: tolerated too (parent identity checked).
+        let events = push(
+            &mut adapter,
+            r#"{"type":"tool_progress","tool_use_id":"toolu_bash_2","tool_name":"Bash","parent_tool_use_id":"toolu_parent","elapsed_time_seconds":30.0,"session_id":"sess-1"}"#,
+        );
+        assert!(events.is_empty());
+        // System-subtype form as well.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"system","subtype":"tool_progress","tool_use_id":"toolu_bash_1","tool_name":"Bash","elapsed_time_seconds":31.0,"session_id":"sess-1"}"#,
+        );
+        assert!(events.is_empty());
+        push(&mut adapter, RESULT_OK);
+        match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
+            NativeTerminalOutcome::Completed { text, .. } => assert_eq!(text, "Hello"),
+            other => panic!("heartbeats must not disturb completion: {other:?}"),
+        }
+        // A malformed parent identity is still a violation.
+        let mut adapter = ClaudeStreamAdapter::new();
+        let err = adapter
+            .push_line(
+                r#"{"type":"tool_progress","tool_use_id":"t","tool_name":"Bash","parent_tool_use_id":7}"#
+                    .as_bytes(),
+            )
+            .expect_err("typed parent still enforced");
+        assert_eq!(err.code, "parent_tool_use_id_type");
+    }
+
+    #[test]
+    fn progress_values_malformed_warn_but_never_terminate() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        let events = push(
+            &mut adapter,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":"soon","utilization":"full","rateLimitType":7}}"#,
+        );
+        assert!(matches!(
+            &events[0],
+            NativeEvent::RateLimit { status, resets_at: None, utilization: None, rate_limit_type: None }
+                if status == "allowed"
+        ));
+        assert!(events[1..].iter().all(|e| matches!(
+            e,
+            NativeEvent::Warning { code, .. } if code == "rate_limit_shape"
+        )));
+        assert!(
+            events.len() >= 2,
+            "malformed values are visible as warnings"
+        );
+    }
+
+    #[test]
+    fn partial_deltas_after_a_completed_block_are_retained() {
+        // Completed message, then a second message still streaming when
+        // the turn is cut short: the completed text AND the in-flight
+        // partial survive, in order, without duplication.
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(&mut adapter, MSG_HELLO);
+        let d1 = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Sec"},"message":{"id":"msg_2"}},"session_id":"sess-1"}"#;
+        let d2 = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ond part"},"message":{"id":"msg_2"}},"session_id":"sess-1"}"#;
+        push(&mut adapter, d1);
+        push(&mut adapter, d2);
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("Hello\n\nSecond part")
+        );
+        // Interrupted without the second message's complete block.
+        match adapter.terminal_outcome(&exit_with(None, Some(2), true)) {
+            NativeTerminalOutcome::Interrupted { partial_text } => {
+                assert_eq!(partial_text.as_deref(), Some("Hello\n\nSecond part"))
+            }
+            other => panic!("expected Interrupted with retained partial, got {other:?}"),
+        }
+        // When the complete block does arrive, no duplication occurs.
+        let second = r#"{"type":"assistant","message":{"id":"msg_2","content":[{"type":"text","text":"Second part"}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        push(&mut adapter, second);
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("Hello\n\nSecond part")
+        );
+    }
+
+    #[test]
+    fn error_result_details_are_preserved_and_classified() {
+        // An error result with errors[] details but no result text: the
+        // details reach the user-visible failure, not just the subtype.
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(
+            &mut adapter,
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":null,"session_id":"sess-1","errors":["upstream model overloaded (529)","retry budget exhausted"]}"#,
+        );
+        match adapter.terminal_outcome(&exit_with(Some(1), None, false)) {
+            NativeTerminalOutcome::Failed { class, message, .. } => {
+                assert_eq!(class, FailureClass::Internal);
+                assert!(
+                    message.contains("upstream model overloaded (529)")
+                        && message.contains("retry budget exhausted"),
+                    "vendor details preserved: {message}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        // errors[] objects contribute their message-ish field, and their
+        // text participates in classification (529-style overload is not
+        // magic — but a quota detail maps to the quota family).
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(
+            &mut adapter,
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":null,"session_id":"sess-1","errors":[{"type":"quota","message":"credit balance depleted"}]}"#,
+        );
+        match adapter.terminal_outcome(&exit_with(Some(1), None, false)) {
+            NativeTerminalOutcome::Failed { class, message, .. } => {
+                assert_eq!(class, FailureClass::QuotaExhausted);
+                assert!(message.contains("credit balance depleted"), "{message}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        // Evidence keeps the details verbatim for downstream diagnostics.
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(
+            &mut adapter,
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"top","session_id":"s","errors":["a","b"]}"#,
+        );
+        assert_eq!(
+            adapter.result_evidence().unwrap().errors,
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn error_result_details_are_bounded_with_a_visible_omission_note() {
+        let errors: Vec<String> = (1..=12).map(|n| format!("detail-{n:02}")).collect();
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(
+            &mut adapter,
+            &serde_json::json!({
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": true,
+                "result": null,
+                "session_id": "sess-1",
+                "errors": errors,
+            })
+            .to_string(),
+        );
+        let evidence = adapter.result_evidence().expect("root result");
+        assert_eq!(evidence.errors.len(), MAX_ERROR_DETAILS + 1);
+        assert_eq!(evidence.errors[0], "detail-01");
+        assert_eq!(evidence.errors[MAX_ERROR_DETAILS - 1], "detail-08");
+        assert_eq!(
+            evidence.errors[MAX_ERROR_DETAILS], "… 4 further vendor error detail(s) omitted",
+            "the cap is visible, never silent"
+        );
+        match adapter.terminal_outcome(&exit_with(Some(1), None, false)) {
+            NativeTerminalOutcome::Failed { message, .. } => {
+                assert!(
+                    message.contains("detail-01") && message.contains("detail-08"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("4 further vendor error detail(s) omitted"),
+                    "{message}"
+                );
+                assert!(
+                    !message.contains("detail-09"),
+                    "omitted rows stay omitted: {message}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_result_details_are_clipped_and_secret_redacted() {
+        let long = "x".repeat(5_000);
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(
+            &mut adapter,
+            &serde_json::json!({
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": true,
+                "result": null,
+                "session_id": "sess-1",
+                "errors": [
+                    long,
+                    "invalid credential sk-ant-api03-SECRETVALUE1234567890 rejected",
+                    "Authorization: Bearer abcdefghIJKLMNop was refused",
+                    "the task-force bearer of token said nothing secret",
+                ],
+            })
+            .to_string(),
+        );
+        let evidence = adapter.result_evidence().expect("root result");
+        // Clip: capped length, explicit ellipsis, never a split character.
+        assert!(evidence.errors[0].chars().count() <= MAX_ERROR_DETAIL_CHARS + 1);
+        assert!(evidence.errors[0].ends_with('…'));
+        // Redact: the credential-shaped runs are gone, context survives.
+        assert!(
+            evidence.errors[1].contains("[redacted]"),
+            "{:?}",
+            evidence.errors[1]
+        );
+        assert!(
+            !evidence.errors[1].contains("SECRETVALUE"),
+            "credential leaked"
+        );
+        assert!(evidence.errors[1].contains("invalid credential"));
+        assert!(evidence.errors[1].contains("rejected"));
+        assert!(
+            evidence.errors[2].contains("[redacted]"),
+            "{:?}",
+            evidence.errors[2]
+        );
+        assert!(
+            !evidence.errors[2].contains("abcdefghIJKLMNop"),
+            "bearer token leaked"
+        );
+        // Prose survives: "task-force" is not a credential, the short
+        // "bearer of" run is below the credible-length threshold.
+        assert!(
+            evidence.errors[3].contains("task-force"),
+            "{:?}",
+            evidence.errors[3]
+        );
+        assert!(
+            !evidence.errors[3].contains("[redacted]"),
+            "{:?}",
+            evidence.errors[3]
+        );
     }
 
     #[test]

@@ -50,6 +50,13 @@ pub struct NativeContinuationBinding {
 
 /// Commit input for one continuation binding (frozen facts from the
 /// completed attempt's target + payload scope).
+///
+/// `parent`/`history_position` are the COMMIT (completed-output) position:
+/// where the NEXT turn attaches when it resumes this session — never the
+/// input position the turn was admitted from. A vendor session is a mutable
+/// cursor through conversation history; committing it at its input position
+/// would let regeneration select the session that already contains the
+/// discarded answer (review §2.3 / AGENTKIT-113).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitContinuation {
     pub conversation: String,
@@ -154,6 +161,19 @@ impl crate::SqliteStore {
                     "continuation binding already committed by another attempt".into(),
                 ));
             }
+            // A NEW binding is a durable authority claim: the committing
+            // attempt must still hold current authority over its task in
+            // this very transaction (AGENTKIT-115) — a cancelled,
+            // lease-stripped or expired attempt can never mint an active,
+            // resumable binding (review §2.3; a later rejected event cannot
+            // undo what an unauthorized commit already published).
+            if let Some(gap) =
+                crate::native_exec::live_authority_gap(&transaction, &expected.owning_task_id, &expected.owning_attempt_id, expected.committed_at)?
+            {
+                return Err(StoreError::InvalidInput(format!(
+                    "continuation commit refused: owning attempt lacks current authority ({gap})"
+                )));
+            }
             // Supersede prior active bindings on the same scope key —
             // fenced on the prior owner having settled.
             let scope_key = (
@@ -163,33 +183,31 @@ impl crate::SqliteStore {
                 expected.backend.clone(),
                 expected.executable.clone(),
                 expected.config_identity.clone(),
+                expected.system_prompt_revision.clone(),
             );
             let prior = find_active(&transaction, &scope_key)?;
             for prior in prior
                 .into_iter()
                 .filter(|prior| prior.binding_id != expected.binding_id)
             {
-                let status: Option<String> = transaction
-                    .query_row(
-                        "SELECT status FROM tasks WHERE id=?1",
-                        params![prior.owning_task_id],
-                        |row| row.get(0),
-                    )
-                    .ok();
-                let settled = match status.as_deref() {
-                    None => true, // owner row gone: nothing can restate through it
-                    Some(status) => matches!(status, "completed" | "failed" | "cancelled"),
-                };
-                if !settled {
-                    return Err(StoreError::Duplicate(format!(
-                        "continuation owner {} still holds the scope",
-                        prior.owning_attempt_id
-                    )));
-                }
-                transaction.execute(
-                    "UPDATE native_continuations SET state='superseded' WHERE binding_id=?1 AND state='active'",
-                    params![prior.binding_id],
+                retire_prior(&transaction, &prior)?;
+            }
+            // A vendor session is a MUTABLE cursor: advancing it to a new
+            // conversation position retires every OTHER active alias to
+            // the same session (older input positions must never remain
+            // resumable alongside the advanced one — review §2.3).
+            let aliases = {
+                let mut statement = transaction.prepare(
+                    "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE conversation=?1 AND vendor_session_id=?2 AND state='active' AND binding_id!=?3",
                 )?;
+                let rows = statement.query_map(
+                    params![expected.conversation, expected.vendor_session_id, expected.binding_id],
+                    read_continuation_row,
+                )?;
+                rows.map(|row| row.map_err(StoreError::from)).collect::<Result<Vec<_>>>()?
+            };
+            for alias in aliases {
+                retire_prior(&transaction, &alias)?;
             }
             transaction.execute(
                 "INSERT INTO native_continuations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -216,8 +234,10 @@ impl crate::SqliteStore {
     }
 
     /// The active binding for one exact scope, if any. Every component
-    /// must match: this is what an exact resume must prove, and a miss is
-    /// a miss (the caller chooses Fresh with seeded ancestry).
+    /// must match — including the system-prompt revision: a changed prompt
+    /// is a changed configuration and therefore a MISS (the caller chooses
+    /// Fresh with seeded ancestry). This is what an exact resume must
+    /// prove; a miss is a miss.
     #[allow(clippy::too_many_arguments)]
     pub async fn active_continuation(
         &self,
@@ -227,6 +247,7 @@ impl crate::SqliteStore {
         backend: &str,
         executable: &str,
         config_identity: &str,
+        system_prompt_revision: Option<&str>,
     ) -> Result<Option<NativeContinuationBinding>> {
         let (conversation, parent, backend, executable, config_identity) = (
             conversation.to_owned(),
@@ -235,6 +256,7 @@ impl crate::SqliteStore {
             executable.to_owned(),
             config_identity.to_owned(),
         );
+        let system_prompt_revision = system_prompt_revision.map(str::to_owned);
         self.call(move |db| {
             find_active(
                 db,
@@ -245,6 +267,7 @@ impl crate::SqliteStore {
                     backend,
                     executable,
                     config_identity,
+                    system_prompt_revision,
                 ),
             )
             .map(|rows| rows.into_iter().next())
@@ -337,21 +360,47 @@ impl crate::SqliteStore {
     }
 }
 
-type ScopeKey = (
-    String,
-    String,
-    i64,
-    String,
-    String,
-    String,
-);
+type ScopeKey = (String, String, i64, String, String, String, Option<String>);
 
-fn find_active(db: &rusqlite::Connection, key: &ScopeKey) -> Result<Vec<NativeContinuationBinding>> {
+/// Supersede one prior active binding, fenced on the prior owner having
+/// SETTLED: a live prior owner is a hard refusal, never a silent handover.
+fn retire_prior(
+    transaction: &rusqlite::Connection,
+    prior: &NativeContinuationBinding,
+) -> Result<()> {
+    let status: Option<String> = transaction
+        .query_row(
+            "SELECT status FROM tasks WHERE id=?1",
+            params![prior.owning_task_id],
+            |row| row.get(0),
+        )
+        .ok();
+    let settled = match status.as_deref() {
+        None => true, // owner row gone: nothing can restate through it
+        Some(status) => matches!(status, "completed" | "failed" | "cancelled"),
+    };
+    if !settled {
+        return Err(StoreError::Duplicate(format!(
+            "continuation owner {} still holds the scope",
+            prior.owning_attempt_id
+        )));
+    }
+    transaction.execute(
+        "UPDATE native_continuations SET state='superseded' WHERE binding_id=?1 AND state='active'",
+        params![prior.binding_id],
+    )?;
+    Ok(())
+}
+
+fn find_active(
+    db: &rusqlite::Connection,
+    key: &ScopeKey,
+) -> Result<Vec<NativeContinuationBinding>> {
     let mut statement = db.prepare(
-        "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE conversation=?1 AND parent=?2 AND history_position=?3 AND backend=?4 AND executable=?5 AND config_identity=?6 AND state='active' ORDER BY committed_at DESC",
+        "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE conversation=?1 AND parent=?2 AND history_position=?3 AND backend=?4 AND executable=?5 AND config_identity=?6 AND system_prompt_revision IS ?7 AND state='active' ORDER BY committed_at DESC",
     )?;
     let rows = statement.query_map(
-        params![key.0, key.1, key.2, key.3, key.4, key.5],
+        params![key.0, key.1, key.2, key.3, key.4, key.5, key.6],
         read_continuation_row,
     )?;
     rows.map(|row| row.map_err(StoreError::from)).collect()
@@ -475,21 +524,56 @@ mod tests {
         }
     }
 
+    /// Submit + claim so the owning task is RUNNING under a live lease:
+    /// a durable continuation commit requires current owner authority
+    /// (AGENTKIT-115), exactly like the executor's settled path. Distinct
+    /// `scope_id`s keep concurrent owner tasks out of each other's
+    /// execution lane; the continuation `conversation` is opaque scope
+    /// identity the store never derives from the task scope.
+    async fn running_task(store: &SqliteStore, task_id: &str, scope_id: &str) -> String {
+        store
+            .submit(SubmitTask {
+                task_id: task_id.into(),
+                kind: "native.turn".into(),
+                scope_id: scope_id.into(),
+                payload: json!({}),
+                priority: 0,
+                now: 1000,
+                available_at: None,
+                depends_on: vec![],
+                parent_task_id: None,
+                exclusive_scope: false,
+            })
+            .await
+            .unwrap();
+        let claimed = claim_task(store).await;
+        assert_eq!(claimed.task.task_id, task_id);
+        claimed.lease.attempt_id
+    }
+
     #[tokio::test]
     async fn commit_is_idempotent_and_scoped() {
         let store = store();
-        submit_task(&store, "task-a").await;
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
         let first = store
-            .commit_continuation(commit("task-a", "attempt-a", "sess-1"))
+            .commit_continuation(commit("task-a", &attempt_a, "sess-1"))
             .await
             .unwrap();
         let again = store
-            .commit_continuation(commit("task-a", "attempt-a", "sess-1"))
+            .commit_continuation(commit("task-a", &attempt_a, "sess-1"))
             .await
             .unwrap();
         assert_eq!(first, again, "identical re-commit is a no-op");
         let found = store
-            .active_continuation("chat-1", "msg-7", 7, "claude-code", "/usr/bin/claude", "cfg-aaa")
+            .active_continuation(
+                "chat-1",
+                "msg-7",
+                7,
+                "claude-code",
+                "/usr/bin/claude",
+                "cfg-aaa",
+                Some("sp-1"),
+            )
             .await
             .unwrap()
             .expect("active binding");
@@ -497,7 +581,15 @@ mod tests {
         // Any single scope component differs → miss (no global identity).
         assert!(
             store
-                .active_continuation("chat-1", "msg-7", 7, "claude-code", "/usr/bin/claude", "cfg-BBB")
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-BBB",
+                    Some("sp-1")
+                )
                 .await
                 .unwrap()
                 .is_none(),
@@ -505,7 +597,15 @@ mod tests {
         );
         assert!(
             store
-                .active_continuation("chat-OTHER", "msg-7", 7, "claude-code", "/usr/bin/claude", "cfg-aaa")
+                .active_continuation(
+                    "chat-OTHER",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1")
+                )
                 .await
                 .unwrap()
                 .is_none(),
@@ -513,36 +613,236 @@ mod tests {
         );
         assert!(
             store
-                .active_continuation("chat-1", "msg-6", 6, "claude-code", "/usr/bin/claude", "cfg-aaa")
+                .active_continuation(
+                    "chat-1",
+                    "msg-6",
+                    6,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1")
+                )
                 .await
                 .unwrap()
                 .is_none(),
             "different history position must not resolve the binding"
         );
+        // The system-prompt revision is part of the active lookup: a
+        // changed (or absent) prompt is a MISS, never a silent match
+        // (review §2.3 configuration matching).
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-2")
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "changed prompt revision must not resolve the binding"
+        );
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    None
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "absent prompt revision must not match a committed prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_requires_current_owner_authority() {
+        // Review §2.3 reproduced: a continuation committed after the task
+        // was cancelled and its lease removed must NOT create an active,
+        // resumable binding.
+        let store = store();
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
+        store.cancel_task("task-a", 1600).await.unwrap();
+        let err = store
+            .commit_continuation(commit("task-a", &attempt_a, "sess-ghost"))
+            .await
+            .expect_err("cancelled, lease-stripped attempt has no authority");
+        assert!(
+            err.to_string().contains("lacks current authority"),
+            "explicit refusal: {err}"
+        );
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1")
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "no active binding may exist from an unauthorized commit"
+        );
+
+        // Expired lease alone is also a refusal.
+        let store = SqliteStore::memory(64).unwrap();
+        submit_task(&store, "task-e").await;
+        let claimed = store
+            .claim(ClaimInput {
+                owner_id: "worker-1".into(),
+                now: 1500,
+                ttl_ms: 100,
+                kinds: vec!["native.turn".into()],
+                busy_scopes: vec![],
+                max_attempts: 5,
+            })
+            .await
+            .unwrap()
+            .expect("claimable");
+        let mut late = commit("task-e", &claimed.lease.attempt_id, "sess-late");
+        late.committed_at = 9_000; // far past the 1500+100 lease expiry
+        assert!(
+            store
+                .commit_continuation(late)
+                .await
+                .expect_err("expired lease has no authority")
+                .to_string()
+                .contains("lease-expired")
+        );
+        // An attempt the lease does not name is a refusal too.
+        let store = SqliteStore::memory(64).unwrap();
+        running_task(&store, "task-f", "chat-turn-f").await;
+        assert!(
+            store
+                .commit_continuation(commit("task-f", "att-stranger", "sess-x"))
+                .await
+                .expect_err("lease names a different attempt")
+                .to_string()
+                .contains("lease-attempt")
+        );
+    }
+
+    #[tokio::test]
+    async fn advancing_a_session_retires_older_aliases() {
+        // Review §2.3 reproduced: advancing the SAME mutable vendor session
+        // to a new conversation position must retire the older alias —
+        // the old position may never remain resumable alongside it.
+        let store = store();
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
+        let first = store
+            .commit_continuation(commit("task-a", &attempt_a, "sess-1"))
+            .await
+            .unwrap();
+        assert_eq!(first.state, "active");
+        // Settle the first owner, then advance the session to a newer
+        // position under a second running task.
+        let lease_a = store
+            .get_lease("task-a")
+            .await
+            .unwrap()
+            .expect("first lease");
+        store
+            .settle(SettleTask {
+                fence: lease_a.fence(),
+                now: 2150,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            })
+            .await
+            .unwrap();
+        let attempt_b = running_task(&store, "task-b", "chat-turn-b").await;
+        let mut advanced = commit("task-b", &attempt_b, "sess-1");
+        advanced.parent = "msg-8".into();
+        advanced.history_position = 8;
+        advanced.committed_at = 2200;
+        let committed = store
+            .commit_continuation(advanced)
+            .await
+            .expect("advance commits under live authority");
+        assert_eq!(committed.vendor_session_id, "sess-1");
+        // The advanced position resolves…
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-8",
+                    8,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1")
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "the advanced position is resumable"
+        );
+        // …and the OLDER alias to the same mutable session is gone.
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1")
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "older alias must not remain resumable"
+        );
+        let prior = store
+            .continuation_for_attempt(&attempt_a)
+            .await
+            .unwrap()
+            .expect("prior row kept for audit");
+        assert_eq!(prior.state, "superseded");
     }
 
     #[tokio::test]
     async fn supersession_is_fenced_on_the_prior_owner() {
         let store = store();
-        submit_task(&store, "task-a").await;
-        submit_task(&store, "task-b").await;
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
         store
-            .commit_continuation(commit("task-a", "attempt-a", "sess-1"))
+            .commit_continuation(commit("task-a", &attempt_a, "sess-1"))
             .await
             .unwrap();
-        // A live claim on the prior owner's task fences the transition.
-        let claimed_a = claim_task(&store).await;
-        assert_eq!(claimed_a.task.task_id, "task-a");
-        let mut next = commit("task-b", "attempt-b", "sess-2");
+        // The prior owner's task is RUNNING with a live lease: the
+        // transition into the same scope key is fenced.
+        let attempt_b = running_task(&store, "task-b", "chat-turn-b").await;
+        let mut next = commit("task-b", &attempt_b, "sess-2");
         next.committed_at = 2100;
         let fenced = store.commit_continuation(next.clone()).await;
         assert!(fenced.is_err(), "live prior owner must block supersession");
 
         // Settle the prior owner: supersession now succeeds and the prior
         // row is superseded, never active again.
+        let lease = store
+            .get_lease("task-a")
+            .await
+            .unwrap()
+            .expect("prior lease still present");
         store
             .settle(SettleTask {
-                fence: claimed_a.lease.fence(),
+                fence: lease.fence(),
                 now: 2200,
                 status: TaskStatus::Completed,
                 error: None,
@@ -555,13 +855,21 @@ mod tests {
         assert_eq!(committed.state, "active");
         assert_eq!(committed.vendor_session_id, "sess-2");
         let prior = store
-            .continuation_for_attempt("attempt-a")
+            .continuation_for_attempt(&attempt_a)
             .await
             .unwrap()
             .expect("prior row retained for audit");
         assert_eq!(prior.state, "superseded");
         let active = store
-            .active_continuation("chat-1", "msg-7", 7, "claude-code", "/usr/bin/claude", "cfg-aaa")
+            .active_continuation(
+                "chat-1",
+                "msg-7",
+                7,
+                "claude-code",
+                "/usr/bin/claude",
+                "cfg-aaa",
+                Some("sp-1"),
+            )
             .await
             .unwrap()
             .expect("one active binding");

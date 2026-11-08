@@ -18,7 +18,7 @@ mod oauth_store;
 mod server;
 mod stdio_client;
 
-pub use backend::{Backend, CatalogTool, Features, SessionScope};
+pub use backend::{Backend, CatalogTool, Features, RpcId, SessionScope};
 pub use bridge::{BridgeError, McpToolSet, aliases_are_one_step, resolve_original};
 pub use client::{ClientOptions, McpClient, McpClientError};
 pub use elicitation::ElicitationHandler;

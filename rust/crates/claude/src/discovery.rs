@@ -1,5 +1,8 @@
 //! Canonical executable discovery, official auth-status reading and the
-//! version-qualified support matrix (AGENTKIT-109).
+//! support matrix (AGENTKIT-109). Versions only ever establish
+//! *compatibility*; qualification is recorded evidence from a real
+//! qualification run, never an inference from a version string
+//! (AGENTKIT-116 qualification-honesty lane).
 //!
 //! Everything here uses only documented official interfaces:
 //! * `<exe> --version` for version identity,
@@ -21,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use agentkit_native::{
@@ -31,8 +35,11 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-/// Qualified minimum official CLI version for this delivery (AGENTKIT-109).
-/// Below this floor the support matrix marks the driver unqualified.
+/// Minimum official CLI version this delivery is compatible with
+/// (AGENTKIT-109). Below this floor the support matrix marks the driver
+/// unqualified; meeting it is compatibility only — qualification requires
+/// recorded evidence, see [`ClaudeSupportMatrix::is_qualified`]
+/// (AGENTKIT-116 qualification-honesty lane).
 pub const QUALIFIED_FLOOR: (u32, u32, u32) = (2, 1, 259);
 
 /// Honest qualification ledger (review §3: minimum feature compatibility is
@@ -43,6 +50,42 @@ pub const QUALIFIED_FLOOR: (u32, u32, u32) = (2, 1, 259);
 /// other floor-satisfying flag is `Capable`: admitted, but never presented
 /// as tested. Entries are plain flag names.
 pub const RECORDED_QUALIFIED: &[&str] = &[];
+
+/// Proof that a real qualification run passed for one exact CLI version
+/// string (AGENTKIT-116 qualification-honesty lane). A version merely
+/// *observed* — `--version` output, support-matrix or floor membership —
+/// is an observation, never qualification. Entries exist only when
+/// explicitly recorded through [`ClaudeSupportMatrix::record_qualification`];
+/// they are never inferred from version strings or the support matrix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QualificationEvidence {
+    /// Exact version string the qualification run observed.
+    /// [`ClaudeSupportMatrix::is_qualified`] matches version strings
+    /// verbatim against it.
+    pub cli_version: String,
+    /// Operating system the qualification run executed on, spelled as
+    /// `std::env::consts::OS` (`"linux"`, `"macos"`, `"windows"`).
+    /// Qualification NEVER transfers across operating systems (review §3:
+    /// a pass on one OS says nothing about another).
+    pub os: String,
+    /// Launch profile the run exercised: `"all"`, `"plainChat"` or
+    /// `"ownedMcpChat"` (review §3: a plain-Chat pass does not qualify
+    /// the governed-MCP loop).
+    pub profile: String,
+    /// When the qualification run completed, as RFC 3339 text supplied by
+    /// the recorder — kept caller-provided so the driver never fabricates
+    /// timestamps from its own clock.
+    pub qualified_at: String,
+    /// Where the evidence lives (run id or artifact path), e.g.
+    /// `"qualification:AGENTKIT-116"`.
+    pub source: String,
+}
+
+/// Process-wide recorded-qualification registry (AGENTKIT-116
+/// qualification-honesty lane). Mutable ONLY through
+/// [`ClaudeSupportMatrix::record_qualification`]; the ledger grows as an
+/// append-only audit trail of real qualification runs.
+static RECORDED_QUALIFICATIONS: Mutex<Vec<QualificationEvidence>> = Mutex::new(Vec::new());
 
 /// Default bound for one probe subprocess (`--version`, `auth status`).
 pub const DEFAULT_PROBE_TIMEOUT_MS: u64 = 10_000;
@@ -545,7 +588,7 @@ fn observe_managed_settings(config_dir: &Path) -> ManagedObservation {
         return ManagedObservation::Absent;
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return ManagedObservation::Unreadable(Some(path.display().to_string().into()));
+        return ManagedObservation::Unreadable(Some(path.display().to_string()));
     };
     // Conservative restrictive markers: a permissions block gating bypass
     // mode, or any allow-list-style MCP server key the official CLI honors.
@@ -593,14 +636,18 @@ fn managed_policy_conflict_for(
     }
 }
 
-/// Version-qualified capability matrix for the official CLI (AGENTKIT-109).
+/// Capability support matrix for the official CLI (AGENTKIT-109).
+/// Versions only ever set *compatibility* (the floor); qualification is
+/// recorded evidence from a real qualification run — see
+/// [`ClaudeSupportMatrix::is_qualified`] (AGENTKIT-116 qualification-
+/// honesty lane).
 pub struct ClaudeSupportMatrix;
 
 impl ClaudeSupportMatrix {
     /// Frozen capability snapshot for one observed version (or `None` when
-    /// the version was never observed). Support requires the qualified
-    /// floor; anything else is explicit `Unsupported`/`Unknown` — never a
-    /// guessed "yes".
+    /// the version was never observed). `Supported` additionally requires
+    /// a recorded qualification run per flag; anything else is explicit
+    /// `Unsupported`/`Unknown` — never a guessed "yes".
     pub fn snapshot(version: Option<&str>) -> agentkit_native::CapabilitySnapshot {
         use agentkit_native::{CapabilitySnapshot, CapabilityState};
         let mut flags = std::collections::BTreeMap::new();
@@ -703,11 +750,79 @@ impl ClaudeSupportMatrix {
         }
     }
 
-    /// True when `version` parses to at least [`QUALIFIED_FLOOR`]. Garbage
-    /// is never qualified.
-    pub fn is_qualified(version: &str) -> bool {
+    /// Floor-only *compatibility* check (AGENTKIT-116 qualification-
+    /// honesty lane): true when `version` parses to at least
+    /// [`QUALIFIED_FLOOR`]. This is deliberately NOT qualification — it
+    /// only says the observed version is inside the compatibility window.
+    /// A version seen once must never make the CLI "qualified"; see
+    /// [`Self::is_qualified`] for the evidence-backed verdict. Garbage is
+    /// never compatible.
+    pub fn meets_qualified_floor(version: &str) -> bool {
         parse_version_triple(version)
             .is_some_and(|triple| version_at_least(triple, QUALIFIED_FLOOR))
+    }
+
+    /// Record that a real qualification run passed for
+    /// `evidence.cli_version` (AGENTKIT-116 qualification-honesty lane).
+    /// This is the ONLY way qualification evidence enters the ledger:
+    /// discovery probes, `--version` output and the support matrix never
+    /// set it.
+    pub fn record_qualification(evidence: QualificationEvidence) {
+        RECORDED_QUALIFICATIONS
+            .lock()
+            .expect("qualification ledger not poisoned")
+            .push(evidence);
+    }
+
+    /// The most recent recorded [`QualificationEvidence`] whose
+    /// `cli_version` equals `version` verbatim AND whose `os` matches the
+    /// CURRENT operating system, if any (AGENTKIT-116 qualification-
+    /// honesty lane; review §3: qualification is recorded per version,
+    /// OS and profile — an entry for another OS never counts here).
+    pub fn recorded_qualification(version: &str) -> Option<QualificationEvidence> {
+        Self::recorded_qualification_for(version, std::env::consts::OS, "all")
+    }
+
+    /// Recorded evidence for one exact (version, OS, profile) triple.
+    /// `profile` matches an entry whose profile is `"all"` or equal to
+    /// the requested profile; OS matching is case-insensitive against the
+    /// `std::env::consts::OS` spelling recorded by the run.
+    pub fn recorded_qualification_for(
+        version: &str,
+        os: &str,
+        profile: &str,
+    ) -> Option<QualificationEvidence> {
+        RECORDED_QUALIFICATIONS
+            .lock()
+            .expect("qualification ledger not poisoned")
+            .iter()
+            .rev()
+            .find(|e| {
+                e.cli_version == version
+                    && e.os.eq_ignore_ascii_case(os)
+                    && (e.profile == "all" || e.profile == profile)
+            })
+            .cloned()
+    }
+
+    /// True only when a real qualification run has been RECORDED for this
+    /// exact version string on THIS operating system via
+    /// [`Self::record_qualification`] and the version also meets
+    /// [`QUALIFIED_FLOOR`] (AGENTKIT-116 qualification-honesty lane).
+    /// Membership in the version ledger alone — an observed `--version`
+    /// string inside the window — yields false, mirroring the matrix's
+    /// `Capable` (compatible, not yet qualified) tier; garbage and
+    /// below-floor versions are never qualified.
+    pub fn is_qualified(version: &str) -> bool {
+        Self::meets_qualified_floor(version) && Self::recorded_qualification(version).is_some()
+    }
+
+    /// Per-profile qualification: the profile's loop was actually run.
+    /// Plain-Chat evidence never qualifies the governed-MCP loop unless
+    /// the entry recorded `"all"`.
+    pub fn is_qualified_for(version: &str, profile: &str) -> bool {
+        Self::meets_qualified_floor(version)
+            && Self::recorded_qualification_for(version, std::env::consts::OS, profile).is_some()
     }
 }
 
@@ -1110,7 +1225,7 @@ mod tests {
 
         // Clean on both layers: none.
         assert_eq!(
-            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            policy_state_for(Some(user.path()), std::slice::from_ref(&system_dir)),
             PolicyState::None
         );
 
@@ -1123,18 +1238,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            policy_state_for(Some(user.path()), std::slice::from_ref(&system_dir)),
             PolicyState::Conflicting
         );
         assert_eq!(
-            managed_policy_conflict_for(Some(user.path()), &[system_dir.clone()]).as_deref(),
+            managed_policy_conflict_for(Some(user.path()), std::slice::from_ref(&system_dir))
+                .as_deref(),
             Some("managed policy present")
         );
 
         // Non-restrictive system file: present-compatible.
         std::fs::write(system.path().join("managed-settings.json"), "{}").unwrap();
         assert_eq!(
-            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            policy_state_for(Some(user.path()), std::slice::from_ref(&system_dir)),
             PolicyState::PresentCompatible
         );
 
@@ -1142,7 +1258,7 @@ mod tests {
         // stricter was seen — never a guessed None or a fake "compatible".
         std::fs::write(system.path().join("managed-settings.json"), "!!!").unwrap();
         assert_eq!(
-            policy_state_for(Some(user.path()), &[system_dir.clone()]),
+            policy_state_for(Some(user.path()), std::slice::from_ref(&system_dir)),
             PolicyState::Unknown
         );
 
@@ -1184,7 +1300,7 @@ mod tests {
     ];
 
     #[test]
-    fn matrix_qualified_version_supports_required_flags() {
+    fn matrix_compatible_version_admits_required_flags() {
         let snap = ClaudeSupportMatrix::snapshot(Some("2.1.310"));
         assert_eq!(snap.backend, "claude-code");
         assert_eq!(snap.matrix_version, 1);
@@ -1199,7 +1315,7 @@ mod tests {
             // `Capable` — never presented as tested.
             assert_eq!(
                 snap.state(flag).is_supported(),
-                crate::discovery::RECORDED_QUALIFIED.contains(&flag),
+                crate::discovery::RECORDED_QUALIFIED.contains(flag),
                 "{flag}: Supported must mirror the recorded-qualification ledger"
             );
         }
@@ -1228,7 +1344,7 @@ mod tests {
                 other => panic!("{flag} should be unsupported, got {other:?}"),
             }
         }
-        // Floor boundary itself qualifies.
+        // The floor boundary itself is compatible (Capable, not qualified).
         let at_floor = ClaudeSupportMatrix::snapshot(Some("2.1.259"));
         assert!(at_floor.supports("plain-chat"));
         // Ancient majors are below floor too.
@@ -1277,14 +1393,124 @@ mod tests {
     }
 
     #[test]
-    fn is_qualified_rejects_garbage_and_old_versions() {
-        assert!(ClaudeSupportMatrix::is_qualified("2.1.259"));
-        assert!(ClaudeSupportMatrix::is_qualified("2.1.310 (Claude Code)"));
-        assert!(ClaudeSupportMatrix::is_qualified("10.0.0"));
+    fn meets_qualified_floor_is_compatibility_only() {
+        // The floor accepts at/above-floor versions — but that is
+        // compatibility, NOT qualification (AGENTKIT-116 honesty lane).
+        assert!(ClaudeSupportMatrix::meets_qualified_floor("2.1.259"));
+        assert!(ClaudeSupportMatrix::meets_qualified_floor(
+            "2.1.310 (Claude Code)"
+        ));
+        assert!(ClaudeSupportMatrix::meets_qualified_floor("10.0.0"));
+        assert!(!ClaudeSupportMatrix::meets_qualified_floor("2.1.258"));
+        assert!(!ClaudeSupportMatrix::meets_qualified_floor("2.0.999"));
+        assert!(!ClaudeSupportMatrix::meets_qualified_floor("garbage"));
+        assert!(!ClaudeSupportMatrix::meets_qualified_floor(""));
+    }
+
+    #[test]
+    fn is_qualified_never_answers_from_the_version_ledger() {
+        // A version merely observed (inside the window) is NOT qualified
+        // until a real qualification run is recorded for that exact
+        // string (AGENTKIT-116 qualification-honesty lane).
+        assert!(!ClaudeSupportMatrix::is_qualified("2.1.259"));
+        assert!(!ClaudeSupportMatrix::is_qualified("2.1.310 (Claude Code)"));
+        assert!(!ClaudeSupportMatrix::is_qualified("10.0.0"));
+        // Below-floor and garbage stay false unconditionally.
         assert!(!ClaudeSupportMatrix::is_qualified("2.1.258"));
         assert!(!ClaudeSupportMatrix::is_qualified("2.0.999"));
         assert!(!ClaudeSupportMatrix::is_qualified("garbage"));
         assert!(!ClaudeSupportMatrix::is_qualified(""));
+    }
+
+    #[test]
+    fn in_ledger_version_without_recorded_qualification_is_not_qualified() {
+        // Regression (AGENTKIT-116): version in the ledger WITHOUT a
+        // recorded qualification must not be "qualified". Unique version
+        // string — no other test records it, so this is deterministic
+        // under parallel test execution.
+        assert!(ClaudeSupportMatrix::meets_qualified_floor("2.1.900"));
+        assert!(ClaudeSupportMatrix::recorded_qualification("2.1.900").is_none());
+        assert!(!ClaudeSupportMatrix::is_qualified("2.1.900"));
+    }
+
+    #[test]
+    fn recorded_qualification_quals_that_exact_version() {
+        // Regression (AGENTKIT-116): after recording a qualification run
+        // for a version, is_qualified flips to true for that exact string.
+        ClaudeSupportMatrix::record_qualification(QualificationEvidence {
+            cli_version: "2.1.901".to_owned(),
+            os: std::env::consts::OS.to_owned(),
+            profile: "all".to_owned(),
+            qualified_at: "2026-11-08T00:00:00Z".to_owned(),
+            source: "qualification:AGENTKIT-116".to_owned(),
+        });
+        assert!(ClaudeSupportMatrix::is_qualified("2.1.901"));
+        let recorded = ClaudeSupportMatrix::recorded_qualification("2.1.901").expect("recorded");
+        assert_eq!(recorded.qualified_at, "2026-11-08T00:00:00Z");
+        assert_eq!(recorded.source, "qualification:AGENTKIT-116");
+    }
+
+    #[test]
+    fn recorded_qualification_does_not_transfer_between_versions() {
+        // Regression (AGENTKIT-116): qualification recorded for version A
+        // must not qualify version B, even when B is also in the ledger.
+        ClaudeSupportMatrix::record_qualification(QualificationEvidence {
+            cli_version: "2.1.902".to_owned(),
+            os: std::env::consts::OS.to_owned(),
+            profile: "all".to_owned(),
+            qualified_at: "2026-11-08T00:00:00Z".to_owned(),
+            source: "qualification:AGENTKIT-116".to_owned(),
+        });
+        assert!(ClaudeSupportMatrix::is_qualified("2.1.902"));
+        assert!(ClaudeSupportMatrix::meets_qualified_floor("2.1.903"));
+        assert!(ClaudeSupportMatrix::recorded_qualification("2.1.903").is_none());
+        assert!(!ClaudeSupportMatrix::is_qualified("2.1.903"));
+    }
+
+    #[test]
+    fn qualification_does_not_transfer_between_operating_systems() {
+        // Review §3: a pass recorded for another OS says nothing about
+        // this one — the ledger must be matched per OS, not per version.
+        ClaudeSupportMatrix::record_qualification(QualificationEvidence {
+            cli_version: "2.1.904".to_owned(),
+            os: "plan9".to_owned(),
+            profile: "all".to_owned(),
+            qualified_at: "2026-11-08T00:00:00Z".to_owned(),
+            source: "qualification:AGENTKIT-116-foreign-os".to_owned(),
+        });
+        assert!(
+            !ClaudeSupportMatrix::is_qualified("2.1.904"),
+            "a foreign-OS entry never qualifies this host"
+        );
+        assert!(
+            ClaudeSupportMatrix::recorded_qualification_for("2.1.904", "plan9", "all").is_some(),
+            "the evidence exists — it just belongs to another OS"
+        );
+    }
+
+    #[test]
+    fn qualification_does_not_transfer_between_profiles() {
+        // Review §3: a plain-Chat run does not qualify the governed-MCP
+        // loop; only an `"all"` entry qualifies unspecified lookups.
+        ClaudeSupportMatrix::record_qualification(QualificationEvidence {
+            cli_version: "2.1.905".to_owned(),
+            os: std::env::consts::OS.to_owned(),
+            profile: "plainChat".to_owned(),
+            qualified_at: "2026-11-08T00:00:00Z".to_owned(),
+            source: "qualification:AGENTKIT-118-plain".to_owned(),
+        });
+        assert!(
+            ClaudeSupportMatrix::is_qualified_for("2.1.905", "plainChat"),
+            "the profile that ran is qualified"
+        );
+        assert!(
+            !ClaudeSupportMatrix::is_qualified_for("2.1.905", "ownedMcpChat"),
+            "the profile that never ran is not"
+        );
+        assert!(
+            !ClaudeSupportMatrix::is_qualified("2.1.905"),
+            "a single-profile run never qualifies the unspecified view"
+        );
     }
 
     fn target_with(snapshot: agentkit_native::CapabilitySnapshot) -> ExecutionTarget {
@@ -1324,7 +1550,7 @@ mod tests {
     }
 
     #[test]
-    fn qualified_snapshot_passes_admission_validation() {
+    fn compatible_snapshot_passes_admission_validation() {
         let mut target = target_with(ClaudeSupportMatrix::snapshot(Some("2.1.310")));
         if let ExecutionTarget::Native(native) = &mut target {
             native.backend_version = Some("2.1.310".to_owned());

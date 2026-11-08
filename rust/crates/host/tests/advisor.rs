@@ -1011,7 +1011,8 @@ async fn reservation_holds_its_permit_and_saturated_reserve_spends_no_slot() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn steer_live_refuses_idle_sessions_and_delivers_to_live_turns() {
     let h = Harness::start(vec![VALID_REPORT.into()], config()).await;
-    let steer = |id: &str| SteerInput { frozen_payload: None,
+    let steer = |id: &str| SteerInput {
+        frozen_payload: None,
         content: json!("note"),
         input_id: Some(id.into()),
         turn_id: None,

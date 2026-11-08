@@ -344,6 +344,15 @@ impl ProcessSupervisor for Scripted {
     async fn drain_owned(&self, _policy: InterruptPolicy) -> Vec<InterruptReceipt> {
         vec![]
     }
+
+    async fn terminate_owned(
+        &self,
+        _pid: u32,
+        _generation: u64,
+        _policy: InterruptPolicy,
+    ) -> Option<InterruptReceipt> {
+        None
+    }
 }
 
 struct ScriptedLocator;

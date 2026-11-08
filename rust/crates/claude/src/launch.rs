@@ -49,11 +49,14 @@ impl ChatLaunchProfiles {
 }
 
 /// Vendor-side HTTP MCP request budget (`MCP_TOOL_TIMEOUT`, ms) for the
-/// owned-broker profile. MUST exceed the broker call timeout
-/// (`BrokerLimits::default().call_timeout_ms`, 120 000 ms) so the broker —
-/// not the vendor transport's 60 s default — is the first to bound a slow
-/// governed call (review §2.9: one coherent deadline model).
-pub const BROKER_MCP_REQUEST_BUDGET_MS: i64 = 150_000;
+/// owned-broker profile. MUST exceed the WHOLE compatible deadline chain
+/// below it (review R5): the broker's human approval gate
+/// (`BROKER_AUTHORIZE_BUDGET_MS`, 360 000 ms) PLUS the effect timeout
+/// (`BrokerLimits::default().call_timeout_ms`, 120 000 ms) plus a 60 s
+/// margin — so the broker's own bounds, not the vendor transport's
+/// default, are the first to end a slow governed call, and an approval
+/// answered at the far edge of its advertised window can still execute.
+pub const BROKER_MCP_REQUEST_BUDGET_MS: i64 = 540_000;
 
 /// Build the frozen launch plan for one attempt.
 ///

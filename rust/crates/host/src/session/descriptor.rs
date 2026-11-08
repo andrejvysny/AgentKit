@@ -141,12 +141,13 @@ pub fn read_session_descriptor(metadata: &Value) -> Option<Value> {
     Some(Value::Object(next))
 }
 
-/// The session-frozen native stanza: a non-empty record, and NEVER one that
-/// freezes `turnInput` (that is per-turn admission — freezing it at session
-/// scope would replay one text across the whole session). Inner keys stay
-/// opaque here; the native admission contract is checked by
-/// `NativeAgentExecutor::validate_frozen_stanza` wherever a payload carrying
-/// them is admitted.
+/// The session-frozen native stanza: a non-empty record, NEVER one that
+/// freezes `turnInput` (that is per-turn admission — freezing it at
+/// session scope would replay one text across the whole session), and —
+/// with the native lane compiled in — every inner key must already parse
+/// against the executor's own typed contract (review round-3 F5): a
+/// session must not be creatable with an inherited target that its turns
+/// could only fail to admit later.
 fn read_native_execution(raw: Option<&Value>) -> Field<Value> {
     let Some(value) = raw else {
         return Field::Absent;
@@ -155,6 +156,10 @@ fn read_native_execution(raw: Option<&Value>) -> Field<Value> {
         return Field::Malformed;
     };
     if record.is_empty() || record.contains_key("turnInput") {
+        return Field::Malformed;
+    }
+    #[cfg(feature = "http")]
+    if crate::native_executor::NativeAgentExecutor::validate_frozen_stanza(record).is_err() {
         return Field::Malformed;
     }
     Field::Valid(value.clone())

@@ -152,6 +152,7 @@ dependencies = [
 name = "agentkit-host"
 version = "0.1.0"
 dependencies = [
+ "agentkit-claude",
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",

@@ -26,7 +26,9 @@ use tokio_util::sync::CancellationToken;
 
 use agentkit_mcp::ErrorData;
 use agentkit_mcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
-use agentkit_mcp::{Backend, BearerAuth, CatalogTool, McpServer, ServerOptions, SessionScope};
+use agentkit_mcp::{
+    Backend, BearerAuth, CatalogTool, McpServer, RpcId, ServerOptions, SessionScope,
+};
 
 /// One catalog entry frozen at attempt start.
 #[derive(Clone, Debug)]
@@ -56,10 +58,12 @@ pub struct BrokerInvocation {
     /// invocation, never on argument digests. Argument hashes stay
     /// integrity evidence only.
     pub invocation_id: String,
-    /// JSON-RPC request id when the transport carried one: the only
-    /// evidence that can PROVE a redelivery (as opposed to a new call that
-    /// happens to carry identical arguments).
-    pub request_id: Option<String>,
+    /// JSON-RPC request id when the transport carried one, kept TYPED
+    /// (review R7): the only evidence that can PROVE a redelivery (as
+    /// opposed to a new call that happens to carry identical arguments).
+    /// Numeric `1` and string `"1"` are DIFFERENT ids — stringifying them
+    /// for identity would fuse two provably distinct calls.
+    pub request_id: Option<RpcId>,
 }
 
 /// Successful in-band execution result.
@@ -113,7 +117,21 @@ pub struct BrokerLimits {
     pub max_args_bytes: usize,
     pub max_result_bytes: usize,
     pub call_timeout_ms: i64,
+    /// Hard bound on `BrokerAuthority::authorize` (the human approval
+    /// gate). Review R5: the approval window a product advertises must be
+    /// COMPATIBLE with, and strictly below, the layers above it — the
+    /// vendor MCP request budget must exceed this gate plus the effect
+    /// timeout, and the consumer's displayed approval deadline must fit
+    /// inside this budget so an answered approval never races an outer
+    /// transport expiry.
+    pub authorize_timeout_ms: i64,
 }
+
+/// The bridge's default human-gate budget (review R5). OneMind clamps its
+/// advertised approval window under this minus a margin, and the vendor
+/// MCP request budget (claude launch) exceeds this plus the effect
+/// timeout — one coherent, compatible deadline chain.
+pub const BROKER_AUTHORIZE_BUDGET_MS: i64 = 360_000;
 
 impl Default for BrokerLimits {
     fn default() -> Self {
@@ -122,6 +140,7 @@ impl Default for BrokerLimits {
             max_args_bytes: 256 * 1024,
             max_result_bytes: 1024 * 1024,
             call_timeout_ms: 120_000,
+            authorize_timeout_ms: BROKER_AUTHORIZE_BUDGET_MS,
         }
     }
 }
@@ -130,6 +149,24 @@ impl Default for BrokerLimits {
 struct Live {
     calls: usize,
     revoked: bool,
+}
+
+/// Identity of a PROVEN-redelivery candidate (review R7, AGENTKIT-115
+/// lane): the per-session broker identity plus the TYPED JSON-RPC request
+/// id. One `BrokerBackend` (and therefore one memo map) is shared by
+/// EVERY MCP session connected to the attempt endpoint — the transport
+/// mints a fresh `actor_id` per initialized session — so the request id
+/// alone is NOT a session-private key: two concurrent sessions restating
+/// id `1` would otherwise replay each other's tool results. Scoping the
+/// memo by `actor_id` keeps redelivery proof meaningful (same session,
+/// same typed id), and keeping the id typed (numeric `1` ≠ string `"1"`)
+/// keeps provably distinct calls from fusing.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MemoKey {
+    /// Session identity as observed at ingress (`SessionScope::actor_id`).
+    actor_id: String,
+    /// JSON-RPC id, stored typed — never stringified.
+    request_id: RpcId,
 }
 
 /// The attempt-scoped MCP backend. Cheap to share; revocation is global.
@@ -164,11 +201,17 @@ pub struct BrokerBackend {
     /// park; completed parks move into `parked_ms`.
     park_gate: Mutex<Vec<std::time::Instant>>,
     /// Proven-redelivery memo: a call whose transport RESTATES the same
-    /// JSON-RPC request id replays the first outcome instead of executing
-    /// twice (AGENTKIT-115: only the exact request id proves redelivery;
-    /// identical arguments never do).
-    memos: Mutex<HashMap<String, CallToolResult>>,
-    inflight: Mutex<HashSet<String>>,
+    /// typed JSON-RPC request id ON THE SAME SESSION replays the first
+    /// outcome instead of executing twice (AGENTKIT-115: only the exact
+    /// request id proves redelivery; identical arguments never do).
+    /// Keyed by [`MemoKey`] — session identity + typed id — because this
+    /// map lives on the per-attempt backend that all connected sessions
+    /// share (review R7).
+    memos: Mutex<HashMap<MemoKey, CallToolResult>>,
+    /// In-flight counterpart of `memos`: an id restated while its first
+    /// execution is still running is refused, not doubled. Same
+    /// session-scoped typed key.
+    inflight: Mutex<HashSet<MemoKey>>,
     cancellation: CancellationToken,
 }
 
@@ -308,19 +351,29 @@ impl BrokerBackend {
             // while unanswered) against the turn deadline by the stream
             // loop — a human decision is not inference time. Only
             // authorize is timed; the effect path below stays charged and
-            // call_timeout-bound.
-            let gate = std::time::Instant::now();
-            self.park_gate.lock().expect("park gate lock").push(gate);
-            let outcome = self.authority.authorize(invocation, &arguments).await;
-            {
-                let mut gate_slots = self.park_gate.lock().expect("park gate lock");
-                if let Some(position) = gate_slots.iter().position(|start| *start == gate) {
-                    gate_slots.swap_remove(position);
-                }
+            // call_timeout-bound. RAII (review R5): if this future is
+            // ABANDONED mid-park (outer request cancelled, authorize
+            // deadline fired), the gate still closes and the gauge still
+            // returns — no leaked `live_calls` and no park whose credit
+            // keeps growing after the call is gone. The gate is also
+            // DEADLINED: a consumer that never answers cannot pin the
+            // attempt open forever.
+            let _park = ParkGuard::new(self);
+            let outcome = tokio::time::timeout(
+                Duration::from_millis(self.limits.authorize_timeout_ms.max(1) as u64),
+                self.authority.authorize(invocation, &arguments),
+            )
+            .await;
+            match outcome {
+                Err(_) => Err(BrokerDenial {
+                    code: "approval_timeout".into(),
+                    message: format!(
+                        "no authority decision arrived within {} ms",
+                        self.limits.authorize_timeout_ms
+                    ),
+                }),
+                Ok(denial) => denial,
             }
-            self.parked_ms
-                .fetch_add(gate.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
-            outcome
         } {
             let payload = json!({"denied": true, "code": denial.code, "message": denial.message});
             self.authority.record(invocation, &payload);
@@ -383,6 +436,65 @@ impl BrokerBackend {
     }
 }
 
+/// RAII counterpart of the `in_flight` gauge (review R5). The increment
+/// is part of construction — a constructed guard always has a matching
+/// decrement, and a future abandoned mid-flight cannot strand the gauge.
+struct InFlightGuard<'a>(&'a BrokerBackend);
+
+impl<'a> InFlightGuard<'a> {
+    fn new(backend: &'a BrokerBackend) -> Self {
+        backend
+            .in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(backend)
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// RAII counterpart of an `authorize` park (review R5): the gate opens on
+/// creation (live deadline credit starts) and CLOSES on drop — whether
+/// authorize answered, denied, timed out, or the whole request future was
+/// abandoned. Parked time accrued so far moves into `parked_ms`; nothing
+/// keeps growing once the call is gone.
+struct ParkGuard<'a> {
+    backend: &'a BrokerBackend,
+    start: std::time::Instant,
+}
+
+impl<'a> ParkGuard<'a> {
+    fn new(backend: &'a BrokerBackend) -> Self {
+        let start = std::time::Instant::now();
+        backend
+            .park_gate
+            .lock()
+            .expect("park gate lock")
+            .push(start);
+        Self { backend, start }
+    }
+}
+
+impl Drop for ParkGuard<'_> {
+    fn drop(&mut self) {
+        {
+            let mut slots = self.backend.park_gate.lock().expect("park gate lock");
+            if let Some(position) = slots.iter().position(|gate| *gate == self.start) {
+                slots.swap_remove(position);
+            }
+        }
+        self.backend.parked_ms.fetch_add(
+            self.start.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
 #[async_trait]
 impl Backend for BrokerBackend {
     async fn list_tools(&self, _scope: &SessionScope) -> Result<Vec<CatalogTool>, ErrorData> {
@@ -423,27 +535,27 @@ impl Backend for BrokerBackend {
                 format!("arguments exceed {} bytes", self.limits.max_args_bytes),
             ));
         }
-        // Proven redelivery BEFORE any budget spend: the same JSON-RPC
-        // request id restated on this attempt replays the recorded outcome
-        // — it is the same call, not a second one. Different request ids
-        // (or none) are independent calls even for byte-identical
-        // arguments (AGENTKIT-115).
+        // Proven redelivery BEFORE any budget spend: the same typed
+        // JSON-RPC request id restated ON THE SAME SESSION replays the
+        // recorded outcome — it is the same call, not a second one.
+        // Another session, or a different id TYPE (numeric `1` is not
+        // string `"1"`), or no id at all, is an independent call even for
+        // byte-identical arguments (AGENTKIT-115; review R7: the memo key
+        // is session identity + typed id, never a stringified id alone).
         let request_id = scope.request_id.clone();
-        if let Some(key) = request_id.as_deref() {
-            if let Some(replay) = self
-                .memos
-                .lock()
-                .expect("broker memos")
-                .get(key)
-                .cloned()
-            {
+        let memo_key = request_id.as_ref().map(|request_id| MemoKey {
+            actor_id: scope.actor_id.clone(),
+            request_id: request_id.clone(),
+        });
+        if let Some(key) = &memo_key {
+            if let Some(replay) = self.memos.lock().expect("broker memos").get(key).cloned() {
                 return Ok(replay);
             }
             if !self
                 .inflight
                 .lock()
                 .expect("broker inflight")
-                .insert(key.to_owned())
+                .insert(key.clone())
             {
                 return Ok(self.denied(
                     "duplicate_in_progress",
@@ -458,7 +570,7 @@ impl Backend for BrokerBackend {
             let mut live = self.live.lock().expect("broker lock");
             live.calls += 1;
             if live.calls > self.limits.max_calls {
-                if let Some(key) = request_id.as_deref() {
+                if let Some(key) = &memo_key {
                     self.inflight.lock().expect("broker inflight").remove(key);
                 }
                 return Ok(self.denied(
@@ -480,17 +592,19 @@ impl Backend for BrokerBackend {
             request_id: request_id.clone(),
         };
         let outcome = {
-            self.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let outcome = self.dispatch_authorized(&invocation, arguments).await;
-            self.in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            outcome
+            // RAII (review R5): the gauge returns to zero even if the
+            // dispatch future is abandoned mid-flight — an abandoned
+            // request must never leave `live_calls()` lying about a call
+            // that no longer exists.
+            let _in_flight = InFlightGuard::new(self);
+            self.dispatch_authorized(&invocation, arguments).await
         };
-        if let Some(key) = request_id.as_deref() {
+        if let Some(key) = &memo_key {
             self.inflight.lock().expect("broker inflight").remove(key);
             self.memos
                 .lock()
                 .expect("broker memos")
-                .insert(key.to_owned(), outcome.clone());
+                .insert(key.clone(), outcome.clone());
         }
         Ok(outcome)
     }
@@ -671,6 +785,35 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// Review round-3 F4: the R5 deadline chain — human approval window ≤
+    /// authorize budget − margin, and the outer vendor MCP request budget
+    /// strictly above (authorize budget + effect timeout) — was tied only
+    /// by comments across crates. This test fails mechanically if anyone
+    /// edits one constant and re-opens the drift R5 closed.
+    #[test]
+    fn deadline_chain_stays_compatible_by_construction() {
+        // OneMind's approvalTimeoutMs default and its clamp margin
+        // (native_chat/broker.rs clamps the human window to
+        // BROKER_AUTHORIZE_BUDGET_MS − 30 s).
+        const HUMAN_APPROVAL_WINDOW_MS: i64 = 300_000;
+        const CLAMP_MARGIN_MS: i64 = 30_000;
+        let call_timeout = BrokerLimits::default().call_timeout_ms;
+        const {
+            assert!(
+                BROKER_AUTHORIZE_BUDGET_MS
+                    >= HUMAN_APPROVAL_WINDOW_MS + CLAMP_MARGIN_MS,
+                "authorize budget must cover the full human approval window plus margin"
+            );
+        }
+        assert!(
+            agentkit_claude::launch::BROKER_MCP_REQUEST_BUDGET_MS
+                > BROKER_AUTHORIZE_BUDGET_MS + call_timeout,
+            "the outer MCP request budget must exceed approval parking plus the effect timeout: \
+             {} !> {BROKER_AUTHORIZE_BUDGET_MS} + {call_timeout}",
+            agentkit_claude::launch::BROKER_MCP_REQUEST_BUDGET_MS
+        );
+    }
+
     struct ScriptedAuthority {
         live: bool,
         authorize_result: Option<BrokerDenial>,
@@ -749,6 +892,172 @@ mod tests {
             request_id: None,
             cancellation: CancellationToken::new(),
         }
+    }
+
+    fn scope_with(actor: &str, request_id: Option<RpcId>) -> SessionScope {
+        SessionScope {
+            actor_id: actor.into(),
+            request_id,
+            ..scope()
+        }
+    }
+
+    /// Distinguishes every EXECUTION by a sequence number baked into the
+    /// result: a memoized replay necessarily carries the ORIGINAL seq, so
+    /// an illegitimate cross-session or cross-type memo hit is directly
+    /// observable in the returned content, not merely inferred from a
+    /// counter (review R7).
+    struct SequencingAuthority {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl BrokerAuthority for SequencingAuthority {
+        fn attempt_generation(&self) -> Option<u64> {
+            Some(7)
+        }
+        async fn authorize(
+            &self,
+            _invocation: &BrokerInvocation,
+            _arguments: &Value,
+        ) -> Result<(), BrokerDenial> {
+            Ok(())
+        }
+        async fn execute(
+            &self,
+            _invocation: &BrokerInvocation,
+            _arguments: Value,
+        ) -> Result<BrokerExecuted, BrokerDenial> {
+            let seq = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(BrokerExecuted {
+                content: vec![json!({"note": "found", "seq": seq})],
+                structured: Some(json!({"seq": seq})),
+            })
+        }
+    }
+
+    async fn sequenced_backend() -> (Arc<BrokerBackend>, Arc<SequencingAuthority>) {
+        let authority = Arc::new(SequencingAuthority {
+            calls: AtomicUsize::new(0),
+        });
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        (backend, authority)
+    }
+
+    /// Review R7 (a): numeric `1` and string `"1"` are DIFFERENT JSON-RPC
+    /// ids. A stringify-then-key memo once fused them; the typed key must
+    /// not — restating the other type is an independent call.
+    #[tokio::test]
+    async fn memo_never_collapses_numeric_and_string_request_ids() {
+        let (backend, authority) = backend(true).await;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("hello"));
+        for id in [RpcId::Number(1), RpcId::String("1".to_owned())] {
+            let result = backend
+                .call_tool(
+                    "search_notes",
+                    args.clone(),
+                    &scope_with("vendor-session-1", Some(id)),
+                )
+                .await
+                .unwrap();
+            assert_eq!(denial_of(&result), None);
+        }
+        assert_eq!(
+            authority.calls.load(Ordering::SeqCst),
+            2,
+            "string \"1\" must not replay numeric 1's memoized result"
+        );
+    }
+
+    /// Review R7 (b): the memo lives on the per-attempt backend shared by
+    /// EVERY connected session, so a second session restating the same
+    /// typed id is a NEW call — it must execute its own effect, never
+    /// replay the first session's result.
+    #[tokio::test]
+    async fn memo_is_scoped_to_the_session_that_earned_it() {
+        let (backend, authority) = sequenced_backend().await;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("hello"));
+        let first = backend
+            .call_tool(
+                "search_notes",
+                args.clone(),
+                &scope_with("vendor-session-1", Some(RpcId::Number(7))),
+            )
+            .await
+            .unwrap();
+        let second = backend
+            .call_tool(
+                "search_notes",
+                args,
+                &scope_with("vendor-session-2", Some(RpcId::Number(7))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&first), None);
+        assert_eq!(denial_of(&second), None);
+        assert_eq!(
+            authority.calls.load(Ordering::SeqCst),
+            2,
+            "another session's id restatement is not a redelivery"
+        );
+        // The second session observed its OWN execution (seq 2), not a
+        // replay of the first session's effect (seq 1).
+        assert!(
+            second.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("\"seq\":2"),
+            "second session must never see the first session's memoized result"
+        );
+    }
+
+    /// Review R7 (c): the widened key must not weaken AGENTKIT-115
+    /// idempotency — same session, same typed id, same arguments replays
+    /// the memoized outcome byte-for-byte and executes exactly once.
+    #[tokio::test]
+    async fn same_session_same_typed_id_replays_exactly_once_executed() {
+        let (backend, authority) = sequenced_backend().await;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("hello"));
+        let first = backend
+            .call_tool(
+                "search_notes",
+                args.clone(),
+                &scope_with("vendor-session-1", Some(RpcId::Number(7))),
+            )
+            .await
+            .unwrap();
+        let replay = backend
+            .call_tool(
+                "search_notes",
+                args,
+                &scope_with("vendor-session-1", Some(RpcId::Number(7))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&first), None);
+        assert_eq!(
+            authority.calls.load(Ordering::SeqCst),
+            1,
+            "the proven redelivery executed nothing"
+        );
+        assert_eq!(
+            serde_json::to_string(&replay).unwrap(),
+            serde_json::to_string(&first).unwrap(),
+            "the redelivery replays the memoized outcome exactly"
+        );
     }
 
     async fn backend(live: bool) -> (Arc<BrokerBackend>, Arc<ScriptedAuthority>) {
@@ -915,6 +1224,134 @@ mod tests {
             settled_credit,
             "credit stops accruing once the call settles"
         );
+    }
+
+    /// Review R5: abandoning a parked call (outer request cancelled) must
+    /// NOT leak the in-flight gauge or keep growing the approval-pause
+    /// credit — RAII closes both when the dispatch future drops.
+    #[tokio::test]
+    async fn abandoned_park_leaks_no_gauge_or_credit() {
+        struct NeverAnswers {
+            entered: tokio::sync::Notify,
+        }
+        #[async_trait]
+        impl BrokerAuthority for NeverAnswers {
+            fn attempt_generation(&self) -> Option<u64> {
+                Some(1)
+            }
+            async fn authorize(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: &Value,
+            ) -> Result<(), BrokerDenial> {
+                self.entered.notify_waiters();
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: Value,
+            ) -> Result<BrokerExecuted, BrokerDenial> {
+                unreachable!("authorize never answers")
+            }
+        }
+        let authority = Arc::new(NeverAnswers {
+            entered: tokio::sync::Notify::new(),
+        });
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            // The gate would never answer; this test abandons, not times out.
+            BrokerLimits {
+                authorize_timeout_ms: 60_000,
+                ..BrokerLimits::default()
+            },
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let entered = authority.entered.notified();
+        let calling = {
+            let backend = Arc::clone(&backend);
+            tokio::spawn(async move {
+                backend
+                    .call_tool("search_notes", Default::default(), &scope())
+                    .await
+            })
+        };
+        entered.await;
+        assert_eq!(backend.live_calls(), 1, "parked while awaited");
+        calling.abort();
+        let _ = calling.await;
+        assert_eq!(
+            backend.live_calls(),
+            0,
+            "an abandoned dispatch must not leave the gauge lying"
+        );
+        let frozen_credit = backend.parked_ms();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(
+            backend.parked_ms(),
+            frozen_credit,
+            "pause credit stops the instant the call is gone"
+        );
+    }
+
+    /// Review R5: a consumer that never answers cannot pin the attempt
+    /// open — the human gate is DEADLINED and denies in band.
+    #[tokio::test]
+    async fn unanswered_authorize_hits_the_gate_deadline() {
+        struct NeverAnswers {
+            entered: tokio::sync::Notify,
+        }
+        #[async_trait]
+        impl BrokerAuthority for NeverAnswers {
+            fn attempt_generation(&self) -> Option<u64> {
+                Some(1)
+            }
+            async fn authorize(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: &Value,
+            ) -> Result<(), BrokerDenial> {
+                self.entered.notify_waiters();
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: Value,
+            ) -> Result<BrokerExecuted, BrokerDenial> {
+                unreachable!("the gate times out first")
+            }
+        }
+        let authority = Arc::new(NeverAnswers {
+            entered: tokio::sync::Notify::new(),
+        });
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits {
+                authorize_timeout_ms: 30,
+                ..BrokerLimits::default()
+            },
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let result = backend
+            .call_tool("search_notes", Default::default(), &scope())
+            .await
+            .unwrap();
+        let denial = denial_of(&result).expect("the gate deadline denies in band");
+        assert_eq!(denial["code"], "approval_timeout");
+        assert_eq!(backend.live_calls(), 0);
     }
 
     #[tokio::test]

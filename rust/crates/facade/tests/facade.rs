@@ -197,6 +197,15 @@ impl ProcessSupervisor for FakeSupervisor {
     async fn drain_owned(&self, _policy: InterruptPolicy) -> Vec<InterruptReceipt> {
         Vec::new()
     }
+
+    async fn terminate_owned(
+        &self,
+        _pid: u32,
+        _generation: u64,
+        _policy: InterruptPolicy,
+    ) -> Option<InterruptReceipt> {
+        None
+    }
 }
 
 fn fast_limits() -> ResourceLimits {

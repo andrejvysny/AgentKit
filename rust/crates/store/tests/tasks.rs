@@ -334,12 +334,7 @@ async fn submit_and_project_are_atomic_idempotent_and_scope_bound() {
     hijack.content = json!("rewritten");
     assert!(
         store
-            .append_projected(
-                lease.fence(),
-                vec![event(2, "hijack")],
-                vec![hijack],
-                1003
-            )
+            .append_projected(lease.fence(), vec![event(2, "hijack")], vec![hijack], 1003)
             .await
             .is_err()
     );

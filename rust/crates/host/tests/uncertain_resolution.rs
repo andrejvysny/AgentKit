@@ -194,7 +194,8 @@ impl Fixture {
             .service
             .send(
                 "s1",
-                &SendInput { frozen_payload: None,
+                &SendInput {
+                    frozen_payload: None,
                     content: json!("work"),
                     input_id: Some(format!("crash:{run_id}")),
                     when_busy: WhenBusy::Reject,
@@ -305,7 +306,8 @@ impl Fixture {
             .service
             .send(
                 "s1",
-                &SendInput { frozen_payload: None,
+                &SendInput {
+                    frozen_payload: None,
                     content: json!("mutate it"),
                     input_id: Some(id.into()),
                     when_busy: WhenBusy::Reject,

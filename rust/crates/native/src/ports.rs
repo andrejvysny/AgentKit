@@ -480,8 +480,22 @@ pub trait ProcessSupervisor: Send + Sync {
     ) -> Result<Box<dyn OwnedChildHandle>, NativeError>;
 
     /// Host-shutdown drain: interrupt/await all live owned children and
-    /// report which remain uncertain.
+    /// report which remain uncertain. Reserved for whole-runtime shutdown;
+    /// per-attempt cleanup uses [`Self::terminate_owned`] so one dropped
+    /// attempt can never interrupt another's process.
     async fn drain_owned(&self, policy: InterruptPolicy) -> Vec<InterruptReceipt>;
+
+    /// Terminate the single live owned child matching `(pid, generation)`
+    /// with the given policy and deregister it; returns `None` when no live
+    /// child carries that identity (already reaped, exited, or never owned
+    /// by this supervisor). Every other live child is untouched — this is
+    /// the per-attempt cleanup handle (AGENTKIT-110 lifecycle hardening).
+    async fn terminate_owned(
+        &self,
+        pid: u32,
+        generation: u64,
+        policy: InterruptPolicy,
+    ) -> Option<InterruptReceipt>;
 }
 
 /// Convenience: collect adapter events until EOF (used by the executor and

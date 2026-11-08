@@ -412,30 +412,20 @@ impl crate::SqliteStore {
                 });
             }
             if require_live_authority {
-                // Live authority, in the settlement transaction: the task
-                // must still be live and its lease must still name the
-                // attempt. A stale UI answer cannot settle a dead row.
-                let task_status: Option<String> = transaction
-                    .query_row(
-                        "SELECT status FROM tasks WHERE id=?1",
-                        params![record.task_id],
-                        |row| row.get(0),
-                    )
-                    .ok();
-                let task_live = matches!(
-                    task_status.as_deref(),
-                    Some("running") | Some("waiting_approval")
-                );
-                let lease_attempt = transaction
-                    .query_row(
-                        "SELECT record FROM leases WHERE task_id=?1",
-                        params![record.task_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<crate::Lease>(&raw).ok())
-                    .map(|lease| lease.attempt_id);
-                if !task_live || lease_attempt.as_deref() != Some(record.attempt_id.as_str()) {
+                // Live authority, in the settlement transaction: the SAME
+                // current-owner rule every durable claim applies — task
+                // executing, no cancellation request, lease present,
+                // naming the attempt, and unexpired. A stale UI answer
+                // cannot settle a dead row, an expired lease, or a
+                // cancelled attempt (review §2.7).
+                if crate::native_exec::live_authority_gap(
+                    &transaction,
+                    &record.task_id,
+                    &record.attempt_id,
+                    now,
+                )?
+                    .is_some()
+                {
                     return Ok(AnswerDisposition::Rejected {
                         reason: InteractionRejection::StaleAttempt,
                     });
@@ -486,6 +476,24 @@ impl crate::SqliteStore {
         .await
     }
 
+    /// Invalidate one still-pending interaction by id (review R5: the
+    /// request whose wait produced this approval gate was ABANDONED — its
+    /// half of the conversation is gone, so the gate must not linger
+    /// answerable). A row already settled by a human, expired, or
+    /// invalidated is left untouched; the return says whether this call
+    /// performed the invalidation.
+    pub async fn invalidate_interaction(&self, interaction_id: &str) -> Result<bool> {
+        let interaction_id = interaction_id.to_owned();
+        self.call(move |db| {
+            Ok(db.execute(
+                "UPDATE native_interactions SET status='invalidated' WHERE interaction_id=?1 AND status='pending'",
+                params![interaction_id],
+            )?
+                > 0)
+        })
+        .await
+    }
+
     /// Invalidate every still-pending interaction of one attempt (cancel,
     /// interruption, process replacement). Returns the number invalidated.
     pub async fn invalidate_interactions(&self, attempt_id: &str, now: i64) -> Result<usize> {
@@ -498,6 +506,61 @@ impl crate::SqliteStore {
             )?)
         })
         .await
+    }
+}
+
+/// The CURRENT-OWNER rule (AGENTKIT-115) as one reusable transaction
+/// probe: the attempt must be the one named by the task's live lease,
+/// the lease must be unexpired, the task must sit in an executing
+/// state, and no cancellation may have been requested. `Ok(None)` is
+/// authorized; `Ok(Some(reason))` names the missing condition. Used by
+/// the fenced interaction settlement and by durable continuation
+/// commits alike, so the authority rules cannot drift apart.
+pub(crate) fn live_authority_gap(
+    db: &rusqlite::Connection,
+    task_id: &str,
+    attempt_id: &str,
+    now: i64,
+) -> Result<Option<&'static str>> {
+    let task: Option<(String, bool)> = db
+        .query_row(
+            "SELECT status, record FROM tasks WHERE id=?1",
+            params![task_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok()
+        .map(|(status, record_raw)| {
+            let cancel = serde_json::from_str::<serde_json::Value>(&record_raw)
+                .ok()
+                .and_then(|v| {
+                    v.get("cancelRequested")
+                        .and_then(serde_json::Value::as_bool)
+                })
+                .unwrap_or(false);
+            (status, cancel)
+        });
+    let Some((status, cancel_requested)) = task else {
+        return Ok(Some("task-gone"));
+    };
+    if !matches!(status.as_str(), "running" | "waiting_approval") {
+        return Ok(Some("task-state"));
+    }
+    if cancel_requested {
+        return Ok(Some("cancel-requested"));
+    }
+    let lease = db
+        .query_row(
+            "SELECT record FROM leases WHERE task_id=?1",
+            params![task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|raw| serde_json::from_str::<crate::Lease>(&raw).ok());
+    match lease {
+        None => Ok(Some("lease-gone")),
+        Some(lease) if lease.attempt_id != attempt_id => Ok(Some("lease-attempt")),
+        Some(lease) if lease.expires_at <= now => Ok(Some("lease-expired")),
+        Some(_) => Ok(None),
     }
 }
 
@@ -918,6 +981,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn single_interaction_invalidation_is_surgical() {
+        // Review R5: an abandoned approval wait invalidates ITS OWN row
+        // only — a concurrently pending sibling (another live call of the
+        // same attempt) must stay answerable, and a row a human already
+        // settled must never be rewritten.
+        let store = store();
+        submit_task(&store, "task-1").await;
+        store
+            .open_interaction(record("task-1", "att-single-a"))
+            .await
+            .unwrap();
+        let mut sibling = record("task-1", "att-single-b");
+        sibling.interaction_id = "int-sibling".to_owned();
+        store.open_interaction(sibling).await.unwrap();
+        // A settled row of the same task.
+        let mut settled = record("task-1", "att-single-c");
+        settled.interaction_id = "int-settled".to_owned();
+        store.open_interaction(settled).await.unwrap();
+        // Human-settled row, marked final directly (the fenced answer
+        // path has its own coverage; here we only need a non-pending
+        // status to prove the invalidation filter).
+        store
+            .call(move |db| {
+                db.execute(
+                    "UPDATE native_interactions SET status='answered' WHERE interaction_id='int-settled'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .invalidate_interaction("int-task-1-att-single-a")
+                .await
+                .unwrap()
+        );
+        let invalidated = store
+            .get_interaction("int-task-1-att-single-a")
+            .await
+            .unwrap();
+        assert_eq!(invalidated.unwrap().status, "invalidated");
+        // The sibling wait is untouched — one abandoned call must not
+        // strand its neighbours.
+        assert_eq!(
+            store
+                .get_interaction("int-sibling")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending"
+        );
+        // A settled row is never rewritten, and re-invalidating an
+        // invalidated row reports no work done.
+        assert_eq!(
+            store
+                .get_interaction("int-settled")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "answered"
+        );
+        assert!(
+            !store
+                .invalidate_interaction("int-task-1-att-single-a")
+                .await
+                .unwrap()
+        );
+        assert!(!store.invalidate_interaction("int-nope").await.unwrap());
+    }
+
+    #[tokio::test]
     async fn decision_must_fit_kind() {
         let store = store();
         submit_task(&store, "task-1").await;
@@ -1059,19 +1197,116 @@ mod tests {
             note: None,
         };
         let accepted = store
-            .answer_interaction_fenced(
-                &submission,
-                "task-1",
-                &live_attempt,
-                3,
-                "hash-a",
-                5_000,
-            )
+            .answer_interaction_fenced(&submission, "task-1", &live_attempt, 3, "hash-a", 5_000)
             .await
             .unwrap();
         assert!(
             matches!(accepted, AnswerDisposition::Accepted { .. }),
             "live lease-backed attempt must settle: {accepted:?}"
+        );
+    }
+
+    /// Review round-3 (coverage): the fenced answer path's ADDED authority
+    /// conditions — cancellation request and lease expiry — must refuse
+    /// through the ANSWER API itself, not only via the shared probe as
+    /// exercised by `commit_continuation`.
+    #[tokio::test]
+    async fn fenced_answer_refuses_cancel_requested_and_expired_lease() {
+        // (a) cancel-requested: the task still reads RUNNING, but the
+        // cancellation request is durable — a fenced answer is stale.
+        let store_a = store();
+        submit_task(&store_a, "task-1").await;
+        let claimed = store_a
+            .claim(crate::ClaimInput {
+                owner_id: "w-1".into(),
+                now: 4_000,
+                ttl_ms: 600_000,
+                kinds: vec!["native.turn".into()],
+                busy_scopes: vec![],
+                max_attempts: 5,
+            })
+            .await
+            .unwrap()
+            .expect("claimable");
+        let attempt = claimed.lease.attempt_id.clone();
+        let live = record("task-1", &attempt);
+        let live_id = live.interaction_id.clone();
+        store_a.open_interaction(live).await.unwrap();
+        store_a.cancel_task("task-1", 4_500).await.unwrap();
+        let submission = AnswerSubmission {
+            interaction_id: live_id.clone(),
+            answer_id: "a-cancel".into(),
+            decision: Decision::Allow,
+            note: None,
+        };
+        let denied = store_a
+            .answer_interaction_fenced(&submission, "task-1", &attempt, 3, "hash-a", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            denied,
+            AnswerDisposition::Rejected {
+                reason: InteractionRejection::StaleAttempt
+            },
+            "a cancellation request ends answer authority: {denied:?}"
+        );
+        assert_eq!(
+            store_a
+                .get_interaction(&live_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending",
+            "refusal must not settle"
+        );
+
+        // (b) lease-expired: unexpired interaction, expired LEASE — the
+        // row must not settle from a dead lease.
+        let store_b = store();
+        submit_task(&store_b, "task-2").await;
+        let claimed = store_b
+            .claim(crate::ClaimInput {
+                owner_id: "w-2".into(),
+                now: 4_000,
+                ttl_ms: 1_000,
+                kinds: vec!["native.turn".into()],
+                busy_scopes: vec![],
+                max_attempts: 5,
+            })
+            .await
+            .unwrap()
+            .expect("claimable");
+        let attempt = claimed.lease.attempt_id.clone();
+        let live = record("task-2", &attempt);
+        let live_id = live.interaction_id.clone();
+        store_b.open_interaction(live).await.unwrap();
+        let submission = AnswerSubmission {
+            interaction_id: live_id.clone(),
+            answer_id: "a-expired".into(),
+            decision: Decision::Allow,
+            note: None,
+        };
+        let denied = store_b
+            .answer_interaction_fenced(&submission, "task-2", &attempt, 3, "hash-a", 6_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            denied,
+            AnswerDisposition::Rejected {
+                reason: InteractionRejection::StaleAttempt
+            },
+            "an expired lease ends answer authority: {denied:?}"
+        );
+        assert_eq!(
+            store_b
+                .get_interaction(&live_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending",
+            "refusal must not settle"
         );
     }
 

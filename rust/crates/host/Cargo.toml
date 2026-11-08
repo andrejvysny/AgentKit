@@ -61,6 +61,10 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 
 [dev-dependencies]
 agentkit-mcp = { path = "../mcp", version = "0.1.0" }
+# Review round-3 F4: the deadline-chain guard test reads the claude
+# adapter's outer MCP budget alongside the host's authorize budget.
+# (dev-only: claude sits ABOVE host, so this never creates a cycle.)
+agentkit-claude = { path = "../claude", version = "0.1.0" }
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"
 # The imported-receipt acceptance tests drive the TypeScript importer

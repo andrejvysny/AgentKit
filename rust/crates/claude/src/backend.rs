@@ -91,7 +91,12 @@ impl NativeBackend for ClaudeCodeBackend {
         // Replacement between probe and now (AGENTKIT-109).
         recheck_replaced(&executable)?;
 
-        if !ClaudeSupportMatrix::is_qualified(&executable.version) {
+        // Compatibility gate only (AGENTKIT-116 qualification-honesty
+        // lane): preflight refuses below-floor/unparseable versions; the
+        // qualified verdict itself requires recorded qualification
+        // evidence (`ClaudeSupportMatrix::is_qualified`), never a version
+        // observation.
+        if !ClaudeSupportMatrix::meets_qualified_floor(&executable.version) {
             return Err(NativeRefusal::new(
                 "unsupported_version",
                 format!(
@@ -634,9 +639,7 @@ mod tests {
         let ctx = content
             .find("CTX-SENTINEL-context")
             .expect("context sentinel rendered");
-        let user = content
-            .find("USER-TEXT-new")
-            .expect("user text rendered");
+        let user = content.find("USER-TEXT-new").expect("user text rendered");
         assert!(
             seed < ctx && ctx < user,
             "order must be seed, context, user: {content}"

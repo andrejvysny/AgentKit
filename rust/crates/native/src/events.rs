@@ -73,14 +73,21 @@ pub enum NativeEvent {
     /// Vendor rate-limit signal (`rate_limit_event` frame). Progress
     /// information only: never terminal-affecting (AGENTKIT-111).
     RateLimit {
-        /// Vendor-reported status, e.g. `"allowed"`, `"warn"`, `"rejected"`.
+        /// Vendor-reported status, e.g. `"allowed"`, `"allowed_warning"`,
+        /// `"rejected"`.
         status: String,
-        /// `resetsAt`: when the vendor says the limit resets, when reported.
+        /// `resetsAt`: vendor-reported Unix timestamp (seconds) when the
+        /// limit window resets, when reported. Numeric on the public
+        /// contract; string-encoded numbers are preserved as the same
+        /// value, never dropped.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        resets_at: Option<String>,
+        resets_at: Option<f64>,
         /// Fraction of the limit window consumed, when reported.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         utilization: Option<f64>,
+        /// Which limit window applies (`rateLimitType`), when reported.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rate_limit_type: Option<String>,
     },
     /// Vendor stream status line (`system` subtype `status`), e.g.
     /// `"compacting"`; absent/null status is a documented clear signal.

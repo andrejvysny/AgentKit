@@ -25,7 +25,7 @@ pub mod protocol;
 pub mod transport;
 
 pub use backend::ClaudeCodeBackend;
-pub use discovery::{ClaudeLocator, ClaudeSupportMatrix, recheck_replaced};
+pub use discovery::{ClaudeLocator, ClaudeSupportMatrix, QualificationEvidence, recheck_replaced};
 pub use launch::{
     ChatLaunchProfiles, PRIVATE_RUN_DIR_PREFIX, build_launch_plan, write_per_run_files,
 };
