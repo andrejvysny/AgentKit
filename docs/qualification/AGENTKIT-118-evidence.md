@@ -151,3 +151,24 @@ test that fails on the pre-fix code:
 Post-round gate (exit 0): the §3 no-fail-fast workspace run, clippy `-D warnings`
 clean, fmt clean. Vendored to OneMind byte-identically
 (`vendor/agentkit-rust`, 672 files, `--check` OK).
+
+## Review round 2 (2026-11-08, commit d158ee1) — independently executed
+
+Findings of the second review (protocol events, literal input, seed history,
+text assembly, frame bounds, ownership, scoped continuations, dispatch
+capabilities, discovery tiers, system-managed policy, deadline/parked-approval
+model), each fixed with a regression test that fails on the pre-fix code.
+
+| Gate | Result |
+| --- | --- |
+| `cargo test --workspace --features agentkit-host/http --exclude agentkit-napi` | green (exit 0) |
+| `agentkit-claude` | 76 passed |
+| `agentkit-host` (incl. `native_session_lane`, broker lifetime, parked-approval credit) | green |
+| `agentkit-store` (schema v18 `native_continuations`, migration fixtures extended) | green |
+| `agentkit-napi` test binary | NOT LINKED here: the test harness needs node symbols (`napi_*`); lib compiles clean (`cargo check`). Pre-existing environment limit, not a regression — runs green under the node-gyp build. |
+
+Environment notes: the `/proc`-vs-PID-namespace mismatch that blocked the
+`/proc` process fixtures in round 1 did not reproduce in this run; those
+tests executed green. System-managed policy observation uses the documented
+OS locations plus an `AGENTKIT_MANAGED_SETTINGS_SYSTEM_DIRS` injection seam
+for hermetic tests.
