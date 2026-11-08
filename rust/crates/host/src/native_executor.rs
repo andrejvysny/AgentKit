@@ -35,7 +35,7 @@ use agentkit_native::{
     NativeProfile, NativeTerminalOutcome, PreflightReport, ProcessExit, ProcessSupervisor,
     ResourceLimits, TransportFault, TurnInput, TurnResume, validate_execution_target,
 };
-use agentkit_store::{BindNativeSession, SqliteStore};
+use agentkit_store::{BindNativeSession, NativeContinuationBinding, SqliteStore};
 
 use crate::native_bridge::{AttemptBroker, BrokerLimits, BrokerToolDefinition};
 use crate::{ExecutionContext, ExecutionFailure, HostError, HostResult, RetrySafety, TaskExecutor};
@@ -166,6 +166,16 @@ pub struct BrokerSpec {
     pub tools: Vec<BrokerToolSpec>,
     #[serde(default)]
     pub limits: Option<BrokerLimitsSpec>,
+    /// The admission-frozen authorization-policy snapshot (review
+    /// round-4 F6a). OPAQUE to the host: AgentKit parses and preserves
+    /// it but never interprets it — it exists so the embedding host
+    /// persists ONE immutable authority record with the turn (settings
+    /// live-swap can never silently widen an admitted turn's tool
+    /// authority) and hands it to its own factory at attempt time.
+    /// `None` = pre-F6a stanza; hosts that require a policy fail closed
+    /// on absence. Unknown keys remain refused (`deny_unknown_fields`).
+    #[serde(default)]
+    pub authorization_policy: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -224,6 +234,76 @@ impl Default for NativeExecutorOptions {
     }
 }
 
+/// The ledger claim an exact-resume attempt holds on its INPUT-position
+/// binding (review round-4 F3). Taken atomically (`active → owned`) under
+/// the current lease BEFORE the vendor can advance the session, it is a
+/// resource of the attempt like the broker or the child: every exit path
+/// must discharge it — provable non-acceptance of the input releases it
+/// (back to Available), an accepted input with a non-completed terminal
+/// outcome marks it `uncertain` (exact resume from the pre-claim position
+/// stays refused), and a completed turn settles it through the commit
+/// sweep. The owner's Drop discharges an undispositioned claim so an
+/// aborted future can never strand the position in `owned` forever.
+struct ContinuationClaim {
+    store: SqliteStore,
+    attempt_id: String,
+    binding_id: String,
+    input_accepted: std::sync::atomic::AtomicBool,
+    settled: std::sync::atomic::AtomicBool,
+}
+
+impl ContinuationClaim {
+    fn new(store: &SqliteStore, attempt_id: &str, binding_id: &str) -> Self {
+        Self {
+            store: store.clone(),
+            attempt_id: attempt_id.to_owned(),
+            binding_id: binding_id.to_owned(),
+            input_accepted: std::sync::atomic::AtomicBool::new(false),
+            settled: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The attempt handed its input to the transport: from here on the
+    /// vendor may have consumed the prompt, so only `uncertain` is an
+    /// honest non-completion disposition.
+    fn mark_input_accepted(&self) {
+        self.input_accepted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether the input reached the transport — the honest selector for
+    /// `discharge` on terminal paths.
+    fn accepted(&self) -> bool {
+        self.input_accepted
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Conclusive completion: the commit (or its visible error) already
+    /// disposed of the position — Drop owes nothing.
+    fn settle(&self) {
+        self.settled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Discharge the claim on a terminal path. `input_accepted` selects
+    /// the honest transition; a store failure leaves the row `owned`,
+    /// which fails CLOSED (exact resume stays refused), never open.
+    async fn discharge(&self, input_accepted: bool) {
+        if self.settled.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let _ = if input_accepted {
+            self.store
+                .mark_continuation_uncertain(&self.binding_id, &self.attempt_id)
+                .await
+        } else {
+            self.store
+                .release_continuation_claim(&self.binding_id, &self.attempt_id)
+                .await
+        };
+    }
+}
+
 /// The attempt resource owner. Every execution obligation that must
 /// survive the REQUEST FUTURE being dropped — aborted futures, `?`
 /// returns mid-stream, panics at persistence boundaries — is held here
@@ -245,6 +325,10 @@ pub struct AttemptOwner {
     child: std::sync::Mutex<Option<(u32, u64)>>,
     broker: Option<Arc<AttemptBroker>>,
     per_run_dir: Option<std::path::PathBuf>,
+    /// The exact-resume ledger claim, attached once taken (F3). Its
+    /// discharge belongs to this owner: an aborted future must not strand
+    /// the input position in `owned`.
+    continuation: std::sync::Mutex<Option<Arc<ContinuationClaim>>>,
     settled: std::sync::atomic::AtomicBool,
 }
 
@@ -263,6 +347,7 @@ impl AttemptOwner {
             child: std::sync::Mutex::new(None),
             broker,
             per_run_dir,
+            continuation: std::sync::Mutex::new(None),
             settled: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -275,6 +360,13 @@ impl AttemptOwner {
 
     fn set_per_run_dir(&mut self, dir: std::path::PathBuf) {
         self.per_run_dir = Some(dir);
+    }
+
+    /// Attach the ledger claim taken for this attempt (F3): from this
+    /// moment the owner owes its discharge on every exit path, including
+    /// future abortion.
+    fn set_continuation(&self, claim: Option<Arc<ContinuationClaim>>) {
+        *self.continuation.lock().unwrap() = claim;
     }
 
     fn mark_settled(&self) {
@@ -299,8 +391,16 @@ impl Drop for AttemptOwner {
         let child = self.child.lock().unwrap().take();
         let broker = self.broker.take();
         let per_run_dir = self.per_run_dir.take();
+        let continuation = self.continuation.lock().unwrap().take();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
+                // Undispositioned ledger claim (aborted future, `?`
+                // return): discharge honestly — release only while the
+                // input provably never reached the transport, uncertain
+                // once it may have (review round-4 F3-A).
+                if let Some(claim) = &continuation {
+                    claim.discharge(claim.accepted()).await;
+                }
                 // Scoped to THIS attempt's process generation: the child
                 // is reaped even though the request future (and its
                 // handle) is gone — no `?`, no await, no abort can strand
@@ -387,12 +487,61 @@ impl NativeAgentExecutor {
         validate_execution_target(target)
     }
 
+    /// The ONE cross-field semantic validator of the frozen admission
+    /// stanza (review round-4 F8-b): a typed continuation scope must not
+    /// merely parse next to the frozen execution target — the facts they
+    /// share (backend, executable, config identity, system-prompt
+    /// revision) must AGREE. This is the check the executor already ran
+    /// only at claim time; running it at admission too makes admission
+    /// durably-clean: there is no successful send whose rows a later
+    /// execution is guaranteed to refuse. Invoked by
+    /// `validate_frozen_stanza` (admission) and at claim — one field
+    /// list, one source of truth.
+    pub fn validate_frozen_semantics(
+        stanza: &serde_json::Map<String, Value>,
+    ) -> Result<(), String> {
+        let Some(scope_raw) = stanza.get(CONTINUATION_SCOPE_PAYLOAD_KEY) else {
+            return Ok(());
+        };
+        if scope_raw.is_null() {
+            return Ok(());
+        }
+        let scope = serde_json::from_value::<ContinuationScope>(scope_raw.clone())
+            .map_err(|e| format!("'{CONTINUATION_SCOPE_PAYLOAD_KEY}': {e}"))
+            .and_then(|scope| {
+                scope
+                    .validate()
+                    .map_err(|e| format!("'{CONTINUATION_SCOPE_PAYLOAD_KEY}': {e}"))?;
+                Ok(scope)
+            })?;
+        let Some(target_raw) = stanza.get(EXECUTION_TARGET_PAYLOAD_KEY) else {
+            return Err(format!(
+                "'{CONTINUATION_SCOPE_PAYLOAD_KEY}' requires a frozen '{EXECUTION_TARGET_PAYLOAD_KEY}'"
+            ));
+        };
+        let target =
+            Self::parse_target(&json!({ EXECUTION_TARGET_PAYLOAD_KEY: target_raw.clone() }))
+                .map_err(|e| format!("'{EXECUTION_TARGET_PAYLOAD_KEY}': {e}"))?;
+        let ExecutionTarget::Native(target) = target else {
+            return Err(format!(
+                "'{CONTINUATION_SCOPE_PAYLOAD_KEY}' requires a native '{EXECUTION_TARGET_PAYLOAD_KEY}'"
+            ));
+        };
+        if let Some(drift) = scope.agrees_with(&target) {
+            return Err(format!(
+                "'{CONTINUATION_SCOPE_PAYLOAD_KEY}' contradicts '{EXECUTION_TARGET_PAYLOAD_KEY}': {drift}"
+            ));
+        }
+        Ok(())
+    }
+
     /// Validate a consumer-frozen admission stanza at ADMISSION time (the
     /// public session API calls this before any row lands, so a malformed
     /// native stanza is refused at send, never discovered after queueing
     /// and claim — AGENTKIT-112). Only the four frozen payload keys are
-    /// allowed, and every present value must parse through the exact typed
-    /// contract the executor enforces at claim.
+    /// allowed, every present value must parse through the exact typed
+    /// contract the executor enforces at claim, and the CROSS-FIELD
+    /// semantics must agree (review round-4 F8-b).
     pub fn validate_frozen_stanza(stanza: &serde_json::Map<String, Value>) -> Result<(), String> {
         const ALLOWED: [&str; 4] = [
             EXECUTION_TARGET_PAYLOAD_KEY,
@@ -428,6 +577,12 @@ impl NativeAgentExecutor {
             if let Err(detail) = outcome {
                 errors.push(format!("{key}: {detail}"));
             }
+        }
+        // F8-b: the per-key parse says every field is well-formed; the
+        // cross-field pass says they describe ONE execution. Admission
+        // refuses here, before any row lands.
+        if let Err(detail) = Self::validate_frozen_semantics(stanza) {
+            errors.push(detail);
         }
         if errors.is_empty() {
             Ok(())
@@ -607,38 +762,69 @@ impl TaskExecutor for NativeAgentExecutor {
                     format!("invalid '{CONTINUATION_SCOPE_PAYLOAD_KEY}': {detail}"),
                 ));
             }
-            if let Some(drift) = scope.agrees_with(&target) {
+            // F8-b: the SAME cross-field validator admission runs before
+            // persisting — kept here because the claim boundary is the
+            // last line of defence against a stanza that entered through
+            // a path without the admission gate.
+            let stanza = context
+                .task
+                .payload
+                .as_object()
+                .expect("task payload is a JSON object");
+            if let Err(detail) = Self::validate_frozen_semantics(stanza) {
                 return Err(self.terminal(
                     "continuation_scope_mismatch",
-                    format!("frozen continuation scope contradicts the frozen target: {drift}"),
+                    format!("frozen continuation scope contradicts the frozen target: {detail}"),
                 ));
             }
         }
 
-        // 4. Lineage preconditions for exact resume (AGENTKIT-113).
-        // A continuation is a NEW task: the conversation's observed
-        // identity lives on the previous task's binding, so the gate
-        // accepts either this task's own observed binding or — WITH a
-        // frozen scope — the durable CONTINUATION binding for exactly
-        // (conversation, selected parent, history position, backend,
-        // executable, config identity). A vendor session merely observed
-        // somewhere on this host is NOT authority for a scoped turn:
-        // foreign scope, changed configuration or a discarded future must
-        // fail closed (review §2.3). Without a frozen scope the legacy
-        // host-global observed check remains (documented generic path).
+        // 4. Lineage preconditions for exact resume (AGENTKIT-113,
+        // hardened by review round-4 F3-B). The task-local observed
+        // session proves IDENTITY only: WITH a frozen scope, reuse
+        // additionally requires the durable continuation LEDGER to vouch
+        // for the binding at the frozen scope — still available
+        // (`active`) or `owned` by THIS attempt (claim re-entry), every
+        // configuration component matching, lease validated when the
+        // claim is taken. A retired, superseded, uncertain or
+        // foreign-owned row is a MISS no matter what this task observed
+        // locally — OneMind's same-task Resume (engine.resume on the
+        // ORIGINAL task, unlike Resend/Regenerate) must never respawn
+        // from a session the ledger has put out of service. Without a
+        // frozen scope only the task's own observed identity remains
+        // (documented same-task re-entry); the host-global "observed
+        // somewhere" path stays retired (AGENTKIT-113).
+        let mut exact_binding: Option<NativeContinuationBinding> = None;
         let lineage_parent: Option<String> = match &input.resume {
             TurnResume::Exact { vendor_session_id } => {
-                let binding = self
+                let observed = self
                     .store
                     .current_native_binding(&context.task.task_id)
-                    .await?;
-                match &binding {
-                    Some(binding) if binding.vendor_session_id == *vendor_session_id => {
-                        Some(binding.vendor_session_id.clone())
-                    }
-                    _ => {
-                        if let Some(scope) = &continuation_scope {
-                            let active = self
+                    .await?
+                    .filter(|binding| binding.vendor_session_id == *vendor_session_id);
+                if let Some(scope) = &continuation_scope {
+                    let vouched = self
+                        .store
+                        .resumable_continuation(
+                            &scope.conversation,
+                            &scope.parent,
+                            scope.history_position,
+                            &scope.backend,
+                            &scope.executable,
+                            &scope.config_identity,
+                            scope.system_prompt_revision.as_deref(),
+                            &context.attempt_id,
+                        )
+                        .await?
+                        .filter(|binding| binding.vendor_session_id == *vendor_session_id);
+                    match vouched {
+                        Some(binding) => {
+                            let session = binding.vendor_session_id.clone();
+                            exact_binding = Some(binding);
+                            Some(session)
+                        }
+                        None => {
+                            let seen = self
                                 .store
                                 .active_continuation(
                                     &scope.conversation,
@@ -649,28 +835,32 @@ impl TaskExecutor for NativeAgentExecutor {
                                     &scope.config_identity,
                                     scope.system_prompt_revision.as_deref(),
                                 )
-                                .await?;
-                            match active.as_ref() {
-                                Some(b) if b.vendor_session_id == *vendor_session_id => {
-                                    Some(b.vendor_session_id.clone())
-                                }
-                                _ => {
-                                    let seen = active
-                                        .as_ref()
-                                        .map(|b| format!("bound to '{}'", b.vendor_session_id))
-                                        .unwrap_or_else(|| "no active binding".to_owned());
-                                    return Err(self.terminal(
-                                        "continuation_mismatch",
-                                        format!(
-                                            "exact resume of '{vendor_session_id}' has no active continuation at conversation '{}' parent '{}' position {history} ({seen})",
-                                            scope.conversation,
-                                            scope.parent,
-                                            history = scope.history_position,
-                                        ),
-                                    ));
-                                }
-                            }
-                        } else {
+                                .await?
+                                .map(|b| format!("bound to '{}'", b.vendor_session_id))
+                                .unwrap_or_else(|| "no active binding".to_owned());
+                            let local_note = if observed.is_some() {
+                                "restates a task-local observation the ledger does not vouch for and "
+                            } else {
+                                ""
+                            };
+                            return Err(self.terminal(
+                                "continuation_mismatch",
+                                format!(
+                                    "exact resume of '{vendor_session_id}' {local_note}has no active-or-owned continuation at conversation '{}' parent '{}' position {history} ({seen})",
+                                    scope.conversation,
+                                    scope.parent,
+                                    history = scope.history_position,
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    match observed {
+                        // Same-task re-entry without frozen provenance:
+                        // the task's OWN observed identity is the only
+                        // authority the generic path ever grants.
+                        Some(binding) => Some(binding.vendor_session_id.clone()),
+                        None => {
                             // No frozen scope ⇒ no authority (AGENTKIT-113).
                             // A host-global "we have seen this id" check
                             // proves only that some attempt somewhere on
@@ -865,6 +1055,64 @@ impl TaskExecutor for NativeAgentExecutor {
             .await?;
         }
 
+        // 8b. Atomic ledger claim (review round-4 F3-A/C): reserve the
+        // INPUT-position binding before the vendor process exists, so a
+        // concurrent attempt can never start from the same position
+        // (compare-and-set at the store: exactly one winner, lease
+        // fenced) and an interrupted attempt's position never reads as
+        // available again. The loser takes the fresh-session decision —
+        // refusal here, from which the consumer falls back to Fresh with
+        // seeded ancestry — and never consumes the binding.
+        let continuation_claim: Option<Arc<ContinuationClaim>> = match (
+            &continuation_scope,
+            &exact_binding,
+        ) {
+            (Some(scope), Some(binding)) => {
+                let claimed = self
+                    .store
+                    .claim_continuation(
+                        &scope.conversation,
+                        &scope.parent,
+                        scope.history_position,
+                        &scope.backend,
+                        &scope.executable,
+                        &scope.config_identity,
+                        scope.system_prompt_revision.as_deref(),
+                        &context.task.task_id,
+                        &context.attempt_id,
+                        context.runtime.now_ms(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        self.terminal(
+                            "continuation_claim_refused",
+                            format!("ledger claim refused: {error}"),
+                        )
+                    })?;
+                match claimed {
+                    Some(claimed) => Some(Arc::new(ContinuationClaim::new(
+                        &self.store,
+                        &context.attempt_id,
+                        &claimed.binding_id,
+                    ))),
+                    None => {
+                        return Err(self.terminal(
+                                "continuation_mismatch",
+                                format!(
+                                    "exact resume of '{}' lost the atomic claim: another attempt owns the continuation at conversation '{}' parent '{}' position {history}",
+                                    binding.vendor_session_id,
+                                    scope.conversation,
+                                    scope.parent,
+                                    history = scope.history_position,
+                                ),
+                            ));
+                    }
+                }
+            }
+            _ => None,
+        };
+        owner.set_continuation(continuation_claim.clone());
+
         // 9. Spawn the owned process (readers start immediately inside).
         let mut child = match self
             .supervisor
@@ -873,6 +1121,11 @@ impl TaskExecutor for NativeAgentExecutor {
         {
             Ok(child) => child,
             Err(err) => {
+                // Nothing was ever handed to the transport: the claim is
+                // released (Available again), not left dangling (F3-A).
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(false).await;
+                }
                 self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
                     .await;
                 let (code, message) = native_error_code(&err);
@@ -903,6 +1156,10 @@ impl TaskExecutor for NativeAgentExecutor {
         {
             // Post-spawn persistence failure must never leave a running
             // vendor process behind: quarantine-interrupt, reap, settle.
+            // The input never reached the transport — release the claim.
+            if let Some(claim) = &continuation_claim {
+                claim.discharge(false).await;
+            }
             let _ = child.interrupt(InterruptPolicy::Quarantine).await;
             let _ = child.wait().await;
             self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
@@ -917,6 +1174,11 @@ impl TaskExecutor for NativeAgentExecutor {
         let input_bytes = match self.backend.encode_input(&input) {
             Ok(bytes) => bytes,
             Err(refusal) => {
+                // Encoding died before any byte left: provable
+                // non-acceptance — release the claim.
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(false).await;
+                }
                 let _ = child.interrupt(InterruptPolicy::Quarantine).await;
                 let _ = child.wait().await;
                 self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
@@ -926,6 +1188,12 @@ impl TaskExecutor for NativeAgentExecutor {
             }
         };
         if let Some(fault) = child.deliver_input(&input_bytes, true).await.err() {
+            // Bytes entered the transport (possibly partially): from here
+            // the vendor MAY have consumed the prompt — the honest
+            // non-completion disposition is `uncertain`, never release.
+            if let Some(claim) = &continuation_claim {
+                claim.mark_input_accepted();
+            }
             let emission = self
                 .emit(
                     &context,
@@ -934,6 +1202,9 @@ impl TaskExecutor for NativeAgentExecutor {
                 )
                 .await;
             if let Err(error) = emission {
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(true).await;
+                }
                 let _ = child.interrupt(InterruptPolicy::Quarantine).await;
                 let _ = child.wait().await;
                 self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
@@ -941,6 +1212,8 @@ impl TaskExecutor for NativeAgentExecutor {
                 owner.mark_settled();
                 return Err(error);
             }
+        } else if let Some(claim) = &continuation_claim {
+            claim.mark_input_accepted();
         }
 
         // 11. Stream loop with startup/idle/overall bounds and dual cancel.
@@ -978,6 +1251,12 @@ impl TaskExecutor for NativeAgentExecutor {
                     Ok(value) => value,
                     Err(error) => {
                         watcher.abort();
+                        // Persistence died AFTER the input entered the
+                        // transport: the position goes `uncertain`, never
+                        // silently back to available (F3-A).
+                        if let Some(claim) = &continuation_claim {
+                            claim.discharge(true).await;
+                        }
                         let _ = child.interrupt(InterruptPolicy::Quarantine).await;
                         let _ = child.wait().await;
                         self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
@@ -1160,6 +1439,12 @@ impl TaskExecutor for NativeAgentExecutor {
         // 13. Authoritative terminal outcome: the adapter decides (the only
         // component that saw the vendor's root result facts).
         if let Some(detail) = &identity_mismatch {
+            // The vendor spoke under a different identity than the claim
+            // vouches for: input was delivered, so the position is
+            // uncertain, never handed back.
+            if let Some(claim) = &continuation_claim {
+                claim.discharge(true).await;
+            }
             self.settle_cleanup(&context, broker.as_ref(), Some(&plan.per_run_dir))
                 .await;
             owner.mark_settled();
@@ -1185,12 +1470,21 @@ impl TaskExecutor for NativeAgentExecutor {
         };
 
         // 14. Cleanup obligations (always run, bounded, failure is visible).
+        // Review round-4 F5: a NORMAL completion is not proof the owned
+        // process group went away — the supervisor's group reconcile reports
+        // what it could not verify, and that uncertainty must reach the
+        // attempt record alongside the interrupt-receipt and fault sources.
         let cleanup_uncertain = interrupt_receipt
             .as_ref()
             .is_some_and(|receipt| receipt.cleanup_uncertain)
             || transport_faults
                 .iter()
-                .any(|f| f.code == "cleanup_uncertain");
+                .any(|f| f.code == "cleanup_uncertain")
+            || self
+                .supervisor
+                .descendant_cleanup(exit.pid, exit.generation)
+                .as_ref()
+                .is_some_and(|receipt| receipt.cleanup_uncertain);
         let mut cleanup_error = false;
         if tokio::time::timeout(
             Duration::from_millis(self.options.limits.cleanup_timeout_ms.max(1) as u64),
@@ -1218,6 +1512,13 @@ impl TaskExecutor for NativeAgentExecutor {
                 if let Some(bound) = &bound_session
                     && bound != &session_id
                 {
+                    // The result arrived from a session the claim never
+                    // vouched for: the claimed position already ate the
+                    // input — uncertain, never handed back for exact
+                    // resume.
+                    if let Some(claim) = &continuation_claim {
+                        claim.discharge(true).await;
+                    }
                     return Err(self.terminal(
                         "session_identity_mismatch",
                         format!(
@@ -1241,6 +1542,14 @@ impl TaskExecutor for NativeAgentExecutor {
                 // and never converts a completed turn into a failure: the
                 // next turn then honestly falls to Fresh with seeded
                 // ancestry instead of guessing.
+                // Conclusive completion settles the claim: the vendor
+                // consumed the input and the commit below publishes the
+                // NEW active position (the commit's alias sweep retires
+                // the claimed input-position row — self-transition, never
+                // fenced against this task).
+                if let Some(claim) = &continuation_claim {
+                    claim.settle();
+                }
                 if let Some(scope) = &continuation_scope {
                     match self
                         .store
@@ -1311,6 +1620,15 @@ impl TaskExecutor for NativeAgentExecutor {
                 Ok(())
             }
             NativeTerminalOutcome::Interrupted { partial_text } => {
+                // Review round-4 F3-A: interrupted after the input was
+                // handed to the transport — the vendor may have consumed
+                // the prompt and part of the answer. The claimed position
+                // goes `uncertain`: exact resume from the pre-claim
+                // position is refused until reconciled (the consumer's
+                // honest path is a fresh session or reconciliation).
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(claim.accepted()).await;
+                }
                 self.emit(
                     &context,
                     "native.interrupted",
@@ -1336,6 +1654,12 @@ impl TaskExecutor for NativeAgentExecutor {
                 message,
                 partial_text,
             } => {
+                // Non-completion after the input entered the transport
+                // leaves the position uncertain too — a failed turn may
+                // still have advanced the mutable vendor session (F3-A).
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(claim.accepted()).await;
+                }
                 self.emit(
                     &context,
                     "native.failed",
@@ -1385,6 +1709,11 @@ impl TaskExecutor for NativeAgentExecutor {
                 detail,
                 partial_text,
             } => {
+                // An accepted-but-inconclusive turn is the textbook
+                // uncertain case for the ledger too (F3-A).
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(claim.accepted()).await;
+                }
                 self.emit(
                     &context,
                     "native.uncertain",
@@ -1413,6 +1742,9 @@ impl TaskExecutor for NativeAgentExecutor {
                 reason,
                 partial_text,
             } => {
+                if let Some(claim) = &continuation_claim {
+                    claim.discharge(claim.accepted()).await;
+                }
                 self.emit(
                     &context,
                     "native.deferred.blocked",
@@ -1635,7 +1967,55 @@ mod tests {
                 writes: false,
             }],
             limits: None,
+            authorization_policy: None,
         }
+    }
+
+    /// Round-4 F6a contract: the stanza carries the consumer's frozen
+    /// authorization policy as an OPAQUE value (parse-and-preserve;
+    /// `deny_unknown_fields` still refuses anything unnamed).
+    #[test]
+    fn broker_stanza_carries_the_frozen_policy_opaquely() {
+        let with_policy = json!({
+            "serverName": "onemind",
+            "tools": [{"name": "note_search", "inputSchema": {"type": "object"}}],
+            "authorizationPolicy": {
+                "autoApproveReadOnly": false,
+                "approvalTimeoutMs": 300000,
+                "maxCallsPerTurn": 8,
+                "turnDeadlineMs": 300000,
+                "installAllowlist": ["note_search", "note_read"]
+            }
+        });
+        let spec: BrokerSpec = serde_json::from_value(with_policy.clone()).unwrap();
+        assert_eq!(
+            spec.authorization_policy.as_ref().unwrap(),
+            with_policy.get("authorizationPolicy").unwrap(),
+            "the policy travels verbatim — the host never reshapes it"
+        );
+        // Absent stays None (pre-F6a stanzas keep parsing).
+        let without = json!({
+            "serverName": "onemind",
+            "tools": [{"name": "note_search", "inputSchema": {"type": "object"}}]
+        });
+        assert!(
+            serde_json::from_value::<BrokerSpec>(without)
+                .unwrap()
+                .authorization_policy
+                .is_none()
+        );
+        // The gate stays strict for keys nobody declared.
+        let mut rogue = with_policy;
+        rogue["authorizationPolicy"]["injected"] = json!(true);
+        assert!(
+            serde_json::from_value::<BrokerSpec>(rogue.clone()).is_ok(),
+            "the carrier is opaque"
+        );
+        rogue["rogueKey"] = json!(1);
+        assert!(
+            serde_json::from_value::<BrokerSpec>(rogue).is_err(),
+            "deny_unknown_fields still fences the stanza shape"
+        );
     }
 
     fn payload(
@@ -1945,6 +2325,63 @@ mod tests {
         }
     }
 
+    /// Review round-4 F5: a supervisor whose normal-completion group
+    /// reconcile could NOT confirm the owned process group empty. Spawning,
+    /// draining and scoped termination are exactly [`FakeSupervisor`]'s —
+    /// only the F5 read-back differs, so the assertion isolates it. The
+    /// plain `FakeSupervisor` deliberately does NOT implement
+    /// `descendant_cleanup`, pinning the port default (`None` = no report)
+    /// as clean-looking-but-unreported.
+    struct UncertainDescendantSupervisor {
+        inner: FakeSupervisor,
+    }
+
+    #[async_trait]
+    impl ProcessSupervisor for UncertainDescendantSupervisor {
+        async fn spawn(
+            &self,
+            plan: &LaunchPlan,
+            limits: &ResourceLimits,
+            cancellation: &CancellationToken,
+        ) -> Result<Box<dyn OwnedChildHandle>, NativeError> {
+            self.inner.spawn(plan, limits, cancellation).await
+        }
+        async fn drain_owned(
+            &self,
+            policy: InterruptPolicy,
+        ) -> Vec<agentkit_native::InterruptReceipt> {
+            self.inner.drain_owned(policy).await
+        }
+        async fn terminate_owned(
+            &self,
+            pid: u32,
+            generation: u64,
+            policy: InterruptPolicy,
+        ) -> Option<agentkit_native::InterruptReceipt> {
+            self.inner.terminate_owned(pid, generation, policy).await
+        }
+        fn descendant_cleanup(
+            &self,
+            pid: u32,
+            generation: u64,
+        ) -> Option<agentkit_native::InterruptReceipt> {
+            if pid != 4242 || generation != 7 {
+                return None;
+            }
+            Some(agentkit_native::InterruptReceipt {
+                terminated: true,
+                escalated_to_sigterm: true,
+                escalated_to_sigkill: true,
+                cleanup_uncertain: true,
+                detail: Some(
+                    "policy=normalCompletion; 1 process-group member(s) survived SIGKILL: \
+                     descendants unverified"
+                        .to_owned(),
+                ),
+            })
+        }
+    }
+
     struct FakeLocator;
 
     #[async_trait]
@@ -2104,10 +2541,15 @@ mod tests {
         }
 
         fn executor(&self) -> NativeAgentExecutor {
-            let backend = Arc::new(FakeBackend {
+            self.executor_with(Arc::new(FakeSupervisor {
                 shared: self.shared.clone(),
-            });
-            let supervisor = Arc::new(FakeSupervisor {
+            }))
+        }
+
+        /// Round-4 F5: the same executor over a caller-chosen supervisor, so
+        /// a test can vary only the supervisor's descendant-cleanup report.
+        fn executor_with(&self, supervisor: Arc<dyn ProcessSupervisor>) -> NativeAgentExecutor {
+            let backend = Arc::new(FakeBackend {
                 shared: self.shared.clone(),
             });
             NativeAgentExecutor::new(
@@ -2202,6 +2644,108 @@ mod tests {
             [b"hello".to_vec()]
         );
         assert_eq!(h.shared.spawn_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// Round-4 F5: an unconfirmed normal-completion process-group reconcile
+    /// must reach the durable attempt record as `cleanupUncertain: true`.
+    /// No interrupt ladder ran and no transport fault occurred, so the
+    /// supervisor's read-back is the ONLY possible source of the flag.
+    #[tokio::test]
+    async fn unconfirmed_descendant_cleanup_marks_completed_attempt_uncertain() {
+        let h = harness();
+        h.shared.queue(&[
+            r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#,
+            r#"{"e":"delta","t":"hel"}"#,
+            r#"{"e":"delta","t":"lo"}"#,
+        ]);
+        h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        let executor = h.executor_with(Arc::new(UncertainDescendantSupervisor {
+            inner: FakeSupervisor {
+                shared: h.shared.clone(),
+            },
+        }));
+        executor
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .expect("the turn itself completes normally");
+        let completed = h
+            .store
+            .events("t1", None, 4096)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|record| {
+                record.event["type"]
+                    .as_str()
+                    .is_some_and(|t| t.ends_with("native.completed"))
+            })
+            .expect("a completed attempt record");
+        assert!(
+            h.shared.interrupts.lock().unwrap().is_empty(),
+            "no ladder ran: the supervisor report alone must set the flag"
+        );
+        assert_eq!(
+            completed.event["data"]["cleanupUncertain"],
+            json!(true),
+            "unverified descendants must be visible uncertainty on a completed turn: {:?}",
+            completed.event
+        );
+    }
+
+    /// Round-4 F5 (pinned default): a supervisor that reports nothing — the
+    /// port default, what every pre-existing implementor gets — leaves a
+    /// completed turn's record clean, exactly as before the F5 wiring.
+    #[tokio::test]
+    async fn reported_nothing_keeps_completed_attempt_certain() {
+        let h = harness();
+        h.shared.queue(&[
+            r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#,
+            r#"{"e":"delta","t":"hel"}"#,
+            r#"{"e":"delta","t":"lo"}"#,
+        ]);
+        h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        h.executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .expect("the turn completes normally");
+        let completed = h
+            .store
+            .events("t1", None, 4096)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|record| {
+                record.event["type"]
+                    .as_str()
+                    .is_some_and(|t| t.ends_with("native.completed"))
+            })
+            .expect("a completed attempt record");
+        assert_eq!(
+            completed.event["data"]["cleanupUncertain"],
+            json!(false),
+            "no report and no fault must stay certain: {:?}",
+            completed.event
+        );
     }
 
     #[tokio::test]
@@ -3540,5 +4084,424 @@ mod tests {
         // the behaviour outside callers (HTTP admission) condition on.
         assert!(!dispatcher.handles_verification());
         assert!(dispatcher.resolves_provider_snapshots());
+    }
+
+    // ----- review round-4 F3: claim-scoped continuation ownership -----
+
+    /// Publish one ACTIVE binding at the INPUT position
+    /// (`conversation`, `parent`, `position`) of a follow-up turn: a
+    /// fresh scoped turn submitted from just before it completes and
+    /// commits there, then settles.
+    async fn publish_input_position(
+        h: &Harness,
+        conversation: &str,
+        parent: &str,
+        position: i64,
+        session: &str,
+    ) -> String {
+        let source_parent = format!("{parent}:before");
+        let seeding = ContinuationScope {
+            commit_parent: parent.into(),
+            commit_history_position: position,
+            ..scope(conversation, &source_parent, position - 1)
+        };
+        h.shared
+            .queue(&[format!(r#"{{"e":"init","s":"{session}","m":"sonnet-x"}}"#).as_str()]);
+        h.shared.set_outcome(Shared::completed(session, "seeded"));
+        h.submit(
+            "t-seed",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+                Some(&seeding),
+            ),
+        )
+        .await;
+        let claimed = h.claim("t-seed").await;
+        h.executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .expect("seeding turn completes");
+        h.store
+            .settle(agentkit_store::SettleTask {
+                fence: claimed.lease.fence(),
+                now: h.runtime.now_ms(),
+                status: agentkit_store::TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            })
+            .await
+            .unwrap();
+        claimed.lease.attempt_id
+    }
+
+    #[tokio::test]
+    async fn interrupted_after_input_attempt_cannot_exact_resume_preclaim_position() {
+        // Review round-4 F3-A reproduced: complete a turn recording its
+        // vendor session, resume that session for a follow-up, deliver
+        // the prompt, receive PARTIAL output, then interrupt. The input
+        // position the interrupted attempt claimed must never present as
+        // available for an exact resume again — the vendor session
+        // already consumed the prompt and part of the answer.
+        let h = harness();
+        let seeding_attempt =
+            publish_input_position(&h, "convo-f3a", "msg-1", 1, "vendor-f3a").await;
+        assert!(
+            h.store
+                .active_continuation(
+                    "convo-f3a",
+                    "msg-1",
+                    1,
+                    BACKEND,
+                    "/usr/bin/claude",
+                    "cfg-digest",
+                    None
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "the input position is resumable before the claim"
+        );
+
+        let input = turn_input(TurnResume::Exact {
+            vendor_session_id: "vendor-f3a".into(),
+        });
+        h.submit(
+            "t1",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&scope("convo-f3a", "msg-1", 1)),
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        // Partial output, no root result, then a durable user stop.
+        h.shared.queue(&[r#"{"e":"delta","t":"half"}"#]);
+        h.shared.hang.store(true, Ordering::SeqCst);
+        h.shared.set_outcome(NativeTerminalOutcome::Interrupted {
+            partial_text: Some("half".into()),
+        });
+        let interruption = CancellationToken::new();
+        interruption.cancel();
+        let (code, _) = Harness::failure(
+            h.executor()
+                .execute(h.context(&claimed, CancellationToken::new(), interruption))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(code.as_deref(), Some("native_interrupted"));
+        assert!(
+            !h.shared.delivered.lock().unwrap().is_empty(),
+            "the input WAS delivered"
+        );
+
+        // The claimed position is now `uncertain`: never available, and
+        // the committing attempt's audit row says so honestly.
+        assert!(
+            h.store
+                .active_continuation(
+                    "convo-f3a",
+                    "msg-1",
+                    1,
+                    BACKEND,
+                    "/usr/bin/claude",
+                    "cfg-digest",
+                    None
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "an interrupted attempt's pre-claim position is not available"
+        );
+        assert!(
+            h.store
+                .resumable_continuation(
+                    "convo-f3a",
+                    "msg-1",
+                    1,
+                    BACKEND,
+                    "/usr/bin/claude",
+                    "cfg-digest",
+                    None,
+                    &claimed.lease.attempt_id
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "not even the claimant may exact-resume it"
+        );
+        let row = h
+            .store
+            .continuation_for_attempt(&seeding_attempt)
+            .await
+            .unwrap()
+            .expect("row kept for audit");
+        assert_eq!(
+            row.state, "uncertain",
+            "interruption after input is uncertain"
+        );
+
+        // A follow-up asking for the exact resume is refused from the
+        // ledger — no second spawn from the consumed session.
+        h.submit(
+            "t2",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&scope("convo-f3a", "msg-1", 1)),
+            ),
+        )
+        .await;
+        let claimed2 = h.claim("t2").await;
+        let (code, _) = Harness::failure(
+            h.executor()
+                .execute(h.context(
+                    &claimed2,
+                    CancellationToken::new(),
+                    CancellationToken::new(),
+                ))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(code.as_deref(), Some("continuation_mismatch"));
+        assert_eq!(
+            h.shared.spawn_count.load(Ordering::SeqCst),
+            2,
+            "only the seeding turn and the interrupted attempt ever spawned"
+        );
+    }
+
+    #[tokio::test]
+    async fn retired_continuations_refuse_the_same_task_resume() {
+        // Review round-4 F3-B reproduced (OneMind Resume, engine.resume
+        // on the SAME task): the task's own observed session proves
+        // identity only. Once the conversation's continuations are
+        // retired, the same-task resume path must NOT respawn from the
+        // stale vendor session — the ledger is the authority.
+        let h = harness();
+        publish_input_position(&h, "convo-f3b", "msg-1", 1, "vendor-f3b").await;
+        let input = turn_input(TurnResume::Exact {
+            vendor_session_id: "vendor-f3b".into(),
+        });
+        h.submit(
+            "t1",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&scope("convo-f3b", "msg-1", 1)),
+            ),
+        )
+        .await;
+        let attempt1 = h.claim("t1").await;
+        // The first attempt observes the identity, delivers the prompt,
+        // and ends inconclusively (uncertain — no root result, input
+        // accepted: the discharge marks the claim uncertain).
+        h.shared.queue(&[
+            r#"{"e":"init","s":"vendor-f3b","m":"sonnet-x"}"#,
+            r#"{"e":"delta","t":"partial"}"#,
+        ]);
+        h.shared.set_outcome(NativeTerminalOutcome::Uncertain {
+            class: FailureClass::ExitWithoutResult,
+            detail: "review fixture: exited without a root result".into(),
+            partial_text: None,
+        });
+        h.executor()
+            .execute(h.context(
+                &attempt1,
+                CancellationToken::new(),
+                CancellationToken::new(),
+            ))
+            .await
+            .expect_err("no scripted outcome is never a success");
+        assert!(
+            h.store
+                .current_native_binding("t1")
+                .await
+                .unwrap()
+                .is_some(),
+            "the task-local observation persists for the retry"
+        );
+
+        // The runner retries the SAME task (attempt 2), then the branch
+        // retirement puts every continuation of the conversation out of
+        // service (OneMind / user deletes the branch).
+        h.store
+            .retry_task(agentkit_store::RetryTask {
+                fence: attempt1.lease.fence(),
+                now: h.runtime.now_ms(),
+                available_at: h.runtime.now_ms(),
+                max_attempts: 5,
+                error: "inconclusive vendor outcome".into(),
+            })
+            .await
+            .unwrap();
+        h.store.retire_continuations("convo-f3b").await.unwrap();
+
+        let attempt2 = h.claim("t1").await;
+        assert_ne!(attempt2.lease.attempt_id, attempt1.lease.attempt_id);
+        let spawned_before = h.shared.spawn_count.load(Ordering::SeqCst);
+        let (code, _) = Harness::failure(
+            h.executor()
+                .execute(h.context(
+                    &attempt2,
+                    CancellationToken::new(),
+                    CancellationToken::new(),
+                ))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(
+            code.as_deref(),
+            Some("continuation_mismatch"),
+            "the observed shortcut must not outlive the ledger"
+        );
+        assert_eq!(
+            h.shared.spawn_count.load(Ordering::SeqCst),
+            spawned_before,
+            "no spawn from the retired session"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_current_tasks_one_binding_exactly_one_claim_winner() {
+        // Review round-4 F3-C reproduced: two current tasks for the same
+        // conversation position must never both start from the same
+        // exact binding. The atomic claim (store-level CAS) has exactly
+        // one winner; the loser takes the fresh-session decision.
+        let h = harness();
+        publish_input_position(&h, "convo-f3c", "msg-1", 1, "vendor-f3c").await;
+        let input = turn_input(TurnResume::Exact {
+            vendor_session_id: "vendor-f3c".into(),
+        });
+        let scope = scope("convo-f3c", "msg-1", 1);
+        h.submit(
+            "t-a",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&scope),
+            ),
+        )
+        .await;
+        h.submit(
+            "t-b",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&scope),
+            ),
+        )
+        .await;
+        let claim_a = h.claim("t-a").await;
+        let claim_b = h.claim("t-b").await;
+
+        // Task A takes the claim first (the concurrent winner).
+        let won = h
+            .store
+            .claim_continuation(
+                "convo-f3c",
+                "msg-1",
+                1,
+                BACKEND,
+                "/usr/bin/claude",
+                "cfg-digest",
+                None,
+                "t-a",
+                &claim_a.lease.attempt_id,
+                h.runtime.now_ms(),
+            )
+            .await
+            .unwrap()
+            .expect("the first claim wins");
+        assert_eq!(won.state, "owned");
+
+        // Task B's executor must not consume it: refused from the ledger,
+        // zero OS contact.
+        let (code, _) = Harness::failure(
+            h.executor()
+                .execute(h.context(&claim_b, CancellationToken::new(), CancellationToken::new()))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(code.as_deref(), Some("continuation_mismatch"));
+        assert_eq!(
+            h.shared.spawn_count.load(Ordering::SeqCst),
+            1,
+            "the loser never spawns (the only spawn so far is the seeding turn)"
+        );
+
+        // The winner runs its turn normally (claim re-entry is
+        // idempotent) and completes.
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-f3c","m":"sonnet-x"}"#]);
+        h.shared
+            .set_outcome(Shared::completed("vendor-f3c", "continued"));
+        h.executor()
+            .execute(h.context(&claim_a, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .expect("the claim winner resumes normally");
+        assert_eq!(
+            h.shared.spawn_count.load(Ordering::SeqCst),
+            2,
+            "seed + winner"
+        );
+        assert!(
+            h.store
+                .active_continuation(
+                    "convo-f3c",
+                    "msg-1:answer",
+                    2,
+                    BACKEND,
+                    "/usr/bin/claude",
+                    "cfg-digest",
+                    None
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "completion publishes the new active position"
+        );
+    }
+
+    #[tokio::test]
+    async fn contradictory_continuation_identity_is_refused_before_spawn() {
+        // Review round-4 F8-b at the executor boundary: a frozen scope
+        // whose configuration identity contradicts the frozen target is
+        // refused at claim, before any OS contact.
+        let h = harness();
+        let input = turn_input(TurnResume::Exact {
+            vendor_session_id: "vendor-x".into(),
+        });
+        let drifted = ContinuationScope {
+            config_identity: "cfg-other".into(),
+            ..scope("convo-f8b", "msg-1", 1)
+        };
+        h.submit(
+            "t1",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &input,
+                None,
+                Some(&drifted),
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        let (code, _) = Harness::failure(
+            h.executor()
+                .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(code.as_deref(), Some("continuation_scope_mismatch"));
+        assert_eq!(h.shared.spawn_count.load(Ordering::SeqCst), 0);
     }
 }

@@ -11,8 +11,13 @@
 //!    "mcp_servers":[..],"capabilities":[S]?,"claude_code_version":S?}`
 //! * `{"type":"assistant","message":{"content":[{"type":"text","text":S} |
 //!    {"type":"tool_use","id":S,"name":S,"input":V} |
-//!    {"type":"thinking","thinking":S}]},"session_id":S,
-//!    "parent_tool_use_id":S|null}`
+//!    {"type":"thinking","thinking":S} |
+//!    {"type":"redacted_thinking","data":V}]},"session_id":S,
+//!    "parent_tool_use_id":S|null}` — a `redacted_thinking` block is the
+//!   public SDK's withheld-reasoning block: it normalizes to an opaque
+//!   marker ([`ClaudeStreamAdapter::redacted_thinking_markers`]), never to
+//!   reasoning or visible text, and never stops its sibling blocks
+//!   (review round-4 F9)
 //! * `{"type":"user","message":{"content":[{"type":"tool_result",
 //!    "tool_use_id":S,..}]},"session_id":S,"parent_tool_use_id":S?}`
 //! * `{"type":"stream_event","event":{"type":"content_block_delta",
@@ -22,6 +27,10 @@
 //! * `{"type":"system","subtype":"permission_denied","tool_name":S?}`
 //! * `{"type":"system","subtype":"status","status":S|null}`
 //! * `{"type":"system","subtype":"compact_boundary","trigger":S?}`
+//! * `{"type":"system","subtype":"model_refusal_no_fallback",...}` — the
+//!   documented refusal-without-fallback notification: informational only
+//!   ([`NativeEvent::Warning`]); the root `result` frame stays the sole
+//!   terminal authority (review round-4 F9)
 //! * `{"type":"rate_limit_event","rate_limit_info":{"status":S,
 //!    "resetsAt":N?,"utilization":F?,"rateLimitType":S?},"session_id":S?}`
 //!   — the public Agent SDK shape (`SDKRateLimitEvent`); the older
@@ -142,6 +151,14 @@ pub struct ClaudeStreamAdapter {
     /// Last non-`stream_event` raw line, for idempotent duplicate-frame
     /// tolerance (a byte-identical repeat is a no-op).
     last_frame: Option<String>,
+    /// Opaque markers for redacted-thinking blocks (review round-4 F9):
+    /// the vendor withholds the reasoning content, so only the block's own
+    /// opaque payload is retained, never rendered as reasoning or
+    /// user-visible text and never reconstructed. Bounded like every other
+    /// retained vendor payload; the dropped counter records what the cap
+    /// discarded.
+    redacted_thinking: Vec<Value>,
+    redacted_thinking_dropped: usize,
 }
 
 impl ClaudeStreamAdapter {
@@ -241,6 +258,34 @@ impl ClaudeStreamAdapter {
     /// Root `result` frame facts, once observed.
     pub fn result_evidence(&self) -> Option<ResultEvidence> {
         self.root_result.clone()
+    }
+
+    /// Opaque retained markers for withheld redacted-thinking blocks
+    /// (review round-4 F9): the vendor's block payload kept verbatim as an
+    /// opaque value. Never decoded into reasoning or user-visible text; no
+    /// field of the block is required to exist.
+    pub fn redacted_thinking_markers(&self) -> &[Value] {
+        &self.redacted_thinking
+    }
+
+    /// How many redacted-thinking markers exceeded the retention cap: a
+    /// nonzero count means the marker list is a prefix, never the whole
+    /// turn (unknown is never presented as zero).
+    pub fn redacted_thinking_dropped(&self) -> usize {
+        self.redacted_thinking_dropped
+    }
+
+    /// Normalize one withheld redacted-thinking block to an opaque marker
+    /// (review round-4 F9): retained verbatim as an opaque value with NO
+    /// field requirements (the opaque payload is never required to be
+    /// present, parseable, or well-typed), and never routed into the text
+    /// accumulator or the reasoning channel.
+    fn record_redacted_thinking(&mut self, block: &Value) {
+        if self.redacted_thinking.len() < MAX_REDACTED_MARKERS {
+            self.redacted_thinking.push(block.clone());
+        } else {
+            self.redacted_thinking_dropped += 1;
+        }
     }
 }
 
@@ -357,6 +402,18 @@ impl ClaudeStreamAdapter {
                     .to_owned();
                 Ok(vec![NativeEvent::PermissionDenied { tool_name }])
             }
+            // Documented refusal-without-fallback notification (review
+            // round-4 F9): the vendor says this model refused and no
+            // fallback was applied. Informational progress, shaped like the
+            // other non-fatal vendor notices: it never terminates the
+            // stream and never becomes a terminal outcome — the root
+            // `result` frame stays the sole authority (AGENTKIT-111/116).
+            "model_refusal_no_fallback" => Ok(vec![NativeEvent::Warning {
+                code: "model_refusal_no_fallback".to_owned(),
+                message: "vendor reported a model refusal with no fallback model; \
+                          the root result frame remains the terminal authority"
+                    .to_owned(),
+            }]),
             // Hook lifecycle, plugin-install and tool-progress system
             // frames are additive progress metadata; correctness of the
             // turn does not depend on them (AGENTKIT-111 tolerance list).
@@ -463,6 +520,17 @@ impl ClaudeStreamAdapter {
                         .to_owned();
                     if parent.is_none() {
                         events.push(NativeEvent::ReasoningDelta { text });
+                    }
+                }
+                // Public SDK withheld-reasoning block (review round-4 F9):
+                // accepted as an opaque marker only. No field of the block
+                // is required (the opaque payload may be absent or
+                // malformed), nothing is reconstructed or displayed as
+                // reasoning, and sibling blocks keep processing normally,
+                // so the visible answer after it still surfaces.
+                "redacted_thinking" => {
+                    if parent.is_none() {
+                        self.record_redacted_thinking(block);
                     }
                 }
                 other => {
@@ -864,6 +932,11 @@ fn result_denials(frame: &Value) -> Vec<String> {
 /// into the bare subtype).
 const MAX_ERROR_DETAILS: usize = 8;
 const MAX_ERROR_DETAIL_CHARS: usize = 300;
+
+/// Cap on retained redacted-thinking opaque markers per turn (review
+/// round-4 F9): the markers are durable evidence about withheld content,
+/// and an unbounded vendor payload is neither storable nor displayable.
+const MAX_REDACTED_MARKERS: usize = 32;
 
 /// Collect vendor `errors[]` details from an error `result` frame. String
 /// entries are kept as-is; object entries contribute their most
@@ -1729,6 +1802,145 @@ mod tests {
                 text: "considering".into()
             }]
         );
+    }
+
+    /// Review round-4 F9 (public SDK contract): a withheld redacted-thinking
+    /// block inside an assistant message must never reject the message —
+    /// the visible sibling text still surfaces, and the withheld block is
+    /// carried only as an opaque marker.
+    #[test]
+    fn redacted_thinking_block_is_opaque_and_never_blocks_visible_text() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        let line = r#"{"type":"assistant","message":{"id":"msg_r","content":[{"type":"redacted_thinking","data":"AQoeb3BhcXVlLXBheWxvYWQ=","signature":null},{"type":"text","text":"visible answer"}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        let events = push(&mut adapter, line);
+        assert_eq!(
+            events,
+            vec![NativeEvent::MessageCompleted {
+                text: "visible answer".into()
+            }],
+            "the withheld block contributes no event of its own"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, NativeEvent::ReasoningDelta { .. })),
+            "withheld reasoning must never surface as reasoning text"
+        );
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("visible answer"),
+            "the visible answer after the withheld block survives"
+        );
+        // Carried verbatim as an opaque marker: payload preserved untouched,
+        // nothing displayed.
+        assert_eq!(
+            adapter.redacted_thinking_markers(),
+            &[serde_json::json!({
+                "type": "redacted_thinking",
+                "data": "AQoeb3BhcXVlLXBheWxvYWQ=",
+                "signature": null
+            })]
+        );
+        assert_eq!(adapter.redacted_thinking_dropped(), 0);
+        // The withheld block never becomes a terminal fact.
+        assert!(!adapter.saw_root_result());
+
+        // Opaque means opaque: a block with no payload at all, and one with
+        // a payload of an arbitrary shape, are both accepted.
+        let mut adapter = ClaudeStreamAdapter::new();
+        let bare = r#"{"type":"assistant","message":{"content":[{"type":"redacted_thinking"},{"type":"text","text":"still answered"}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        let events = push(&mut adapter, bare);
+        assert_eq!(
+            events,
+            vec![NativeEvent::MessageCompleted {
+                text: "still answered".into()
+            }]
+        );
+        assert_eq!(
+            adapter.redacted_thinking_markers(),
+            &[serde_json::json!({"type": "redacted_thinking"})]
+        );
+        let weird = r#"{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":[1,"two",null]}]},"session_id":"sess-1","parent_tool_use_id":null}"#;
+        assert!(
+            push(&mut adapter, weird).is_empty(),
+            "a withheld block is not content"
+        );
+        assert_eq!(
+            adapter.redacted_thinking_markers()[1],
+            serde_json::json!({"type": "redacted_thinking", "data": [1, "two", null]})
+        );
+        assert_eq!(
+            adapter.partial_text().as_deref(),
+            Some("still answered"),
+            "the opaque marker never enters the text accumulator"
+        );
+
+        // Child-scoped withheld blocks never enter the root marker list.
+        let child = r#"{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"x"}]},"session_id":"sess-1","parent_tool_use_id":"toolu_parent"}"#;
+        assert!(push(&mut adapter, child).is_empty());
+        assert_eq!(adapter.redacted_thinking_markers().len(), 2);
+    }
+
+    /// Review round-4 F9: the documented `model_refusal_no_fallback` system
+    /// notification is informational — it never errors the stream and never
+    /// becomes a terminal outcome; the root `result` frame stays the
+    /// authority.
+    #[test]
+    fn model_refusal_no_fallback_is_informational_until_the_result() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        let refusal = r#"{"type":"system","subtype":"model_refusal_no_fallback","model":"claude-sonnet-4-5","session_id":"sess-1"}"#;
+        let events = adapter
+            .push_line(refusal.as_bytes())
+            .expect("documented refusal notification is never a parse error");
+        assert_eq!(
+            events,
+            vec![NativeEvent::Warning {
+                code: "model_refusal_no_fallback".to_owned(),
+                message: "vendor reported a model refusal with no fallback model; \
+                          the root result frame remains the terminal authority"
+                    .to_owned(),
+            }],
+            "mirrors the non-fatal vendor-notice shape"
+        );
+        // No terminal authority: a clean exit with only progress frames
+        // stays Uncertain, and no result was observed.
+        assert!(!adapter.saw_root_result());
+        match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
+            NativeTerminalOutcome::Uncertain { .. } => {}
+            other => panic!("a refusal notice must not complete a turn: {other:?}"),
+        }
+        // The authoritative result frame still decides: refusal notice
+        // followed by a valid success completes normally.
+        for line in [DELTA_HEL, DELTA_LO, MSG_HELLO, RESULT_OK] {
+            push(&mut adapter, line);
+        }
+        match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
+            NativeTerminalOutcome::Completed { text, .. } => assert_eq!(text, "Hello"),
+            other => panic!("expected Completed after the refusal notice, got {other:?}"),
+        }
+        // A refusal followed by an error result fails on the result's facts
+        // alone.
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        push(&mut adapter, refusal);
+        push(&mut adapter, DELTA_HEL);
+        push(
+            &mut adapter,
+            &result_line("error_during_execution", true, Some("model refused")),
+        );
+        match adapter.terminal_outcome(&exit_with(Some(1), None, false)) {
+            NativeTerminalOutcome::Failed { class, .. } => {
+                assert_eq!(class, FailureClass::Internal)
+            }
+            other => panic!("the result frame stays authoritative, got {other:?}"),
+        }
+        // Unknown subtypes stay strict next to the new accepted one.
+        let err = adapter
+            .push_line(r#"{"type":"system","subtype":"model_refusal_fallback"}"#.as_bytes())
+            .expect_err("undocumented subtype stays a violation");
+        assert_eq!(err.code, "unknown_subtype");
     }
 
     #[test]

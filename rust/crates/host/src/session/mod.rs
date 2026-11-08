@@ -749,6 +749,10 @@ impl AgentSessionService {
                     &input.content,
                     input.input_id.as_deref(),
                     input.frozen_payload.as_ref(),
+                    // A direct (reject) turn is a follow-up in admission
+                    // terms: the replay digest must be computed under the
+                    // same kind a follow-up replay would use (F8-a).
+                    QueueKind::FollowUp,
                 )
                 .await;
         }
@@ -1974,6 +1978,7 @@ impl AgentSessionService {
                 &content,
                 intent.input_id.as_deref(),
                 frozen,
+                kind,
             )
             .await
         {
@@ -2042,10 +2047,7 @@ impl AgentSessionService {
         // input stores (`queue_content` / `read_input_content` shape). The
         // frozen native stanza rides the same durable envelope: a queued
         // input flushes with the identical admission bytes it was sent with.
-        let mut envelope = json!({"content": content});
-        if let Some(frozen) = frozen {
-            envelope["frozen"] = Value::Object(frozen.clone());
-        }
+        let envelope = self.admission_envelope(&content, frozen);
         let candidate = self
             .stage_candidate(
                 session_id,
@@ -2106,10 +2108,7 @@ impl AgentSessionService {
         if let Some(existing) = self.store().get_input(input_id.to_owned()).await? {
             // createInput is the idempotency check: same input (content AND
             // frozen stanza) replays, a different one is `input_conflict`.
-            let mut envelope = json!({"content": content.clone()});
-            if let Some(stanza) = frozen {
-                envelope["frozen"] = Value::Object(stanza.clone());
-            }
+            let envelope = self.admission_envelope(content, frozen);
             let (record, _) = self
                 .store()
                 .create_input(
@@ -2130,12 +2129,34 @@ impl AgentSessionService {
                 .await?;
             return Ok(Some(self.receipt_of(record).await?));
         }
+        // No input row: an IMMEDIATE admission is its own idempotency
+        // record — the turn itself (review round-4 F8-a). The digest
+        // persisted at submit is the SAME queued-path digest over the
+        // SAME envelope; a replay under one input id with swapped content
+        // or frozen bytes conflicts, never silently returns the old turn.
         let turn = self
             .store()
             .get_task(&turn_id_for(input_id))
             .await?
             .filter(|task| task.scope_id == session_id);
-        Ok(turn.map(turn_result))
+        match turn {
+            Some(task) => {
+                if let Some(recorded) = task.payload.get("admissionDigest").and_then(Value::as_str)
+                {
+                    let digest = self.admission_digest(kind, content, frozen);
+                    if digest != recorded {
+                        return Err(SessionError::new(
+                            "input_conflict",
+                            format!(
+                                "input {input_id} is already admitted under different content or frozen bytes"
+                            ),
+                        ));
+                    }
+                }
+                Ok(Some(turn_result(task)))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn receipt_of(&self, record: AgentInputRecord) -> SessionResult<AgentSendResult> {
@@ -2158,6 +2179,32 @@ impl AgentSessionService {
     fn hash_of(&self, kind: QueueKind, envelope: &Value) -> String {
         let hashed = json!({"kind": kind.as_str(), "envelope": envelope});
         sha256_hex(&serde_json::to_string(&hashed).unwrap_or_else(|_| "{}".into()))
+    }
+
+    /// The admission envelope — the ONE field set idempotency digests:
+    /// the input content plus the frozen native stanza (review round-4
+    /// F8-a). The queued path stores it on the input row; the immediate
+    /// turn path digests it into the task payload. Both compare through
+    /// `hash_of` over this same builder — one field list, no drift
+    /// between the two admission shapes.
+    fn admission_envelope(&self, content: &Value, frozen: Option<&Map<String, Value>>) -> Value {
+        let mut envelope = json!({"content": content.clone()});
+        if let Some(frozen) = frozen {
+            envelope["frozen"] = Value::Object(frozen.clone());
+        }
+        envelope
+    }
+
+    /// The idempotency digest of one admission, shared by the queued and
+    /// the immediate path (F8-a): same input id, different bytes (content
+    /// OR frozen target) is a conflict under both shapes.
+    fn admission_digest(
+        &self,
+        kind: QueueKind,
+        content: &Value,
+        frozen: Option<&Map<String, Value>>,
+    ) -> String {
+        self.hash_of(kind, &self.admission_envelope(content, frozen))
     }
 
     /// Validate native admission BEFORE it becomes durable (AGENTKIT-112,
@@ -2262,6 +2309,7 @@ impl AgentSessionService {
         content: &Value,
         input_id: Option<&str>,
         frozen: Option<&Map<String, Value>>,
+        kind: QueueKind,
     ) -> SessionResult<AgentSendResult> {
         // Native admission is validated BEFORE the first mint: a malformed
         // or incomplete stanza is refused at send time, never discovered
@@ -2289,6 +2337,17 @@ impl AgentSessionService {
             for (key, value) in frozen {
                 map.insert(key.clone(), value.clone());
             }
+        }
+        // The immediate path creates no input row, so the turn itself
+        // carries the admission digest — the SAME digest the queued path
+        // hashes (F8-a): `prior_receipt` compares against it on replay.
+        if input_id.is_some()
+            && let Some(map) = payload.as_object_mut()
+        {
+            map.insert(
+                "admissionDigest".into(),
+                self.admission_digest(kind, content, frozen).into(),
+            );
         }
         let task = SubmitTask {
             task_id: task_id.clone(),

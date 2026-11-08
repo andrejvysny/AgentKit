@@ -496,6 +496,22 @@ pub trait ProcessSupervisor: Send + Sync {
         generation: u64,
         policy: InterruptPolicy,
     ) -> Option<InterruptReceipt>;
+
+    /// Normal-completion group-reconcile read-back (review round-4 F5): the
+    /// honest descendant-cleanup outcome recorded when the owned child with
+    /// this `(pid, generation)` exited on its own (`wait`) — with no
+    /// interrupt ladder to verify the process group. A supervisor that
+    /// could NOT confirm its owned process group empty reports
+    /// `cleanup_uncertain: true`, and the executor must surface that as
+    /// visible uncertainty, never as a clean attempt.
+    ///
+    /// `None` means "no report recorded for that identity", which is NOT a
+    /// claim that the group was clean. The default serves supervisors
+    /// without descendant visibility (and every pre-existing implementor,
+    /// untouched): an honest supervisor overrides this.
+    fn descendant_cleanup(&self, _pid: u32, _generation: u64) -> Option<InterruptReceipt> {
+        None
+    }
 }
 
 /// Convenience: collect adapter events until EOF (used by the executor and

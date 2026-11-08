@@ -43,9 +43,28 @@ pub struct NativeContinuationBinding {
     pub vendor_session_id: String,
     pub owning_attempt_id: String,
     pub owning_task_id: String,
-    /// `active` | `superseded` | `retired`.
+    /// `active` | `owned` | `uncertain` | `superseded` | `retired`
+    /// (review round-4 F3). `active` = available for one atomic claim at
+    /// the verified position; `owned` = claimed by exactly one attempt
+    /// (`claimed_attempt_id`) whose input may already have advanced the
+    /// vendor session — never selectable by another attempt; `uncertain` =
+    /// the claiming attempt was interrupted AFTER its input was accepted,
+    /// so exact resume from this pre-claim position is blocked until
+    /// reconciled (or the conversation moves on through a fresh session).
     pub state: String,
     pub committed_at: i64,
+    /// The attempt that holds (or held) the exclusive claim, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_at: Option<i64>,
+    /// Monotonic compare-and-set counter: every claim/release/uncertain/
+    /// reconcile transition bumps it, so a claim keyed on a stale
+    /// generation loses the race instead of overwriting (F3-C: exactly
+    /// one winner).
+    pub generation: i64,
 }
 
 /// Commit input for one continuation binding (frozen facts from the
@@ -140,13 +159,20 @@ impl crate::SqliteStore {
             owning_task_id: input.owning_task_id,
             state: "active".into(),
             committed_at: input.committed_at,
+            claimed_attempt_id: None,
+            claimed_task_id: None,
+            claimed_at: None,
+            generation: 0,
         };
         let expected = binding.clone();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             if let Some(existing) = read_continuation(&transaction, &expected.binding_id)? {
-                // Idempotent re-commit by the owning attempt only.
-                if existing == expected {
+                // Idempotent re-commit by the owning attempt only. The
+                // frozen facts (everything the COMMIT attested) decide
+                // identity; claim columns and generation are ledger
+                // bookkeeping around them, never commit facts.
+                if frozen_facts(&existing) == frozen_facts(&expected) {
                     return Ok(existing);
                 }
                 if existing.owning_attempt_id == expected.owning_attempt_id {
@@ -174,8 +200,12 @@ impl crate::SqliteStore {
                     "continuation commit refused: owning attempt lacks current authority ({gap})"
                 )));
             }
-            // Supersede prior active bindings on the same scope key —
-            // fenced on the prior owner having settled.
+            // Supersede prior non-terminal bindings on the same scope key —
+            // fenced on the prior owner having settled (a claim an
+            // interrupted attempt left `owned`/`uncertain` is retired here
+            // too, not only successful completions — review round-4 F3-A:
+            // retirement of older positions must cover interrupted
+            // attempts).
             let scope_key = (
                 expected.conversation.clone(),
                 expected.parent.clone(),
@@ -185,20 +215,22 @@ impl crate::SqliteStore {
                 expected.config_identity.clone(),
                 expected.system_prompt_revision.clone(),
             );
-            let prior = find_active(&transaction, &scope_key)?;
+            let prior = find_open(&transaction, &scope_key)?;
             for prior in prior
                 .into_iter()
                 .filter(|prior| prior.binding_id != expected.binding_id)
             {
-                retire_prior(&transaction, &prior)?;
+                retire_prior(&transaction, &prior, &expected.owning_task_id)?;
             }
             // A vendor session is a MUTABLE cursor: advancing it to a new
-            // conversation position retires every OTHER active alias to
-            // the same session (older input positions must never remain
-            // resumable alongside the advanced one — review §2.3).
+            // conversation position retires every OTHER open alias to the
+            // same session (older input positions must never remain
+            // resumable alongside the advanced one — review §2.3; and an
+            // interrupted attempt's claimed/uncertain alias is retired by
+            // this sweep too, review round-4 F3-A).
             let aliases = {
                 let mut statement = transaction.prepare(
-                    "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE conversation=?1 AND vendor_session_id=?2 AND state='active' AND binding_id!=?3",
+                    "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at, claimed_attempt_id, claimed_task_id, claimed_at, generation FROM native_continuations WHERE conversation=?1 AND vendor_session_id=?2 AND state IN ('active','owned','uncertain') AND binding_id!=?3",
                 )?;
                 let rows = statement.query_map(
                     params![expected.conversation, expected.vendor_session_id, expected.binding_id],
@@ -207,10 +239,10 @@ impl crate::SqliteStore {
                 rows.map(|row| row.map_err(StoreError::from)).collect::<Result<Vec<_>>>()?
             };
             for alias in aliases {
-                retire_prior(&transaction, &alias)?;
+                retire_prior(&transaction, &alias, &expected.owning_task_id)?;
             }
             transaction.execute(
-                "INSERT INTO native_continuations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO native_continuations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 params![
                     expected.binding_id,
                     expected.conversation,
@@ -225,6 +257,10 @@ impl crate::SqliteStore {
                     expected.owning_task_id,
                     expected.state,
                     expected.committed_at,
+                    expected.claimed_attempt_id,
+                    expected.claimed_task_id,
+                    expected.claimed_at,
+                    expected.generation,
                 ],
             )?;
             transaction.commit()?;
@@ -275,6 +311,234 @@ impl crate::SqliteStore {
         .await
     }
 
+    /// Atomically reserve the binding at one exact scope for ONE attempt
+    /// (review round-4 F3): `active → owned` as a generation-keyed
+    /// compare-and-set inside a single transaction, fenced on the
+    /// claimant holding CURRENT lease authority over its task. Exactly one
+    /// concurrent claim wins (`Ok(Some)`); every loser observes `Ok(None)`
+    /// and must take the fresh-session path — the primitive behind
+    /// OneMind's `exclusive_scope` is repaired here, not assumed (F3-C).
+    /// Re-entry by the attempt that already holds the claim is idempotent.
+    ///
+    /// The claim is what makes an interrupted attempt's input position
+    /// non-resumable: once `owned`, no OTHER lookup may select the binding
+    /// (the vendor session may already have consumed this attempt's
+    /// input), and after an interruption the claimant marks it
+    /// `uncertain` so even exact re-resume from the pre-claim position is
+    /// refused (F3-A).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn claim_continuation(
+        &self,
+        conversation: &str,
+        parent: &str,
+        history_position: i64,
+        backend: &str,
+        executable: &str,
+        config_identity: &str,
+        system_prompt_revision: Option<&str>,
+        claimant_task_id: &str,
+        claimant_attempt_id: &str,
+        now: i64,
+    ) -> Result<Option<NativeContinuationBinding>> {
+        if conversation.trim().is_empty()
+            || parent.trim().is_empty()
+            || backend.trim().is_empty()
+            || executable.trim().is_empty()
+            || config_identity.trim().is_empty()
+            || claimant_task_id.trim().is_empty()
+            || claimant_attempt_id.trim().is_empty()
+            || history_position < 0
+        {
+            return Err(StoreError::InvalidInput(
+                "continuation claim needs full scope and claimant".into(),
+            ));
+        }
+        let key: ScopeKey = (
+            conversation.to_owned(),
+            parent.to_owned(),
+            history_position,
+            backend.to_owned(),
+            executable.to_owned(),
+            config_identity.to_owned(),
+            system_prompt_revision.map(str::to_owned),
+        );
+        let (claimant_task_id, claimant_attempt_id) =
+            (claimant_task_id.to_owned(), claimant_attempt_id.to_owned());
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            // Lease-fenced: an attempt without CURRENT authority cannot
+            // reserve anything (same bar as a commit — AGENTKIT-115).
+            if let Some(gap) = crate::native_exec::live_authority_gap(
+                &transaction,
+                &claimant_task_id,
+                &claimant_attempt_id,
+                now,
+            )? {
+                return Err(StoreError::InvalidInput(format!(
+                    "continuation claim refused: claiming attempt lacks current authority ({gap})"
+                )));
+            }
+            let candidates = find_resumable(&transaction, &key, &claimant_attempt_id)?;
+            let Some(candidate) = candidates.into_iter().next() else {
+                transaction.commit()?;
+                return Ok(None);
+            };
+            if candidate.state == "owned" {
+                // Re-entry: this attempt already holds the claim (the
+                // only `owned` row `find_resumable` returns).
+                transaction.commit()?;
+                return Ok(Some(candidate));
+            }
+            let changed = transaction.execute(
+                "UPDATE native_continuations SET state='owned', claimed_attempt_id=?2, claimed_task_id=?3, claimed_at=?4, generation=generation+1 WHERE binding_id=?1 AND state='active' AND generation=?5",
+                params![
+                    candidate.binding_id,
+                    claimant_attempt_id,
+                    claimant_task_id,
+                    now,
+                    candidate.generation,
+                ],
+            )?;
+            if changed == 0 {
+                // Lost the race to a concurrent claim: exactly one wins.
+                transaction.commit()?;
+                return Ok(None);
+            }
+            let claimed = read_continuation(&transaction, &candidate.binding_id)?;
+            transaction.commit()?;
+            Ok(claimed)
+        })
+        .await
+    }
+
+    /// The exact-resume view for ONE attempt: the binding at the scope is
+    /// still available, or `owned` by this very attempt (claim re-entry).
+    /// Anything else — superseded, retired, or owned by another attempt —
+    /// is a miss: the observed-session shortcut must be validated against
+    /// this before it may reuse an identity (F3-B), and a claim never
+    /// leaks to a second consumer (F3-C).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn resumable_continuation(
+        &self,
+        conversation: &str,
+        parent: &str,
+        history_position: i64,
+        backend: &str,
+        executable: &str,
+        config_identity: &str,
+        system_prompt_revision: Option<&str>,
+        attempt_id: &str,
+    ) -> Result<Option<NativeContinuationBinding>> {
+        let key: ScopeKey = (
+            conversation.to_owned(),
+            parent.to_owned(),
+            history_position,
+            backend.to_owned(),
+            executable.to_owned(),
+            config_identity.to_owned(),
+            system_prompt_revision.map(str::to_owned),
+        );
+        let attempt_id = attempt_id.to_owned();
+        self.call(move |db| {
+            find_resumable(db, &key, &attempt_id).map(|rows| rows.into_iter().next())
+        })
+        .await
+    }
+
+    /// Prove the input was NOT accepted and give the position back:
+    /// `owned → active`, claimant-cleared, generation bumped. Only the
+    /// claimant (or a settled re-entry of its attempt) may release what it
+    /// reserved — an unclaimed/foreign row is a no-op, never a takeover.
+    pub async fn release_continuation_claim(
+        &self,
+        binding_id: &str,
+        claimant_attempt_id: &str,
+    ) -> Result<Option<NativeContinuationBinding>> {
+        let (binding_id, claimant_attempt_id) =
+            (binding_id.to_owned(), claimant_attempt_id.to_owned());
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let changed = transaction.execute(
+                "UPDATE native_continuations SET state='active', claimed_attempt_id=NULL, claimed_task_id=NULL, claimed_at=NULL, generation=generation+1 WHERE binding_id=?1 AND state='owned' AND claimed_attempt_id=?2",
+                params![binding_id, claimant_attempt_id],
+            )?;
+            let outcome = if changed > 0 {
+                read_continuation(&transaction, &binding_id)?
+            } else {
+                // Already released (replay) — an AVAILABLE row is the
+                // desired end state, so restating is fine; anything else
+                // (superseded/retired/foreign) is honestly "not yours".
+                let existing = read_continuation(&transaction, &binding_id)?;
+                existing.filter(|row| row.state == "active")
+            };
+            transaction.commit()?;
+            Ok(outcome)
+        })
+        .await
+    }
+
+    /// The attempt was interrupted AFTER its input was accepted: the
+    /// vendor session may have consumed the prompt (and part of the
+    /// answer), so the pre-claim position must never present as available
+    /// again. `owned → uncertain` blocks exact resume from it until an
+    /// explicit reconcile or until the conversation moves on through a
+    /// fresh session (review round-4 F3-A). Claimant-fenced like release.
+    pub async fn mark_continuation_uncertain(
+        &self,
+        binding_id: &str,
+        claimant_attempt_id: &str,
+    ) -> Result<Option<NativeContinuationBinding>> {
+        let (binding_id, claimant_attempt_id) =
+            (binding_id.to_owned(), claimant_attempt_id.to_owned());
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let changed = transaction.execute(
+                "UPDATE native_continuations SET state='uncertain', generation=generation+1 WHERE binding_id=?1 AND state='owned' AND claimed_attempt_id=?2",
+                params![binding_id, claimant_attempt_id],
+            )?;
+            let outcome = if changed > 0 {
+                read_continuation(&transaction, &binding_id)?
+            } else {
+                // Idempotent restatement: already uncertain is the goal.
+                let existing = read_continuation(&transaction, &binding_id)?;
+                existing.filter(|row| row.state == "uncertain")
+            };
+            transaction.commit()?;
+            Ok(outcome)
+        })
+        .await
+    }
+
+    /// Reconcile an uncertain binding back to AVAILABLE (the consumer has
+    /// proven the vendor position honest, e.g. the interrupted turn's
+    /// outcome was actually delivered): `uncertain → active`,
+    /// claimant-cleared, generation bumped. This is the ONLY edge that
+    /// returns an uncertain row to service; the alternative — a fresh
+    /// session — simply never reconciles and lets the commit sweep
+    /// supersede the row.
+    pub async fn reconcile_continuation(
+        &self,
+        binding_id: &str,
+    ) -> Result<Option<NativeContinuationBinding>> {
+        let binding_id = binding_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let changed = transaction.execute(
+                "UPDATE native_continuations SET state='active', claimed_attempt_id=NULL, claimed_task_id=NULL, claimed_at=NULL, generation=generation+1 WHERE binding_id=?1 AND state='uncertain'",
+                params![binding_id],
+            )?;
+            let outcome = if changed > 0 {
+                read_continuation(&transaction, &binding_id)?
+            } else {
+                let existing = read_continuation(&transaction, &binding_id)?;
+                existing.filter(|row| row.state == "active")
+            };
+            transaction.commit()?;
+            Ok(outcome)
+        })
+        .await
+    }
+
     /// The binding committed by one attempt (audit, recovery).
     pub async fn continuation_for_attempt(
         &self,
@@ -283,7 +547,7 @@ impl crate::SqliteStore {
         let attempt_id = attempt_id.to_owned();
         self.call(move |db| {
             let mut statement = db.prepare(
-                "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE owning_attempt_id=?1 ORDER BY committed_at DESC LIMIT 1",
+                "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at, claimed_attempt_id, claimed_task_id, claimed_at, generation FROM native_continuations WHERE owning_attempt_id=?1 ORDER BY committed_at DESC LIMIT 1",
             )?;
             let mut rows = statement.query(params![attempt_id])?;
             match rows.next()? {
@@ -362,12 +626,26 @@ impl crate::SqliteStore {
 
 type ScopeKey = (String, String, i64, String, String, String, Option<String>);
 
-/// Supersede one prior active binding, fenced on the prior owner having
-/// SETTLED: a live prior owner is a hard refusal, never a silent handover.
+/// Supersede one prior non-terminal binding, fenced on the prior owner
+/// having SETTLED: a live prior owner is a hard refusal, never a silent
+/// handover. `by_task` is the task performing the transition: retiring
+/// one's OWN live claim/alias (the completing attempt consuming the
+/// input-position binding it claimed, or the same task's stale alias) is
+/// never fenced against itself. Covers claims an interrupted attempt left
+/// behind (`owned`/`uncertain`), not just active rows — review round-4
+/// F3-A: retirement of older positions must cover interrupted attempts.
 fn retire_prior(
     transaction: &rusqlite::Connection,
     prior: &NativeContinuationBinding,
+    by_task: &str,
 ) -> Result<()> {
+    if prior.owning_task_id == by_task || prior.claimed_task_id.as_deref() == Some(by_task) {
+        transaction.execute(
+            "UPDATE native_continuations SET state='superseded', generation=generation+1 WHERE binding_id=?1 AND state IN ('active','owned','uncertain')",
+            params![prior.binding_id],
+        )?;
+        return Ok(());
+    }
     let status: Option<String> = transaction
         .query_row(
             "SELECT status FROM tasks WHERE id=?1",
@@ -386,23 +664,74 @@ fn retire_prior(
         )));
     }
     transaction.execute(
-        "UPDATE native_continuations SET state='superseded' WHERE binding_id=?1 AND state='active'",
+        "UPDATE native_continuations SET state='superseded', generation=generation+1 WHERE binding_id=?1 AND state IN ('active','owned','uncertain')",
         params![prior.binding_id],
     )?;
     Ok(())
+}
+
+/// The COMMIT facts a binding attests — everything except the claim
+/// columns and generation, which are ledger bookkeeping around the
+/// commit, never part of the frozen record an idempotent re-commit must
+/// restate.
+fn frozen_facts(binding: &NativeContinuationBinding) -> NativeContinuationBinding {
+    let mut facts = binding.clone();
+    facts.claimed_attempt_id = None;
+    facts.claimed_task_id = None;
+    facts.claimed_at = None;
+    facts.generation = 0;
+    facts
 }
 
 fn find_active(
     db: &rusqlite::Connection,
     key: &ScopeKey,
 ) -> Result<Vec<NativeContinuationBinding>> {
-    let mut statement = db.prepare(
-        "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE conversation=?1 AND parent=?2 AND history_position=?3 AND backend=?4 AND executable=?5 AND config_identity=?6 AND system_prompt_revision IS ?7 AND state='active' ORDER BY committed_at DESC",
-    )?;
-    let rows = statement.query_map(
-        params![key.0, key.1, key.2, key.3, key.4, key.5, key.6],
-        read_continuation_row,
-    )?;
+    find_in_states(db, key, "state='active'", None)
+}
+
+/// Non-terminal rows on one scope key (available, claimed, or uncertain) —
+/// what a NEW commit must supersede before publishing its position.
+fn find_open(db: &rusqlite::Connection, key: &ScopeKey) -> Result<Vec<NativeContinuationBinding>> {
+    find_in_states(db, key, "state IN ('active','owned','uncertain')", None)
+}
+
+/// Rows on one scope key an EXACT resume may proceed from for `attempt`:
+/// still available, or `owned` by this very attempt (a re-entry after a
+/// persistence failure restates its own claim — never another attempt's).
+fn find_resumable(
+    db: &rusqlite::Connection,
+    key: &ScopeKey,
+    attempt: &str,
+) -> Result<Vec<NativeContinuationBinding>> {
+    find_in_states(
+        db,
+        key,
+        "(state='active' OR (state='owned' AND claimed_attempt_id=?8))",
+        Some(attempt),
+    )
+}
+
+fn find_in_states(
+    db: &rusqlite::Connection,
+    key: &ScopeKey,
+    state_filter: &str,
+    claimant: Option<&str>,
+) -> Result<Vec<NativeContinuationBinding>> {
+    let sql = format!(
+        "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at, claimed_attempt_id, claimed_task_id, claimed_at, generation FROM native_continuations WHERE conversation=?1 AND parent=?2 AND history_position=?3 AND backend=?4 AND executable=?5 AND config_identity=?6 AND system_prompt_revision IS ?7 AND {state_filter} ORDER BY committed_at DESC"
+    );
+    let mut statement = db.prepare(&sql)?;
+    let rows = match claimant {
+        Some(attempt) => statement.query_map(
+            params![key.0, key.1, key.2, key.3, key.4, key.5, key.6, attempt],
+            read_continuation_row,
+        )?,
+        None => statement.query_map(
+            params![key.0, key.1, key.2, key.3, key.4, key.5, key.6],
+            read_continuation_row,
+        )?,
+    };
     rows.map(|row| row.map_err(StoreError::from)).collect()
 }
 
@@ -411,7 +740,7 @@ fn read_continuation(
     binding_id: &str,
 ) -> Result<Option<NativeContinuationBinding>> {
     let mut statement = db.prepare(
-        "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations WHERE binding_id=?1",
+        "SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at, claimed_attempt_id, claimed_task_id, claimed_at, generation FROM native_continuations WHERE binding_id=?1",
     )?;
     let mut rows = statement.query(params![binding_id])?;
     match rows.next()? {
@@ -435,6 +764,10 @@ fn read_continuation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeCont
         owning_task_id: row.get(10)?,
         state: row.get(11)?,
         committed_at: row.get(12)?,
+        claimed_attempt_id: row.get(13)?,
+        claimed_task_id: row.get(14)?,
+        claimed_at: row.get(15)?,
+        generation: row.get(16)?,
     })
 }
 
@@ -916,5 +1249,363 @@ mod tests {
         let mut conflict = receipt.clone();
         conflict.record = json!({"executed": false});
         assert!(store.record_call_receipt(conflict).await.is_err());
+    }
+
+    /// Publish one active binding at the fixture scope under a live task,
+    /// then settle that committer so the position is claimable by others.
+    async fn published_position(store: &SqliteStore) -> NativeContinuationBinding {
+        let committer = running_task(store, "task-c", "chat-turn-c").await;
+        let binding = store
+            .commit_continuation(commit("task-c", &committer, "sess-1"))
+            .await
+            .unwrap();
+        let lease = store
+            .get_lease("task-c")
+            .await
+            .unwrap()
+            .expect("committer lease");
+        store
+            .settle(SettleTask {
+                fence: lease.fence(),
+                now: 2150,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            })
+            .await
+            .unwrap();
+        binding
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn claim(
+        store: &SqliteStore,
+        claimant_task: &str,
+        claimant_attempt: &str,
+        now: i64,
+    ) -> crate::Result<Option<NativeContinuationBinding>> {
+        store
+            .claim_continuation(
+                "chat-1",
+                "msg-7",
+                7,
+                "claude-code",
+                "/usr/bin/claude",
+                "cfg-aaa",
+                Some("sp-1"),
+                claimant_task,
+                claimant_attempt,
+                now,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn claim_is_atomic_single_winner_and_lease_fenced() {
+        // Review round-4 F3-C reproduced: two current tasks for one
+        // conversation position must never BOTH start from the same exact
+        // binding — the compare-and-set has exactly one winner, the loser
+        // gets `None` (fresh-session decision), and a claim without a
+        // current lease is a hard refusal.
+        let store = store();
+        let binding = published_position(&store).await;
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
+        let attempt_b = running_task(&store, "task-b", "chat-turn-b").await;
+
+        let won = claim(&store, "task-a", &attempt_a, 2200)
+            .await
+            .unwrap()
+            .expect("first claim wins");
+        assert_eq!(won.binding_id, binding.binding_id);
+        assert_eq!(won.state, "owned");
+        assert_eq!(won.claimed_attempt_id.as_deref(), Some(attempt_a.as_str()));
+        assert_eq!(won.claimed_task_id.as_deref(), Some("task-a"));
+        assert_eq!(won.generation, binding.generation + 1);
+
+        // While owned, the position is NOT available to any lookup…
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1")
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // …and only the claimant sees it as resumable.
+        assert!(
+            store
+                .resumable_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1"),
+                    &attempt_a,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .resumable_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1"),
+                    "att-stranger",
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Re-entry by the SAME attempt restates its own claim.
+        let again = claim(&store, "task-a", &attempt_a, 2210)
+            .await
+            .unwrap()
+            .expect("claim re-entry is idempotent");
+        assert_eq!(again, won);
+
+        // The second task loses the race — it must not consume the binding.
+        assert!(
+            claim(&store, "task-b", &attempt_b, 2220)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // …and the loser can neither release nor mark the winner's claim.
+        assert!(
+            store
+                .release_continuation_claim(&won.binding_id, &attempt_b)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .mark_continuation_uncertain(&won.binding_id, &attempt_b)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // An attempt the lease does not name cannot claim at all.
+        assert!(
+            claim(&store, "task-b", "att-stranger", 2230)
+                .await
+                .expect_err("lease names a different attempt")
+                .to_string()
+                .contains("lease-attempt")
+        );
+    }
+
+    #[tokio::test]
+    async fn release_returns_the_position_and_reentry_restates() {
+        // Proving the input was NOT accepted gives the position back:
+        // owned → active, claimant-cleared; the next claimant wins cleanly.
+        let store = store();
+        let _binding = published_position(&store).await;
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
+        let attempt_b = running_task(&store, "task-b", "chat-turn-b").await;
+
+        let won = claim(&store, "task-a", &attempt_a, 2200)
+            .await
+            .unwrap()
+            .expect("first claim wins");
+        let released = store
+            .release_continuation_claim(&won.binding_id, &attempt_a)
+            .await
+            .unwrap()
+            .expect("claimant releases its own reservation");
+        assert_eq!(released.state, "active");
+        assert!(released.claimed_attempt_id.is_none());
+        assert!(released.claimed_task_id.is_none());
+        assert!(released.claimed_at.is_none());
+        assert_eq!(released.generation, won.generation + 1);
+        // Releasing twice is an idempotent no-op.
+        let again = store
+            .release_continuation_claim(&won.binding_id, &attempt_a)
+            .await
+            .unwrap();
+        assert_eq!(again.as_ref(), Some(&released));
+
+        // The position is available again — and the other task wins it.
+        let won_b = claim(&store, "task-b", &attempt_b, 2260)
+            .await
+            .unwrap()
+            .expect("released position is claimable");
+        assert_eq!(
+            won_b.claimed_attempt_id.as_deref(),
+            Some(attempt_b.as_str())
+        );
+        assert_eq!(won_b.generation, released.generation + 1);
+        // The previous claimant cannot mark it uncertain any more: not
+        // its row, never a takeover.
+        assert!(
+            store
+                .mark_continuation_uncertain(&won.binding_id, &attempt_a)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_claim_blocks_exact_resume_until_reconciled() {
+        // Review round-4 F3-A reproduced: an attempt interrupted AFTER its
+        // input was accepted leaves the vendor session having consumed the
+        // prompt — the pre-claim position may never present as available
+        // for an exact resume again.
+        let store = store();
+        let binding = published_position(&store).await;
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
+        let won = claim(&store, "task-a", &attempt_a, 2200)
+            .await
+            .unwrap()
+            .expect("claim wins");
+        assert_eq!(won.state, "owned");
+
+        // Interruption after input → uncertain; exact resume from the
+        // pre-claim position is refused for EVERYONE, claimant included.
+        let uncertain = store
+            .mark_continuation_uncertain(&won.binding_id, &attempt_a)
+            .await
+            .unwrap()
+            .expect("claimant marks its own claim uncertain");
+        assert_eq!(uncertain.state, "uncertain");
+        assert!(
+            store
+                .active_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1"),
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .resumable_continuation(
+                    "chat-1",
+                    "msg-7",
+                    7,
+                    "claude-code",
+                    "/usr/bin/claude",
+                    "cfg-aaa",
+                    Some("sp-1"),
+                    &attempt_a,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            claim(&store, "task-a", &attempt_a, 2250)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // Releasing is NOT a proof of non-acceptance once uncertain.
+        assert!(
+            store
+                .release_continuation_claim(&won.binding_id, &attempt_a)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Settle the interrupted attempt, then a FRESH-session completion
+        // advances the same vendor session: the commit sweep retires the
+        // uncertain alias too (F3-A: retirement covers interrupted
+        // attempts, not only successful completions).
+        let lease_a = store
+            .get_lease("task-a")
+            .await
+            .unwrap()
+            .expect("interrupted lease");
+        store
+            .settle(SettleTask {
+                fence: lease_a.fence(),
+                now: 2300,
+                status: TaskStatus::Failed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            })
+            .await
+            .unwrap();
+        let attempt_b = running_task(&store, "task-b", "chat-turn-b").await;
+        let mut advanced = commit("task-b", &attempt_b, "sess-1");
+        advanced.parent = "msg-8".into();
+        advanced.history_position = 8;
+        advanced.committed_at = 2350;
+        store
+            .commit_continuation(advanced)
+            .await
+            .expect("advance commits under live authority");
+        let prior = store
+            .continuation_for_attempt(&binding.owning_attempt_id)
+            .await
+            .unwrap()
+            .expect("prior row kept for audit");
+        assert_eq!(
+            prior.state, "superseded",
+            "the uncertain alias must not survive the advance"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_returns_uncertain_position_to_service() {
+        // The only edge that puts an uncertain row back: an explicit
+        // reconcile proves the vendor position honest (e.g. the
+        // interrupted turn's answer actually landed).
+        let store = store();
+        let _binding = published_position(&store).await;
+        let attempt_a = running_task(&store, "task-a", "chat-turn-a").await;
+        let won = claim(&store, "task-a", &attempt_a, 2200)
+            .await
+            .unwrap()
+            .expect("claim wins");
+        store
+            .mark_continuation_uncertain(&won.binding_id, &attempt_a)
+            .await
+            .unwrap()
+            .expect("uncertain");
+        let reconciled = store
+            .reconcile_continuation(&won.binding_id)
+            .await
+            .unwrap()
+            .expect("uncertain → active");
+        assert_eq!(reconciled.state, "active");
+        assert!(reconciled.claimed_attempt_id.is_none());
+        // …and it is claimable again by a fresh attempt.
+        let attempt_b = running_task(&store, "task-b", "chat-turn-b").await;
+        let won_b = claim(&store, "task-b", &attempt_b, 2300)
+            .await
+            .unwrap()
+            .expect("reconciled position is available again");
+        assert_eq!(
+            won_b.claimed_attempt_id.as_deref(),
+            Some(attempt_b.as_str())
+        );
     }
 }

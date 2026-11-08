@@ -24,6 +24,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use agentkit_native::canonical_digest;
+
 use agentkit_mcp::ErrorData;
 use agentkit_mcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 use agentkit_mcp::{
@@ -133,6 +135,34 @@ pub struct BrokerLimits {
 /// timeout — one coherent, compatible deadline chain.
 pub const BROKER_AUTHORIZE_BUDGET_MS: i64 = 360_000;
 
+/// Headroom the broker adds to the SERVER-side per-call deadline on top of
+/// (authorize budget + effect timeout) (review R4 F2). The `agentkit-mcp`
+/// handler wraps the ENTIRE `tools/call` — human approval park included —
+/// in this one deadline, so deriving it from the effect timeout alone cut
+/// approvals off early. With this overhead the installed server deadline
+/// still sits strictly below the vendor MCP request budget
+/// (`agentkit_claude::launch::BROKER_MCP_REQUEST_BUDGET_MS`), so the
+/// vendor is always the first to give up — mechanically guarded by
+/// `deadline_chain_stays_compatible_by_construction`.
+pub const BROKER_SERVER_DEADLINE_OVERHEAD_MS: i64 = 30_000;
+
+/// The per-call deadline the broker INSTALLED on its MCP server, derived
+/// from the deadline chain: authorize budget + effect timeout + bounded
+/// overhead (review R4 F2). Inner bounds stay meaningful — `authorize` is
+/// still bounded by `authorize_timeout_ms` and `execute` by
+/// `call_timeout_ms` inside `dispatch_authorized`; this outer bound only
+/// guarantees neither is cut off from outside.
+fn broker_call_deadline(limits: &BrokerLimits) -> Duration {
+    Duration::from_millis(
+        limits
+            .authorize_timeout_ms
+            .max(1)
+            .saturating_add(limits.call_timeout_ms.max(1))
+            .saturating_add(BROKER_SERVER_DEADLINE_OVERHEAD_MS)
+            .max(1) as u64,
+    )
+}
+
 impl Default for BrokerLimits {
     fn default() -> Self {
         BrokerLimits {
@@ -169,6 +199,28 @@ struct MemoKey {
     request_id: RpcId,
 }
 
+/// A recorded replayable outcome (review R4 F7c). The memoized result is
+/// only served to a restatement that proves it is the SAME call: same tool
+/// name and same canonical digest of the arguments. A proven-redelivery
+/// key restated with different content is a different call wearing an
+/// old badge — it never replays this result.
+struct Memo {
+    result: CallToolResult,
+    tool: String,
+    digest: String,
+}
+
+/// Union bookkeeping for approval parks (review R4 F7b). `active` is the
+/// count of currently open gates; `base` is the wall-clock start of the
+/// current UNION interval, set on the 0→1 transition and flushed into
+/// `parked_ms` on the 1→0 transition. Overlapping parks therefore credit
+/// the union of the wait, never the sum of per-call waits.
+#[derive(Default)]
+struct ParkState {
+    active: usize,
+    base: Option<std::time::Instant>,
+}
+
 /// The attempt-scoped MCP backend. Cheap to share; revocation is global.
 pub struct BrokerBackend {
     task_id: String,
@@ -194,20 +246,26 @@ pub struct BrokerBackend {
     /// (review §2.9: an approval answered inside the displayed deadline
     /// succeeds).
     parked_ms: std::sync::atomic::AtomicU64,
-    /// Starts of the CURRENTLY pending authorization gates (empty when no
-    /// call is parked). Credit is LIVE: a human who has not answered yet
-    /// must already be exempt from the turn deadline, not reimbursed only
-    /// after they answer. Live credit measures from the OLDEST active
-    /// park; completed parks move into `parked_ms`.
-    park_gate: Mutex<Vec<std::time::Instant>>,
+    /// Starts of the CURRENTLY pending authorization gates (review R4 F7b:
+    /// UNION accounting, not per-call accumulation). `active` counts the
+    /// gates currently open; `base` is set on the 0→1 transition and the
+    /// interval is added to `parked_ms` on every 1→0 transition, so two
+    /// concurrently parked calls credit the wall-clock UNION of their
+    /// waits, never the doubled sum. Credit is LIVE: a human who has not
+    /// answered yet must already be exempt from the turn deadline, not
+    /// reimbursed only after they answer.
+    park_gate: Mutex<ParkState>,
     /// Proven-redelivery memo: a call whose transport RESTATES the same
     /// typed JSON-RPC request id ON THE SAME SESSION replays the first
     /// outcome instead of executing twice (AGENTKIT-115: only the exact
     /// request id proves redelivery; identical arguments never do).
     /// Keyed by [`MemoKey`] — session identity + typed id — because this
     /// map lives on the per-attempt backend that all connected sessions
-    /// share (review R7).
-    memos: Mutex<HashMap<MemoKey, CallToolResult>>,
+    /// share (review R7). Each memo also carries the tool name and the
+    /// canonical digest of the arguments that EARNED it (review R4 F7c):
+    /// a restated id whose content differs is not the same call and never
+    /// replays a result it did not produce.
+    memos: Mutex<HashMap<MemoKey, Memo>>,
     /// In-flight counterpart of `memos`: an id restated while its first
     /// execution is still running is refused, not doubled. Same
     /// session-scoped typed key.
@@ -269,7 +327,7 @@ impl BrokerBackend {
             live: Mutex::new(Live::default()),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             parked_ms: std::sync::atomic::AtomicU64::new(0),
-            park_gate: Mutex::new(Vec::new()),
+            park_gate: Mutex::new(ParkState::default()),
             memos: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashSet::new()),
             cancellation,
@@ -304,7 +362,9 @@ impl BrokerBackend {
 
     /// Cumulative ms the authority spent (and is still spending) in
     /// `authorize` (approval parks); the stream loop credits this against
-    /// the turn deadline.
+    /// the turn deadline. UNION time (review R4 F7b): the wall-clock
+    /// duration over which at least one gate was open, never the sum of
+    /// per-call waits.
     #[must_use]
     pub fn parked_ms(&self) -> u64 {
         let done = self.parked_ms.load(std::sync::atomic::Ordering::Relaxed);
@@ -312,9 +372,8 @@ impl BrokerBackend {
             .park_gate
             .lock()
             .expect("park gate lock")
-            .iter()
-            .map(|start| start.elapsed().as_millis() as u64)
-            .max()
+            .base
+            .map(|base| base.elapsed().as_millis() as u64)
             .unwrap_or(0);
         done.saturating_add(live)
     }
@@ -340,11 +399,16 @@ impl BrokerBackend {
 
     /// Authorization + execution once the call passed mechanical bounds.
     /// Every terminal outcome is recorded durably by the authority under
-    /// the exact invocation identity.
+    /// the exact invocation identity. `effect_started` flips immediately
+    /// before the effect is entered (review R4 F7a): an abandoned dispatch
+    /// whose flag is still `false` provably never reached `execute`, so
+    /// its replay reservation may be released; one whose flag is `true`
+    /// must be remembered as UNCERTAIN, never silently re-executed.
     async fn dispatch_authorized(
         &self,
         invocation: &BrokerInvocation,
         arguments: Value,
+        effect_started: &std::sync::atomic::AtomicBool,
     ) -> CallToolResult {
         if let Err(denial) = {
             // Timing the human gate: approval parks are credited (LIVE,
@@ -379,6 +443,10 @@ impl BrokerBackend {
             self.authority.record(invocation, &payload);
             return CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
         }
+        // The effect MAY have started from this line onward: set the flag
+        // BEFORE awaiting so an abandonment at any later point is visible
+        // to the reservation guard (review R4 F7a).
+        effect_started.store(true, std::sync::atomic::Ordering::SeqCst);
         let executed = tokio::time::timeout(
             Duration::from_millis(self.limits.call_timeout_ms.max(1) as u64),
             self.authority.execute(invocation, arguments),
@@ -458,40 +526,112 @@ impl Drop for InFlightGuard<'_> {
     }
 }
 
-/// RAII counterpart of an `authorize` park (review R5): the gate opens on
-/// creation (live deadline credit starts) and CLOSES on drop — whether
-/// authorize answered, denied, timed out, or the whole request future was
-/// abandoned. Parked time accrued so far moves into `parked_ms`; nothing
-/// keeps growing once the call is gone.
+/// RAII counterpart of an `authorize` park (review R5; union-accounted per
+/// review R4 F7b): the gate opens on creation (live deadline credit starts
+/// on the 0→1 transition) and CLOSES on drop — whether authorize answered,
+/// denied, timed out, or the whole request future was abandoned. On the
+/// 1→0 transition the UNION interval accrues to `parked_ms`; a nested
+/// (overlapping) park adds nothing on open and nothing on close, so two
+/// concurrently parked calls are never double-credited.
 struct ParkGuard<'a> {
     backend: &'a BrokerBackend,
-    start: std::time::Instant,
 }
 
 impl<'a> ParkGuard<'a> {
     fn new(backend: &'a BrokerBackend) -> Self {
-        let start = std::time::Instant::now();
-        backend
-            .park_gate
-            .lock()
-            .expect("park gate lock")
-            .push(start);
-        Self { backend, start }
+        let mut gate = backend.park_gate.lock().expect("park gate lock");
+        if gate.active == 0 {
+            gate.base = Some(std::time::Instant::now());
+        }
+        gate.active += 1;
+        Self { backend }
     }
 }
 
 impl Drop for ParkGuard<'_> {
     fn drop(&mut self) {
+        let mut gate = self.backend.park_gate.lock().expect("park gate lock");
+        gate.active = gate.active.saturating_sub(1);
+        if gate.active == 0
+            && let Some(base) = gate.base.take()
         {
-            let mut slots = self.backend.park_gate.lock().expect("park gate lock");
-            if let Some(position) = slots.iter().position(|gate| *gate == self.start) {
-                slots.swap_remove(position);
-            }
+            self.backend.parked_ms.fetch_add(
+                base.elapsed().as_millis() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
-        self.backend.parked_ms.fetch_add(
-            self.start.elapsed().as_millis() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+    }
+}
+
+/// RAII counterpart of a proven-redelivery reservation (review R4 F7a).
+/// The normal path disarms the guard after recording the memo; if the
+/// dispatch future is ABANDONED instead (outer request cancelled while the
+/// call parked on authorization), the guard makes cleanup
+/// cancellation-safe:
+/// * the effect was NOT entered → the inflight reservation is released, so
+///   a legitimate redelivery of the same key is not frozen out with
+///   `duplicate_in_progress` for the life of the attempt;
+/// * the effect MAY have started → a durable UNCERTAIN memo is recorded,
+///   so a redelivery gets an explicit uncertain denial — never a silent
+///   duplicate refusal, never a re-execution of an effect whose fate the
+///   broker does not know.
+struct ReservationGuard<'a> {
+    backend: &'a BrokerBackend,
+    key: Option<MemoKey>,
+    effect_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tool: String,
+    digest: String,
+}
+
+impl<'a> ReservationGuard<'a> {
+    fn new(
+        backend: &'a BrokerBackend,
+        key: Option<MemoKey>,
+        effect_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        tool: String,
+        digest: String,
+    ) -> Self {
+        Self {
+            backend,
+            key,
+            effect_started,
+            tool,
+            digest,
+        }
+    }
+    /// The dispatch settled normally: the caller records the real memo.
+    fn disarm(&mut self) {
+        self.key = None;
+    }
+}
+
+impl Drop for ReservationGuard<'_> {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else { return };
+        self.backend
+            .inflight
+            .lock()
+            .expect("broker inflight")
+            .remove(&key);
+        if self
+            .effect_started
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            let outcome = json!({
+                "denied": true, "code": "effect_uncertain",
+                "message": "the effect of this call may have started before its \
+                            request was abandoned; its outcome is uncertain and \
+                            it will never be re-executed automatically",
+            });
+            self.backend.memos.lock().expect("broker memos").insert(
+                key,
+                Memo {
+                    result: CallToolResult::error(vec![ContentBlock::text(outcome.to_string())]),
+                    tool: std::mem::take(&mut self.tool),
+                    digest: std::mem::take(&mut self.digest),
+                },
+            );
+        }
     }
 }
 
@@ -547,9 +687,26 @@ impl Backend for BrokerBackend {
             actor_id: scope.actor_id.clone(),
             request_id: request_id.clone(),
         });
+        // Canonical content identity of THIS request (review R4 F7c): the
+        // memo only replays to a restatement that proves the same tool
+        // and the same arguments.
+        let digest = canonical_digest(&arguments);
         if let Some(key) = &memo_key {
-            if let Some(replay) = self.memos.lock().expect("broker memos").get(key).cloned() {
-                return Ok(replay);
+            if let Some(memo) = self.memos.lock().expect("broker memos").get(key) {
+                if memo.tool == name && memo.digest == digest {
+                    return Ok(memo.result.clone());
+                }
+                // Fail closed: a restated key carrying DIFFERENT content
+                // is not the call this memo records — replaying would
+                // answer a new request with an unrelated result, and
+                // re-dispatching would let a transport that claims
+                // restatement smuggle a second effect under an old id.
+                // The in-band refusal is stable and never executes.
+                return Ok(self.denied(
+                    "replay_conflict",
+                    "this request id was already recorded for different \
+                     arguments; the recorded outcome will not be replayed",
+                ));
             }
             if !self
                 .inflight
@@ -591,20 +748,37 @@ impl Backend for BrokerBackend {
             invocation_id: format!("inv_{}", uuid::Uuid::new_v4().simple()),
             request_id: request_id.clone(),
         };
+        let effect_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let outcome = {
             // RAII (review R5): the gauge returns to zero even if the
             // dispatch future is abandoned mid-flight — an abandoned
             // request must never leave `live_calls()` lying about a call
-            // that no longer exists.
+            // that no longer exists. The reservation guard (review R4 F7a)
+            // makes the replay bookkeeping equally abandonment-safe.
             let _in_flight = InFlightGuard::new(self);
-            self.dispatch_authorized(&invocation, arguments).await
+            let mut reservation = ReservationGuard::new(
+                self,
+                memo_key.clone(),
+                effect_started.clone(),
+                name.to_owned(),
+                digest.clone(),
+            );
+            let outcome = self
+                .dispatch_authorized(&invocation, arguments, &effect_started)
+                .await;
+            reservation.disarm();
+            outcome
         };
         if let Some(key) = &memo_key {
             self.inflight.lock().expect("broker inflight").remove(key);
-            self.memos
-                .lock()
-                .expect("broker memos")
-                .insert(key.clone(), outcome.clone());
+            self.memos.lock().expect("broker memos").insert(
+                key.clone(),
+                Memo {
+                    result: outcome.clone(),
+                    tool: name.to_owned(),
+                    digest,
+                },
+            );
         }
         Ok(outcome)
     }
@@ -653,6 +827,10 @@ pub struct AttemptBroker {
     token: String,
     url: String,
     server: McpServer,
+    /// The per-call deadline actually INSTALLED on the MCP server
+    /// (review R4 F2); observable so assembly tests can prove the
+    /// installed configuration, not just the constants.
+    call_deadline: Duration,
     serve: tokio::task::JoinHandle<()>,
     cancellation: CancellationToken,
 }
@@ -690,10 +868,18 @@ impl AttemptBroker {
             json!({"brokerTask": task_id, "brokerAttempt": attempt_id}),
         )
         .map_err(|e| format!("broker token: {e}"))?;
+        // Review R4 F2: the mcp handler applies ONE deadline to the whole
+        // tools/call — human authorization park included — so the
+        // installed server deadline is derived from the full chain
+        // (authorize budget + effect timeout + bounded overhead), never
+        // from the effect timeout alone. The inner bounds inside
+        // `dispatch_authorized` still bound each phase individually;
+        // this only stops the outer transport from cutting approval short.
+        let call_deadline = broker_call_deadline(&limits);
         let mut options = ServerOptions {
             writes_enabled: backend.has_writes(),
             max_request_bytes: limits.max_args_bytes.saturating_mul(2).max(64 * 1024),
-            max_call_duration: Duration::from_millis(limits.call_timeout_ms.max(1) as u64),
+            max_call_duration: call_deadline,
             ..ServerOptions::default()
         };
         options.session_idle_ttl = Duration::from_secs(3600);
@@ -708,7 +894,10 @@ impl AttemptBroker {
                 .local_addr()
                 .map_err(|e| format!("broker addr: {e}"))?
         );
-        let router = server.router();
+        // Review R4 F1: the endpoint ADVERTISES `/mcp`, so `/mcp` must be
+        // exactly what the transport serves — the same authenticated
+        // handler is also kept on `/` for the existing mcp-suite clients.
+        let router = server.router().merge(server.router_at("/mcp"));
         let shutdown = cancellation.clone();
         let serve = tokio::spawn(async move {
             let _ = axum::serve(listener, router)
@@ -720,6 +909,7 @@ impl AttemptBroker {
             token,
             url,
             server,
+            call_deadline,
             serve,
             cancellation,
         }))
@@ -738,6 +928,14 @@ impl AttemptBroker {
 
     pub fn backend(&self) -> &Arc<BrokerBackend> {
         &self.backend
+    }
+
+    /// The per-call deadline INSTALLED on the broker's MCP server
+    /// (review R4 F2): authorize budget + effect timeout + bounded
+    /// overhead. Assembly tests assert against this, not just constants.
+    #[must_use]
+    pub fn server_call_deadline(&self) -> Duration {
+        self.call_deadline
     }
 
     /// Calls currently parked in the authority (approval waits, effects).
@@ -785,11 +983,16 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Review round-3 F4: the R5 deadline chain — human approval window ≤
-    /// authorize budget − margin, and the outer vendor MCP request budget
-    /// strictly above (authorize budget + effect timeout) — was tied only
-    /// by comments across crates. This test fails mechanically if anyone
-    /// edits one constant and re-opens the drift R5 closed.
+    /// Review round-3 F4; extended review R4 F2: the R5 deadline chain —
+    /// human approval window ≤ authorize budget − margin, and the outer
+    /// vendor MCP request budget strictly above (authorize budget +
+    /// effect timeout + the broker's installed-server overhead) — was tied
+    /// only by comments across crates. This test fails mechanically if
+    /// anyone edits one constant and re-opens the drift R5 closed. It
+    /// covers the CONSTANTS only: the deadline the broker actually
+    /// INSTALLS on its MCP server is proven by the assembly test
+    /// `approval_longer_than_effect_timeout_serves_through_the_server`,
+    /// which starts a real broker and calls it over the advertised URL.
     #[test]
     fn deadline_chain_stays_compatible_by_construction() {
         // OneMind's approvalTimeoutMs default and its clamp margin
@@ -800,17 +1003,28 @@ mod tests {
         let call_timeout = BrokerLimits::default().call_timeout_ms;
         const {
             assert!(
-                BROKER_AUTHORIZE_BUDGET_MS
-                    >= HUMAN_APPROVAL_WINDOW_MS + CLAMP_MARGIN_MS,
+                BROKER_AUTHORIZE_BUDGET_MS >= HUMAN_APPROVAL_WINDOW_MS + CLAMP_MARGIN_MS,
                 "authorize budget must cover the full human approval window plus margin"
             );
         }
         assert!(
             agentkit_claude::launch::BROKER_MCP_REQUEST_BUDGET_MS
-                > BROKER_AUTHORIZE_BUDGET_MS + call_timeout,
-            "the outer MCP request budget must exceed approval parking plus the effect timeout: \
-             {} !> {BROKER_AUTHORIZE_BUDGET_MS} + {call_timeout}",
+                > BROKER_AUTHORIZE_BUDGET_MS + call_timeout + BROKER_SERVER_DEADLINE_OVERHEAD_MS,
+            "the outer MCP request budget must exceed approval parking, the effect \
+             timeout and the installed server-deadline overhead: {} !> \
+             {BROKER_AUTHORIZE_BUDGET_MS} + {call_timeout} + \
+             {BROKER_SERVER_DEADLINE_OVERHEAD_MS}",
             agentkit_claude::launch::BROKER_MCP_REQUEST_BUDGET_MS
+        );
+        // The value the broker actually installs at defaults, so the
+        // chain above covers the REAL installed deadline, not a
+        // hypothetical smaller one.
+        assert_eq!(
+            broker_call_deadline(&BrokerLimits::default()),
+            Duration::from_millis(
+                (BROKER_AUTHORIZE_BUDGET_MS + call_timeout + BROKER_SERVER_DEADLINE_OVERHEAD_MS)
+                    as u64
+            )
         );
     }
 
@@ -1615,5 +1829,513 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(denial_of(&result).unwrap()["code"], "revoked");
+    }
+
+    /// Raw JSON-RPC POST mirroring the mcp suite's own HTTP tests: bearer
+    /// auth, dual accept, protocol-version header, session-id capture,
+    /// and JSON-or-SSE body parsing.
+    async fn rpc(
+        client: &reqwest::Client,
+        url: &str,
+        token: &str,
+        session: Option<&str>,
+        payload: Value,
+    ) -> (reqwest::StatusCode, Option<String>, Value) {
+        let mut request = client
+            .post(url)
+            .bearer_auth(token)
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2025-11-25")
+            .json(&payload);
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status();
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .map(|value| value.to_str().unwrap().to_owned());
+        let text = response.text().await.unwrap();
+        let body = serde_json::from_str(&text)
+            .ok()
+            .or_else(|| {
+                text.lines()
+                    .filter_map(|line| {
+                        line.strip_prefix("data:")
+                            .and_then(|data| serde_json::from_str(data.trim()).ok())
+                    })
+                    .next_back()
+            })
+            .unwrap_or(Value::Null);
+        (status, session, body)
+    }
+
+    /// Full streamable-HTTP handshake: initialize → notifications/initialized.
+    async fn initialize(client: &reqwest::Client, url: &str, token: &str) -> String {
+        let (status, session, body) = rpc(
+            client,
+            url,
+            token,
+            None,
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-11-25","capabilities":{},
+                "clientInfo":{"name":"r4-test","version":"1"}}}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            reqwest::StatusCode::OK,
+            "the ADVERTISED URL must serve initialize, not 404 (review R4 F1): {body}"
+        );
+        assert_eq!(body["result"]["protocolVersion"], "2025-11-25");
+        let session = session.expect("initialize mints a session");
+        let (status, _, _) = rpc(
+            client,
+            url,
+            token,
+            Some(&session),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        )
+        .await;
+        assert!(status.is_success(), "initialized notification: {status}");
+        session
+    }
+
+    /// Review R4 F1 (reproduced via real loopback HTTP): the URL the
+    /// broker ADVERTISES through `spec()` must be the URL the transport
+    /// actually serves — a full initialize → tools/list → tools/call
+    /// round trip against `broker.spec().http_url` with
+    /// `broker.spec().auth_token`, no path fix-ups by the caller.
+    #[tokio::test]
+    async fn advertised_endpoint_serves_initialize_list_and_call() {
+        let authority = authority(true);
+        let broker = AttemptBroker::start(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+        )
+        .await
+        .unwrap();
+        let spec = broker.spec();
+        let url = spec.http_url.clone().expect("http endpoint advertised");
+        let token = spec.auth_token.clone().expect("private token");
+        assert!(url.ends_with("/mcp"), "advertised: {url}");
+        let client = reqwest::Client::new();
+        let session = initialize(&client, &url, &token).await;
+        let (status, _, body) = rpc(
+            &client,
+            &url,
+            &token,
+            Some(&session),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+        )
+        .await;
+        assert!(status.is_success(), "tools/list: {status} {body}");
+        let names: Vec<&str> = body["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert!(
+            names.contains(&"search_notes") && names.contains(&"propose_note"),
+            "the frozen catalog must be listed: {names:?}"
+        );
+        let (status, _, body) = rpc(
+            &client,
+            &url,
+            &token,
+            Some(&session),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"search_notes","arguments":{"q":"hello"}}}),
+        )
+        .await;
+        assert!(status.is_success(), "tools/call: {status} {body}");
+        assert_ne!(body["result"]["isError"], Value::Bool(true), "{body}");
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("found")),
+            "the scripted authority's execution must travel back: {body}"
+        );
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+        broker.shutdown().await;
+    }
+
+    /// Review R4 F2 (assembly): with a TINY effect timeout, an approval
+    /// that takes longer than the effect timeout must still succeed
+    /// THROUGH the real installed server over the advertised URL — the
+    /// outer per-call deadline is derived from the whole chain, not from
+    /// `call_timeout_ms`. Under the old wiring (installed deadline =
+    /// effect timeout) this same call died at ~50 ms while the human was
+    /// still deciding.
+    #[tokio::test]
+    async fn approval_longer_than_effect_timeout_serves_through_the_server() {
+        struct SlowApproval {
+            authorize_ms: u64,
+        }
+        #[async_trait]
+        impl BrokerAuthority for SlowApproval {
+            fn attempt_generation(&self) -> Option<u64> {
+                Some(3)
+            }
+            async fn authorize(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: &Value,
+            ) -> Result<(), BrokerDenial> {
+                // The human decides LONGER than the 50 ms effect timeout,
+                // well inside the authorize budget.
+                tokio::time::sleep(Duration::from_millis(self.authorize_ms)).await;
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _invocation: &BrokerInvocation,
+                _arguments: Value,
+            ) -> Result<BrokerExecuted, BrokerDenial> {
+                Ok(BrokerExecuted {
+                    content: vec![json!({"approved": true})],
+                    structured: None,
+                })
+            }
+        }
+        let limits = BrokerLimits {
+            call_timeout_ms: 50,
+            authorize_timeout_ms: 1_000,
+            ..BrokerLimits::default()
+        };
+        let broker = AttemptBroker::start(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            limits,
+            Arc::new(SlowApproval { authorize_ms: 120 }),
+        )
+        .await
+        .unwrap();
+        // The INSTALLED configuration, not just the constants: the
+        // per-call deadline must cover authorize + effect (the OLD value,
+        // the bare 50 ms effect timeout, would fail the call below).
+        assert!(
+            broker.server_call_deadline()
+                >= Duration::from_millis(
+                    (limits.authorize_timeout_ms + limits.call_timeout_ms) as u64
+                ),
+            "installed deadline {:?} must be >= authorize budget + effect timeout",
+            broker.server_call_deadline()
+        );
+        let spec = broker.spec();
+        let url = spec.http_url.clone().unwrap();
+        let token = spec.auth_token.clone().unwrap();
+        let client = reqwest::Client::new();
+        let session = initialize(&client, &url, &token).await;
+        let (status, _, body) = rpc(
+            &client,
+            &url,
+            &token,
+            Some(&session),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                "name":"search_notes","arguments":{"q":"hello"}}}),
+        )
+        .await;
+        assert!(
+            status.is_success() && body["result"]["isError"] != Value::Bool(true),
+            "an approval slower than the effect timeout must succeed: {status} {body}"
+        );
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("approved")),
+            "{body}"
+        );
+        broker.shutdown().await;
+    }
+
+    /// Parks EVERY caller in `authorize` (and optionally `execute`) on a
+    /// shared watch flag until it flips — genuinely concurrent parks, as
+    /// review R4 F7b requires. Counts only COMPLETED executions so an
+    /// abandoned effect is observably never re-run.
+    struct GateAuthority {
+        authorize_gate: Option<tokio::sync::watch::Receiver<bool>>,
+        execute_gate: Option<tokio::sync::watch::Receiver<bool>>,
+        in_authorize: tokio::sync::Notify,
+        in_execute: tokio::sync::Notify,
+        executions: AtomicUsize,
+    }
+
+    async fn wait_gate(
+        gate: &Option<tokio::sync::watch::Receiver<bool>>,
+        entered: &tokio::sync::Notify,
+    ) {
+        entered.notify_waiters();
+        if let Some(gate) = gate {
+            let mut gate = gate.clone();
+            while !*gate.borrow_and_update() && gate.changed().await.is_ok() {}
+        }
+    }
+
+    #[async_trait]
+    impl BrokerAuthority for GateAuthority {
+        fn attempt_generation(&self) -> Option<u64> {
+            Some(9)
+        }
+        async fn authorize(
+            &self,
+            _invocation: &BrokerInvocation,
+            _arguments: &Value,
+        ) -> Result<(), BrokerDenial> {
+            wait_gate(&self.authorize_gate, &self.in_authorize).await;
+            Ok(())
+        }
+        async fn execute(
+            &self,
+            _invocation: &BrokerInvocation,
+            _arguments: Value,
+        ) -> Result<BrokerExecuted, BrokerDenial> {
+            wait_gate(&self.execute_gate, &self.in_execute).await;
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            Ok(BrokerExecuted {
+                content: vec![json!({"done": true})],
+                structured: None,
+            })
+        }
+    }
+
+    fn gate_backend(
+        authorize_gate: Option<tokio::sync::watch::Receiver<bool>>,
+        execute_gate: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> (Arc<BrokerBackend>, Arc<GateAuthority>) {
+        let authority = Arc::new(GateAuthority {
+            authorize_gate,
+            execute_gate,
+            in_authorize: tokio::sync::Notify::new(),
+            in_execute: tokio::sync::Notify::new(),
+            executions: AtomicUsize::new(0),
+        });
+        let backend = BrokerBackend::new(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        (backend, authority)
+    }
+
+    fn gated_call(
+        backend: &Arc<BrokerBackend>,
+        actor: &str,
+        request_id: Option<RpcId>,
+        query: &str,
+    ) -> tokio::task::JoinHandle<CallToolResult> {
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!(query));
+        let backend = Arc::clone(backend);
+        let actor = actor.to_owned();
+        tokio::spawn(async move {
+            backend
+                .call_tool("search_notes", args, &scope_with(&actor, request_id))
+                .await
+                .unwrap()
+        })
+    }
+
+    /// Review R4 F7(a) pre-effect: cancelling a call parked in
+    /// authorization must RELEASE its replay reservation — a legitimate
+    /// redelivery of the same request key then executes normally instead
+    /// of being frozen out with `duplicate_in_progress` forever.
+    #[tokio::test]
+    async fn cancelled_authorization_releases_the_replay_reservation() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(Some(rx), None);
+        let calling = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(1)),
+            "hello",
+        );
+        authority.in_authorize.notified().await;
+        assert_eq!(backend.live_calls(), 1, "parked on approval");
+        calling.abort();
+        let _ = calling.await;
+        assert_eq!(backend.live_calls(), 0);
+        let _ = tx.send(true);
+        // Same session, same typed id, same arguments: the abandoned call
+        // never reached the effect, so this restatement is a fresh call.
+        let redelivered = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(1)),
+            "hello",
+        );
+        let result = redelivered.await.unwrap();
+        assert_eq!(
+            denial_of(&result),
+            None,
+            "a released reservation must not refuse the redelivery: {result:?}"
+        );
+        assert_eq!(authority.executions.load(Ordering::SeqCst), 1);
+    }
+
+    /// Review R4 F7(a) post-effect: abandoning a call whose effect MAY
+    /// have started must leave a durable UNCERTAIN reservation — the
+    /// redelivery gets an explicit uncertain denial, never a silent
+    /// `duplicate_in_progress`, and never a second execution.
+    #[tokio::test]
+    async fn abandoned_effect_reports_uncertainty_and_never_reexecutes() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(None, Some(rx));
+        let calling = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(2)),
+            "hello",
+        );
+        authority.in_execute.notified().await;
+        calling.abort();
+        let _ = calling.await;
+        drop(tx);
+        let redelivered = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(2)),
+            "hello",
+        );
+        let result = redelivered.await.unwrap();
+        let denial = denial_of(&result).expect("the redelivery reports uncertainty");
+        assert_eq!(denial["code"], "effect_uncertain");
+        assert_eq!(
+            authority.executions.load(Ordering::SeqCst),
+            0,
+            "the uncertain effect is never re-executed"
+        );
+    }
+
+    /// Review R4 F7(b): two calls parked in authorization OVERLAPPING in
+    /// time must be credited the WALL-CLOCK UNION of their waits, never
+    /// the sum of the two parks.
+    #[tokio::test]
+    async fn overlapping_parks_are_credited_as_a_union() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(Some(rx), None);
+        let first_notified = authority.in_authorize.notified();
+        let first = {
+            let backend = Arc::clone(&backend);
+            tokio::spawn(async move {
+                backend
+                    .call_tool("search_notes", Default::default(), &scope())
+                    .await
+                    .unwrap()
+            })
+        };
+        first_notified.await;
+        let second_notified = authority.in_authorize.notified();
+        let second = {
+            let backend = Arc::clone(&backend);
+            tokio::spawn(async move {
+                backend
+                    .call_tool(
+                        "search_notes",
+                        Default::default(),
+                        &scope_with("vendor-session-2", None),
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        second_notified.await;
+        assert_eq!(backend.live_calls(), 2, "both parked together");
+        // From here both gates are open simultaneously: the union of the
+        // wait IS the wall clock from the first park to now.
+        let union_start = std::time::Instant::now();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let parked = backend.parked_ms();
+        let wall = union_start.elapsed().as_millis() as u64;
+        // The old per-call accumulation credited ~2x the wall duration;
+        // union accounting must track the wall clock, never exceed it by
+        // more than the slack between the two readings.
+        assert!(
+            parked >= 60,
+            "the live union must be crediting the ongoing wait: {parked}"
+        );
+        assert!(
+            parked <= wall + 60,
+            "two overlapping parks must not double-credit: parked {parked}, wall {wall}"
+        );
+        let _ = tx.send(true);
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        assert_eq!(denial_of(&first), None);
+        assert_eq!(denial_of(&second), None);
+        let settled = backend.parked_ms();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(backend.parked_ms(), settled, "credit stops when both leave");
+    }
+
+    /// Review R4 F7(c): a session-scoped typed request id restated with
+    /// CHANGED arguments must never receive the first request's cached
+    /// result — it fails closed with a stable refusal and executes
+    /// nothing.
+    #[tokio::test]
+    async fn replay_never_serves_a_restated_request_with_different_content() {
+        let (backend, authority) = sequenced_backend().await;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("A"));
+        let first = backend
+            .call_tool(
+                "search_notes",
+                args.clone(),
+                &scope_with("vendor-session-1", Some(RpcId::Number(4))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&first), None);
+        assert!(
+            first.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("\"seq\":1")
+        );
+        let mut changed = JsonObject::new();
+        changed.insert("q".into(), json!("B"));
+        let restated = backend
+            .call_tool(
+                "search_notes",
+                changed,
+                &scope_with("vendor-session-1", Some(RpcId::Number(4))),
+            )
+            .await
+            .unwrap();
+        let denial = denial_of(&restated).expect("fail-closed refusal, not a replay");
+        assert_eq!(denial["code"], "replay_conflict");
+        assert!(
+            !restated.content[0].as_text().unwrap().text.contains("seq"),
+            "the first request's cached result must never travel"
+        );
+        // The faithful restatement of A still replays exactly once; the
+        // mismatching one executed nothing new.
+        let replay = backend
+            .call_tool(
+                "search_notes",
+                args,
+                &scope_with("vendor-session-1", Some(RpcId::Number(4))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&replay).unwrap(),
+            serde_json::to_string(&first).unwrap()
+        );
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
     }
 }

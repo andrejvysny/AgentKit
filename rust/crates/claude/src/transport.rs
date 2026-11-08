@@ -6,7 +6,10 @@
 //! emitting anything can never deadlock against input delivery), bounded
 //! framing/backpressure, generation-bound handles, and group-scoped
 //! interrupt escalation SIGINT → SIGTERM → SIGKILL with an honest
-//! [`InterruptReceipt`].
+//! [`InterruptReceipt`]. Normal completion reconciles the owned process
+//! group too (review round-4 F5): a leader that exits while its group keeps
+//! running is not a finished attempt, so `wait` sweeps and VERIFIES the
+//! group empty before finalization disarms cleanup.
 
 use std::collections::{HashMap, VecDeque};
 #[cfg(unix)]
@@ -113,6 +116,11 @@ impl SharedChild {
 pub struct OwnedProcessSupervisor {
     next_generation: AtomicU64,
     live: Arc<Mutex<HashMap<u32, std::sync::Weak<SharedChild>>>>,
+    /// Review round-4 F5: the honest descendant-cleanup outcome of the most
+    /// recent NORMAL completion per pid. [`ProcessExit`] is the shared port
+    /// type and cannot carry it, so the supervisor records it for the
+    /// attempt identity; bounded, newest wins.
+    cleanup_reports: Arc<Mutex<HashMap<u32, (u64, InterruptReceipt)>>>,
 }
 
 impl Default for OwnedProcessSupervisor {
@@ -126,7 +134,27 @@ impl OwnedProcessSupervisor {
         OwnedProcessSupervisor {
             next_generation: AtomicU64::new(0),
             live: Arc::new(Mutex::new(HashMap::new())),
+            cleanup_reports: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Review round-4 F5: descendant-cleanup honesty for a normally
+    /// completed attempt. `None` means no normal-completion finalize is
+    /// recorded for that exact `(pid, generation)` — which is NOT a claim
+    /// that the group was clean. `cleanup_uncertain` on the receipt is the
+    /// surface: set when the owned process group could not be VERIFIED
+    /// empty after the leader exited. This is the concrete-type read-back;
+    /// consumers holding `dyn ProcessSupervisor` use the trait method of
+    /// the same purpose, [`ProcessSupervisor::descendant_cleanup`], which
+    /// delegates here.
+    #[must_use]
+    pub fn descendant_cleanup_report(&self, pid: u32, generation: u64) -> Option<InterruptReceipt> {
+        self.cleanup_reports
+            .lock()
+            .unwrap()
+            .get(&pid)
+            .filter(|(recorded, _)| *recorded == generation)
+            .map(|(_, receipt)| receipt.clone())
     }
 }
 
@@ -163,16 +191,21 @@ fn group_kill(pgid: u32, sig: i32) -> Result<(), String> {
     Err(format!("kill(-{pgid}, {sig}) failed: {err}"))
 }
 
-/// Live (non-zombie) members of our process group, via /proc. Used to make
-/// the shutdown ladder honest about descendants: a leader that exits while
-/// its group keeps running is not a terminated shutdown. Off Linux (or if
-/// /proc is unreadable) the group is considered quiet, preserving the
-/// leader-only semantics.
+/// Live (non-zombie) members of our process group, via /proc, or `None`
+/// when the scan itself could not be trusted. `Some(0)` is a group VERIFIED
+/// empty; `None` is uncertainty and must NEVER be read as quiet (review
+/// round-4 F5). Used to make the shutdown ladder honest about descendants:
+/// a leader that exits while its group keeps running is not a terminated
+/// shutdown, and a normal leader exit is not a cleaned-up group either.
 #[cfg(target_os = "linux")]
-fn group_live_count(pgid: u32) -> usize {
+fn group_live_scan(pgid: u32) -> Option<usize> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
-        return 0;
+        return None;
     };
+    // A pid that vanished between `readdir` and the read is normal; a pid
+    // still present whose `stat` we cannot read is not, and must not be
+    // silently counted as "not a member".
+    let present = |pid: u32| std::path::Path::new(&format!("/proc/{pid}")).exists();
     let mut live = 0;
     for entry in entries.flatten() {
         let Some(pid) = entry
@@ -188,22 +221,50 @@ fn group_live_count(pgid: u32) -> usize {
             continue;
         }
         let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            if present(pid) {
+                return None;
+            }
             continue;
         };
         let Some(close) = stat.rfind(')') else {
+            if present(pid) {
+                return None;
+            }
             continue;
         };
         // After `comm`: state, ppid, pgrp, session, …
         let mut fields = stat[close + 1..].split_whitespace();
         let (Some(state), Some(_ppid), Some(pgrp)) = (fields.next(), fields.next(), fields.next())
         else {
+            if present(pid) {
+                return None;
+            }
             continue;
         };
-        if pgrp.parse::<u32>() == Ok(pgid) && state != "Z" {
-            live += 1;
+        match pgrp.parse::<u32>() {
+            Ok(pgrp) if pgrp == pgid && state != "Z" => live += 1,
+            Ok(_) => {}
+            Err(_) if present(pid) => return None,
+            Err(_) => {}
         }
     }
-    live
+    Some(live)
+}
+
+/// Ladder-facing view of [`group_live_scan`]: a failed scan stays "quiet"
+/// so a rung on an unobservable /proc never hangs the bounded shutdown
+/// (pre-F5 semantics, preserved for the ladder paths). Callers that need
+/// CLEANUP CERTAINTY must use [`group_live_scan`] directly.
+#[cfg(target_os = "linux")]
+fn group_live_count(pgid: u32) -> usize {
+    group_live_scan(pgid).unwrap_or(0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn group_live_scan(_pgid: u32) -> Option<usize> {
+    // No /proc: group liveness is unobservable, which is uncertainty,
+    // never certainty (AGENTKIT-110).
+    None
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -259,6 +320,141 @@ async fn await_rung(shared: &Arc<SharedChild>, ms: i64) -> bool {
     })
     .await
     .is_ok()
+}
+
+/// Receipt for a cleanup whose CONFIRMATION failed: the leader is gone,
+/// but the group could not be proven empty (review round-4 F5).
+fn uncertain_receipt(
+    label: &str,
+    sigterm: bool,
+    sigkill: bool,
+    note: impl Into<String>,
+) -> InterruptReceipt {
+    InterruptReceipt {
+        terminated: true,
+        escalated_to_sigterm: sigterm,
+        escalated_to_sigkill: sigkill,
+        cleanup_uncertain: true,
+        detail: Some(format!("policy={label}; {}", note.into())),
+    }
+}
+
+/// Bounded wait for the owned group to be VERIFIED empty. A failed scan is
+/// uncertainty, never quiet (review round-4 F5).
+async fn await_group_quiet(shared: &Arc<SharedChild>, ms: i64) -> bool {
+    let budget = Duration::from_millis(ms.max(1) as u64);
+    tokio::time::timeout(budget, async {
+        loop {
+            match group_live_scan(shared.pgid) {
+                Some(0) => return true,
+                Some(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                None => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Review round-4 F5: reconcile the owned process group after the LEADER
+/// exited on the normal `wait` path (whether it exited on its own or after
+/// an acknowledged interrupt — the exit facts themselves are never
+/// touched). A leader that emitted its root result and exited 0
+/// while a same-group descendant keeps writing is NOT a finished attempt:
+/// the descendant is still ours and must not survive the attempt. Called
+/// by `wait` BEFORE finalization (which disarms drop cleanup and
+/// deregisters), reusing the ladder's own machinery: SIGTERM the group,
+/// await the operator grace, SIGKILL stragglers, then VERIFY empty.
+///
+/// The leader's exit facts are never touched — only group ownership is
+/// settled. What cannot be proven is reported, not assumed: an unobservable
+/// platform, a failed /proc scan, or a member that survives SIGKILL (e.g.
+/// stuck in D state) all come back `cleanup_uncertain` with an honest
+/// detail.
+async fn reconcile_group_after_leader_exit(
+    shared: &Arc<SharedChild>,
+    limits: &ResourceLimits,
+    after_interrupt: bool,
+) -> InterruptReceipt {
+    let label = if after_interrupt {
+        "interruptedCompletion"
+    } else {
+        "normalCompletion"
+    };
+    let cause = if after_interrupt {
+        "leader exited after the interrupt"
+    } else {
+        "leader exited normally"
+    };
+    if !group_liveness_observable() {
+        // Nothing observable: best-effort sweep like the ladder's
+        // unobservable-platform branch, and stay honest about it.
+        let _ = group_kill(shared.pgid, SIGKILL);
+        return success_receipt(
+            label,
+            false,
+            true,
+            &format!("{cause}; process-group descendants unverifiable on this platform"),
+        );
+    }
+    let Some(stragglers) = group_live_scan(shared.pgid) else {
+        return uncertain_receipt(
+            label,
+            false,
+            false,
+            format!("{cause} but the process-group scan failed: descendants unverified"),
+        );
+    };
+    if stragglers == 0 {
+        return success_receipt(
+            label,
+            false,
+            false,
+            &format!("{cause}; process group already empty"),
+        );
+    }
+    if let Err(reason) = group_kill(shared.pgid, SIGTERM) {
+        return uncertain_receipt(
+            label,
+            false,
+            false,
+            format!("{cause} with {stragglers} descendant(s) and {reason}"),
+        );
+    }
+    if await_group_quiet(shared, limits.terminate_grace_ms).await {
+        return success_receipt(
+            label,
+            true,
+            false,
+            &format!("{cause}; {stragglers} descendant(s) exited after SIGTERM"),
+        );
+    }
+    if let Err(reason) = group_kill(shared.pgid, SIGKILL) {
+        return uncertain_receipt(
+            label,
+            true,
+            false,
+            format!("SIGTERM left descendants and {reason}"),
+        );
+    }
+    if await_group_quiet(shared, limits.cleanup_timeout_ms).await {
+        return success_receipt(
+            label,
+            true,
+            true,
+            &format!("{cause}; {stragglers} descendant(s) exited after SIGKILL"),
+        );
+    }
+    let remaining = group_live_scan(shared.pgid).unwrap_or(usize::MAX);
+    uncertain_receipt(
+        label,
+        true,
+        true,
+        format!(
+            "{cause} but {remaining} process-group member(s) survived SIGKILL \
+             (uninterruptible or unobservable): descendants unverified"
+        ),
+    )
 }
 
 /// Core bounded shutdown ladder shared by `handle.interrupt` and
@@ -350,6 +546,24 @@ fn deregister(live: &Arc<Mutex<HashMap<u32, std::sync::Weak<SharedChild>>>>, s: 
     {
         map.remove(&s.pid);
     }
+}
+
+/// Bounded history of normal-completion descendant outcomes (review
+/// round-4 F5): the newest attempts only, so a long-lived supervisor never
+/// accumulates records without limit.
+const MAX_CLEANUP_REPORTS: usize = 64;
+
+fn record_cleanup_report(
+    reports: &Arc<Mutex<HashMap<u32, (u64, InterruptReceipt)>>>,
+    shared: &Arc<SharedChild>,
+    receipt: &InterruptReceipt,
+) {
+    let mut map = reports.lock().unwrap();
+    if map.len() >= MAX_CLEANUP_REPORTS {
+        let floor = shared.generation.saturating_sub(MAX_CLEANUP_REPORTS as u64);
+        map.retain(|_, (generation, _)| *generation > floor);
+    }
+    map.insert(shared.pid, (shared.generation, receipt.clone()));
 }
 
 /// Framed stdout reader: incremental newline framing with a hard
@@ -451,11 +665,22 @@ struct OwnedChild {
     frames_exhausted: bool,
     /// Cleanup ran to completion through `wait`/`interrupt`/drop: tasks
     /// are stopped and the child is deregistered. Only this disarms Drop.
+    /// `wait` may only set it AFTER the round-4 F5 group reconcile — a
+    /// leader exit alone never proves the group is gone.
     finalized: bool,
     live: Arc<Mutex<HashMap<u32, std::sync::Weak<SharedChild>>>>,
+    /// Review round-4 F5: where the normal-completion descendant outcome is
+    /// recorded (read back via
+    /// [`OwnedProcessSupervisor::descendant_cleanup_report`] / the
+    /// [`ProcessSupervisor::descendant_cleanup`] port method).
+    cleanup_reports: Arc<Mutex<HashMap<u32, (u64, InterruptReceipt)>>>,
 }
 
 impl OwnedChild {
+    /// Stop the tasks and retire the registry entry. Callers must have
+    /// settled the process GROUP first (review round-4 F5): `wait` runs
+    /// [`reconcile_group_after_leader_exit`] before this, and the abandon
+    /// path sweeps the group in `Drop`.
     fn finalize(&mut self) {
         self.frames_exhausted = true;
         self.finalized = true;
@@ -640,6 +865,17 @@ impl OwnedChildHandle for OwnedChild {
 
     async fn wait(&mut self) -> ProcessExit {
         let raw = self.await_process_exit().await;
+        // Review round-4 F5: the LEADER exiting is not the GROUP exiting.
+        // A leader that printed a valid successful root result and exited 0
+        // can leave a same-group descendant running, and `finalize` below
+        // both disarms drop cleanup and deregisters the attempt — so the
+        // owned group is reconciled (SIGTERM → grace → SIGKILL → verify
+        // empty, the ladder's own machinery) BEFORE anything is disarmed.
+        // The leader's exit facts are recorded first and stay unchanged.
+        let after_interrupt = self.shared.interrupt_requested.load(Ordering::SeqCst);
+        let receipt =
+            reconcile_group_after_leader_exit(&self.shared, &self.limits, after_interrupt).await;
+        record_cleanup_report(&self.cleanup_reports, &self.shared, &receipt);
         self.finalize();
         ProcessExit {
             pid: self.shared.pid,
@@ -771,6 +1007,7 @@ impl ProcessSupervisor for OwnedProcessSupervisor {
             frames_exhausted: false,
             finalized: false,
             live: Arc::clone(&self.live),
+            cleanup_reports: Arc::clone(&self.cleanup_reports),
         }))
     }
 
@@ -812,6 +1049,13 @@ impl ProcessSupervisor for OwnedProcessSupervisor {
             map.remove(&pid);
         }
         Some(receipt)
+    }
+
+    /// Review round-4 F5: the portable read-back of the normal-completion
+    /// group reconcile recorded by `wait`, delegating to the concrete
+    /// ledger accessor so both access paths report identically.
+    fn descendant_cleanup(&self, pid: u32, generation: u64) -> Option<InterruptReceipt> {
+        self.descendant_cleanup_report(pid, generation)
     }
 }
 
@@ -1506,5 +1750,120 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("orphaned vendor child {pid} outlived the supervisor shutdown");
+    }
+
+    /// Whether `pid` is a live (non-zombie) process. A zombie is terminated:
+    /// the signal landed and only reaping is pending (the reaper may be a
+    /// runtime task that outlives the assertion window).
+    fn pid_is_live(pid: u32) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat
+                .rfind(')')
+                .is_some_and(|c| stat[c + 1..].split_whitespace().next() != Some("Z")),
+            Err(_) => false,
+        }
+    }
+
+    /// Review round-4 F5 (real OS reproduction): the NORMAL completion path
+    /// must not leave descendants running. The leader starts a same-process-
+    /// group descendant that keeps appending to a heartbeat file, emits a
+    /// valid successful root result and exits 0. `wait()` must reconcile the
+    /// owned group (SIGTERM → grace → SIGKILL → verify empty) before it
+    /// deregisters, so after the handle and the supervisor are dropped the
+    /// descendant is gone and the heartbeat provably stopped growing.
+    #[tokio::test]
+    async fn normal_completion_reaps_same_group_descendants() {
+        let dir = TempDir::new().unwrap();
+        let heartbeat = dir.path().join("heartbeat");
+        let pidfile = dir.path().join("descendant.pid");
+        let result_frame = r#"{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"sess-1"}"#;
+        // Background job = same process group as the leader. The leader
+        // waits for the descendant's first heartbeat byte so the reconcile
+        // can never race the descendant's start.
+        let script = format!(
+            "hb={heartbeat:?}\npidf={pidfile:?}\n( while :; do printf 'x' >> \"$hb\"; sleep 0.1; done ) &\np=$!\nprintf '%s' \"$p\" > \"$pidf\"\nwhile [ ! -s \"$hb\" ]; do :; done\nprintf '%s\\n' '{result_frame}'\nexit 0\n",
+        );
+        let exe = fixture(&dir, "leader_with_descendant.sh", &script);
+        let sup = OwnedProcessSupervisor::new();
+        let mut child = spawn_child(&sup, exe, &dir, &tight_limits()).await;
+
+        // The leader's successful root result is delivered intact: the F5
+        // reconcile never touches the leader's exit facts.
+        match read_frame(child.as_mut(), 5_000).await {
+            Some(FrameLine::Line(bytes)) => {
+                assert_eq!(String::from_utf8_lossy(&bytes), result_frame);
+            }
+            other => panic!("expected the successful root result frame, got {other:?}"),
+        }
+        let pid = child.pid();
+        let descendant: u32 = std::fs::read_to_string(&pidfile)
+            .expect("descendant recorded its pid")
+            .trim()
+            .parse()
+            .expect("descendant pid is numeric");
+        assert!(
+            pid_is_live(descendant),
+            "the same-group descendant must be running before wait()"
+        );
+
+        let exit = child.wait().await;
+        assert_eq!(exit.exit_code, Some(0), "leader exit code preserved");
+        assert_eq!(exit.signal, None);
+        assert!(!exit.after_interrupt, "this is a normal completion");
+        assert_eq!(exit.pid, pid);
+
+        // The honest F5 surface: normal completion records what it could
+        // prove about the group — through the portable port method and the
+        // concrete accessor alike.
+        let receipt = sup
+            .descendant_cleanup(pid, exit.generation)
+            .expect("normal completion records its descendant outcome");
+        assert_eq!(
+            Some(receipt.clone()),
+            sup.descendant_cleanup_report(pid, exit.generation),
+            "the trait read-back and the concrete accessor agree"
+        );
+        assert!(
+            sup.descendant_cleanup(pid, exit.generation + 1).is_none(),
+            "a stale generation has no report, which is not a claim of clean"
+        );
+        assert!(receipt.terminated, "{receipt:?}");
+        if std::fs::read_dir("/proc").is_ok() {
+            assert!(
+                !receipt.cleanup_uncertain,
+                "the group must be verified empty: {receipt:?}"
+            );
+        } else {
+            assert!(
+                receipt.cleanup_uncertain,
+                "an unobservable group is never reported as certain: {receipt:?}"
+            );
+        }
+
+        // Exactly the reproduction: drop the child handle and the
+        // supervisor, then prove the descendant is dead rather than alive
+        // and still writing.
+        drop(child);
+        drop(sup);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while pid_is_live(descendant) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "same-group descendant {descendant} survived normal completion (F5)"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Two samples across more than one write interval: equal sizes prove
+        // the heartbeat stopped, i.e. the writer is really dead.
+        let size = |path: &std::path::Path| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let before = size(&heartbeat);
+        assert!(before > 0, "the descendant wrote its heartbeat first");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            before,
+            size(&heartbeat),
+            "descendant kept writing after the group reconcile"
+        );
     }
 }

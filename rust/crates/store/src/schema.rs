@@ -22,7 +22,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
 /// full scans.
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -317,6 +317,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 18 {
             migrate_native_continuations(&mut connection)?;
         }
+        if version < 19 {
+            migrate_continuation_claims(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -431,7 +434,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 17 {
         sql.push_str(NATIVE_EXEC_SCHEMA);
     }
-    if version >= 18 {
+    if version >= 19 {
+        sql.push_str(CONTINUATION_CLAIM_SCHEMA);
+    } else if version >= 18 {
         sql.push_str(NATIVE_CONTINUATION_SCHEMA);
     }
     sql
@@ -543,6 +548,53 @@ fn migrate_native_continuations(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(NATIVE_CONTINUATION_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 18)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Review round-4 F3: a continuation binding is a CLAIMABLE resource, not
+/// only a commit record. Additive at schema version 19: `state` gains
+/// `'owned'` (atomically claimed by one attempt before its input is sent)
+/// and `'uncertain'` (interrupted after input was accepted — exact resume
+/// from the pre-claim position is blocked until reconciled), plus the
+/// claimant columns and a per-row `generation` the compare-and-set fences
+/// on. Purely additive: existing rows keep their state and gain
+/// `claimed_*=NULL, generation=0`; the rebuild (same scratch-copy pattern
+/// as `migrate_free_receipts`, because the CHECK constraint cannot be
+/// altered in place) preserves every column byte-for-byte.
+const CONTINUATION_CLAIM_SCHEMA: &str = r#"
+CREATE TABLE native_continuations(binding_id TEXT PRIMARY KEY, conversation TEXT NOT NULL, parent TEXT NOT NULL, history_position INTEGER NOT NULL, backend TEXT NOT NULL, executable TEXT NOT NULL, config_identity TEXT NOT NULL, system_prompt_revision TEXT, vendor_session_id TEXT NOT NULL, owning_attempt_id TEXT NOT NULL, owning_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, state TEXT NOT NULL CHECK(state IN ('active','owned','uncertain','superseded','retired')), committed_at INTEGER NOT NULL, claimed_attempt_id TEXT, claimed_task_id TEXT, claimed_at INTEGER, generation INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS native_continuations_scope ON native_continuations(conversation,parent,history_position,backend,executable,config_identity,state);
+CREATE INDEX IF NOT EXISTS native_continuations_attempt ON native_continuations(owning_attempt_id);
+CREATE TABLE IF NOT EXISTS native_call_receipts(receipt_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, invocation_id TEXT NOT NULL, tool_name TEXT NOT NULL, content_hash TEXT NOT NULL, record TEXT NOT NULL, recorded_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS native_call_receipts_invocation ON native_call_receipts(attempt_id,invocation_id);
+"#;
+
+fn migrate_continuation_claims(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('native_continuations') WHERE name='claimed_attempt_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_column {
+        // The table predates the claim model: park the rows in a plain
+        // scratch table, rebuild with the extended state CHECK, restore.
+        // A failure below rolls the whole transaction (user_version
+        // included) back, leaving `native_continuations` exactly as it was.
+        transaction.execute_batch(
+            "CREATE TABLE native_continuations_copy(binding_id TEXT, conversation TEXT, parent TEXT, history_position INTEGER, backend TEXT, executable TEXT, config_identity TEXT, system_prompt_revision TEXT, vendor_session_id TEXT, owning_attempt_id TEXT, owning_task_id TEXT, state TEXT, committed_at INTEGER);",
+        )?;
+        transaction.execute_batch(
+            "INSERT INTO native_continuations_copy SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations;",
+        )?;
+        transaction.execute_batch("DROP TABLE native_continuations;")?;
+        transaction.execute_batch(CONTINUATION_CLAIM_SCHEMA)?;
+        transaction.execute_batch(
+            "INSERT INTO native_continuations SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at, NULL, NULL, NULL, 0 FROM native_continuations_copy; DROP TABLE native_continuations_copy;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", 19)?;
     transaction.commit()?;
     Ok(())
 }
