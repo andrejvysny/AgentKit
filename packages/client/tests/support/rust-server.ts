@@ -1,12 +1,13 @@
 import type { AiProviderClient } from "@agentkit/core";
 import { startProviderBridge } from "./provider-bridge.js";
-import type {
-  MemoryAssistantStore,
-  MemorySecretStore,
-} from "@agentkit/adapters-memory";
 import { MockProviderClient, type MockTurn } from "@agentkit/testing";
 import { startNativeServer } from "../../../../rust/tests/support/http-server.js";
-import type { TestServer, TestServerOptions } from "./server.js";
+import type {
+  TestSecretStore,
+  TestServer,
+  TestServerOptions,
+  TestTaskStore,
+} from "./server.js";
 
 export interface NativeClientServer<
   T extends AiProviderClient = MockProviderClient,
@@ -100,7 +101,7 @@ export async function startRustClientServer(
     return response.json();
   };
   let secretValues = new Map<string, string>();
-  const secrets = new Proxy(Object.create(null) as MemorySecretStore, {
+  const secrets = new Proxy(Object.create(null) as TestSecretStore, {
     get(_target, key) {
       if (key === "values") return new Map(secretValues);
       if (key === "get")
@@ -168,7 +169,7 @@ export async function startRustClientServer(
     },
   });
   bridge?.setEventsReader((runId, options) => tasks.listEvents(runId, options));
-  const store = new Proxy(Object.create(null) as MemoryAssistantStore, {
+  const store = new Proxy(Object.create(null) as TestTaskStore, {
     get(_target, key) {
       if (key === "tasks") return tasks;
       throw new Error(

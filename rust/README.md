@@ -138,7 +138,7 @@ bun run lint
 bun scripts/export-rust-fixtures.ts --check
 bun test
 bun run typecheck
-AGENTKIT_TEST_BACKEND=rust bun test --timeout 60000 packages/client/tests packages/react/tests
+bun test --timeout 60000 packages/client/tests packages/react/tests # Rust fixture is the only backend
 AGENTKIT_RUN_RUST_CONFORMANCE=1 AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE=1 bun test scripts/tests/rust-store-conformance.test.ts scripts/tests/rust-runner-conformance.test.ts
 cd rust
 cargo fmt --all --check

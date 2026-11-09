@@ -7,7 +7,6 @@ export async function startRustReactServer(
   options: TestServerOptions,
 ): Promise<TestServer> {
   const native = await startRustClientServer({
-    backend: "rust",
     ...(options.contributors === undefined
       ? {}
       : { contributors: options.contributors }),
