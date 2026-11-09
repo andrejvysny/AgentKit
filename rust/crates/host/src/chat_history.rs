@@ -454,6 +454,39 @@ pub(super) struct DurableEvents {
     pub display_metadata: Value,
     pub usage: Option<Arc<dyn UsageAuthorizer>>,
     pub usage_timeout_ms: u64,
+    pub reasoning: std::sync::Mutex<ReasoningTrack>,
+}
+
+/// Public reasoning of the turn in flight (TS `reasoning-projection.ts`).
+#[derive(Default)]
+pub(super) struct ReasoningTrack {
+    /// Every completed model step so far; lands on the display message.
+    accumulated: String,
+    /// Deltas of the step still streaming; replaced by the completed value.
+    streaming: String,
+    /// The last completed step's own `reasoningContent`, if the event had one.
+    step: Option<String>,
+}
+
+impl ReasoningTrack {
+    fn observe(&mut self, event: &Value) {
+        match event["type"].as_str() {
+            Some("run.message.reasoning-delta") => {
+                self.streaming
+                    .push_str(event["data"]["delta"].as_str().unwrap_or(""));
+            }
+            Some("run.message.completed") => {
+                self.step = event["data"]["reasoningContent"]
+                    .as_str()
+                    .map(str::to_owned);
+                let streamed = std::mem::take(&mut self.streaming);
+                self.accumulated
+                    .push_str(self.step.as_deref().unwrap_or(&streamed));
+            }
+            Some("run.warning") if event["data"]["code"] == "retry_pass" => *self = Self::default(),
+            _ => {}
+        }
+    }
 }
 #[async_trait]
 impl RunEventSink for DurableEvents {
@@ -487,6 +520,14 @@ impl DurableEvents {
         if event["type"] == "run.input.applied" {
             return self.persist_steered(&event).await;
         }
+        let (accumulated, step) = {
+            let mut track = self
+                .reasoning
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            track.observe(&event);
+            (track.accumulated.clone(), track.step.clone())
+        };
         let mut projected = vec![];
         for message in messages {
             let final_answer = message.role == "assistant" && message.tool_calls.is_empty();
@@ -503,6 +544,14 @@ impl DurableEvents {
             }
             if let Some(name) = &message.name {
                 metadata["toolName"] = name.clone().into();
+            }
+            if message.role == "assistant"
+                && let Some(step) = &step
+                && (!final_answer || self.canonical)
+            {
+                metadata["reasoningContent"] = step.clone().into();
+            } else if final_answer && !self.canonical {
+                set_reasoning(&mut metadata, &accumulated);
             }
             let input = MessageInput {
                 id: Some(if final_answer && !self.canonical {
@@ -540,6 +589,7 @@ impl DurableEvents {
                         let mut metadata = self.display_metadata.clone();
                         metadata["canonicalProviderDisplay"] = true.into();
                         metadata["placeholder"] = true.into();
+                        set_reasoning(&mut metadata, &accumulated);
                         metadata
                     },
                     ..MessageInput::default()
@@ -573,6 +623,13 @@ impl DurableEvents {
             .await;
         }
         Ok(())
+    }
+}
+
+/// An empty value never creates the key; an existing key is kept in step.
+fn set_reasoning(metadata: &mut Value, accumulated: &str) {
+    if !accumulated.is_empty() || metadata.get("reasoningContent").is_some() {
+        metadata["reasoningContent"] = accumulated.into();
     }
 }
 

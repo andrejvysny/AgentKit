@@ -119,12 +119,7 @@ async function streamTurn(
   return runId;
 }
 
-// TODO(P6): needs Rust host to project run.message.completed `reasoningContent`
-// into the persisted assistant message metadata (TS did, via
-// packages/host/src/turn/reasoning-projection.ts). Live streaming and the
-// durable event log already match; the reconciled message loses
-// `metadata.reasoningContent`, so the post-terminal assertion fails.
-test.skip("provider SSE reasoning streams through the real host, survives SQLite reopen and React reload exactly once", async () => {
+test("provider SSE reasoning streams through the real host, survives SQLite reopen and React reload exactly once", async () => {
   const { provider, release } = interceptedProvider();
   const bridge = startProviderBridge(provider);
   let server = await startNativeServer({

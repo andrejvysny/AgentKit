@@ -480,6 +480,7 @@ impl TaskExecutor for ChatExecutor {
                 .unwrap_or(json!({})),
             usage: options.usage.clone(),
             usage_timeout_ms: options.hook_timeouts.usage_ms,
+            reasoning: Default::default(),
         });
         let mut request = ChatRequest {
             model: model.into(),
