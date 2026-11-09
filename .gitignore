@@ -20,3 +20,12 @@ packages/native/generated/*.node
 
 # Claude session-local artifacts (worktrees, agent memory)
 .claude/
+/rust/scripts/sandbox-image/cache/
+/rust/scripts/sandbox-image/out/
+/rust/scripts/sandbox-image/registry/
+/scripts/sandbox-image/cache/
+/scripts/sandbox-image/out/
+/scripts/sandbox-image/registry/*
+!/scripts/sandbox-image/registry/*.sha256
+/scripts/sandbox-image/*.cpio.gz
+*.ext4
