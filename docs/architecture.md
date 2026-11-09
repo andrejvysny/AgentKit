@@ -37,7 +37,7 @@ In-process (Node/Bun)                 Out-of-process
   app                                   app / browser
    │ @agentkit/core, @agentkit/native     │ @agentkit/client (REST v1 + SSE)
    ▼                                      ▼
-  agentkit-napi (cdylib)                agentkit-transport-http (axum)
+  agentkit-napi (cdylib)                agentkit-http (axum)
    │                                      │ Backend trait
    ▼                                      ▼
   agentkit-host ── agentkit-core ◀── agentkit-host (http feature)
@@ -54,7 +54,7 @@ In-process (Node/Bun)                 Out-of-process
    JavaScript through the callback router; every `#[napi]` export is declared
    with `catch_unwind`. The binding can also start the HTTP server
    (`startHttpServer`) inside the same process.
-2. **Out-of-process.** `agentkit-transport-http` serves REST v1 and resumable
+2. **Out-of-process.** `agentkit-http` serves REST v1 and resumable
    SSE over an authenticated `Backend`; `agentkit-host` implements that
    `Backend` behind its `http` feature. `@agentkit/client` (TypeScript) and
    `agentkit-client` (Rust) are the typed clients. The HTTP backend is a
@@ -76,13 +76,13 @@ All crates live in `rust/crates/`. "Depends on" lists workspace crates only
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution, budgets | contracts |
 | `agentkit-store` | SQLite actor: tasks, attempts, leases, event log, conversations, projections, recovery | contracts, kernel |
 | `agentkit-connections` | App-scoped connections, consent, secret-store and network ports | contracts |
-| `agentkit-host` | Durable execution (`AgentHost`, worker), chat (`ChatExecutor`), agent sessions (`AgentSessionService`), profiles, governance, subagents, advisor, teammates, proposals, MCP configuration, optional HTTP backend | store, core, contracts, kernel, connections, transport-http (optional) |
-| `agentkit-transport-http` | Axum REST/SSE boundary over a `Backend` trait | contracts |
+| `agentkit-host` | Durable execution (`AgentHost`, worker), chat (`ChatExecutor`), agent sessions (`AgentSessionService`), profiles, governance, subagents, advisor, teammates, proposals, MCP configuration | store, core, contracts, kernel, connections |
+| `agentkit-http` | Axum REST/SSE boundary over a `Backend` trait, and the desktop backend (`DesktopBackend`) serving it from a local host | contracts, core, store, connections, host |
 | `agentkit-client` | Native HTTP client, replay decoding, presentation state | contracts |
 | `agentkit-mcp` | MCP client and server transports on `rmcp` | contracts, core |
 | `agentkit-toolpacks-coding` | Confined coding tools: filesystem, read-only git, sandboxed commands | contracts, core, host |
 | `agentkit-lsp` | LSP client, language-server lifecycle, code-intelligence tools | contracts, core |
-| `agentkit-napi` | Node-API binding behind `@agentkit/native` | store, host (http), core, connections, mcp, contracts, transport-http, toolpacks-coding, lsp |
+| `agentkit-napi` | Node-API binding behind `@agentkit/native` | store, host, core, connections, mcp, contracts, http, toolpacks-coding, lsp |
 | `agentkit-rust` (`crates/agentkit`) | Feature-selected integration facade; contracts only by default | contracts; others optional |
 
 `agentkit-host` is the large crate: ADR 0021 exists because it owns most

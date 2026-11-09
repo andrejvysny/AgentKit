@@ -1,0 +1,38 @@
+[package]
+name = "agentkit-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit HTTP driving adapter: REST v1 routes, SSE, and the desktop backend"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-contracts = { workspace = true }
+agentkit-core = { workspace = true }
+agentkit-host = { workspace = true }
+agentkit-store = { workspace = true }
+agentkit-connections = { workspace = true, features = ["http"] }
+async-trait.workspace = true
+axum.workspace = true
+async-stream.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+percent-encoding = "=2.3.2"
+reqwest.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+url.workspace = true
+
+[dev-dependencies]
+agentkit-mcp = { workspace = true }
+rusqlite = { workspace = true, features = ["bundled"] }
+tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }
+uuid.workspace = true

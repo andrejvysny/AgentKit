@@ -1,8 +1,7 @@
 use agentkit_contracts::*;
-use agentkit_host::http::{ProviderOperations, ToolCatalogPort, WritePolicyPort};
 use agentkit_host::{Authorization, HostResult, MutationIdentity, ProposalApplier};
+use agentkit_http::{Actor, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort};
 use agentkit_store::{ProposalRecord, ProposalStatus, SqliteStore};
-use agentkit_transport_http::{Actor, Problem};
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -164,9 +163,9 @@ pub async fn seed(store: &SqliteStore) -> HostResult<()> {
 
 pub async fn seed_compat(
     store: &SqliteStore,
-    backend: &agentkit_host::http::DesktopBackend,
+    backend: &agentkit_http::DesktopBackend,
 ) -> Result<(), Problem> {
-    use agentkit_transport_http::{Backend, OperationRequest};
+    use agentkit_http::{Backend, OperationRequest};
     let actor = Actor {
         id: "fixture-actor".into(),
         metadata: Default::default(),

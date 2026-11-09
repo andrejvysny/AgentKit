@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use agentkit_host::http::NativeProviderFactory;
 use agentkit_host::{
     AgentHost, AgentSessionService, ContentAuthority, ProfileRegistry, ProviderRegistry,
     WorkerHandle,
 };
+use agentkit_http::NativeProviderFactory;
 
 use crate::builder::AgentRuntimeBuilder;
 use crate::lanes::advisor::AdvisorLane;

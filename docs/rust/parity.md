@@ -127,7 +127,7 @@ sequences start at 0, so `afterSeq: 0` silently drops the first event;
 the wrapper now documents it.
 
 Native REST/SSE server (2026-11-01). The binding gained
-`startHttpServer`/`stopHttpServer`: `agentkit-transport-http`'s router
+`startHttpServer`/`stopHttpServer`: `agentkit-http`'s router
 over the host crate's `DesktopBackend` (bearer token enforced engine-side,
 ≥32 bytes) serves AgentKit REST v1 and the SSE run stream **from Rust**
 on the session service's own host/store — a Bun process gets the whole
@@ -149,7 +149,7 @@ the engine had behind its frozen option bag are now wired rather than
 documented away. **CORS** is a real `startHttpServer` option: the napi
 layer strictly parses `cors: {origins: "*"|[string], allowHeaders?,
 exposeHeaders?, maxAgeSeconds?}` into
-`agentkit_transport_http::CorsConfig` (`rust/crates/transport-http/src/cors.rs`),
+`agentkit_http::CorsConfig` (`rust/crates/http/src/cors.rs`),
 and the handler answers exactly the retired TypeScript transport's matrix
 (`packages/transport-http/src/cors.ts` + `handler.ts`): unconfigured means
 byte-for-byte untouched and OPTIONS still 405s; configured puts
@@ -159,7 +159,7 @@ answers matched-origin `OPTIONS` with 204 + that path's real method set,
 allow-headers defaults and max-age — while an unmatched-origin preflight
 falls through to the ordinary 405 and an unmatched path 404s, still
 decorated. Pinned by 5 unit + 6 socket-level tests
-(`rust/crates/transport-http/tests/cors.rs`) and the binding-level matrix
+(`rust/crates/http/tests/cors.rs`) and the binding-level matrix
 in `packages/native/tests/http-server.test.ts`; malformed `cors`/
 `providerSecrets` values fail `startHttpServer` with `invalid_input`
 rather than being ignored. **Provider-management credential writes** are
@@ -187,7 +187,7 @@ managed-content.ts`, `packages/native/tests/managed-content.test.ts`). The
 TypeScript `ConnectionService`, `PromptTemplateService`, `SkillService`
 and `createRunContentProvider` imports are gone from the recipe; the
 desktop backend's nine managed-content routes are served by the same
-engine (`rust/crates/host/src/http/managed_content.rs`), no longer by
+engine (`rust/crates/http/src/desktop/managed_content.rs`), no longer by
 `management.rs`'s "Native managed content services are not configured."
 stub. The generic managed-content connection-action API remains a separate limitation:
 Its generic `ConnectionService` lifecycle is not implicitly mapped to the explicit native MCP OAuth composition. The wrapper still exposes
@@ -242,7 +242,7 @@ params. Native suite: 187 pass / 2 named skips / 0 fail.
 Native client-contract proof (2026-11-01, AGENTKIT-56/59 evidence). With
 `AGENTKIT_TEST_BACKEND=rust`, the ENTIRE unchanged client suite (157
 tests) and react suite (76 tests) pass against the Rust server:
-`DesktopBackend` over `agentkit-transport-http`, real SQLite, JS
+`DesktopBackend` over `agentkit-http`, real SQLite, JS
 provider bridge — zero skips, all 39 contract routes already served,
 no engine gaps surfaced. The single baseline failure was fixture drift
 (`http_fixture` left the SSE `retry_hint` at the 500 ms default while

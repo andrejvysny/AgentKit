@@ -16,8 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use agentkit_host::http::DesktopBackend;
-use agentkit_transport_http::{Actor, Config, StreamOptions};
+use agentkit_http::{Actor, Config, DesktopBackend, StreamOptions};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -163,7 +162,7 @@ struct ServerOptions {
     /// Cross-origin policy mirrored from the TypeScript transport's
     /// `CorsConfig`: absent (default) answers plain HTTP with no CORS
     /// headers and OPTIONS with 405 — no browser was ever expected.
-    cors: Option<agentkit_transport_http::CorsConfig>,
+    cors: Option<agentkit_http::CorsConfig>,
     /// `"memory"` wires a volatile credential vault so the provider
     /// management routes' `apiKey`/`extraHeaders` writes really store
     /// secrets (mirroring the desktop example's `MemorySecretStore`);
@@ -219,8 +218,8 @@ pub(super) fn optional_text(
 
 /// Strictly parse `cors` into the transport's `CorsConfig`. Every accepted
 /// shape changes observable behavior; anything malformed fails the call.
-fn parse_cors(object: &Value) -> Result<Option<agentkit_transport_http::CorsConfig>> {
-    use agentkit_transport_http::{CorsConfig, CorsOrigins};
+fn parse_cors(object: &Value) -> Result<Option<agentkit_http::CorsConfig>> {
+    use agentkit_http::{CorsConfig, CorsOrigins};
     match object.get("cors") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) => {
@@ -389,7 +388,7 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
     })
 }
 
-/// Normalize a base path exactly as `agentkit_transport_http::router` does,
+/// Normalize a base path exactly as `agentkit_http::router` does,
 /// so the advertised `baseUrl` is the path that actually routes.
 fn normalize_base_path(path: &str) -> String {
     let path = path.trim().trim_end_matches('/').to_owned();

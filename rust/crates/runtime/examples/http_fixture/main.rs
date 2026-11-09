@@ -6,7 +6,8 @@ mod mcp_secrets;
 mod ports;
 mod provider;
 
-use agentkit_host::{SystemRuntime, ToolContributor, http::DesktopBackend};
+use agentkit_host::{SystemRuntime, ToolContributor};
+use agentkit_http::DesktopBackend;
 use agentkit_runtime::AgentRuntime;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -15,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use agentkit_connections::{
         AppId, ConnectionRepository, MemorySecretStore, NativeConnections, UnavailableNetwork,
     };
-    use agentkit_transport_http::{Actor, Config};
+    use agentkit_http::{Actor, Config};
     let path = std::env::args()
         .nth(1)
         .ok_or("SQLite path argument is required")?;
@@ -164,11 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inner: Arc::new(backend),
         read_hook,
     };
-    axum::serve(
-        socket,
-        agentkit_transport_http::router(Arc::new(backend), config),
-    )
-    .await?;
+    axum::serve(socket, agentkit_http::router(Arc::new(backend), config)).await?;
     worker.shutdown().await?;
     Ok(())
 }

@@ -31,8 +31,13 @@ dependencies = [
 name = "agentkit-client"
 version = "0.1.0"
 dependencies = [
+ "agentkit-connections",
  "agentkit-contracts",
- "agentkit-transport-http",
+ "agentkit-core",
+ "agentkit-host",
+ "agentkit-http",
+ "agentkit-runtime",
+ "agentkit-store",
  "async-stream",
  "async-trait",
  "axum",
@@ -40,8 +45,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -126,9 +133,7 @@ dependencies = [
  "agentkit-kernel",
  "agentkit-mcp",
  "agentkit-store",
- "agentkit-transport-http",
  "async-trait",
- "axum",
  "chrono",
  "futures",
  "libc",
@@ -144,6 +149,33 @@ dependencies = [
  "tokio-util",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "agentkit-http"
+version = "0.1.0"
+dependencies = [
+ "agentkit-connections",
+ "agentkit-contracts",
+ "agentkit-core",
+ "agentkit-host",
+ "agentkit-mcp",
+ "agentkit-store",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "futures",
+ "percent-encoding",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -204,10 +236,10 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
+ "agentkit-http",
  "agentkit-mcp",
  "agentkit-runtime",
  "agentkit-store",
- "agentkit-transport-http",
  "async-trait",
  "axum",
  "futures",
@@ -230,10 +262,10 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
+ "agentkit-http",
  "agentkit-lsp",
  "agentkit-store",
  "agentkit-toolpacks-coding",
- "agentkit-transport-http",
  "async-trait",
  "axum",
  "chrono",
@@ -259,10 +291,10 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
+ "agentkit-http",
  "agentkit-mcp",
  "agentkit-store",
  "agentkit-toolpacks-coding",
- "agentkit-transport-http",
 ]
 
 [[package]]
@@ -288,8 +320,8 @@ name = "agentkit-teammate-consumer"
 version = "0.1.0"
 dependencies = [
  "agentkit-host",
+ "agentkit-http",
  "agentkit-store",
- "agentkit-transport-http",
  "axum",
  "reqwest",
  "serde_json",
@@ -320,24 +352,6 @@ dependencies = [
  "tokio-util",
  "unicode-normalization",
  "uuid",
-]
-
-[[package]]
-name = "agentkit-transport-http"
-version = "0.1.0"
-dependencies = [
- "agentkit-contracts",
- "async-stream",
- "async-trait",
- "axum",
- "futures",
- "percent-encoding",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "url",
 ]
 
 [[package]]

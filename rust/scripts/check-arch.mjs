@@ -36,7 +36,6 @@ const LAYERS = {
   "agentkit-runtime": 5,
   "agentkit-napi": 6,
   "agentkit-http": 6,
-  "agentkit-transport-http": 6,
   "agentkit-client": 6,
   "agentkit-rust": 6,
 };

@@ -17,9 +17,9 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-contracts` | Portable Serde contracts, offline schema validation, routes and idempotency |
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
-| `agentkit-host` | Durable execution, agent sessions with steering/human input/plan grants, native run handles, proposal application and optional HTTP backend |
+| `agentkit-host` | Durable execution, agent sessions with steering/human input/plan grants, native run handles and proposal application |
 | `agentkit-connections` | Application namespaces, immutable selection, consent, secret-store and network ports |
-| `agentkit-transport-http` | Axum REST/SSE boundary over an authenticated backend |
+| `agentkit-http` | Axum REST/SSE boundary, plus the desktop backend serving it from a local host |
 | `agentkit-client` | Native HTTP client, replay decoding and presentation state |
 | `agentkit-mcp` | Official `rmcp` transports with the frozen TypeScript protocol revisions |
 | `agentkit-rust` | Feature-selected integration facade; contracts only by default |
@@ -147,10 +147,8 @@ cargo test --workspace --all-features --locked
 cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
 ```
 
-The HTTP teammates conformance lane needs the `http` feature and declares
-`required-features = ["http"]`, so running it without the feature fails
-instead of reporting a vacuous "0 passed":
-`cargo test --locked -p agentkit-host --features http --test http_teammates`.
+The HTTP teammates conformance lane lives in `agentkit-http`:
+`cargo test --locked -p agentkit-http --test http_teammates`.
 The napi lane exposes 14 of the 15 Hybrid M1 teammate operations;
 `streamAgentTask` (SSE) is intentionally absent on the native boundary
 (see `crates/napi/src/teammate_lane.rs`).

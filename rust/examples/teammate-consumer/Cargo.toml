@@ -11,9 +11,9 @@ description = "Headless consumer walkthrough of the AGENTKIT-90 M1 teammate surf
 workspace = true
 
 [dependencies]
-agentkit-host = { workspace = true, features = ["http"] }
+agentkit-host = { workspace = true }
 agentkit-store = { workspace = true }
-agentkit-transport-http = { workspace = true }
+agentkit-http = { workspace = true }
 axum.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

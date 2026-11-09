@@ -77,7 +77,7 @@ pub const ASSISTANT_SETTINGS_KEY: &str = "assistant";
 /// the compatibility record here is what makes an imported
 /// `toolCalling: "off"` reach the executor instead of dying in storage.
 /// The literals must match `crates/napi/src/store_settings.rs` and
-/// `crates/host/src/http/management.rs`, which hardcode them.
+/// `crates/http/src/desktop/management.rs`, which hardcode them.
 pub const SETTINGS_NAMESPACE: &str = "http";
 /// The only key [`SETTINGS_NAMESPACE`] holds the settings document under.
 pub const SETTINGS_KEY: &str = "settings";

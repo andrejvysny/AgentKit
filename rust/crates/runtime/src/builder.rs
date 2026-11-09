@@ -9,13 +9,13 @@ use std::sync::Arc;
 
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
-use agentkit_host::http::NativeProviderFactory;
 use agentkit_host::{
     AdvisorEventSink, AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
     ChatExecutor, ChatExecutorOptions, CodingPermissionAuthority, ContentAuthority, HostOptions,
     ProfileRegistry, ProviderRegistry, SharedRuntime, SystemRuntime, TaskExecutor, ToolContributor,
     ToolGuard, VerificationHook,
 };
+use agentkit_http::NativeProviderFactory;
 use serde_json::Value;
 
 use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};

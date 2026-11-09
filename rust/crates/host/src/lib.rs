@@ -11,8 +11,6 @@ mod continuation;
 mod dispatch;
 mod emulated_tool_call;
 mod governance;
-#[cfg(feature = "http")]
-pub mod http;
 mod mcp_configuration;
 mod ports;
 mod profiles;

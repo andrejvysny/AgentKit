@@ -468,7 +468,7 @@ impl AgentSessionService {
         self.get_state(&chat.id).await
     }
 
-    pub(crate) async fn create_session_chat(
+    pub async fn create_session_chat(
         &self,
         input: &CreateSessionInput,
     ) -> SessionResult<ChatRecord> {

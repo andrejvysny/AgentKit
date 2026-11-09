@@ -58,7 +58,7 @@ function fixture(): string {
   write(root, "rust/crates/host/src/lib.rs", '"contractVersion": "0.7.0"\n');
   write(
     root,
-    "rust/crates/host/src/http/management.rs",
+    "rust/crates/http/src/desktop/management.rs",
     '"contractVersion":"0.7.0"\n',
   );
   return root;

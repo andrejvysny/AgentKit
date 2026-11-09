@@ -43,7 +43,7 @@ function nativeVersions(read, before, after) {
     ],
     ["rust/crates/host/src/lib.rs", `"contractVersion": "${before}"`],
     [
-      "rust/crates/host/src/http/management.rs",
+      "rust/crates/http/src/desktop/management.rs",
       `"contractVersion":"${before}"`,
     ],
   ]) {

@@ -2,11 +2,10 @@
   "comment": "Existing architecture violations (see docs/adr/0021). Only shrinks; remove entries as migration phases resolve them.",
   "violations": [
     "R1 agentkit-core -> reqwest",
-    "R1 agentkit-host -> axum",
     "R1 agentkit-host -> reqwest",
     "R1b agentkit-host -> agentkit-connections",
     "R1b agentkit-host -> agentkit-store",
-    "R1b agentkit-host -> agentkit-transport-http",
+    "R1b agentkit-runtime -> agentkit-http",
     "R5 agentkit-client src/lib.rs pub use presentation::*",
     "R5 agentkit-connections src/lib.rs pub use credentials::*",
     "R5 agentkit-connections src/lib.rs pub use discovery::*",
@@ -68,12 +67,12 @@
     "R5 agentkit-host src/lib.rs pub use subagents::*",
     "R5 agentkit-host src/lib.rs pub use subscription::*",
     "R5 agentkit-host src/lib.rs pub use teammates::*",
-    "R5 agentkit-host src/mcp_configuration.rs #[path] mcp_configuration_http.rs",
     "R5 agentkit-host src/mcp_configuration.rs #[path] mcp_configuration_secrets.rs",
     "R5 agentkit-host src/mcp_configuration.rs #[path] mcp_configuration_state.rs",
     "R5 agentkit-host src/mcp_configuration_state.rs static RUNTIMES",
     "R5 agentkit-host src/mcp_configuration_state.rs static STATES",
     "R5 agentkit-host src/runner.rs #[path] runner_tests.rs",
+    "R5 agentkit-http src/routes.rs static ROUTES",
     "R5 agentkit-mcp src/oauth_store.rs static LOCKS",
     "R5 agentkit-napi src/errors.rs static CONTRACT",
     "R5 agentkit-napi src/jsbridge.rs static CALLS",
@@ -166,7 +165,6 @@
     "R5 agentkit-toolpacks-coding src/process_tree.rs static PS_TABLE",
     "R5 agentkit-toolpacks-coding src/process_tree.rs static PS_TOKEN",
     "R5 agentkit-toolpacks-coding src/version_ledger.rs static LEDGER",
-    "R5 agentkit-toolpacks-coding src/version_ledger.rs static TEST_LOCK",
-    "R5 agentkit-transport-http src/routes.rs static ROUTES"
+    "R5 agentkit-toolpacks-coding src/version_ledger.rs static TEST_LOCK"
   ]
 }

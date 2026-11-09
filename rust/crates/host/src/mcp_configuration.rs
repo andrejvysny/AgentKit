@@ -91,6 +91,11 @@ impl McpConfigRepository {
         })
     }
 
+    /// The application scope this repository serves.
+    pub fn app_id(&self) -> &str {
+        &self.app_id
+    }
+
     /// A live runtime is bound to exactly one store/application scope.
     pub fn with_ports(
         self,
@@ -315,7 +320,3 @@ fn parse_record(mut value: Value) -> Result<McpServerDto, McpConfigError> {
     }
     serde_json::from_value(value).map_err(|_| McpConfigError::Invalid)
 }
-
-#[cfg(feature = "http")]
-#[path = "mcp_configuration_http.rs"]
-mod http_adapter;

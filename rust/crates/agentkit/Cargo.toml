@@ -17,7 +17,7 @@ default = []
 runtime = ["dep:agentkit-core", "dep:agentkit-connections"]
 durable = ["runtime", "dep:agentkit-host", "dep:agentkit-store"]
 client = ["dep:agentkit-client"]
-http = ["durable", "dep:agentkit-transport-http", "agentkit-host/http"]
+http = ["durable", "dep:agentkit-http"]
 mcp = ["dep:agentkit-mcp"]
 coding = ["durable", "dep:agentkit-toolpacks-coding"]
 keychain = ["runtime", "agentkit-connections/os-keychain"]
@@ -29,6 +29,6 @@ agentkit-connections = { workspace = true, optional = true }
 agentkit-host = { workspace = true, optional = true }
 agentkit-store = { workspace = true, optional = true }
 agentkit-client = { workspace = true, optional = true }
-agentkit-transport-http = { workspace = true, optional = true }
+agentkit-http = { workspace = true, optional = true }
 agentkit-mcp = { workspace = true, optional = true }
 agentkit-toolpacks-coding = { workspace = true, optional = true }

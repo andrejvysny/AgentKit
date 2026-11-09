@@ -1,8 +1,7 @@
 //! Host-owned vault and consent callbacks. Callback failures never expose vault text.
 use crate::jsbridge::{JsBridge, PendingKind};
 use agentkit_connections::{ConnectionError, RequestPlan, Secret, SecretKey, SecretStore};
-use agentkit_host::http::ProviderConsentPort;
-use agentkit_transport_http::{Actor, Problem};
+use agentkit_http::{Actor, Problem, ProviderConsentPort};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
