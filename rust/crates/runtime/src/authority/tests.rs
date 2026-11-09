@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{CancellationToken, ToolDefinition, ToolLimits};
-use agentkit_host::{CodingPermissionAuthority, PermissionContext};
-use agentkit_host::{
-    PlanApprovalPolicy, PlanGrantIntent, ToolContributionContext, ToolGuard, ToolGuardContext,
-    ToolGuardVerdict,
+use agentkit_governance::{
+    CodingPermissionAuthority, GovernanceResult, PermissionContext, ToolContributionContext,
+    ToolGuard, ToolGuardContext, ToolGuardVerdict,
 };
+use agentkit_host::{PlanApprovalPolicy, PlanGrantIntent};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -22,10 +22,7 @@ struct FixedAuthority {
 
 #[async_trait]
 impl CodingPermissionAuthority for FixedAuthority {
-    async fn mode_of(
-        &self,
-        _ctx: &PermissionContext,
-    ) -> agentkit_host::HostResult<Option<CodingMode>> {
+    async fn mode_of(&self, _ctx: &PermissionContext) -> GovernanceResult<Option<CodingMode>> {
         Ok(self.mode)
     }
 }

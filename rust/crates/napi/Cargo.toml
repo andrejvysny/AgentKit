@@ -19,6 +19,7 @@ crate-type = ["cdylib", "rlib"]
 agentkit-store = { workspace = true }
 agentkit-host = { workspace = true }
 agentkit-core = { workspace = true }
+agentkit-governance = { workspace = true }
 agentkit-connections = { workspace = true }
 agentkit-mcp = { workspace = true }
 agentkit-contracts = { workspace = true }

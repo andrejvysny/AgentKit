@@ -16,10 +16,13 @@ use agentkit_core::permission::{
     BlockedFinal, CodingMode, PLAN_MODE_BLOCKED_HINT, PermissionDecision, ToolClass,
     classify_capability, decide,
 };
-use agentkit_host::{
-    AgentSessionService, ApprovalAsk, CodingPermissionAuthority, HostResult, PermissionContext,
-    PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent, SessionExecutionAuthority, ToolGuard,
+use agentkit_governance::{
+    ApprovalAsk, CodingPermissionAuthority, GovernanceResult, PermissionContext, ToolGuard,
     ToolGuardContext, ToolGuardVerdict,
+};
+use agentkit_host::{
+    AgentSessionService, HostResult, PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent,
+    SessionExecutionAuthority,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -59,7 +62,7 @@ impl BindingAuthority {
 
 #[async_trait]
 impl CodingPermissionAuthority for BindingAuthority {
-    async fn mode_of(&self, ctx: &PermissionContext) -> HostResult<Option<CodingMode>> {
+    async fn mode_of(&self, ctx: &PermissionContext) -> GovernanceResult<Option<CodingMode>> {
         match self.inner() {
             Some(authority) => authority.mode_of(ctx).await,
             None => Ok(None),
@@ -69,7 +72,7 @@ impl CodingPermissionAuthority for BindingAuthority {
     async fn role_of(
         &self,
         ctx: &PermissionContext,
-    ) -> HostResult<Option<agentkit_core::permission::CodingRole>> {
+    ) -> GovernanceResult<Option<agentkit_core::permission::CodingRole>> {
         match self.inner() {
             Some(authority) => authority.role_of(ctx).await,
             None => Ok(None),
@@ -80,7 +83,7 @@ impl CodingPermissionAuthority for BindingAuthority {
         &self,
         chat_id: Option<&str>,
         plan_digest: &str,
-    ) -> HostResult<Option<bool>> {
+    ) -> GovernanceResult<Option<bool>> {
         match self.inner() {
             Some(authority) => authority.plan_approved(chat_id, plan_digest).await,
             None => Ok(None),
@@ -157,7 +160,7 @@ impl JsToolGuard {
 
 #[async_trait]
 impl ToolGuard for JsToolGuard {
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if context.namespace != JS_NAMESPACE {
             return Ok(ToolGuardVerdict::Allowed);
         }

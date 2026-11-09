@@ -123,11 +123,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-governance"
+version = "0.1.0"
+dependencies = [
+ "agentkit-core",
+ "async-trait",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio-util",
+]
+
+[[package]]
 name = "agentkit-host"
 version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-governance",
  "agentkit-kernel",
  "agentkit-mcp",
  "agentkit-store",
@@ -234,6 +246,7 @@ dependencies = [
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-governance",
  "agentkit-host",
  "agentkit-http",
  "agentkit-mcp",
@@ -284,6 +297,7 @@ dependencies = [
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-governance",
  "agentkit-host",
  "agentkit-http",
  "agentkit-lsp",
@@ -360,6 +374,7 @@ version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-governance",
  "agentkit-host",
  "agentkit-kernel",
  "agentkit-store",

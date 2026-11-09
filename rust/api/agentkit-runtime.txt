@@ -40,7 +40,7 @@ pub fn agentkit_runtime::AgentRuntimeBuilder::clock(self, agentkit_host::ports::
 pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_host::run_content::ContentAuthority>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::default_provider(self, alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::external_tools(self, agentkit_runtime::ExternalToolsPolicy) -> Self
-pub fn agentkit_runtime::AgentRuntimeBuilder::extra_contributors(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_host::governance::staging::ToolContributor>>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::extra_contributors(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::lease_ttl_ms(self, i64) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::plan(self, agentkit_runtime::PlanConfiguration) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::profiles(self, alloc::vec::Vec<serde_json::value::Value>) -> Self

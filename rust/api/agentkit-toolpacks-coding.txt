@@ -4,7 +4,6 @@ pub use agentkit_toolpacks_coding::CodingPermissionAuthority
 pub use agentkit_toolpacks_coding::CodingRole
 pub use agentkit_toolpacks_coding::PLAN_MODE_BLOCKED_HINT
 pub use agentkit_toolpacks_coding::PermissionContext
-pub use agentkit_toolpacks_coding::SessionExecutionAuthority
 pub mod agentkit_toolpacks_coding::args
 pub fn agentkit_toolpacks_coding::args::as_record(&serde_json::value::Value) -> core::result::Result<&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agentkit_toolpacks_coding::errors::CodingError>
 pub fn agentkit_toolpacks_coding::args::opt_bool(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<bool>, agentkit_toolpacks_coding::errors::CodingError>
@@ -33,11 +32,11 @@ impl agentkit_toolpacks_coding::command_policy::CommandClass
 pub fn agentkit_toolpacks_coding::command_policy::CommandClass::as_str(&self) -> &'static str
 pub struct agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R: agentkit_toolpacks_coding::command_policy::WorkspaceResolver>
 pub agentkit_toolpacks_coding::command_policy::CodingStandingApproval::resolver: R
-impl<R: agentkit_toolpacks_coding::command_policy::WorkspaceResolver> agentkit_host::governance::durable_execution::StandingApprovalPolicy for agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R>
-pub fn agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R>::key_for<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext, &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<(alloc::string::String, alloc::string::String)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl<R: agentkit_toolpacks_coding::command_policy::WorkspaceResolver> agentkit_governance::approval::StandingApprovalPolicy for agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R>
+pub fn agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R>::key_for<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext, &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<(alloc::string::String, alloc::string::String)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
-impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
-pub fn agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::guard::ToolGuard for agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
+pub fn agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_toolpacks_coding::command_policy::ShellArgs
 pub agentkit_toolpacks_coding::command_policy::ShellArgs::command: alloc::string::String
 pub agentkit_toolpacks_coding::command_policy::ShellArgs::cwd: core::option::Option<alloc::string::String>
@@ -298,10 +297,10 @@ pub mod agentkit_toolpacks_coding::guard
 pub struct agentkit_toolpacks_coding::guard::CodingPermissionGuard
 impl agentkit_toolpacks_coding::guard::CodingPermissionGuard
 pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::new(agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions) -> Self
-impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::guard::CodingPermissionGuard
-pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::guard::ToolGuard for agentkit_toolpacks_coding::guard::CodingPermissionGuard
+pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions
-pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>
 pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::mode: agentkit_core::permission::CodingMode
 pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::plan_tool_names: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::role: core::option::Option<agentkit_core::permission::CodingRole>
@@ -392,8 +391,8 @@ pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::dispose(&self)
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::env(&self) -> &alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>
 pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::new(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<Self>, agentkit_toolpacks_coding::errors::CodingError>
 pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::shutdown(&self)
-impl agentkit_host::governance::staging::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
-pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::governance::staging::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::contribution::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::namespace(&self) -> &str
 pub const agentkit_toolpacks_coding::pack::CODING_TOOL_NAMES: &[&str]
 pub async fn agentkit_toolpacks_coding::pack::create_coding_tool_pack(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_toolpacks_coding::pack::CodingToolPack>, agentkit_toolpacks_coding::errors::CodingError>
@@ -421,7 +420,7 @@ pub mod agentkit_toolpacks_coding::plan_tool
 pub const agentkit_toolpacks_coding::plan_tool::SUBMIT_PLAN_CAPABILITY: &str
 pub const agentkit_toolpacks_coding::plan_tool::SUBMIT_PLAN_TOOL_NAME: &str
 pub fn agentkit_toolpacks_coding::plan_tool::args_sha256_of(&serde_json::value::Value) -> alloc::string::String
-pub fn agentkit_toolpacks_coding::plan_tool::submit_plan_tool(u64, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::plan_tool::submit_plan_tool(u64, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
 pub mod agentkit_toolpacks_coding::process
 pub enum agentkit_toolpacks_coding::process::CleanupOutcome
 pub agentkit_toolpacks_coding::process::CleanupOutcome::Clean
@@ -655,7 +654,7 @@ pub agentkit_toolpacks_coding::types::CodingToolPackOptions::coordinator: core::
 pub agentkit_toolpacks_coding::types::CodingToolPackOptions::environment: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
 pub agentkit_toolpacks_coding::types::CodingToolPackOptions::limits: agentkit_toolpacks_coding::limits::CodingLimitsOverride
 pub agentkit_toolpacks_coding::types::CodingToolPackOptions::network: bool
-pub agentkit_toolpacks_coding::types::CodingToolPackOptions::permission: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::permission: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>
 pub agentkit_toolpacks_coding::types::CodingToolPackOptions::platform: core::option::Option<alloc::string::String>
 pub agentkit_toolpacks_coding::types::CodingToolPackOptions::sandbox: agentkit_toolpacks_coding::types::SandboxMode
 pub agentkit_toolpacks_coding::types::CodingToolPackOptions::sandbox_exec_path: core::option::Option<alloc::string::String>
@@ -818,10 +817,10 @@ pub fn agentkit_toolpacks_coding::limits::CodingLimitsOverride::resolve(&self) -
 pub struct agentkit_toolpacks_coding::CodingPermissionGuard
 impl agentkit_toolpacks_coding::guard::CodingPermissionGuard
 pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::new(agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions) -> Self
-impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::guard::CodingPermissionGuard
-pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::guard::ToolGuard for agentkit_toolpacks_coding::guard::CodingPermissionGuard
+pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_toolpacks_coding::CodingPermissionGuardOptions
-pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>
 pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::mode: agentkit_core::permission::CodingMode
 pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::plan_tool_names: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::role: core::option::Option<agentkit_core::permission::CodingRole>
@@ -831,8 +830,8 @@ pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::dispose(&self)
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::env(&self) -> &alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>
 pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::new(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<Self>, agentkit_toolpacks_coding::errors::CodingError>
 pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::shutdown(&self)
-impl agentkit_host::governance::staging::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
-pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::governance::staging::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::contribution::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::namespace(&self) -> &str
 pub struct agentkit_toolpacks_coding::CodingToolPackOptions
 pub agentkit_toolpacks_coding::CodingToolPackOptions::allow_git_writes: bool
@@ -843,7 +842,7 @@ pub agentkit_toolpacks_coding::CodingToolPackOptions::coordinator: core::option:
 pub agentkit_toolpacks_coding::CodingToolPackOptions::environment: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
 pub agentkit_toolpacks_coding::CodingToolPackOptions::limits: agentkit_toolpacks_coding::limits::CodingLimitsOverride
 pub agentkit_toolpacks_coding::CodingToolPackOptions::network: bool
-pub agentkit_toolpacks_coding::CodingToolPackOptions::permission: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::permission: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>
 pub agentkit_toolpacks_coding::CodingToolPackOptions::platform: core::option::Option<alloc::string::String>
 pub agentkit_toolpacks_coding::CodingToolPackOptions::sandbox: agentkit_toolpacks_coding::types::SandboxMode
 pub agentkit_toolpacks_coding::CodingToolPackOptions::sandbox_exec_path: core::option::Option<alloc::string::String>
@@ -886,8 +885,8 @@ pub agentkit_toolpacks_coding::EnvInit::sandbox_exec_path: alloc::string::String
 pub agentkit_toolpacks_coding::EnvInit::test_commands: alloc::vec::Vec<alloc::string::String>
 pub agentkit_toolpacks_coding::EnvInit::workspace_root: alloc::string::String
 pub struct agentkit_toolpacks_coding::HighRiskCommandGuard
-impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
-pub fn agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::guard::ToolGuard for agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
+pub fn agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_toolpacks_coding::InProcessCoordinator
 impl agentkit_toolpacks_coding::coordination::InProcessCoordinator
 pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::new(core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>) -> Self
@@ -1107,7 +1106,7 @@ pub fn agentkit_toolpacks_coding::sha256(&[u8]) -> alloc::string::String
 pub fn agentkit_toolpacks_coding::shell_args_of(&serde_json::value::Value) -> core::option::Option<agentkit_toolpacks_coding::command_policy::ShellArgs>
 pub fn agentkit_toolpacks_coding::split_bom(&str) -> agentkit_toolpacks_coding::edit_engine::SplitBom
 pub fn agentkit_toolpacks_coding::split_lines(&str) -> alloc::vec::Vec<&str>
-pub fn agentkit_toolpacks_coding::submit_plan_tool(u64, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::submit_plan_tool(u64, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
 pub async fn agentkit_toolpacks_coding::sweep_orphans(core::option::Option<u64>) -> usize
 pub fn agentkit_toolpacks_coding::system_clock() -> agentkit_toolpacks_coding::types::Clock
 pub fn agentkit_toolpacks_coding::to_coding_error(impl core::convert::Into<alloc::string::String>, bool) -> agentkit_toolpacks_coding::errors::CodingError

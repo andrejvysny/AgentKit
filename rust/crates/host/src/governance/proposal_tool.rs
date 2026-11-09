@@ -80,10 +80,6 @@ impl GovernedProposalTool {
         })
     }
 
-    pub(super) fn matches_actor(&self, actor: &Value, actor_id: Option<&str>) -> bool {
-        self.options.actor == *actor && self.options.actor_id.as_deref() == actor_id
-    }
-
     async fn stage(
         &self,
         context: &ToolContext,
@@ -293,6 +289,12 @@ impl GovernedProposalTool {
                 guard,
             )
             .await
+    }
+}
+
+impl agentkit_governance::GovernedWriteTool for GovernedProposalTool {
+    fn matches_actor(&self, actor: &Value, actor_id: Option<&str>) -> bool {
+        self.options.actor == *actor && self.options.actor_id.as_deref() == actor_id
     }
 }
 

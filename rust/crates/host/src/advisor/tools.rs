@@ -51,7 +51,7 @@ impl crate::ToolContributor for AdvisorContributor {
     async fn contribute(
         &self,
         _context: &crate::ToolContributionContext,
-    ) -> crate::HostResult<Vec<crate::ContributedTool>> {
+    ) -> crate::GovernanceResult<Vec<crate::ContributedTool>> {
         if !self.tools.config().enabled {
             return Ok(vec![]);
         }

@@ -1,8 +1,9 @@
 //! Fixture-only RPC for original tool contributor callbacks.
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
-use agentkit_host::{
-    ContributedTool, HostError, HostResult, ToolContributionContext, ToolContributor,
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
+use agentkit_host::HostError;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -18,14 +19,17 @@ impl ToolContributor for Contributor {
     fn namespace(&self) -> &str {
         &self.namespace
     }
-    async fn contribute(&self, ctx: &ToolContributionContext) -> HostResult<Vec<ContributedTool>> {
+    async fn contribute(
+        &self,
+        ctx: &ToolContributionContext,
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         let input = json!({"index":self.index,"context":{"chatId":ctx.chat_id,"runId":ctx.run_id,"scopeId":ctx.scope_id,"actorId":ctx.actor_id,"bindings":ctx.bindings,"limits":ctx.limits}});
         let request = reqwest::Client::new()
             .post(format!("{}/contribute", self.url))
             .bearer_auth(&self.token)
             .json(&input)
             .send();
-        let response = tokio::select! {_=ctx.cancellation.cancelled()=>return Err(HostError::Cancelled),result=request=>result.map_err(error)?};
+        let response = tokio::select! {_=ctx.cancellation.cancelled()=>return Err(HostError::Cancelled.into()),result=request=>result.map_err(error)?};
         let definitions: Vec<ToolDefinition> = response
             .error_for_status()
             .map_err(error)?

@@ -94,7 +94,10 @@ impl ToolContributor for Contributor {
     fn namespace(&self) -> &str {
         "coding"
     }
-    async fn contribute(&self, _: &ToolContributionContext) -> HostResult<Vec<ContributedTool>> {
+    async fn contribute(
+        &self,
+        _: &ToolContributionContext,
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         Ok(vec![ContributedTool::DirectWrite(self.0.clone())])
     }
 }

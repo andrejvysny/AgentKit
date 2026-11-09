@@ -17,7 +17,7 @@ struct Permission(Arc<AtomicBool>, bool);
 
 #[async_trait::async_trait]
 impl ToolGuard for Permission {
-    async fn can_execute(&self, _: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, _: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         Ok(if self.0.load(Ordering::SeqCst) {
             ToolGuardVerdict::Refused("permission revoked".into())
         } else if self.1 {
@@ -39,7 +39,7 @@ impl StandingApprovalPolicy for Standing {
         &self,
         _: &ToolGuardContext,
         _: &[String],
-    ) -> HostResult<Option<(String, String)>> {
+    ) -> GovernanceResult<Option<(String, String)>> {
         Ok(Some((DIGEST.into(), "echo".into())))
     }
 }

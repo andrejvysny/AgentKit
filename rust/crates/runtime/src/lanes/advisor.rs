@@ -5,11 +5,13 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use agentkit_core::{ChatProvider, RunHooks};
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+};
 use agentkit_host::{
     AdvisorConfig, AdvisorContributor, AdvisorEngine, AdvisorEventSink, AdvisorReport,
-    AdvisorToolSource, AdvisorTools, AgentSessionService, ContributedTool, HostResult,
-    ProviderRegistry, SharedRuntime, TaskSettledObserver, ToolContributionContext, ToolContributor,
-    Watchdog, WatchdogRunHooks,
+    AdvisorToolSource, AdvisorTools, AgentSessionService, HostResult, ProviderRegistry,
+    SharedRuntime, TaskSettledObserver, Watchdog, WatchdogRunHooks,
 };
 use agentkit_store::TaskRecord;
 use std::sync::Mutex as StdMutex;
@@ -240,7 +242,7 @@ impl ToolContributor for AdvisorLaneContributor {
     async fn contribute(
         &self,
         context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         let Some(state) = self.lane.state() else {
             return Ok(vec![]);
         };

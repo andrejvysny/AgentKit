@@ -11,7 +11,9 @@
 use std::sync::{Arc, Mutex};
 
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
-use agentkit_host::{ContributedTool, ToolContributionContext, ToolContributor};
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -290,7 +292,7 @@ impl ToolContributor for JsToolContributor {
     async fn contribute(
         &self,
         _context: &ToolContributionContext,
-    ) -> agentkit_host::HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         let definitions = self
             .definitions
             .lock()

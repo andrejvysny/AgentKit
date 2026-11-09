@@ -148,7 +148,10 @@ impl ToolContributor for WriterContributor {
     fn namespace(&self) -> &str {
         "coding"
     }
-    async fn contribute(&self, _: &ToolContributionContext) -> HostResult<Vec<ContributedTool>> {
+    async fn contribute(
+        &self,
+        _: &ToolContributionContext,
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         Ok(vec![ContributedTool::DirectWrite(self.tool.clone())])
     }
 }
@@ -160,7 +163,7 @@ struct AskGuard {
 
 #[async_trait]
 impl ToolGuard for AskGuard {
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if context.tool.name != self.tool {
             return Ok(ToolGuardVerdict::Allowed);
         }
@@ -183,7 +186,7 @@ impl StandingApprovalPolicy for KeyPolicy {
         &self,
         context: &ToolGuardContext,
         reasons: &[String],
-    ) -> HostResult<Option<(String, String)>> {
+    ) -> GovernanceResult<Option<(String, String)>> {
         if context.tool.name != "write_file"
             || !reasons
                 .iter()

@@ -1,7 +1,8 @@
-use super::GovernedProposalTool;
 use crate::{HostError, HostResult};
-use agentkit_core::{
-    CoreError, Tool, ToolContext, ToolDefinition, ToolLimits, ToolRegistry, ToolResult,
+use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult};
+use agentkit_governance::{
+    ApprovalAsk, ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+    ToolGuard, ToolGuardContext, ToolGuardVerdict,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -10,76 +11,34 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio_util::sync::CancellationToken;
 
 #[path = "execution_recheck.rs"]
 mod execution_recheck;
 
-#[derive(Clone)]
-pub struct ToolContributionContext {
-    pub chat_id: Option<String>,
-    pub run_id: String,
-    pub scope_id: Option<String>,
-    pub actor: Value,
-    pub actor_id: Option<String>,
-    pub bindings: Vec<Value>,
-    pub limits: ToolLimits,
-    pub cancellation: CancellationToken,
-    pub has_primary_binding: bool,
-    pub timeout_ms: u64,
-    /// Host-owned durable execution bundle (ADR 0020). When present, guarded
-    /// mutating tools admit/complete receipts around their body; when absent,
-    /// `effect: write` tools are refused rather than run unguarded.
-    pub durable: Option<Arc<super::DurableExecution>>,
-}
-
-#[derive(Clone)]
-pub enum ContributedTool {
-    Read(Arc<dyn Tool>),
-    /// Trusted hosts retain direct effects; guards authorize them and the domain
-    /// owns durable receipts and reconciliation of uncertain external effects.
-    DirectWrite(Arc<dyn Tool>),
-    Write(Arc<GovernedProposalTool>),
-}
-
-impl ContributedTool {
-    fn checked(&self, context: &ToolContributionContext) -> HostResult<Arc<dyn Tool>> {
-        match self {
-            Self::Read(tool) if tool.definition().effect == "read" => Ok(tool.clone()),
-            Self::DirectWrite(tool) if tool.definition().effect == "write" => {
-                let mut definition = tool.definition().clone();
-                definition.description = format!(
-                    "Direct write tool; host authorization and domain receipts are required. {}",
-                    definition.description
-                );
-                Ok(Arc::new(DirectWriteTool {
-                    inner: tool.clone(),
-                    definition,
-                }))
-            }
-            Self::Write(tool)
-                if tool.matches_actor(&context.actor, context.actor_id.as_deref()) =>
-            {
-                Ok(tool.clone())
-            }
-            _ => Err(HostError::Execution("tool_effect_or_actor_mismatch".into())),
+fn check_contribution(
+    tool: &ContributedTool,
+    context: &ToolContributionContext,
+) -> HostResult<Arc<dyn Tool>> {
+    match tool {
+        ContributedTool::Read(tool) if tool.definition().effect == "read" => Ok(tool.clone()),
+        ContributedTool::DirectWrite(tool) if tool.definition().effect == "write" => {
+            let mut definition = tool.definition().clone();
+            definition.description = format!(
+                "Direct write tool; host authorization and domain receipts are required. {}",
+                definition.description
+            );
+            Ok(Arc::new(DirectWriteTool {
+                inner: tool.clone(),
+                definition,
+            }))
         }
+        ContributedTool::Write(tool)
+            if tool.matches_actor(&context.actor, context.actor_id.as_deref()) =>
+        {
+            Ok(tool.clone())
+        }
+        _ => Err(HostError::Execution("tool_effect_or_actor_mismatch".into())),
     }
-}
-
-#[async_trait]
-pub trait ToolContributor: Send + Sync {
-    fn namespace(&self) -> &str;
-    fn privileged(&self) -> bool {
-        false
-    }
-    fn unbound_tool_names(&self) -> Option<BTreeSet<String>> {
-        None
-    }
-    async fn contribute(
-        &self,
-        context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>>;
 }
 
 /// Legacy tools enter the same guards. Proposal-only hosts opt into pruning direct writes.
@@ -119,7 +78,7 @@ impl ToolContributor for StaticToolContributor {
     async fn contribute(
         &self,
         _context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         Ok(self
             .registry
             .definitions()
@@ -157,52 +116,6 @@ impl Tool for DirectWriteTool {
     }
 }
 
-#[derive(Clone)]
-pub struct ToolGuardContext {
-    pub contribution: ToolContributionContext,
-    pub namespace: String,
-    pub tool: ToolDefinition,
-    /// The live call's arguments, present on `canExecute` only (TS
-    /// `ToolGuardContext.arguments?`; visibility never sees them). Guards
-    /// that classify command text depend on this field.
-    pub arguments: Option<Value>,
-}
-
-pub enum ToolGuardVerdict {
-    Allowed,
-    Refused(String),
-    /// The call could run IF a human approves it (ADR 0016 §2, ADR 0019).
-    /// The wrapper — not the guard — assembles the durable request: it owns
-    /// the argument hash, the one-use approvals, and the standing grants.
-    /// A `Refused` anywhere in the chain wins over any number of these
-    /// (denial is final; approval cannot reopen a role ceiling).
-    AwaitingHuman(ApprovalAsk),
-}
-
-/// The approvable refusal a guard offers: the model-facing reason, the text
-/// the human approves on, and the mode a plan REQUESTS (recorded for the
-/// human, never obeyed — the model may not author its own permissions).
-/// The durable wrapper adds `uncertainty_generation` (the execution id of
-/// the unresolved admitted receipt) so an approval is bound to the exact
-/// uncertain effect it authorizes; a later uncertainty needs a new answer.
-#[derive(Clone, Debug, Default)]
-pub struct ApprovalAsk {
-    pub reason: String,
-    pub preview: Option<String>,
-    pub requested_mode: Option<String>,
-    pub uncertainty_generation: Option<String>,
-}
-
-#[async_trait]
-pub trait ToolGuard: Send + Sync {
-    async fn is_visible(&self, _context: &ToolGuardContext) -> HostResult<bool> {
-        Ok(true)
-    }
-    async fn can_execute(&self, _context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
-        Ok(ToolGuardVerdict::Allowed)
-    }
-}
-
 pub struct ContributorFailure {
     pub namespace: String,
     pub reason: String,
@@ -230,7 +143,7 @@ pub async fn stage_tools(
     for (index, contributor) in contributors.iter().enumerate() {
         let tools = contribute(contributor.as_ref(), &context, &mut failed).await;
         for tool in tools {
-            let tool = tool.checked(&context)?;
+            let tool = check_contribution(&tool, &context)?;
             let name = &tool.definition().name;
             if owners.get(name).is_some_and(|owner| *owner != index) {
                 return Err(HostError::Execution("tool_name_collision".into()));
@@ -413,20 +326,20 @@ impl Tool for GuardedTool {
                 )
                 .await?
             {
-                crate::governance::PreGuard::Replay(result) => return Ok(result),
+                agentkit_governance::PreGuard::Replay(result) => return Ok(result),
                 // The operation is uncertain and no answer names this
                 // generation. Do NOT refuse yet: fold it into the approval
                 // flow below so the human can authorize the exact
                 // unresolved execution — a denial from any guard still
                 // wins, and a host that cannot park gets the honest
                 // uncertain refusal as before.
-                crate::governance::PreGuard::Uncertain {
+                agentkit_governance::PreGuard::Uncertain {
                     refusal,
                     generation,
                 } => {
                     uncertainty = Some((refusal, generation));
                 }
-                crate::governance::PreGuard::Proceed => {}
+                agentkit_governance::PreGuard::Proceed => {}
             }
         }
         // TS registry-staging rebuilds the guard context per call with the
@@ -505,11 +418,11 @@ impl Tool for GuardedTool {
                 )
                 .await?
             {
-                crate::governance::Admission::Skipped => {}
-                crate::governance::Admission::Granted { execution_id: id } => {
+                agentkit_governance::Admission::Skipped => {}
+                agentkit_governance::Admission::Granted { execution_id: id } => {
                     execution_id = Some(id);
                 }
-                crate::governance::Admission::Refused(result) => return Ok(result),
+                agentkit_governance::Admission::Refused(result) => return Ok(*result),
             }
         }
         if definition.capability == "process.exec" {
@@ -553,8 +466,7 @@ impl GuardedTool {
         let durable = self.snapshot.contribution.durable.clone();
         let args = crate::governance::args_sha256(input);
         let context_hash = durable.as_ref().map(|durable| {
-            super::durable_execution::execution_context_sha256(
-                durable,
+            durable.execution_context_sha256(
                 &self.snapshot.contribution,
                 definition,
                 effect_context,
@@ -563,9 +475,9 @@ impl GuardedTool {
         if context
             .tool_call_id
             .as_deref()
-            .and_then(|id| durable.as_ref()?.approvals.get(id))
-            .and_then(|grant| grant.context_sha256.as_deref())
-            .is_some_and(|hash| Some(hash) != context_hash.as_deref())
+            .and_then(|id| durable.as_ref()?.approval_grant(id))
+            .and_then(|grant| grant.context_sha256)
+            .is_some_and(|hash| Some(hash.as_str()) != context_hash.as_deref())
         {
             return Ok(Some(guard_refusal(
                 context,
@@ -582,8 +494,7 @@ impl GuardedTool {
             .and_then(|call_id| {
                 durable
                     .as_ref()?
-                    .approvals
-                    .get(call_id)
+                    .approval_grant(call_id)
                     .filter(|grant| grant.args_sha256 == args)
                     .filter(|grant| match &uncertainty {
                         Some((_, generation)) => {
@@ -591,7 +502,7 @@ impl GuardedTool {
                         }
                         None => grant.uncertainty_generation.is_none(),
                     })
-                    .map(|grant| (call_id.to_owned(), grant.clone()))
+                    .map(|grant| (call_id.to_owned(), grant))
             })
             .filter(|(call_id, _)| {
                 !self
@@ -623,12 +534,12 @@ impl GuardedTool {
         let is_duplicate = context.tool_call_id.as_deref().is_some_and(|call_id| {
             durable
                 .as_ref()
-                .is_some_and(|durable| durable.approvals.contains_key(call_id))
+                .is_some_and(|durable| durable.approval_grant(call_id).is_some())
         });
         if uncertainty.is_none()
             && !is_duplicate
             && let Some(durable) = &durable
-            && let Some(policy) = &durable.standing
+            && let Some(policy) = durable.standing_policy()
         {
             let reasons: Vec<String> = approvable.iter().map(|ask| ask.reason.clone()).collect();
             // A policy that could not answer has not remembered anything:
@@ -638,7 +549,7 @@ impl GuardedTool {
                 .await
                 .unwrap_or(None);
             if let Some((digest, _)) = &standing_key
-                && has_active_standing_grant(durable, definition, digest).await?
+                && durable.has_active_standing_grant(digest).await?
             {
                 *selected_standing_digest = Some(digest.clone());
                 return Ok(None);
@@ -781,29 +692,6 @@ fn approval_spec(
         content_hash,
         expires_at: None,
     }
-}
-
-/// True when the session carries an active (unexpired, unrevoked) standing
-/// grant for this exact digest.
-async fn has_active_standing_grant(
-    durable: &crate::governance::DurableExecution,
-    definition: &agentkit_core::ToolDefinition,
-    digest: &str,
-) -> Result<bool, CoreError> {
-    let chat = durable
-        .context
-        .store
-        .get_chat(&durable.chat_id)
-        .await
-        .map_err(|error| {
-            CoreError::new(
-                "recovery_history_unreadable",
-                &format!("Cannot read standing approvals; the call stays gated. ({error})"),
-            )
-        })?
-        .ok_or_else(|| CoreError::new("invalid_execution", "Approval chat vanished mid-run"))?;
-    let _ = definition;
-    Ok(agentkit_store::find_active_standing_grant(&chat.metadata, digest).is_some())
 }
 
 fn guard_refusal(context: &ToolContext, reason: &str) -> ToolResult {

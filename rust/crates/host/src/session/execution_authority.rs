@@ -12,53 +12,11 @@ use agentkit_core::permission::CodingMode;
 use agentkit_core::permission::CodingRole;
 
 use super::AgentSessionService;
-use crate::{HostError, HostResult};
+use agentkit_governance::{
+    CodingPermissionAuthority, GovernanceError, GovernanceResult, PermissionContext,
+};
 use async_trait::async_trait;
 use serde_json::Value;
-
-/// Context passed to the permission authority; mirrors `{chatId?, runId?}`.
-#[derive(Clone, Debug, Default)]
-pub struct PermissionContext {
-    pub chat_id: Option<String>,
-    pub run_id: Option<String>,
-}
-
-/// The host's answer to "what is this session allowed to do RIGHT NOW".
-/// Optional: without one the guard uses the mode it was constructed with,
-/// which is what a single-mode CLI does.
-///
-/// The host owns it deliberately — a permission mode the model could set is
-/// not a permission mode.
-/// Host-supplied session policy source. The TypeScript port lets these
-/// hooks reject (`roleOf`/`modeOf`/`planApproved` throw), and the host
-/// staging then FAILS CLOSED: a guard that could not answer has not allowed
-/// anything. The Rust port keeps that contract — an implementation that
-/// cannot answer returns `Err`, the guard propagates it, and host staging
-/// turns the failed guard call into a `guard error` refusal. Silently
-/// returning `None` means "no opinion" (use the configured mode/role),
-/// never "the lookup failed".
-#[async_trait]
-pub trait CodingPermissionAuthority: Send + Sync {
-    /// The session's effective mode; `None` means "use the configured mode".
-    async fn mode_of(&self, _ctx: &PermissionContext) -> HostResult<Option<CodingMode>> {
-        Ok(None)
-    }
-    /// The role a session runs under; `None` means "the configured role".
-    async fn role_of(&self, _ctx: &PermissionContext) -> HostResult<Option<CodingRole>> {
-        Ok(None)
-    }
-    /// True when THIS plan was approved by a human for this session.
-    /// `None` means the host never wired a plan authority at all — the TS
-    /// `authority?.planApproved === undefined` check; the plan is then only
-    /// recorded, never judged.
-    async fn plan_approved(
-        &self,
-        _chat_id: Option<&str>,
-        _plan_digest: &str,
-    ) -> HostResult<Option<bool>> {
-        Ok(None)
-    }
-}
 
 /// Reads the session's durable execution state through the session service.
 /// Absent state means "no session-level decision yet": the guard falls back
@@ -76,7 +34,7 @@ impl SessionExecutionAuthority {
 
 #[async_trait]
 impl CodingPermissionAuthority for SessionExecutionAuthority {
-    async fn mode_of(&self, ctx: &PermissionContext) -> HostResult<Option<CodingMode>> {
+    async fn mode_of(&self, ctx: &PermissionContext) -> GovernanceResult<Option<CodingMode>> {
         let Some(session_id) = ctx.chat_id.as_deref() else {
             return Ok(None); // a chat that is not a session has no session mode
         };
@@ -97,7 +55,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
                 }
             })
             .map_err(|error| {
-                HostError::Execution(format!(
+                GovernanceError::Execution(format!(
                     "Cannot read the session's execution state; permissions stay with the guard. ({error:?})"
                 ))
             })?;
@@ -108,31 +66,31 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             .get("mode")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                HostError::Execution(
+                GovernanceError::Execution(
                 "The session's execution state carries no mode; permissions stay with the guard."
                     .into(),
             )
             })?;
-        CodingMode::parse(mode)
-            .map(Some)
-            .ok_or_else(|| HostError::Execution(format!("unknown session execution mode {mode}")))
+        CodingMode::parse(mode).map(Some).ok_or_else(|| {
+            GovernanceError::Execution(format!("unknown session execution mode {mode}"))
+        })
     }
 
-    async fn role_of(&self, ctx: &PermissionContext) -> HostResult<Option<CodingRole>> {
+    async fn role_of(&self, ctx: &PermissionContext) -> GovernanceResult<Option<CodingRole>> {
         let Some(session_id) = ctx.chat_id.as_deref() else {
             return Ok(None);
         };
         let state = match self.service.get_state(session_id).await {
             Ok(state) => state,
             Err(error) if error.code == "session_not_found" => return Ok(None),
-            Err(error) => return Err(HostError::Execution(error.to_string())),
+            Err(error) => return Err(GovernanceError::Execution(error.to_string())),
         };
         match state.descriptor["profileSnapshot"]["role"].as_str() {
             Some("implementer") => Ok(Some(CodingRole::Implementer)),
             Some("reviewer") => Ok(Some(CodingRole::Reviewer)),
             Some("supervisor") => Ok(Some(CodingRole::Supervisor)),
             None => Ok(None),
-            Some(_) => Err(HostError::Execution("invalid_profile_role".into())),
+            Some(_) => Err(GovernanceError::Execution("invalid_profile_role".into())),
         }
     }
 
@@ -147,7 +105,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
         &self,
         chat_id: Option<&str>,
         plan_digest: &str,
-    ) -> HostResult<Option<bool>> {
+    ) -> GovernanceResult<Option<bool>> {
         let Some(session_id) = chat_id else {
             return Ok(None); // not a session: nothing can have approved this plan
         };
@@ -158,7 +116,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             // a silent pass.
             Err(error) if error.code == "session_not_found" => return Ok(None),
             Err(error) => {
-                return Err(HostError::Execution(format!(
+                return Err(GovernanceError::Execution(format!(
                     "Cannot read the session's execution state; the plan stays unjudged. ({error:?})"
                 )));
             }
@@ -175,7 +133,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
                         .get("planDigest")
                         .and_then(Value::as_str)
                         .ok_or_else(|| {
-                            HostError::Execution(
+                            GovernanceError::Execution(
                             "The session's plan grant carries no planDigest; refusing to judge."
                                 .into(),
                         )

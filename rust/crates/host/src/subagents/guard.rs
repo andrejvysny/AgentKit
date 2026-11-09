@@ -1,5 +1,8 @@
 use super::service::SubagentService;
-use crate::{HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict, read_session_descriptor};
+use crate::{
+    GovernanceResult, HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict,
+    read_session_descriptor,
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -250,7 +253,7 @@ impl SubagentRoleGuard {
 
 #[async_trait]
 impl ToolGuard for SubagentRoleGuard {
-    async fn is_visible(&self, context: &ToolGuardContext) -> HostResult<bool> {
+    async fn is_visible(&self, context: &ToolGuardContext) -> GovernanceResult<bool> {
         if let Some(chat_id) = context.contribution.chat_id.as_deref()
             && let Some(reason) = self.role_allows(context, chat_id).await?
         {
@@ -263,7 +266,7 @@ impl ToolGuard for SubagentRoleGuard {
         Ok(true)
     }
 
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if let Some(chat_id) = context.contribution.chat_id.as_deref() {
             if let Some(reason) = self.role_allows(context, chat_id).await? {
                 return Ok(ToolGuardVerdict::Refused(reason));

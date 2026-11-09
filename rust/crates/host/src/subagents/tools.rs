@@ -169,7 +169,7 @@ impl crate::ToolContributor for SubagentContributor {
     async fn contribute(
         &self,
         _context: &crate::ToolContributionContext,
-    ) -> crate::HostResult<Vec<crate::ContributedTool>> {
+    ) -> crate::GovernanceResult<Vec<crate::ContributedTool>> {
         if !self.service.config().enabled {
             return Ok(vec![]);
         }

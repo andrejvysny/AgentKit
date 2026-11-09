@@ -1,5 +1,23 @@
 pub mod agentkit_host
+pub use agentkit_host::Admission
+pub use agentkit_host::ApprovalAsk
+pub use agentkit_host::ApprovalGrant
+pub use agentkit_host::CodingPermissionAuthority
+pub use agentkit_host::CommandCompletion
+pub use agentkit_host::ContributedTool
+pub use agentkit_host::DurableExecutionPort
+pub use agentkit_host::GovernanceError
+pub use agentkit_host::GovernanceResult
+pub use agentkit_host::GovernedWriteTool
+pub use agentkit_host::PermissionContext
+pub use agentkit_host::PreGuard
 pub use agentkit_host::RECEIPT_RUN_ACTIVE
+pub use agentkit_host::StandingApprovalPolicy
+pub use agentkit_host::ToolContributionContext
+pub use agentkit_host::ToolContributor
+pub use agentkit_host::ToolGuard
+pub use agentkit_host::ToolGuardContext
+pub use agentkit_host::ToolGuardVerdict
 pub enum agentkit_host::AgentSendResult
 pub agentkit_host::AgentSendResult::Queued
 pub agentkit_host::AgentSendResult::Queued::input: alloc::boxed::Box<agentkit_store::agent_inputs::AgentInputRecord>
@@ -10,10 +28,6 @@ pub agentkit_host::AgentSendResult::Turn::user_message_id: alloc::string::String
 pub enum agentkit_host::ContextUnitKind
 pub agentkit_host::ContextUnitKind::Text
 pub agentkit_host::ContextUnitKind::ToolPair
-pub enum agentkit_host::ContributedTool
-pub agentkit_host::ContributedTool::DirectWrite(alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>)
-pub agentkit_host::ContributedTool::Read(alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>)
-pub agentkit_host::ContributedTool::Write(alloc::rcs::arc::Arc<agentkit_host::GovernedProposalTool>)
 pub enum agentkit_host::ExecutionErrorKind
 pub agentkit_host::ExecutionErrorKind::Cancelled
 pub agentkit_host::ExecutionErrorKind::Terminal
@@ -44,6 +58,10 @@ pub agentkit_host::HostError::Store(agentkit_store::StoreError)
 pub agentkit_host::HostError::UnknownKind(alloc::string::String)
 impl core::convert::From<agentkit_core::types::CoreError> for agentkit_host::HostError
 pub fn agentkit_host::HostError::from(agentkit_core::types::CoreError) -> Self
+impl core::convert::From<agentkit_governance::error::GovernanceError> for agentkit_host::HostError
+pub fn agentkit_host::HostError::from(agentkit_governance::error::GovernanceError) -> Self
+impl core::convert::From<agentkit_host::HostError> for agentkit_governance::error::GovernanceError
+pub fn agentkit_governance::error::GovernanceError::from(agentkit_host::HostError) -> Self
 pub enum agentkit_host::McpConfigError
 pub agentkit_host::McpConfigError::Conflict
 pub agentkit_host::McpConfigError::DuplicateAlias
@@ -76,10 +94,6 @@ pub agentkit_host::RunUpdate::Settled(alloc::boxed::Box<agentkit_store::models::
 pub enum agentkit_host::SelectedSourceKind
 pub agentkit_host::SelectedSourceKind::Resource
 pub agentkit_host::SelectedSourceKind::Skill
-pub enum agentkit_host::ToolGuardVerdict
-pub agentkit_host::ToolGuardVerdict::Allowed
-pub agentkit_host::ToolGuardVerdict::AwaitingHuman(agentkit_host::ApprovalAsk)
-pub agentkit_host::ToolGuardVerdict::Refused(alloc::string::String)
 pub enum agentkit_host::WatchdogSignals
 pub agentkit_host::WatchdogSignals::PotentialRegression
 pub agentkit_host::WatchdogSignals::RepeatedFailures
@@ -138,11 +152,9 @@ pub fn agentkit_host::AdvisorConfig::default() -> Self
 pub struct agentkit_host::AdvisorContributor
 impl agentkit_host::AdvisorContributor
 pub fn agentkit_host::AdvisorContributor::new(agentkit_host::AdvisorTools) -> Self
-impl agentkit_host::ToolContributor for agentkit_host::AdvisorContributor
-pub fn agentkit_host::AdvisorContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::contribution::ToolContributor for agentkit_host::AdvisorContributor
+pub fn agentkit_host::AdvisorContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_host::AdvisorContributor::namespace(&self) -> &str
-pub fn agentkit_host::AdvisorContributor::privileged(&self) -> bool
-pub fn agentkit_host::AdvisorContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
 pub struct agentkit_host::AdvisorEngine
 impl agentkit_host::AdvisorEngine
 pub fn agentkit_host::AdvisorEngine::config(&self) -> agentkit_host::AdvisorConfig
@@ -296,16 +308,6 @@ pub struct agentkit_host::AnswerInput
 pub agentkit_host::AnswerInput::answer_id: alloc::string::String
 pub agentkit_host::AnswerInput::request_id: alloc::string::String
 pub agentkit_host::AnswerInput::response: serde_json::value::Value
-pub struct agentkit_host::ApprovalAsk
-pub agentkit_host::ApprovalAsk::preview: core::option::Option<alloc::string::String>
-pub agentkit_host::ApprovalAsk::reason: alloc::string::String
-pub agentkit_host::ApprovalAsk::requested_mode: core::option::Option<alloc::string::String>
-pub agentkit_host::ApprovalAsk::uncertainty_generation: core::option::Option<alloc::string::String>
-pub struct agentkit_host::ApprovalGrant
-pub agentkit_host::ApprovalGrant::args_sha256: alloc::string::String
-pub agentkit_host::ApprovalGrant::context_sha256: core::option::Option<alloc::string::String>
-pub agentkit_host::ApprovalGrant::request_id: alloc::string::String
-pub agentkit_host::ApprovalGrant::uncertainty_generation: core::option::Option<alloc::string::String>
 pub struct agentkit_host::ApprovalGrantRef
 pub agentkit_host::ApprovalGrantRef::digest: alloc::string::String
 pub agentkit_host::ApprovalGrantRef::grant_id: alloc::string::String
@@ -358,9 +360,9 @@ pub agentkit_host::ChatExecutorOptions::provider_factory: core::option::Option<a
 pub agentkit_host::ChatExecutorOptions::providers: core::option::Option<alloc::rcs::arc::Arc<agentkit_host::ProviderRegistry>>
 pub agentkit_host::ChatExecutorOptions::run_hooks: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::types::RunHooks>>
 pub agentkit_host::ChatExecutorOptions::skip_untrusted_project_instructions: bool
-pub agentkit_host::ChatExecutorOptions::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::StandingApprovalPolicy>>
-pub agentkit_host::ChatExecutorOptions::tool_contributors: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_host::ToolContributor>>
-pub agentkit_host::ChatExecutorOptions::tool_guards: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_host::ToolGuard>>
+pub agentkit_host::ChatExecutorOptions::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
+pub agentkit_host::ChatExecutorOptions::tool_contributors: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>
+pub agentkit_host::ChatExecutorOptions::tool_guards: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>>
 pub agentkit_host::ChatExecutorOptions::usage: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::UsageAuthorizer>>
 pub agentkit_host::ChatExecutorOptions::verification: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::VerificationHook>>
 impl core::default::Default for agentkit_host::ChatExecutorOptions
@@ -403,11 +405,22 @@ pub agentkit_host::CreateSessionInput::title: core::option::Option<alloc::string
 pub agentkit_host::CreateSessionInput::turn_kind: core::option::Option<alloc::string::String>
 pub agentkit_host::CreateSessionInput::workspace: core::option::Option<serde_json::value::Value>
 pub struct agentkit_host::DurableExecution
-pub agentkit_host::DurableExecution::approvals: alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, agentkit_host::ApprovalGrant>>
+pub agentkit_host::DurableExecution::approvals: alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, agentkit_governance::approval::ApprovalGrant>>
 pub agentkit_host::DurableExecution::chat_id: alloc::string::String
 pub agentkit_host::DurableExecution::context: agentkit_host::ExecutionContext
 pub agentkit_host::DurableExecution::is_mutating: core::option::Option<alloc::rcs::arc::Arc<agentkit_host::MutatingPolicy>>
-pub agentkit_host::DurableExecution::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::StandingApprovalPolicy>>
+pub agentkit_host::DurableExecution::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
+impl agentkit_governance::durable::DurableExecutionPort for agentkit_host::DurableExecution
+pub fn agentkit_host::DurableExecution::admit<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 agentkit_governance::guard::ToolGuardContext, &'life3 agentkit_core::types::ToolDefinition, core::option::Option<&'life4 serde_json::value::Value>, &'life5 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_governance::durable::Admission, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
+pub fn agentkit_host::DurableExecution::approval_grant(&self, &str) -> core::option::Option<agentkit_governance::approval::ApprovalGrant>
+pub fn agentkit_host::DurableExecution::before_guards<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 agentkit_governance::guard::ToolGuardContext, &'life3 agentkit_core::types::ToolDefinition, core::option::Option<&'life4 serde_json::value::Value>, &'life5 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_governance::durable::PreGuard, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
+pub fn agentkit_host::DurableExecution::complete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_core::types::ToolResult) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_host::DurableExecution::complete_not_started<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_core::types::ToolResult) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_host::DurableExecution::execution_context_sha256(&self, &agentkit_governance::contribution::ToolContributionContext, &agentkit_core::types::ToolDefinition, core::option::Option<&serde_json::value::Value>) -> alloc::string::String
+pub fn agentkit_host::DurableExecution::has_active_standing_grant<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_host::DurableExecution::record_schema_refusal<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 agentkit_governance::guard::ToolGuardContext, &'life3 agentkit_core::types::ToolDefinition, core::option::Option<&'life4 serde_json::value::Value>, &'life5 serde_json::value::Value, &'life6 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
+pub fn agentkit_host::DurableExecution::register_command_completion(&self) -> alloc::boxed::Box<dyn agentkit_governance::durable::CommandCompletion>
+pub fn agentkit_host::DurableExecution::standing_policy(&self) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
 impl core::fmt::Debug for agentkit_host::DurableExecution
 pub fn agentkit_host::DurableExecution::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct agentkit_host::EffectiveRole
@@ -465,6 +478,8 @@ pub fn agentkit_host::GovernedProposalTool::new(agentkit_core::types::ToolDefini
 impl agentkit_core::types::Tool for agentkit_host::GovernedProposalTool
 pub fn agentkit_host::GovernedProposalTool::definition(&self) -> &agentkit_core::types::ToolDefinition
 pub fn agentkit_host::GovernedProposalTool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::types::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::types::ToolResult, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_governance::contribution::GovernedWriteTool for agentkit_host::GovernedProposalTool
+pub fn agentkit_host::GovernedProposalTool::matches_actor(&self, &serde_json::value::Value, core::option::Option<&str>) -> bool
 pub struct agentkit_host::HostOptions
 pub agentkit_host::HostOptions::concurrency: usize
 pub agentkit_host::HostOptions::lease_ttl_ms: i64
@@ -507,9 +522,6 @@ pub agentkit_host::MutationIdentity::execution_fence: core::option::Option<agent
 pub agentkit_host::MutationIdentity::fingerprint: alloc::string::String
 pub agentkit_host::MutationIdentity::operation_id: alloc::string::String
 pub agentkit_host::MutationIdentity::proposal_id: alloc::string::String
-pub struct agentkit_host::PermissionContext
-pub agentkit_host::PermissionContext::chat_id: core::option::Option<alloc::string::String>
-pub agentkit_host::PermissionContext::run_id: core::option::Option<alloc::string::String>
 pub struct agentkit_host::PlanGrantIntent<'a>
 pub agentkit_host::PlanGrantIntent::plan_digest: &'a str
 pub agentkit_host::PlanGrantIntent::request_id: &'a str
@@ -667,10 +679,10 @@ pub fn agentkit_host::SessionError::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 pub struct agentkit_host::SessionExecutionAuthority
 impl agentkit_host::SessionExecutionAuthority
 pub fn agentkit_host::SessionExecutionAuthority::new(agentkit_host::AgentSessionService) -> Self
-impl agentkit_host::CodingPermissionAuthority for agentkit_host::SessionExecutionAuthority
-pub fn agentkit_host::SessionExecutionAuthority::mode_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<agentkit_core::permission::CodingMode>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::SessionExecutionAuthority::plan_approved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<bool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_host::SessionExecutionAuthority::role_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<agentkit_core::permission::CodingRole>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::authority::CodingPermissionAuthority for agentkit_host::SessionExecutionAuthority
+pub fn agentkit_host::SessionExecutionAuthority::mode_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::authority::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<agentkit_core::permission::CodingMode>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_host::SessionExecutionAuthority::plan_approved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<bool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_host::SessionExecutionAuthority::role_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::authority::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<agentkit_core::permission::CodingRole>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_host::SessionWritePolicy
 impl agentkit_host::SessionWritePolicy
 pub fn agentkit_host::SessionWritePolicy::allow(&self, agentkit_host::WriteAllowance) -> agentkit_host::HostResult<alloc::string::String>
@@ -720,11 +732,9 @@ impl agentkit_host::StaticToolContributor
 pub fn agentkit_host::StaticToolContributor::new(alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
 pub fn agentkit_host::StaticToolContributor::proposal_only(alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
 pub fn agentkit_host::StaticToolContributor::skipped_write_names(&self) -> alloc::vec::Vec<alloc::string::String>
-impl agentkit_host::ToolContributor for agentkit_host::StaticToolContributor
-pub fn agentkit_host::StaticToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::contribution::ToolContributor for agentkit_host::StaticToolContributor
+pub fn agentkit_host::StaticToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_host::StaticToolContributor::namespace(&self) -> &str
-pub fn agentkit_host::StaticToolContributor::privileged(&self) -> bool
-pub fn agentkit_host::StaticToolContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
 pub struct agentkit_host::StaticToolSource
 impl agentkit_host::StaticToolSource
 pub fn agentkit_host::StaticToolSource::new(alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>>) -> Self
@@ -746,17 +756,15 @@ pub fn agentkit_host::SubagentConfig::role(&self, &str) -> core::option::Option<
 pub struct agentkit_host::SubagentContributor
 impl agentkit_host::SubagentContributor
 pub fn agentkit_host::SubagentContributor::new(agentkit_host::SubagentService) -> Self
-impl agentkit_host::ToolContributor for agentkit_host::SubagentContributor
-pub fn agentkit_host::SubagentContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::contribution::ToolContributor for agentkit_host::SubagentContributor
+pub fn agentkit_host::SubagentContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_host::SubagentContributor::namespace(&self) -> &str
-pub fn agentkit_host::SubagentContributor::privileged(&self) -> bool
-pub fn agentkit_host::SubagentContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
 pub struct agentkit_host::SubagentRoleGuard
 impl agentkit_host::SubagentRoleGuard
 pub fn agentkit_host::SubagentRoleGuard::new(agentkit_host::SubagentService) -> Self
-impl agentkit_host::ToolGuard for agentkit_host::SubagentRoleGuard
-pub fn agentkit_host::SubagentRoleGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::SubagentRoleGuard::is_visible<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_governance::guard::ToolGuard for agentkit_host::SubagentRoleGuard
+pub fn agentkit_host::SubagentRoleGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_host::SubagentRoleGuard::is_visible<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_host::SubagentRoleLimits
 pub agentkit_host::SubagentRoleLimits::await_poll_ms: u64
 pub agentkit_host::SubagentRoleLimits::cancel_orphans: bool
@@ -867,23 +875,6 @@ pub struct agentkit_host::TemplateSelection
 pub agentkit_host::TemplateSelection::arguments: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
 pub agentkit_host::TemplateSelection::id: alloc::string::String
 pub agentkit_host::TemplateSelection::revision: alloc::string::String
-pub struct agentkit_host::ToolContributionContext
-pub agentkit_host::ToolContributionContext::actor: serde_json::value::Value
-pub agentkit_host::ToolContributionContext::actor_id: core::option::Option<alloc::string::String>
-pub agentkit_host::ToolContributionContext::bindings: alloc::vec::Vec<serde_json::value::Value>
-pub agentkit_host::ToolContributionContext::cancellation: tokio_util::sync::cancellation_token::CancellationToken
-pub agentkit_host::ToolContributionContext::chat_id: core::option::Option<alloc::string::String>
-pub agentkit_host::ToolContributionContext::durable: core::option::Option<alloc::rcs::arc::Arc<agentkit_host::DurableExecution>>
-pub agentkit_host::ToolContributionContext::has_primary_binding: bool
-pub agentkit_host::ToolContributionContext::limits: agentkit_core::types::ToolLimits
-pub agentkit_host::ToolContributionContext::run_id: alloc::string::String
-pub agentkit_host::ToolContributionContext::scope_id: core::option::Option<alloc::string::String>
-pub agentkit_host::ToolContributionContext::timeout_ms: u64
-pub struct agentkit_host::ToolGuardContext
-pub agentkit_host::ToolGuardContext::arguments: core::option::Option<serde_json::value::Value>
-pub agentkit_host::ToolGuardContext::contribution: agentkit_host::ToolContributionContext
-pub agentkit_host::ToolGuardContext::namespace: alloc::string::String
-pub agentkit_host::ToolGuardContext::tool: agentkit_core::types::ToolDefinition
 pub struct agentkit_host::TruncationPolicy
 pub agentkit_host::TruncationPolicy::mode: alloc::string::String
 pub struct agentkit_host::VerificationInput
@@ -980,14 +971,6 @@ pub trait agentkit_host::ChatProviderFactory: core::marker::Send + core::marker:
 pub fn agentkit_host::ChatProviderFactory::available(&self) -> bool
 pub fn agentkit_host::ChatProviderFactory::resolve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 serde_json::value::Value, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_host::ChatProviderFactory::snapshot<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<serde_json::value::Value>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub trait agentkit_host::CodingPermissionAuthority: core::marker::Send + core::marker::Sync
-pub fn agentkit_host::CodingPermissionAuthority::mode_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<agentkit_core::permission::CodingMode>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::CodingPermissionAuthority::plan_approved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<bool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_host::CodingPermissionAuthority::role_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<agentkit_core::permission::CodingRole>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-impl agentkit_host::CodingPermissionAuthority for agentkit_host::SessionExecutionAuthority
-pub fn agentkit_host::SessionExecutionAuthority::mode_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<agentkit_core::permission::CodingMode>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::SessionExecutionAuthority::plan_approved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<bool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_host::SessionExecutionAuthority::role_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<agentkit_core::permission::CodingRole>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_host::ContentAuthority: core::marker::Send + core::marker::Sync
 pub fn agentkit_host::ContentAuthority::authority_identity<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [alloc::string::String], tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<serde_json::value::Value>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_host::ContentAuthority::authorized_connectors<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<alloc::string::String>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -1041,8 +1024,6 @@ pub trait agentkit_host::SessionFlushPlanner: core::marker::Send + core::marker:
 pub fn agentkit_host::SessionFlushPlanner::settle_plan<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord, bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::SettlePlan>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl agentkit_host::SessionFlushPlanner for agentkit_host::AgentSessionService
 pub fn agentkit_host::AgentSessionService::settle_plan<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord, bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::SettlePlan>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub trait agentkit_host::StandingApprovalPolicy: core::marker::Send + core::marker::Sync
-pub fn agentkit_host::StandingApprovalPolicy::key_for<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext, &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<(alloc::string::String, alloc::string::String)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_host::TaskExecutor: core::marker::Send + core::marker::Sync
 pub fn agentkit_host::TaskExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_host::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_host::TaskExecutor::handles_verification(&self) -> bool
@@ -1057,32 +1038,6 @@ impl agentkit_host::TaskSettledObserver for agentkit_host::SubagentService
 pub fn agentkit_host::SubagentService::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl agentkit_host::TaskSettledObserver for agentkit_host::Watchdog
 pub fn agentkit_host::Watchdog::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub trait agentkit_host::ToolContributor: core::marker::Send + core::marker::Sync
-pub fn agentkit_host::ToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::ToolContributor::namespace(&self) -> &str
-pub fn agentkit_host::ToolContributor::privileged(&self) -> bool
-pub fn agentkit_host::ToolContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
-impl agentkit_host::ToolContributor for agentkit_host::AdvisorContributor
-pub fn agentkit_host::AdvisorContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::AdvisorContributor::namespace(&self) -> &str
-pub fn agentkit_host::AdvisorContributor::privileged(&self) -> bool
-pub fn agentkit_host::AdvisorContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
-impl agentkit_host::ToolContributor for agentkit_host::StaticToolContributor
-pub fn agentkit_host::StaticToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::StaticToolContributor::namespace(&self) -> &str
-pub fn agentkit_host::StaticToolContributor::privileged(&self) -> bool
-pub fn agentkit_host::StaticToolContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
-impl agentkit_host::ToolContributor for agentkit_host::SubagentContributor
-pub fn agentkit_host::SubagentContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::SubagentContributor::namespace(&self) -> &str
-pub fn agentkit_host::SubagentContributor::privileged(&self) -> bool
-pub fn agentkit_host::SubagentContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
-pub trait agentkit_host::ToolGuard: core::marker::Send + core::marker::Sync
-pub fn agentkit_host::ToolGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::ToolGuard::is_visible<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-impl agentkit_host::ToolGuard for agentkit_host::SubagentRoleGuard
-pub fn agentkit_host::SubagentRoleGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_host::SubagentRoleGuard::is_visible<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_host::ToolWritePolicy: core::marker::Send + core::marker::Sync
 pub fn agentkit_host::ToolWritePolicy::is_auto_apply_allowed(&self, &agentkit_host::WriteQuery) -> bool
 impl agentkit_host::ToolWritePolicy for agentkit_host::SessionWritePolicy
@@ -1104,7 +1059,7 @@ pub fn agentkit_host::default_delegation_guidance() -> &'static str
 pub fn agentkit_host::default_role_specs() -> alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_host::RoleSpec>
 pub async fn agentkit_host::drain_native_command_completions(&agentkit_store::actor::SqliteStore, core::time::Duration) -> core::result::Result<(), agentkit_core::types::CoreError>
 pub fn agentkit_host::effective_role(core::option::Option<&agentkit_host::RoleSnapshot>, core::option::Option<&agentkit_host::RoleSpec>) -> core::option::Option<agentkit_host::EffectiveRole>
-pub fn agentkit_host::execution_context_sha256(&agentkit_host::DurableExecution, &agentkit_host::ToolContributionContext, &agentkit_core::types::ToolDefinition, core::option::Option<&serde_json::value::Value>) -> alloc::string::String
+pub fn agentkit_host::execution_context_sha256(&agentkit_host::DurableExecution, &agentkit_governance::contribution::ToolContributionContext, &agentkit_core::types::ToolDefinition, core::option::Option<&serde_json::value::Value>) -> alloc::string::String
 pub fn agentkit_host::execution_id(&str, &str, core::option::Option<&str>) -> alloc::string::String
 pub async fn agentkit_host::explicit_review(&agentkit_host::AdvisorEngine, &str, alloc::string::String, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_host::HostResult<agentkit_host::AdvisorReport>
 pub async fn agentkit_host::freeze_run_content(&agentkit_store::actor::SqliteStore, serde_json::value::Value, &str, core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_host::ContentAuthority>>) -> agentkit_host::HostResult<serde_json::value::Value>
@@ -1122,7 +1077,7 @@ pub async fn agentkit_host::restore_execution_budget(&agentkit_host::ExecutionCo
 pub fn agentkit_host::session_content_selection(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
 pub fn agentkit_host::session_turn_kind(&serde_json::value::Value) -> alloc::string::String
 pub async fn agentkit_host::session_usage(&agentkit_store::actor::SqliteStore, &str, &serde_json::value::Value) -> agentkit_host::SessionResult<serde_json::value::Value>
-pub async fn agentkit_host::stage_tools(&[alloc::rcs::arc::Arc<dyn agentkit_host::ToolContributor>], &[alloc::rcs::arc::Arc<dyn agentkit_host::ToolGuard>], agentkit_host::ToolContributionContext) -> agentkit_host::HostResult<agentkit_host::StagedTools>
+pub async fn agentkit_host::stage_tools(&[alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>], &[alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>], agentkit_governance::contribution::ToolContributionContext) -> agentkit_host::HostResult<agentkit_host::StagedTools>
 pub fn agentkit_host::summarize_turn(&agentkit_store::models::TaskRecord) -> serde_json::value::Value
 pub async fn agentkit_host::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_host::HostResult<agentkit_host::RoleTaskOverrides>
 pub fn agentkit_host::ts_args_sha256(&serde_json::value::Value) -> alloc::string::String

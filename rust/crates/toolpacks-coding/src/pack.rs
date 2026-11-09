@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use agentkit_core::CancellationToken;
-use agentkit_host::{ContributedTool, ToolContributionContext, ToolContributor};
+use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
 use async_trait::async_trait;
 
 use crate::context::PackEnv;
@@ -241,7 +241,7 @@ impl ToolContributor for CodingToolPack {
     async fn contribute(
         &self,
         _context: &ToolContributionContext,
-    ) -> agentkit_host::HostResult<Vec<ContributedTool>> {
+    ) -> agentkit_governance::GovernanceResult<Vec<ContributedTool>> {
         let env = Arc::clone(&self.env);
         // It offers every tool on every run; the guard decides.
         Ok(vec![

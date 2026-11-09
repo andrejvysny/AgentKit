@@ -24,8 +24,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use agentkit_core::permission::{CodingMode, CodingRole};
-use agentkit_host::{
-    CodingPermissionAuthority, ContributedTool, HostResult, ToolContributionContext,
+use agentkit_governance::{
+    CodingPermissionAuthority, ContributedTool, GovernanceResult, ToolContributionContext,
     ToolContributor, ToolGuard, ToolGuardContext, ToolGuardVerdict,
 };
 use agentkit_toolpacks_coding::command_policy::{
@@ -281,7 +281,7 @@ impl ToolContributor for CodingLaneContributor {
     async fn contribute(
         &self,
         context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         if self.lane.is_disposed() {
             return Ok(vec![]);
         }
@@ -314,7 +314,7 @@ impl CodingLaneGuard {
 
 #[async_trait::async_trait]
 impl ToolGuard for CodingLaneGuard {
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if self.lane.is_disposed() && context.namespace == CODING_NAMESPACE {
             return Ok(ToolGuardVerdict::Refused(
                 "service_closed: the session service is closed".to_owned(),

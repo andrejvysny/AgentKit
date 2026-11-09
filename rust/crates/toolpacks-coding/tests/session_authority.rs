@@ -7,8 +7,8 @@
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_host::{
     AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ChatExecutor,
-    ChatExecutorOptions, CreateSessionInput, HostResult, PlanApprovalPolicy, SharedRuntime,
-    SystemRuntime, TaskExecutor, WhenBusy,
+    ChatExecutorOptions, CreateSessionInput, HostResult, PlanApprovalPolicy,
+    SessionExecutionAuthority, SharedRuntime, SystemRuntime, TaskExecutor, WhenBusy,
 };
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, ExecutionReceiptStatus, SqliteStore,
@@ -17,8 +17,7 @@ use agentkit_store::{
 use agentkit_toolpacks_coding::guard::{CodingPermissionGuard, CodingPermissionGuardOptions};
 use agentkit_toolpacks_coding::types::{CodingMode, CodingPermissionAuthority};
 use agentkit_toolpacks_coding::{
-    CodingToolPackOptions, CodingWorkspace, SandboxMode, SessionExecutionAuthority,
-    create_coding_tool_pack,
+    CodingToolPackOptions, CodingWorkspace, SandboxMode, create_coding_tool_pack,
 };
 use async_trait::async_trait;
 use serde_json::json;

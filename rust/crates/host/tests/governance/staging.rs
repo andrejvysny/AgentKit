@@ -59,13 +59,15 @@ impl ToolContributor for Contributor {
     async fn contribute(
         &self,
         _context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.hang {
             std::future::pending::<()>().await;
         }
         if self.fail {
-            return Err(HostError::Execution("private-contributor-detail".into()));
+            return Err(GovernanceError::Execution(
+                "private-contributor-detail".into(),
+            ));
         }
         Ok(self.tools.clone())
     }
@@ -97,12 +99,12 @@ struct Guard {
 
 #[async_trait]
 impl ToolGuard for Guard {
-    async fn is_visible(&self, _context: &ToolGuardContext) -> HostResult<bool> {
+    async fn is_visible(&self, _context: &ToolGuardContext) -> GovernanceResult<bool> {
         Ok(self.visible)
     }
-    async fn can_execute(&self, _context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, _context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if self.broken {
-            return Err(HostError::Execution("private-guard-detail".into()));
+            return Err(GovernanceError::Execution("private-guard-detail".into()));
         }
         Ok(if self.allowed.load(Ordering::SeqCst) {
             ToolGuardVerdict::Allowed
@@ -228,7 +230,10 @@ async fn guards_receive_the_live_call_arguments() {
     }
     #[async_trait]
     impl ToolGuard for ArgumentGuard {
-        async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+        async fn can_execute(
+            &self,
+            context: &ToolGuardContext,
+        ) -> GovernanceResult<ToolGuardVerdict> {
             self.seen.lock().unwrap().push(context.arguments.clone());
             let blocked = context
                 .arguments

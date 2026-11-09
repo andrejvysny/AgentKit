@@ -12,9 +12,12 @@
 //! attempt, canonical argument and execution-context fingerprints, and the
 //! (dormant until the approval flow lands) authorization fields.
 
-use super::staging::{ToolContributionContext, ToolGuardContext};
 use crate::ExecutionContext;
 use agentkit_core::{CoreError, ToolContext, ToolDefinition, ToolResult};
+use agentkit_governance::{
+    Admission, ApprovalGrant, CommandCompletion, DurableExecutionPort, PreGuard,
+    StandingApprovalPolicy, ToolContributionContext, ToolGuardContext,
+};
 use agentkit_kernel::sha256_hex;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -34,36 +37,6 @@ pub struct DurableExecution {
     /// Exact-call remembering policy for approvable refusals (ADR 0019
     /// part 2). Absent: every approvable call asks each time.
     pub standing: Option<Arc<dyn StandingApprovalPolicy>>,
-}
-
-/// An answered approval bound to one exact call: the answered request id
-/// (spent at admission, single-use via the store's UNIQUE index) and the
-/// canonical arguments hash it was granted for (a changed call is not this
-/// grant's to spend). `uncertainty_generation` is the execution id of the
-/// unresolved admitted receipt an answer explicitly reauthorized: the
-/// store's pending-generation gate only opens for exactly that value, so
-/// the grant cannot spend itself on a different (later) uncertainty.
-#[derive(Clone, Debug)]
-pub struct ApprovalGrant {
-    pub request_id: String,
-    pub args_sha256: String,
-    pub uncertainty_generation: Option<String>,
-    pub context_sha256: Option<String>,
-}
-
-/// Which approvable refusals may be remembered, and under what digest. The
-/// coding pack implements this for its shell tools: a policy that declines
-/// to key a call (high-risk, plan, malformed) forces a fresh ask.
-#[async_trait::async_trait]
-pub trait StandingApprovalPolicy: Send + Sync {
-    /// `(digest, label)` for this exact call, or `None` when uncoverable.
-    /// `reasons` are every approvable refusal the guards gave; a policy
-    /// covers only the ordinary `approval_required:` surface.
-    async fn key_for(
-        &self,
-        context: &super::staging::ToolGuardContext,
-        reasons: &[String],
-    ) -> crate::HostResult<Option<(String, String)>>;
 }
 
 /// TS `durable.isMutating` predicate.
@@ -460,30 +433,6 @@ pub async fn resolve_uncertain_execution(
         .await?)
 }
 
-pub(super) enum PreGuard {
-    Proceed,
-    Replay(ToolResult),
-    /// The operation is uncertain (admitted without a durable result) and
-    /// no answer covers this generation. The wrapper folds it into the
-    /// approval flow: the human is asked, the ask carries the exact
-    /// unresolved generation, and a refusal is the fallback when this host
-    /// cannot park.
-    Uncertain {
-        refusal: ToolResult,
-        generation: String,
-    },
-}
-
-#[allow(clippy::large_enum_variant)] // refusals carry the full model-facing envelope
-pub(super) enum Admission {
-    /// Non-mutating tool: no receipt required.
-    Skipped,
-    Granted {
-        execution_id: String,
-    },
-    Refused(ToolResult),
-}
-
 impl DurableExecution {
     fn needs_receipt(&self, tool: &ToolDefinition) -> bool {
         tool.effect == "write"
@@ -704,12 +653,12 @@ impl DurableExecution {
             .and_then(|grant| grant.context_sha256.as_deref())
             .is_some_and(|hash| hash != current_context)
         {
-            return Ok(Admission::Refused(receipt_refusal(
+            return Ok(Admission::Refused(Box::new(receipt_refusal(
                 context,
                 "approval_mismatch",
                 "The approval no longer matches this execution context.",
                 None,
-            )));
+            ))));
         }
         let approval_request_id = grant.map(|grant| grant.request_id.clone());
         let execution = execution_id(
@@ -742,12 +691,12 @@ impl DurableExecution {
             .await
             .map_err(receipt_unreadable)?;
         if !admitted {
-            return Ok(Admission::Refused(receipt_refusal(
+            return Ok(Admission::Refused(Box::new(receipt_refusal(
                 context,
                 "execution_already_admitted",
                 "this authorization has already been consumed; its outcome must be recovered before another execution.",
                 Some(json!({"executionId": execution})),
-            )));
+            ))));
         }
         Ok(Admission::Granted {
             execution_id: execution,
@@ -937,6 +886,104 @@ impl DurableExecution {
     }
 }
 
+#[async_trait::async_trait]
+impl DurableExecutionPort for DurableExecution {
+    fn approval_grant(&self, tool_call_id: &str) -> Option<ApprovalGrant> {
+        self.approvals.get(tool_call_id).cloned()
+    }
+
+    fn standing_policy(&self) -> Option<Arc<dyn StandingApprovalPolicy>> {
+        self.standing.clone()
+    }
+
+    fn execution_context_sha256(
+        &self,
+        contribution: &ToolContributionContext,
+        tool: &ToolDefinition,
+        effect_context: Option<&Value>,
+    ) -> String {
+        execution_context_sha256(self, contribution, tool, effect_context)
+    }
+
+    async fn has_active_standing_grant(&self, digest: &str) -> Result<bool, CoreError> {
+        let chat = self
+            .context
+            .store
+            .get_chat(&self.chat_id)
+            .await
+            .map_err(|error| {
+                CoreError::new(
+                    "recovery_history_unreadable",
+                    &format!("Cannot read standing approvals; the call stays gated. ({error})"),
+                )
+            })?
+            .ok_or_else(|| CoreError::new("invalid_execution", "Approval chat vanished mid-run"))?;
+        Ok(agentkit_store::find_active_standing_grant(&chat.metadata, digest).is_some())
+    }
+
+    async fn before_guards(
+        &self,
+        context: &ToolContext,
+        contribution: &ToolGuardContext,
+        tool: &ToolDefinition,
+        effect_context: Option<&Value>,
+        input: &Value,
+    ) -> Result<PreGuard, CoreError> {
+        DurableExecution::before_guards(self, context, contribution, tool, effect_context, input)
+            .await
+    }
+
+    async fn admit(
+        &self,
+        context: &ToolContext,
+        contribution: &ToolGuardContext,
+        tool: &ToolDefinition,
+        effect_context: Option<&Value>,
+        input: &Value,
+    ) -> Result<Admission, CoreError> {
+        DurableExecution::admit(self, context, contribution, tool, effect_context, input).await
+    }
+
+    async fn record_schema_refusal(
+        &self,
+        context: &ToolContext,
+        contribution: &ToolGuardContext,
+        tool: &ToolDefinition,
+        effect_context: Option<&Value>,
+        input: &Value,
+        message: &str,
+    ) {
+        DurableExecution::record_schema_refusal(
+            self,
+            context,
+            contribution,
+            tool,
+            effect_context,
+            input,
+            message,
+        )
+        .await;
+    }
+
+    async fn complete(&self, execution_id: &str, result: &ToolResult) -> Result<(), CoreError> {
+        DurableExecution::complete(self, execution_id, result).await
+    }
+
+    async fn complete_not_started(
+        &self,
+        execution_id: &str,
+        result: &ToolResult,
+    ) -> Result<(), CoreError> {
+        DurableExecution::complete_not_started(self, execution_id, result).await
+    }
+
+    fn register_command_completion(&self) -> Box<dyn CommandCompletion> {
+        Box::new(super::native_command_drain::CompletionGuard::register(
+            &self.context.store,
+        ))
+    }
+}
+
 fn receipt_unreadable(error: agentkit_store::StoreError) -> CoreError {
     CoreError::new(
         "recovery_history_unreadable",
@@ -1030,7 +1077,7 @@ impl agentkit_core::Tool for ReceiptedTool {
         {
             Admission::Skipped => None,
             Admission::Granted { execution_id } => Some(execution_id),
-            Admission::Refused(result) => return Ok(result),
+            Admission::Refused(result) => return Ok(*result),
         };
         super::execution_completion::execute_receipted(
             self.tool.clone(),

@@ -78,6 +78,23 @@ pub enum HostError {
     NotFound(String),
 }
 
+impl From<agentkit_governance::GovernanceError> for HostError {
+    fn from(error: agentkit_governance::GovernanceError) -> Self {
+        match error {
+            agentkit_governance::GovernanceError::Execution(message) => Self::Execution(message),
+        }
+    }
+}
+
+impl From<HostError> for agentkit_governance::GovernanceError {
+    fn from(error: HostError) -> Self {
+        match error {
+            HostError::Execution(message) => Self::Execution(message),
+            other => Self::Execution(other.to_string()),
+        }
+    }
+}
+
 pub type HostResult<T> = Result<T, HostError>;
 
 #[derive(Clone)]

@@ -15,3 +15,10 @@ pub use policy::*;
 pub use proposal_support::{NATIVE_GOVERNANCE_IDENTITY_VERSION, native_write_fingerprint};
 pub use proposal_tool::*;
 pub use staging::*;
+
+pub use agentkit_governance::{
+    Admission, ApprovalAsk, ApprovalGrant, CommandCompletion, ContributedTool,
+    DurableExecutionPort, GovernanceError, GovernanceResult, GovernedWriteTool, PreGuard,
+    StandingApprovalPolicy, ToolContributionContext, ToolContributor, ToolGuard, ToolGuardContext,
+    ToolGuardVerdict,
+};

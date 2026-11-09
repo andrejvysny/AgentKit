@@ -7,10 +7,13 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor, ToolGuard,
+    ToolGuardContext, ToolGuardVerdict,
+};
 use agentkit_host::{
-    ContributedTool, DelegationGuidance, HostResult, SubagentConfig, SubagentContributor,
-    SubagentRoleGuard, SubagentService, SubagentView, TaskSettledObserver, ToolContributionContext,
-    ToolContributor, ToolGuard, ToolGuardContext, ToolGuardVerdict,
+    DelegationGuidance, HostResult, SubagentConfig, SubagentContributor, SubagentRoleGuard,
+    SubagentService, SubagentView, TaskSettledObserver,
 };
 use agentkit_store::TaskRecord;
 
@@ -144,7 +147,7 @@ impl ToolContributor for SubagentLaneContributor {
     async fn contribute(
         &self,
         context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         let Some(service) = self.lane.service() else {
             return Ok(vec![]);
         };
@@ -171,7 +174,7 @@ impl SubagentLaneGuard {
 
 #[async_trait::async_trait]
 impl ToolGuard for SubagentLaneGuard {
-    async fn is_visible(&self, context: &ToolGuardContext) -> HostResult<bool> {
+    async fn is_visible(&self, context: &ToolGuardContext) -> GovernanceResult<bool> {
         match self.lane.service() {
             Some(service) => {
                 SubagentRoleGuard::new((*service).clone())
@@ -181,7 +184,7 @@ impl ToolGuard for SubagentLaneGuard {
             None => Ok(true),
         }
     }
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         match self.lane.service() {
             Some(service) => {
                 SubagentRoleGuard::new((*service).clone())

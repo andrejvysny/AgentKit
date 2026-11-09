@@ -1,11 +1,11 @@
-use super::DurableExecution;
 use agentkit_core::{CoreError, Tool, ToolContext, ToolResult};
+use agentkit_governance::DurableExecutionPort;
 use serde_json::Value;
 use std::sync::Arc;
 
 pub(super) async fn execute_receipted(
     tool: Arc<dyn Tool>,
-    durable: Option<Arc<DurableExecution>>,
+    durable: Option<Arc<dyn DurableExecutionPort>>,
     execution_id: Option<String>,
     context: ToolContext,
     input: Value,
@@ -13,9 +13,9 @@ pub(super) async fn execute_receipted(
     let owns_start = tool.records_command_start();
     let completion = owns_start
         .then(|| {
-            durable.as_ref().map(|durable| {
-                super::native_command_drain::CompletionGuard::register(&durable.context.store)
-            })
+            durable
+                .as_ref()
+                .map(|durable| durable.register_command_completion())
         })
         .flatten();
     let body = async move {

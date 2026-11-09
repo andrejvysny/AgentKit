@@ -7,7 +7,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agentkit_host::{ContributedTool, HostResult, ToolContributionContext, ToolContributor};
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+};
 use agentkit_lsp::{LspConfig, LspPool, lsp_tools};
 
 use crate::error::RuntimeError;
@@ -139,7 +141,7 @@ impl ToolContributor for LspLaneContributor {
     async fn contribute(
         &self,
         context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         Ok(self
             .lane
             .read_tools_for(context.chat_id.as_deref())

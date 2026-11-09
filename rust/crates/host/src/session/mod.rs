@@ -14,14 +14,13 @@ mod execution_authority;
 mod receipts;
 mod report;
 
+pub use agentkit_governance::{CodingPermissionAuthority, PermissionContext};
 pub use agentkit_store::RECEIPT_RUN_ACTIVE;
 pub use descriptor::{
     CHAT_TURN_TASK_KIND, REASONING_EFFORTS, TURN_CONFIG_KEYS, is_valid_session_turn_kind,
     read_session_descriptor, session_content_selection, session_turn_kind, turn_config,
 };
-pub use execution_authority::{
-    CodingPermissionAuthority, PermissionContext, SessionExecutionAuthority,
-};
+pub use execution_authority::SessionExecutionAuthority;
 pub use report::{FALLBACK_CONTEXT_WINDOW_TOKENS, list_turn_tasks, session_usage, summarize_turn};
 
 use crate::{HostResult, SharedRuntime};

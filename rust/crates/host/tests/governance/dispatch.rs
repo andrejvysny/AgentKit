@@ -76,7 +76,7 @@ struct RevokeDispatch(Arc<Guard>);
 
 #[async_trait]
 impl ToolGuard for RevokeDispatch {
-    async fn can_execute(&self, _context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, _context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         tokio::task::yield_now().await;
         self.0.allowed.store(false, Ordering::SeqCst);
         Ok(ToolGuardVerdict::Allowed)

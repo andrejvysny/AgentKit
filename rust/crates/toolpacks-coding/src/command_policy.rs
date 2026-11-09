@@ -848,12 +848,12 @@ pub fn high_risk_refusal(tool_name: &str) -> String {
 pub struct HighRiskCommandGuard;
 
 #[async_trait::async_trait]
-impl agentkit_host::ToolGuard for HighRiskCommandGuard {
+impl agentkit_governance::ToolGuard for HighRiskCommandGuard {
     async fn can_execute(
         &self,
-        context: &agentkit_host::ToolGuardContext,
-    ) -> agentkit_host::HostResult<agentkit_host::ToolGuardVerdict> {
-        use agentkit_host::ToolGuardVerdict;
+        context: &agentkit_governance::ToolGuardContext,
+    ) -> agentkit_governance::GovernanceResult<agentkit_governance::ToolGuardVerdict> {
+        use agentkit_governance::ToolGuardVerdict;
         if context.namespace != crate::guard::CODING_NAMESPACE {
             return Ok(ToolGuardVerdict::Allowed);
         }
@@ -872,7 +872,7 @@ impl agentkit_host::ToolGuard for HighRiskCommandGuard {
         // `approval_required:`, so the standing policy never keys it and a
         // high-risk command forces a FRESH human approval in every mode.
         Ok(ToolGuardVerdict::AwaitingHuman(
-            agentkit_host::ApprovalAsk {
+            agentkit_governance::ApprovalAsk {
                 reason: high_risk_refusal(&name),
                 preview: None,
                 requested_mode: None,
@@ -1045,12 +1045,14 @@ pub struct CodingStandingApproval<R: WorkspaceResolver> {
 }
 
 #[async_trait::async_trait]
-impl<R: WorkspaceResolver> agentkit_host::StandingApprovalPolicy for CodingStandingApproval<R> {
+impl<R: WorkspaceResolver> agentkit_governance::StandingApprovalPolicy
+    for CodingStandingApproval<R>
+{
     async fn key_for(
         &self,
-        context: &agentkit_host::ToolGuardContext,
+        context: &agentkit_governance::ToolGuardContext,
         reasons: &[String],
-    ) -> agentkit_host::HostResult<Option<(String, String)>> {
+    ) -> agentkit_governance::GovernanceResult<Option<(String, String)>> {
         if context.namespace != crate::guard::CODING_NAMESPACE
             || !is_shell_tool(&context.tool.name)
             || reasons.is_empty()
@@ -1755,7 +1757,9 @@ mod tests {
     }
 
     use agentkit_core::{ToolDefinition, ToolLimits};
-    use agentkit_host::{ToolContributionContext, ToolGuard, ToolGuardContext, ToolGuardVerdict};
+    use agentkit_governance::{
+        ToolContributionContext, ToolGuard, ToolGuardContext, ToolGuardVerdict,
+    };
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
 
@@ -1791,7 +1795,7 @@ mod tests {
 
     async fn verdict(tool_name: &str, command: Option<&str>) -> Option<String> {
         let arguments = command.map(|command| json!({ "command": command }));
-        match agentkit_host::ToolGuard::can_execute(
+        match agentkit_governance::ToolGuard::can_execute(
             &HighRiskCommandGuard,
             &guard_context(tool_name, arguments),
         )

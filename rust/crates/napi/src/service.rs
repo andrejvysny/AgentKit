@@ -194,7 +194,7 @@ impl SessionService {
             .default_provider(provider)
             .additional_providers(additional)
             .extra_contributors(vec![
-                Arc::clone(&contributor) as Arc<dyn agentkit_host::ToolContributor>
+                Arc::clone(&contributor) as Arc<dyn agentkit_governance::ToolContributor>
             ])
             .external_tools(ExternalToolsPolicy {
                 configured_mode: options.configured_mode,

@@ -1,6 +1,8 @@
 [workspace]
 members = ["crates/*", "examples/agent-lifecycle", "examples/egui-host", "examples/teammate-consumer"]
 default-members = ["crates/*"]
+# Agent tooling may drop dot-directories under crates/; never treat them as members.
+exclude = ["crates/.claude"]
 resolver = "3"
 
 [workspace.package]
@@ -41,6 +43,7 @@ zeroize = "=1.9.1"
 agentkit-contracts = { path = "crates/contracts", version = "0.1.0" }
 agentkit-kernel = { path = "crates/kernel", version = "0.1.0" }
 agentkit-core = { path = "crates/core", version = "0.1.0" }
+agentkit-governance = { path = "crates/governance", version = "0.1.0" }
 agentkit-connections = { path = "crates/connections", version = "0.1.0" }
 agentkit-host = { path = "crates/host", version = "0.1.0" }
 agentkit-store = { path = "crates/store", version = "0.1.0" }

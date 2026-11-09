@@ -6,7 +6,8 @@ mod mcp_secrets;
 mod ports;
 mod provider;
 
-use agentkit_host::{SystemRuntime, ToolContributor};
+use agentkit_governance::ToolContributor;
+use agentkit_host::SystemRuntime;
 use agentkit_http::DesktopBackend;
 use agentkit_runtime::AgentRuntime;
 use std::{collections::BTreeMap, sync::Arc};

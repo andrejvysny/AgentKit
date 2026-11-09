@@ -18,7 +18,7 @@ pub struct CodingWorkspace {
 /// never re-define or re-branch on the matrix (a JS tool and a native tool
 /// that diverge in verdict is a bug, not per-surface policy).
 pub use agentkit_core::permission::{CodingMode, CodingRole};
-pub use agentkit_host::{CodingPermissionAuthority, PermissionContext};
+pub use agentkit_governance::{CodingPermissionAuthority, PermissionContext};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SandboxMode {

@@ -61,6 +61,12 @@ impl CompletionGuard {
     }
 }
 
+impl agentkit_governance::CommandCompletion for CompletionGuard {
+    fn finish(self: Box<Self>, error: Option<String>) {
+        CompletionGuard::finish(*self, error);
+    }
+}
+
 impl Drop for CompletionGuard {
     fn drop(&mut self) {
         if !self.finished {

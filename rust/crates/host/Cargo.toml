@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 agentkit-store = { workspace = true }
 agentkit-core = { workspace = true }
+agentkit-governance = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-kernel = { workspace = true }
 serde.workspace = true

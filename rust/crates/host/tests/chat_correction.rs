@@ -357,7 +357,7 @@ impl ToolContributor for ExtraContributor {
     async fn contribute(
         &self,
         context: &ToolContributionContext,
-    ) -> HostResult<Vec<ContributedTool>> {
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         assert_eq!(context.actor["id"], "actor");
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(vec![ContributedTool::Read(Arc::new(Echo {definition:serde_json::from_value(json!({"name":"extra","version":"1","effect":"read","capability":"test","description":"Extra","inputSchema":{"type":"object"}})).unwrap()}))])
@@ -366,7 +366,7 @@ impl ToolContributor for ExtraContributor {
 struct CountingGuard(Arc<std::sync::atomic::AtomicUsize>);
 #[async_trait]
 impl ToolGuard for CountingGuard {
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         assert_eq!(context.contribution.run_id, "run");
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(ToolGuardVerdict::Allowed)

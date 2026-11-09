@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
+use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
 use agentkit_host::{
     AdvisorEventSink, AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
-    ChatExecutor, ChatExecutorOptions, CodingPermissionAuthority, ContentAuthority, HostOptions,
-    ProfileRegistry, ProviderRegistry, SharedRuntime, SystemRuntime, TaskExecutor, ToolContributor,
-    ToolGuard, VerificationHook,
+    ChatExecutor, ChatExecutorOptions, ContentAuthority, HostOptions, ProfileRegistry,
+    ProviderRegistry, SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
 };
 use agentkit_providers::NativeProviderFactory;
 use serde_json::Value;
@@ -252,7 +252,7 @@ impl AgentRuntimeBuilder {
                     // lane's workspace. Unregistered resolves to nothing,
                     // so every approvable call keeps asking.
                     standing: Some(LaneWorkspaceResolver::standing_policy(Arc::clone(&lane))
-                        as Arc<dyn agentkit_host::StandingApprovalPolicy>),
+                        as Arc<dyn agentkit_governance::StandingApprovalPolicy>),
                     // Sessions whose descriptor carries a workspace get the
                     // AGENTS.md/CLAUDE.md system block exactly as the
                     // TypeScript authority injects it; descriptor-less

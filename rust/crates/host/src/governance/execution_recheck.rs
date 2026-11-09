@@ -1,5 +1,5 @@
-use super::{ApprovalAsk, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use agentkit_core::{CoreError, DispatchFence, DispatchGuard};
+use agentkit_governance::{ApprovalAsk, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -92,8 +92,7 @@ impl ExecutionRecheck {
             .as_ref()
             .ok_or_else(|| refused("standing approval authority unavailable"))?;
         let policy = durable
-            .standing
-            .as_ref()
+            .standing_policy()
             .ok_or_else(|| refused("standing approval policy unavailable"))?;
         let reasons = self
             .approvals
@@ -105,7 +104,7 @@ impl ExecutionRecheck {
             .await
             .map_err(|_| refused("standing approval identity unavailable"))?;
         if current.as_ref().map(|(digest, _)| digest) != Some(expected)
-            || !super::has_active_standing_grant(durable, &self.snapshot.tool, expected).await?
+            || !durable.has_active_standing_grant(expected).await?
         {
             return Err(refused(
                 "standing approval changed or revoked; fresh approval required",
