@@ -1,0 +1,685 @@
+{
+  "generated_at": "2026-11-08T20:03:11.228Z",
+  "host": {
+    "platform": "linux",
+    "uname": "Linux pectra 7.0.0-38-generic #38~24.04.4-Ubuntu SMP PREEMPT_DYNAMIC Mon Sep 14 16:37:11 UTC 2 x86_64 x86_64 x86_64 GNU/Linux",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+    "kvm": "unavailable (missing or no rw access for uid 1010)",
+    "firecracker": "/home/students/xvysnya/.local/bin/firecracker",
+    "jailer": "/home/students/xvysnya/.local/bin/jailer",
+    "vzHelper": "n/a (Linux host)"
+  },
+  "rows": [
+    {
+      "id": "T01",
+      "scenario": "cross-tenant denial incl. guessed ids",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 2,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test tenant_denial -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test fuzz_dispatch -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker-apple --test parity -- --ignored",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "macOS host required (platform=linux); signed VZ helper + entitlements needed"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T02",
+      "scenario": "no VM/hypervisor => IsolationUnavailable, never a fallback",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker-fc --lib probe::tests::probe_fails_closed_without_binaries -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T03",
+      "scenario": "guest workspace isolation from host/other tenants",
+      "status": "NOT RUN",
+      "runs": [
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker-apple --test parity -- --ignored",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "macOS host required (platform=linux); signed VZ helper + entitlements needed"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T04",
+      "scenario": "guest network absent; no DNS/IPv4/IPv6/private-IP",
+      "status": "NOT RUN",
+      "runs": [
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker-apple --test parity -- --ignored",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "macOS host required (platform=linux); signed VZ helper + entitlements needed"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T05",
+      "scenario": "approved packages via structured broker only",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 10,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test broker_flow -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T06",
+      "scenario": "unstructured/secret-bearing registry requests denied",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 10,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test broker_flow -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T07",
+      "scenario": "OCI hostile tar shapes refused",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test oci_import -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 20,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test fsops_hostile -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T08",
+      "scenario": "OCI digest-pinned conversion + boot validation",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test oci_import -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T09",
+      "scenario": "exec semantics: outputs, exits, timeouts, cancellation",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test exec_flow -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 12,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test exec_supervisor -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T10",
+      "scenario": "descendants killed or VM quarantined",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 12,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test exec_supervisor -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T11",
+      "scenario": "crash at dispatch/receipt boundaries; no false completed",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 5,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test fault_injection -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test journal_replay -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 6,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-host --test binding_reconcile -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T12",
+      "scenario": "resource exhaustion: quotas enforced",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 3,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test quotas -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T13",
+      "scenario": "import staging: traversal/symlink/oversize/cross-tenant denied",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test staging_flow -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 20,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test fsops_hostile -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T14",
+      "scenario": "export manifests, no host overwrite, stale grants denied",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test staging_flow -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T15",
+      "scenario": "persistent re-boot from private disk; next generation",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test lifecycle -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T16",
+      "scenario": "writer lease arbitration; no escalation to children",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 5,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test writer_lease -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 3,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-host --test subagents_worker -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T17",
+      "scenario": "legacy host tools intact; VM-bound sessions never touch host I/O",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 13,
+          "notRun": [],
+          "command": "cargo test -p agentkit-toolpacks-coding --test vm_routing -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-toolpacks-coding --test sandbox_escape",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "macOS-only compile-time gated suite (target_os=macos); platform=linux"
+          ],
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T18",
+      "scenario": "protocol: version/frame/digest/path adversarial refusal",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 10,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-contracts --test protocol_adversarial -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 3,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-contracts --test protocol_property -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test fuzz_dispatch -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 7,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test handshake -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T19",
+      "scenario": "revocation while alive prevents next effect",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test exec_flow -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 3,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-host --test subagents_worker -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T20",
+      "scenario": "deletion/quarantine: verified erase or retained quarantine",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test lifecycle -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test journal_replay -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T21",
+      "scenario": "Linux co-located app cannot read worker disks/sockets",
+      "status": "NOT RUN",
+      "runs": [
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T22",
+      "scenario": "macOS co-located app cannot drive the helper without IPC",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 4,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker-apple --test parity -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker-apple --test parity -- --ignored",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "macOS host required (platform=linux); signed VZ helper + entitlements needed"
+          ],
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T23",
+      "scenario": "bounded multi-tenant soak with restarts (24h is L4 sign-off)",
+      "status": "PASS",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test soak -- --nocapture",
+          "exit": 0
+        }
+      ]
+    },
+    {
+      "id": "T24",
+      "scenario": "hostile guest inputs: no panic/RCE/alloc blowup/broker abuse",
+      "status": "PARTIAL",
+      "runs": [
+        {
+          "status": "PASS",
+          "passed": 10,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-contracts --test protocol_adversarial -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 3,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-contracts --test protocol_property -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 1,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-worker --test fuzz_dispatch -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 7,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test handshake -- --nocapture",
+          "exit": 0
+        },
+        {
+          "status": "PASS",
+          "passed": 20,
+          "notRun": [],
+          "command": "cargo test -p agentkit-sandbox-guest --test fsops_hostile -- --nocapture",
+          "exit": 0
+        },
+        {
+          "command": "cd rust && cargo test -p agentkit-sandbox-worker --features firecracker --test real_vm",
+          "status": "NOT RUN",
+          "passed": 0,
+          "notRun": [
+            "AGENTKIT_REAL_VM=1 unset; /dev/kvm: unavailable (missing or no rw access for uid 1010)"
+          ],
+          "exit": 0
+        }
+      ]
+    }
+  ]
+}

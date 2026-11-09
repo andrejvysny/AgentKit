@@ -12,6 +12,8 @@ repository = "https://github.com/andrejvysny/AgentKit"
 agentkit-contracts = { path = "../contracts", version = "0.1.0" }
 agentkit-core = { path = "../core", version = "0.1.0" }
 agentkit-host = { path = "../host", version = "0.1.0" }
+agentkit-sandbox-contracts = { path = "../sandbox-contracts", version = "0.1.0" }
+base64.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 libc = "0.2"
@@ -31,3 +33,4 @@ agentkit-store = { path = "../store" }
 futures = { workspace = true }
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"
+uuid = { version = "1", features = ["v4"] }

@@ -61,6 +61,7 @@ fn test_options() -> CodingToolPackOptions {
         coordination_wait_ms: None,
         environment: None,
         permission: None,
+        vm: None,
     }
 }
 

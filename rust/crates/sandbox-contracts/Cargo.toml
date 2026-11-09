@@ -1,0 +1,19 @@
+[package]
+name = "agentkit-sandbox-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "VM sandbox runtime contracts: identities, sandbox spec, policy, state machine, errors, bounded worker/guest protocols"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }

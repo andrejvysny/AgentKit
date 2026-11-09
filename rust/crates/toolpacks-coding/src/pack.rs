@@ -196,6 +196,7 @@ impl CodingToolPack {
                 .unwrap_or_else(default_workspace_coordinator),
             coordination_wait_ms,
             environment: options.environment.clone().map(Arc::new),
+            vm: options.vm.clone(),
         }));
         Ok(Arc::new(Self {
             env,

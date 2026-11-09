@@ -16,6 +16,9 @@ use crate::limits::CodingLimits;
 use crate::paths::canonical_root;
 use crate::types::{Clock, SandboxMode};
 
+use agentkit_sandbox_contracts::grant::WriterLeaseToken;
+use agentkit_sandbox_contracts::session::VmSandboxSession;
+
 /// What every tool body needs; built once per pack.
 pub struct PackEnv {
     pub workspace_root: String,
@@ -33,6 +36,20 @@ pub struct PackEnv {
     pub coordination_wait_ms: u64,
     /// Base environment for spawned commands; `None` = host process env.
     pub environment: Option<Arc<HashMap<String, String>>>,
+    /// The VM sandbox session for this pack. `Some` routes every
+    /// sandbox-bound tool call (fs, search, git inspect, exec) through
+    /// `session.io` and NEVER touches host I/O (S06 — no host fallback,
+    /// including after a guest error or timeout). `None` keeps today's
+    /// host behaviour bit-identical.
+    pub vm: Option<Arc<VmSandboxSession>>,
+    /// Writer-lease injection point for the VM session (S09). Mutating
+    /// routed calls (`io.write`, `io.exec`) pass this token as the grant's
+    /// `writer_lease`; `None` (the default) is what v1 sends — the host
+    /// bridge mints the admitted writer token after durable writer
+    /// admission and sets this field on the `PackEnv` before sharing the
+    /// pack's `Arc`. The pack never mints, widens or fabricates a lease
+    /// (S08), and never edits the contracts to obtain one.
+    pub vm_writer_lease: Option<WriterLeaseToken>,
     root: Mutex<Option<Result<String, CodingError>>>,
     scratch: Mutex<Option<Result<String, CodingError>>>,
     closed: agentkit_core::CancellationToken,
@@ -53,6 +70,8 @@ pub struct EnvInit {
     pub coordinator: Arc<dyn WorkspaceCoordinator>,
     pub coordination_wait_ms: u64,
     pub environment: Option<Arc<HashMap<String, String>>>,
+    /// See [`PackEnv::vm`]; default `None` = host behaviour.
+    pub vm: Option<Arc<VmSandboxSession>>,
 }
 
 impl PackEnv {
@@ -71,6 +90,8 @@ impl PackEnv {
             coordinator: init.coordinator,
             coordination_wait_ms: init.coordination_wait_ms,
             environment: init.environment,
+            vm: init.vm,
+            vm_writer_lease: None,
             root: Mutex::new(None),
             scratch: Mutex::new(None),
             closed: agentkit_core::CancellationToken::new(),

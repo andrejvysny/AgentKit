@@ -1,0 +1,24 @@
+[package]
+name = "agentkit-sandbox-worker-apple"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Virtualization.framework backend adapter for the AgentKit sandbox worker (macOS)"
+
+[dependencies]
+agentkit-sandbox-contracts = { path = "../sandbox-contracts" }
+async-trait = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+libc = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "process", "time", "io-util", "macros", "fs"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+
+[[bin]]
+name = "agentkit-sandbox-vz-fake-helper"
+path = "src/bin/fake_helper.rs"

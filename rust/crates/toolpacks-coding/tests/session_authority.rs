@@ -157,6 +157,7 @@ async fn fixture_opts(
         coordinator: None,
         coordination_wait_ms: None,
         environment: None,
+        vm: None,
         permission: pack_authorized.then(|| {
             Arc::new(SessionExecutionAuthority::new(service.clone()))
                 as Arc<dyn agentkit_toolpacks_coding::types::CodingPermissionAuthority>

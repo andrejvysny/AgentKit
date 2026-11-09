@@ -64,6 +64,7 @@ impl Fixture {
                 ("PATH".into(), process_env().remove("PATH").unwrap()),
                 ("HOME".into(), root.to_string_lossy().into_owned()),
             ]))),
+            vm: None,
         }));
         Self { dir, env, waiting }
     }

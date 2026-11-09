@@ -80,6 +80,14 @@ pub struct CodingToolPackOptions {
     /// `StandingApprovalWorkspace::environment` so the grant key and the
     /// spawn agree.
     pub environment: Option<HashMap<String, String>>,
+    /// VM sandbox session for an isolated execution target (§4, §6.2).
+    /// `Some` routes every sandbox-bound tool call through the guest
+    /// (`session.io`) with no host fallback (S06); the legacy host
+    /// `sandbox`/`SandboxMode` surface stays exactly as before for the
+    /// host mode, and an isolated session never downgrades it — routing
+    /// is decided by the presence of the session, not by `SandboxMode`.
+    /// Default `None` = today's host behaviour, bit-identical.
+    pub vm: Option<Arc<agentkit_sandbox_contracts::session::VmSandboxSession>>,
 }
 
 impl Default for CodingToolPackOptions {
@@ -101,6 +109,7 @@ impl Default for CodingToolPackOptions {
             coordinator: None,
             coordination_wait_ms: None,
             environment: None,
+            vm: None,
         }
     }
 }

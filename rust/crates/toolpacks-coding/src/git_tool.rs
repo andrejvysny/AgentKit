@@ -35,7 +35,7 @@ pub enum GitCommand {
 }
 
 impl GitCommand {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Status => "status",
             Self::Diff => "diff",
@@ -529,6 +529,13 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let input = as_record(&raw)?;
                 let command_text = req_string(input, "command", 16)?;
                 let Some(command) = parse_git_command(&command_text) else {
+                    if env.vm.is_some() {
+                        // Under a VM target, only the fixed read-only
+                        // inspections exist; anything else (commit, push,
+                        // checkout, ...) is a policy denial, never a host
+                        // git exec (S06/S07).
+                        return Err(crate::vm::refuse_git_write(&command_text));
+                    }
                     return Err(CodingError::new(
                         "git_command_not_allowed",
                         format!(
@@ -551,6 +558,18 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         "invalid_rev",
                         "rev must match [A-Za-z0-9_./~^-]{1,100} and not start with -",
                     ));
+                }
+                if env.vm.is_some() {
+                    // Read-only inspection through the guest; the driver
+                    // neutralization checks are the guest's (contract
+                    // §8.4), the output shaping is the host's.
+                    let raw_path = opt_string(&args, "path", 4096)?;
+                    let staged = opt_bool(&args, "staged")?;
+                    let max_count = opt_int(&args, "maxCount", 1, l.git_max_count as i64)?;
+                    return crate::vm::git_inspect(
+                        &env, &ctx, command, rev, raw_path, staged, max_count,
+                    )
+                    .await;
                 }
                 let root = env.root().await?;
                 let raw_path = opt_string(&args, "path", 4096)?;
@@ -760,8 +779,9 @@ mod tests {
             platform: "linux".to_owned(),
             sandbox_exec_path: String::new(),
             coordinator: default_in_process_coordinator(),
-            coordination_wait_ms: 20_000,
+            coordination_wait_ms: 5_000,
             environment: None,
+            vm: None,
         }))
     }
 

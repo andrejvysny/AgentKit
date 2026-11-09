@@ -1392,7 +1392,7 @@ async fn write_log(path: &str, buffer: &[u8]) -> std::io::Result<()> {
     file.flush().await
 }
 
-fn describe_truncation(
+pub(crate) fn describe_truncation(
     total: usize,
     shown_lines: usize,
     shown_bytes: usize,
@@ -1414,7 +1414,7 @@ fn describe_truncation(
 /// Windows children terminate by handle and report an exit code, so there
 /// is no terminating signal to name and `RunResult::signal` stays `None`.
 #[cfg(unix)]
-fn signal_name(sig: i32) -> String {
+pub(crate) fn signal_name(sig: i32) -> String {
     let name = match sig {
         libc::SIGHUP => "SIGHUP",
         libc::SIGINT => "SIGINT",

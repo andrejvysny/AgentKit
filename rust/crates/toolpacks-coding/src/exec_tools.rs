@@ -124,19 +124,19 @@ pub(crate) fn process_env() -> HashMap<String, String> {
 /// `clear`) and the tool future being dropped at any await (`Drop` spawns
 /// the clear), so a command that never reached a driver leaves no ownership
 /// record behind.
-struct IntentGuard {
-    coordinator: Arc<dyn crate::coordination::WorkspaceCoordinator>,
-    root: String,
-    execution_id: String,
-    armed: bool,
+pub(crate) struct IntentGuard {
+    pub(crate) coordinator: Arc<dyn crate::coordination::WorkspaceCoordinator>,
+    pub(crate) root: String,
+    pub(crate) execution_id: String,
+    pub(crate) armed: bool,
 }
 
 impl IntentGuard {
-    fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         self.armed = false;
     }
 
-    async fn clear(&mut self) {
+    pub(crate) async fn clear(&mut self) {
         if self.armed {
             let _ = self
                 .coordinator
@@ -182,11 +182,11 @@ fn slice_utf16(value: &str, max_units: usize) -> String {
     String::from_utf16_lossy(&units)
 }
 
-struct ShellRequest {
-    tool: &'static str,
-    command: String,
-    cwd: Option<String>,
-    timeout_sec: u64,
+pub(crate) struct ShellRequest {
+    pub(crate) tool: &'static str,
+    pub(crate) command: String,
+    pub(crate) cwd: Option<String>,
+    pub(crate) timeout_sec: u64,
 }
 
 #[path = "command_authority.rs"]
@@ -198,6 +198,13 @@ async fn run_shell(
     ctx: ToolContext,
     request: ShellRequest,
 ) -> Result<Outcome, CodingError> {
+    if env.vm.is_some() {
+        // VM session: the command runs in the guest via `io.exec` +
+        // `io.exec_events`; the host driver never sees it (S06). The vm
+        // path carries the same gates (guard, intent, exclusive lease) and
+        // the same output pipeline (tail truncation, footer, summary).
+        return crate::vm::run_shell(env, ctx, request).await;
+    }
     let mut handed_to_driver = false;
     match run_shell_inner(env, ctx, request, &mut handed_to_driver).await {
         Err(error) if !handed_to_driver => Ok(command_not_started(&format!(
@@ -208,7 +215,7 @@ async fn run_shell(
     }
 }
 
-fn command_not_started(message: &str) -> Outcome {
+pub(crate) fn command_not_started(message: &str) -> Outcome {
     Outcome {
         ok: false,
         text: slice_utf16(message, 500),
@@ -220,6 +227,64 @@ fn command_not_started(message: &str) -> Outcome {
             "started": false, "phase": "before_spawn", "retryable": false,
             "freshApprovalRequired": true,
         })),
+    }
+}
+
+/// Termination footer, summary and success verdict, derived from the
+/// settled command state. Shared verbatim by the host driver path and the
+/// VM exec path (`crate::vm`) so both render identical text; absence of an
+/// exit status is never success.
+pub(crate) struct CommandStatus {
+    pub footer: String,
+    pub summary: String,
+    pub ok: bool,
+}
+
+pub(crate) fn command_status(
+    timed_out: bool,
+    aborted: bool,
+    signal: &Option<String>,
+    exit_code: Option<i32>,
+    timeout_sec: u64,
+) -> CommandStatus {
+    let footer = if timed_out {
+        format!(
+            "[timed out after {timeout_sec}s; process group killed{}]",
+            signal
+                .as_ref()
+                .map(|signal| format!(" ({signal})"))
+                .unwrap_or_default()
+        )
+    } else if aborted {
+        "[aborted; process group killed]".to_owned()
+    } else if let Some(signal) = signal {
+        format!("[killed by {signal}]")
+    } else {
+        format!(
+            "[exit code {}]",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "null".to_owned())
+        )
+    };
+    let summary = if timed_out {
+        format!("timed out after {timeout_sec}s")
+    } else if aborted {
+        "aborted".to_owned()
+    } else if let Some(signal) = signal {
+        format!("killed by {signal}")
+    } else {
+        format!(
+            "exit code {}",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "null".to_owned())
+        )
+    };
+    CommandStatus {
+        footer,
+        summary,
+        ok: exit_code == Some(0) && !timed_out && !aborted,
     }
 }
 
@@ -440,36 +505,22 @@ async fn run_shell_inner(
             slice_utf16(spawn_error, 500),
         ));
     }
-    let footer = if run.timed_out {
-        format!(
-            "[timed out after {}s; process group killed{}]",
-            request.timeout_sec,
-            run.signal
-                .as_ref()
-                .map(|signal| format!(" ({signal})"))
-                .unwrap_or_default()
-        )
-    } else if run.aborted {
-        "[aborted; process group killed]".to_owned()
-    } else if let Some(signal) = &run.signal {
-        format!("[killed by {signal}]")
-    } else {
-        format!(
-            "[exit code {}]",
-            run.exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "null".to_owned())
-        )
-    };
+    let status = command_status(
+        run.timed_out,
+        run.aborted,
+        &run.signal,
+        run.exit_code,
+        request.timeout_sec,
+    );
     let parts = [
         run.output.trim_end_matches('\n').to_owned(),
         run.notice.clone(),
-        footer,
+        status.footer,
     ]
     .into_iter()
     .filter(|part| !part.is_empty())
     .collect::<Vec<_>>();
-    let ok = run.exit_code == Some(0) && !run.timed_out && !run.aborted;
+    let ok = status.ok;
     let mut details = Map::new();
     details.insert("exitCode".to_owned(), json!(run.exit_code));
     details.insert("signal".to_owned(), json!(run.signal));
@@ -484,20 +535,7 @@ async fn run_shell_inner(
     Ok(Outcome {
         ok,
         text: parts.join("\n"),
-        summary: Some(if run.timed_out {
-            format!("timed out after {}s", request.timeout_sec)
-        } else if run.aborted {
-            "aborted".to_owned()
-        } else if let Some(signal) = &run.signal {
-            format!("killed by {signal}")
-        } else {
-            format!(
-                "exit code {}",
-                run.exit_code
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "null".to_owned())
-            )
-        }),
+        summary: Some(status.summary),
         truncated: run.truncated,
         warnings: [
             if sandboxed {
@@ -806,6 +844,7 @@ mod tests {
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 20_000,
             environment: None,
+            vm: None,
         }))
     }
 
@@ -1090,6 +1129,7 @@ mod tests {
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 20_000,
             environment: None,
+            vm: None,
         }));
         let r = run(&run_command_tool(&env), json!({ "command": "echo hi" })).await;
         assert!(!r.ok);
@@ -1158,6 +1198,7 @@ mod tests {
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 20_000,
             environment: None,
+            vm: None,
         }));
         let text = run_command_tool(&env).definition().description.clone();
         assert!(text.contains("97.65625 KB"), "{text}");

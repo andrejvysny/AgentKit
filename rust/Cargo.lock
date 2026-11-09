@@ -234,6 +234,101 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-sandbox-contracts"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "agentkit-sandbox-guest"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-contracts",
+ "base64 0.22.1",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "agentkit-sandbox-host"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-contracts",
+ "agentkit-sandbox-worker",
+ "async-trait",
+ "base64 0.22.1",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "agentkit-sandbox-worker"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-contracts",
+ "agentkit-sandbox-worker-apple",
+ "agentkit-sandbox-worker-fc",
+ "async-trait",
+ "base64 0.22.1",
+ "flate2",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "agentkit-sandbox-worker-apple"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-contracts",
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "agentkit-sandbox-worker-fc"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-contracts",
+ "async-trait",
+ "base64 0.22.1",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "agentkit-store"
 version = "0.1.0"
 dependencies = [
@@ -271,8 +366,10 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
+ "agentkit-sandbox-contracts",
  "agentkit-store",
  "async-trait",
+ "base64 0.22.1",
  "futures",
  "libc",
  "regex",
@@ -4131,6 +4228,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

@@ -1,0 +1,29 @@
+[package]
+name = "agentkit-sandbox-guest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Untrusted VM guest agent: vsock RPC serving fs/exec/search/git under openat2-bounded roots"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[dependencies]
+agentkit-sandbox-contracts = { path = "../sandbox-contracts", version = "0.1.0" }
+base64.workspace = true
+libc.workspace = true
+regex = "=1.13.1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+agentkit-sandbox-contracts = { path = "../sandbox-contracts", version = "0.1.0" }
+base64.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = "3"
+libc.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

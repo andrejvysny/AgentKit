@@ -71,13 +71,13 @@ fn throw_if_aborted(ctx: &ToolContext) -> Result<(), CodingError> {
     Ok(())
 }
 
-struct FileRead {
-    text: String,
-    summary: String,
-    truncated: bool,
-    sha256: String,
-    total_lines: usize,
-    invalid_utf8: bool,
+pub(crate) struct FileRead {
+    pub(crate) text: String,
+    pub(crate) summary: String,
+    pub(crate) truncated: bool,
+    pub(crate) sha256: String,
+    pub(crate) total_lines: usize,
+    pub(crate) invalid_utf8: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -106,6 +106,34 @@ async fn read_one(
         env.limits.read_max_file_bytes,
     )
     .await?;
+    format_file_read(
+        env,
+        path,
+        &target.path,
+        offset,
+        limit,
+        max_bytes,
+        chat_id,
+        buffer,
+    )
+}
+
+/// The whole post-read pipeline shared by the host read path and the VM
+/// read path (`crate::vm`): binary refusal, digest, line numbering,
+/// offset/limit slicing, byte truncation with the continuation notice, and
+/// the version-ledger record. `ledger_key` identifies the file in the
+/// session ledger (host canonical path, or guest path under a VM session).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn format_file_read(
+    env: &PackEnv,
+    path: &str,
+    ledger_key: &str,
+    offset: i64,
+    limit: Option<i64>,
+    max_bytes: usize,
+    chat_id: Option<&str>,
+    buffer: Vec<u8>,
+) -> Result<FileRead, CodingError> {
     if looks_binary(&buffer) {
         return Err(CodingError::new(
             "binary_file",
@@ -121,7 +149,7 @@ async fn read_one(
     let content = strict.unwrap_or_else(|| String::from_utf8_lossy(&buffer).into_owned());
     let lines = split_lines(&content);
     if lines.is_empty() {
-        ledger::record_read(chat_id, &target.path, &digest, true);
+        ledger::record_read(chat_id, ledger_key, &digest, true);
         return Ok(FileRead {
             text: "(empty file)".to_owned(),
             summary: format!("read {path} (empty)"),
@@ -179,7 +207,7 @@ async fn read_one(
     // Only a read that shows the whole file may later authorise an overwrite.
     ledger::record_read(
         chat_id,
-        &target.path,
+        ledger_key,
         &digest,
         offset == 1 && !more && !cut.truncated,
     );
@@ -251,7 +279,7 @@ fn read_paths(input: &Map<String, Value>) -> Result<Vec<String>, CodingError> {
     Ok(paths)
 }
 
-const INVALID_UTF8_WARNING: &str = "not valid UTF-8; shown with replacement characters";
+pub(crate) const INVALID_UTF8_WARNING: &str = "not valid UTF-8; shown with replacement characters";
 
 pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let description = format!(
@@ -310,6 +338,19 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let paths = read_paths(input)?;
                 let offset = opt_int(input, "offset", 1, 1_000_000_000)?.unwrap_or(1);
                 let limit = opt_int(input, "limit", 1, 1_000_000_000)?;
+                if env.vm.is_some() {
+                    // VM session: the guest filesystem is the only
+                    // filesystem; the host path below never runs (S06).
+                    return crate::vm::read_file(
+                        &env,
+                        &ctx,
+                        &paths,
+                        offset,
+                        limit,
+                        input.get("path").is_some(),
+                    )
+                    .await;
+                }
                 let root = env.root().await?;
                 if input.get("path").is_some() {
                     throw_if_aborted(&ctx)?;
@@ -441,6 +482,9 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let path = opt_string(input, "path", 4096)?.unwrap_or_else(|| ".".to_owned());
                 let include_ignored = opt_bool(input, "includeIgnored")?.unwrap_or(false);
                 throw_if_aborted(&ctx)?;
+                if env.vm.is_some() {
+                    return crate::vm::list_dir(&env, &ctx, &path, include_ignored).await;
+                }
                 let root = env.root().await?;
                 let target = confine(
                     &root,
@@ -520,54 +564,27 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 visible.sort_by(|left, right| left.0.encode_utf16().cmp(right.0.encode_utf16()));
                 let hidden = all.len() - permitted.len();
                 let ignored = permitted.len() - visible.len();
-                let shown = &visible[..std::cmp::min(visible.len(), env.limits.list_max_entries)];
-                let mut lines: Vec<String> = shown
-                    .iter()
-                    .map(|(name, is_dir, is_link)| {
-                        if *is_dir {
-                            format!("{name}/")
-                        } else if *is_link {
-                            format!("{name}@")
-                        } else {
-                            name.clone()
-                        }
-                    })
-                    .collect();
-                if visible.len() > shown.len() {
-                    lines.push(format!(
-                        "[{} more entries not shown]",
-                        visible.len() - shown.len()
-                    ));
-                }
-                if capped {
-                    lines.push(format!(
-                        "[directory has more entries; only the first {collect_cap} were read]"
-                    ));
-                }
-                if hidden > 0 {
-                    lines.push(format!("[{hidden} sensitive entries hidden]"));
-                }
-                if ignored > 0 {
-                    lines.push(format!("[{ignored} ignored entries hidden]"));
-                }
-                let text = if lines.is_empty() {
-                    "(empty directory)".to_owned()
-                } else {
-                    lines.join("\n")
-                };
+                let visible: Vec<(String, bool, bool)> = visible.into_iter().cloned().collect();
+                let (text, shown, truncated) = render_listing(
+                    &visible,
+                    env.limits.list_max_entries,
+                    capped,
+                    collect_cap,
+                    hidden,
+                    ignored,
+                );
                 Ok(Outcome {
                     ok: true,
                     text,
                     summary: Some(format!(
-                        "listed {} ({} entries)",
+                        "listed {} ({shown} entries)",
                         if target.relative_path.is_empty() {
                             "."
                         } else {
                             &target.relative_path
                         },
-                        shown.len()
                     )),
-                    truncated: capped || visible.len() > shown.len(),
+                    truncated,
                     warnings: vec![],
                     details: None,
                 })
@@ -683,6 +700,19 @@ pub fn write_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                             env.limits.write_max_bytes
                         ),
                     ));
+                }
+                if env.vm.is_some() {
+                    // Same coordinator lease as the host write path
+                    // (writers serialize), then the guest CAS write. The
+                    // writer-lease token for the grant is the injection
+                    // point on `PackEnv::vm_writer_lease` (`None` in v1).
+                    let target = crate::vm::guest_path_of(&env, &path)?;
+                    let mut lease =
+                        crate::vm::acquire_guest_file_lease(&env, &ctx, "write_file", &target)
+                            .await?;
+                    let result = crate::vm::write_file(&env, &ctx, &path, &data, &explicit).await;
+                    lease.release().await;
+                    return result;
                 }
                 let root = env.root().await?;
                 let options = ConfineOptions {
@@ -842,7 +872,57 @@ fn verify_callback(
 
 /// Extra directory entries read beyond `list_max_entries`, so entries that
 /// are hidden (sensitive/ignored) do not crowd out visible ones.
-const LIST_COLLECT_SLACK: usize = 1_000;
+pub(crate) const LIST_COLLECT_SLACK: usize = 1_000;
+
+/// The shared `list_dir` rendering pipeline: sorted visible
+/// `(name, is_dir, is_link)` entries in, the listing text plus the shown
+/// count and the truncated flag out. The host body and the VM-routed
+/// listing (`crate::vm`) go through this one implementation.
+pub(crate) fn render_listing(
+    visible: &[(String, bool, bool)],
+    list_max_entries: usize,
+    capped: bool,
+    collect_cap: usize,
+    hidden: usize,
+    ignored: usize,
+) -> (String, usize, bool) {
+    let shown = &visible[..std::cmp::min(visible.len(), list_max_entries)];
+    let mut lines: Vec<String> = shown
+        .iter()
+        .map(|(name, is_dir, is_link)| {
+            if *is_dir {
+                format!("{name}/")
+            } else if *is_link {
+                format!("{name}@")
+            } else {
+                name.clone()
+            }
+        })
+        .collect();
+    if visible.len() > shown.len() {
+        lines.push(format!(
+            "[{} more entries not shown]",
+            visible.len() - shown.len()
+        ));
+    }
+    if capped {
+        lines.push(format!(
+            "[directory has more entries; only the first {collect_cap} were read]"
+        ));
+    }
+    if hidden > 0 {
+        lines.push(format!("[{hidden} sensitive entries hidden]"));
+    }
+    if ignored > 0 {
+        lines.push(format!("[{ignored} ignored entries hidden]"));
+    }
+    let text = if lines.is_empty() {
+        "(empty directory)".to_owned()
+    } else {
+        lines.join("\n")
+    };
+    (text, shown.len(), capped || visible.len() > shown.len())
+}
 
 const MAX_EDITS: usize = 50;
 
@@ -947,6 +1027,18 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let path = req_string(input, "path", 4096)?;
                 let edits = parse_edits(input.get("edits"))?;
                 let explicit = parse_expected_sha(input)?;
+                if env.vm.is_some() {
+                    // Read-modify-write through the guest: same coordinator
+                    // lease as the host edit path, then the edit engine over
+                    // guest bytes with the guest's `expected_sha256` CAS.
+                    let target = crate::vm::guest_path_of(&env, &path)?;
+                    let mut lease =
+                        crate::vm::acquire_guest_file_lease(&env, &ctx, "edit_file", &target)
+                            .await?;
+                    let result = crate::vm::edit_file(&env, &ctx, &path, &edits, &explicit).await;
+                    lease.release().await;
+                    return result;
+                }
                 let root = env.root().await?;
                 let options = ConfineOptions {
                     access: PathAccess::Write,
@@ -1126,6 +1218,7 @@ mod tests {
                 coordinator: crate::coordination::create_in_process_workspace_coordinator(None),
                 coordination_wait_ms: 5_000,
                 environment: None,
+                vm: None,
             }));
             Harness {
                 chat: format!("chat-{}", uuid::Uuid::new_v4().simple()),

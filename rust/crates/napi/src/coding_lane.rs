@@ -150,6 +150,10 @@ impl CodingLane {
             coordinator: Some(lockdir_coordinator(input.coordination_dir.as_deref())),
             coordination_wait_ms: input.coordination_wait_ms,
             environment: input.environment.clone(),
+            // The N-API lane is the legacy host coding lane: it never binds
+            // a VM sandbox session (the host bridge wires `vm` for isolated
+            // targets). Default `None` = host behaviour, unchanged.
+            vm: None,
         })
         .await
         .map_err(coding)?;

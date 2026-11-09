@@ -81,6 +81,10 @@ pub fn find_files_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let path = opt_string(input, "path", 4096)?.unwrap_or_else(|| ".".to_owned());
                 let limit = opt_int(input, "limit", 1, env.limits.find_max_results as i64)?
                     .unwrap_or(env.limits.find_default_results as i64);
+                if env.vm.is_some() {
+                    return crate::vm::find_files(&env, &ctx, &pattern, &path, limit as usize)
+                        .await;
+                }
                 let root = env.root().await?;
                 let target = confine(
                     &root,
@@ -197,6 +201,30 @@ pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let input = as_record(&raw)?;
                 let pattern = req_string(input, "pattern", limits.search_max_pattern_chars)?;
                 let path = opt_string(input, "path", 4096)?.unwrap_or_else(|| ".".to_owned());
+                if env.vm.is_some() {
+                    let glob = opt_string(input, "glob", 1000)?;
+                    let literal = opt_bool(input, "literal")?.unwrap_or(false);
+                    let ignore_case = opt_bool(input, "ignoreCase")?.unwrap_or(false);
+                    let context = opt_int(input, "context", 0, limits.search_max_context as i64)?
+                        .unwrap_or(0) as usize;
+                    let limit = opt_int(input, "limit", 1, limits.search_max_matches as i64)?
+                        .unwrap_or(limits.search_default_matches as i64)
+                        as usize;
+                    let offset = opt_int(input, "offset", 0, 1_000_000_000)?.unwrap_or(0) as usize;
+                    return crate::vm::code_search(
+                        &env,
+                        &ctx,
+                        &pattern,
+                        &path,
+                        glob,
+                        literal,
+                        ignore_case,
+                        context,
+                        limit,
+                        offset,
+                    )
+                    .await;
+                }
                 let root = env.root().await?;
                 let target = confine(
                     &root,
@@ -274,6 +302,9 @@ pub fn repo_map_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let path = opt_string(input, "path", 4096)?.unwrap_or_else(|| ".".to_owned());
                 let depth = opt_int(input, "depth", 1, env.limits.repo_map_max_depth as i64)?
                     .unwrap_or(env.limits.repo_map_default_depth as i64);
+                if env.vm.is_some() {
+                    return crate::vm::repo_map(&env, &ctx, &path, depth as usize).await;
+                }
                 let root = env.root().await?;
                 let target = confine(
                     &root,
@@ -368,6 +399,7 @@ mod tests {
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 0,
             environment: None,
+            vm: None,
         }))
     }
 

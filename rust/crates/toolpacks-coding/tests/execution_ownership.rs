@@ -215,6 +215,7 @@ impl Harness {
             coordination_wait_ms: Some(500),
             environment: None,
             permission: None,
+            vm: None,
         })
         .await
         .unwrap();

@@ -127,6 +127,17 @@ ledger); there is no TypeScript backend fallback.
   long-term memory is the next open phase; a Later list) this deferred
   surface lands against.
 - [`docs/adr/`](docs/adr/) — accepted architecture decision records.
+- **VM sandbox runtime**: untrusted code executes only inside real VMs
+  (Firecracker/KVM on Linux, Virtualization.framework on macOS); all
+  sandbox-bound file/search/git/command/test tools route through guest
+  I/O. See [`docs/specs/sandbox-runtime.md`](docs/specs/sandbox-runtime.md)
+  (acceptance contract),
+  [`docs/adr/0021-vm-sandbox-runtime.md`](docs/adr/0021-vm-sandbox-runtime.md),
+  the [S01–S20 invariant map](docs/sandbox-invariants.md), the
+  [worker operations & disaster-recovery guide](docs/operations/sandbox-worker-operations.md),
+  and the [T01–T24 evidence reports](docs/baseline/)
+  (`bun scripts/sandbox-evidence.mjs`; real-VM L2/L3 rows report
+  `NOT RUN` honestly when hardware is absent).
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed per contract version, and
   the working method (ADR gating, reference-repo extraction policy,
   verification bar).

@@ -31,6 +31,7 @@ pub mod search_tools;
 pub mod truncate;
 pub mod types;
 pub mod version_ledger;
+mod vm;
 
 pub use agentkit_core::permission::PLAN_MODE_BLOCKED_HINT;
 pub use agentkit_host::SessionExecutionAuthority;

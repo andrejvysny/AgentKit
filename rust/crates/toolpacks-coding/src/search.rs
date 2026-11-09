@@ -39,7 +39,7 @@ use crate::paths::{is_sensitive_segment, relative};
 use crate::types::Clock;
 
 /// Git's exclude files plus the ripgrep-style `.ignore`.
-const IGNORE_FILES: [&str; 3] = [".gitignore", ".ignore", ".git/info/exclude"];
+pub(crate) const IGNORE_FILES: [&str; 3] = [".gitignore", ".ignore", ".git/info/exclude"];
 
 /// Why a walk ended early; reported to the model instead of failing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,11 +49,11 @@ pub struct SearchBudget {
 }
 
 #[derive(Clone)]
-struct IgnoreRule {
-    base: String,
-    pattern: Regex,
-    negate: bool,
-    directory_only: bool,
+pub(crate) struct IgnoreRule {
+    pub(crate) base: String,
+    pub(crate) pattern: Regex,
+    pub(crate) negate: bool,
+    pub(crate) directory_only: bool,
 }
 
 /// One yielded entry of [`Walk`].
@@ -120,7 +120,7 @@ fn join(dir: &str, name: &str) -> String {
 }
 
 /// `path.basename` for walk-produced relative paths and direct file targets.
-fn basename(path: &str) -> &str {
+pub(crate) fn basename(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
         Some(at) => &trimmed[at + 1..],
@@ -129,7 +129,7 @@ fn basename(path: &str) -> &str {
 }
 
 /// JS `str.slice(0, n)` on chars, returned as a borrow when possible.
-fn clip_chars(line: &str, n: usize) -> &str {
+pub(crate) fn clip_chars(line: &str, n: usize) -> &str {
     match line.char_indices().nth(n) {
         Some((at, _)) => &line[..at],
         None => line,
@@ -143,7 +143,7 @@ fn json_snippet(value: &str) -> String {
 }
 
 /// JS `ms / 1000` rendered the way JS renders the number.
-fn seconds(ms: u64) -> String {
+pub(crate) fn seconds(ms: u64) -> String {
     let value = ms as f64 / 1000.0;
     if value.fract() == 0.0 {
         format!("{}", value as i64)
@@ -553,7 +553,7 @@ fn walk_stub_options(limits: &CodingLimits) -> WalkOptions {
 
 /// Parses one ignore-file line; `None` means blank/comment/malformed. The
 /// tuple is `(pattern, negate, directory_only)`.
-fn parse_ignore_rule(line: &str) -> Option<(Regex, bool, bool)> {
+pub(crate) fn parse_ignore_rule(line: &str) -> Option<(Regex, bool, bool)> {
     // JS `trim()` strips U+FEFF (BOM) along with whitespace; match it so a
     // BOM-prefixed ignore file keeps its first rule.
     let mut text = line
@@ -755,7 +755,7 @@ pub fn glob_matches(glob: &Regex, rel: &str) -> bool {
     glob.is_match(rel) || glob.is_match(basename(rel))
 }
 
-fn excluded(rules: &[IgnoreRule], file: &str, is_directory: bool) -> bool {
+pub(crate) fn excluded(rules: &[IgnoreRule], file: &str, is_directory: bool) -> bool {
     let mut drop = false;
     for rule in rules {
         let path = relative(&rule.base, file);
@@ -1287,7 +1287,7 @@ pub async fn repo_map(
     })
 }
 
-fn compare_segments(a: &[&str], b: &[&str]) -> std::cmp::Ordering {
+pub(crate) fn compare_segments(a: &[&str], b: &[&str]) -> std::cmp::Ordering {
     let n = std::cmp::min(a.len(), b.len());
     for index in 0..n {
         if a[index] != b[index] {
