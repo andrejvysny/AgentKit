@@ -146,6 +146,17 @@ cargo test --workspace --all-features --locked
 cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
 ```
 
+The HTTP teammates conformance lane needs the `http` feature and declares
+`required-features = ["http"]`, so running it without the feature fails
+instead of reporting a vacuous "0 passed":
+`cargo test --locked -p agentkit-host --features http --test http_teammates`.
+The napi lane exposes 14 of the 15 Hybrid M1 teammate operations;
+`streamAgentTask` (SSE) is intentionally absent on the native boundary
+(see `crates/napi/src/teammate_lane.rs`).
+
+Architecture rules (ADR 0021) are checked from the monorepo root with
+`bun run check:arch`.
+
 Environment: the release-projection and MCP stdio-peer suites spawn a real
 `node` (Node 22 on the CI runners); the workflow qualification gates evaluate
 `needs` results with `jq` and need no runtime. The wasm check requires the
