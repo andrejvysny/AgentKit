@@ -121,7 +121,7 @@ export interface BuildAppOptions {
       Parameters<NativeSessionService["setContentAuthority"]>[1]
     >;
   };
-  /** Defaults to `new Date()`'s ISO clock — see `packages/host/src/ports/system.ts`. */
+  /** Defaults to `new Date()`'s ISO clock. */
   clock?: Clock;
   logger?: Logger;
   /** Defaults to `process.env`. A test passes `{}` so nothing real is read. */

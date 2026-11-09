@@ -7,7 +7,7 @@
  * break, and the durable log on the other side already knows how to hand back
  * exactly the tail that was missed: `Last-Event-ID` names the last event this
  * client actually saw, and the server replays from ONE PAST it (see
- * `packages/transport-http/src/sse.ts`). So a reconnect here is not a retry that
+ * `agentkit-http`'s SSE writer). So a reconnect here is not a retry that
  * risks duplicates — it is the continuation the protocol was designed for, and
  * the caller never has to know it happened. Every event is yielded exactly once,
  * `seq`-contiguous across the seam — and that is ENFORCED here rather than
@@ -51,9 +51,8 @@ import type { RequestOptions, Transport } from "./transport.js";
  * The run events that end a PASS — not necessarily the run, which can open
  * another pass after one (see the module doc and `retry_pass`).
  *
- * A MIRROR of `TERMINAL_RUN_EVENT_TYPES` in `@agentkit/transport-http`, restated
- * because this package sits beside that one rather than below it and must not
- * depend on a server adapter to talk to a server. The vocabulary is
+ * Restated here (the server owns the same set) so this package does not depend
+ * on a server implementation to talk to a server. The vocabulary is
  * `AiRunEventType`'s, which is the contract both read.
  */
 export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<AiRunEvent["type"]> =

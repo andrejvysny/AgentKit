@@ -743,7 +743,7 @@ export interface ImportChatInput {
  * The caller supplies identity, the tree links, the `active` flags and the tool
  * linkage; the STORE assigns `orderKey`, `depth` and `branchIndex`. That split is the whole
  * design: those three are derived facts with rules
- * (`packages/host/src/conversation/message-tree.ts`) that every append in this
+ * (implemented by the Rust store) that every append in this
  * port already obeys, and letting an import name them would let it write a chat
  * no append could have produced — which the very next append would then have to
  * reconcile.

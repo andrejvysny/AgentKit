@@ -1,12 +1,17 @@
 # Port catalog
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 `@agentkit/host` defines no storage or execution of its own — it defines
 interfaces ("ports") an embedding host implements, plus the record types and
 frozen transition tables those interfaces are defined in terms of. Two
 complete implementations ship as their own packages:
-[`@agentkit/adapters-memory`](../packages/adapters-memory)'s
+`@agentkit/adapters-memory`'s
 `MemoryAssistantStore` (Map-backed, for tests and local dev) and
-[`@agentkit/adapters-sqlite`](../packages/adapters-sqlite)'s
+`@agentkit/adapters-sqlite`'s
 `SqliteAssistantStore` (`bun:sqlite`-backed, the durable store for a
 single-process host). Both pass
 `@agentkit/testing`'s `describeAssistantStoreConformance(factory)` suite
@@ -15,13 +20,13 @@ the shared behavioral contract every `AssistantStore` implementation must
 satisfy; a new adapter is graded against the same suite rather than by what
 one host's tests happen to touch.
 
-Source: [`packages/host/src/ports/`](../packages/host/src/ports/).
+Source: `packages/host/src/ports/`.
 
 ## Persistence
 
 ### `AssistantStore` (aggregate)
 
-[`ports/assistant-store.ts`](../packages/host/src/ports/assistant-store.ts)
+`ports/assistant-store.ts`
 
 The host's persistence, as one aggregate of six stores
 (`conversations`, `tasks`, `proposals`, `providers`, `settings`, `outbox`)
@@ -78,15 +83,15 @@ exactly as `SqliteAssistantStore` does. The conformance suite grades all four
 against both.
 
 **Reference / conformance**: `MemoryAssistantStore` in
-[`packages/adapters-memory/src/`](../packages/adapters-memory/src/) and
+`packages/adapters-memory/src/` and
 `SqliteAssistantStore` in
-[`packages/adapters-sqlite/src/`](../packages/adapters-sqlite/src/);
+`packages/adapters-sqlite/src/`;
 conformance suite in
 [`packages/testing/src/store-conformance.ts`](../packages/testing/src/store-conformance.ts).
 
 ### `ConversationStore`
 
-[`ports/conversation-store.ts`](../packages/host/src/ports/conversation-store.ts)
+`ports/conversation-store.ts`
 
 Chats and messages. Owns `MessageRecord.orderKey`, the per-chat ordering
 key — not `createdAt`, for the same reason `AiRunEvent.seq` orders events:
@@ -274,7 +279,7 @@ whole shape — links, depths, rising `orderKey`, childless leaf — after every
 single step, on both reference adapters.
 
 **Chat lifecycle across stores**: `ConversationService`
-([`conversation/conversation-service.ts`](../packages/host/src/conversation/conversation-service.ts))
+(`conversation/conversation-service.ts`)
 is where a delete that *means something* lives. `deleteChat(chatId)` runs one
 `store.transaction`: read the chat, read `TaskStore.listByScope(chatId)`, refuse
 with `ChatBusyError` (`chat_busy`, HTTP 409) if any task is `running` or
@@ -294,7 +299,7 @@ over `updateChat({ archived })`.
 (sqlite adapter: `SCHEMA_V8`, `parent_message_id`/`depth`/`branch_index`/
 `active` on `messages`, `chats.archived`, `settings.tool_calling_mode`, and
 the FTS5 view/table/trigger set behind `searchMessages` — see
-[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v8)),
+`packages/adapters-sqlite/README.md`),
 both graded by the same conformance suite; the tree arithmetic itself
 (`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
 `planForkedMessages`) is shared, pure, and synchronous
@@ -304,7 +309,7 @@ by construction rather than by two hand-written walks agreeing.
 
 ### `TaskStore`
 
-[`ports/task-store.ts`](../packages/host/src/ports/task-store.ts)
+`ports/task-store.ts`
 
 Durable lifecycle for a task of **any** kind: status (`TaskStatus`,
 `TASK_TRANSITIONS`), attempts, leases, and the event log — the product every
@@ -585,7 +590,7 @@ is the optional `context_summaries` table (`SCHEMA_VERSION` stays 10). Conforman
 
 ### `ProposalStore`
 
-[`ports/proposal-store.ts`](../packages/host/src/ports/proposal-store.ts)
+`ports/proposal-store.ts`
 
 Staged writes: `ProposalRecord`, `ProposalStatus`, and apply outcomes
 (`ApplyOutcome`, keyed by `operationId`).
@@ -628,9 +633,9 @@ rejection, key reuse after release, and outcome idempotency.
 
 ### `ProviderStore`, `SettingsStore`, `OutboxStore`
 
-[`ports/provider-store.ts`](../packages/host/src/ports/provider-store.ts),
-[`ports/settings-store.ts`](../packages/host/src/ports/settings-store.ts),
-[`ports/outbox-store.ts`](../packages/host/src/ports/outbox-store.ts)
+`ports/provider-store.ts`,
+`ports/settings-store.ts`,
+`ports/outbox-store.ts`
 
 `ProviderStore` persists configured providers, their model catalogs, and
 probed capabilities (`replaceModels` is a wholesale replace, not a merge —
@@ -672,7 +677,7 @@ work that may still roll back and losing the announcement on a crash.
 
 ### `TaskRunner` / `TaskWorker`
 
-[`ports/task-runner.ts`](../packages/host/src/ports/task-runner.ts)
+`ports/task-runner.ts`
 
 The durable queue that turns "a task exists" into "a worker is executing
 it". Deliberately has **no `subscribe()`** — events reach consumers through
@@ -702,7 +707,7 @@ would feed to `ClaimNextInput.kinds` so a box only claims work it can run —
 no adapter in this repository does that filtering yet.
 
 `recoverOnBoot({ taskRunner, proposals })`
-([`packages/host/src/bootstrap.ts`](../packages/host/src/bootstrap.ts))
+(`packages/host/src/bootstrap.ts`)
 is the pair of them a host actually calls at startup: `TaskRunner.recover()`
 first, then `ProposalService.reconcileInterrupted()`, so a recovered task is
 picked back up only after the writes it may have left mid-apply are settled.
@@ -713,7 +718,7 @@ task by, so a task it cannot hand to a worker yet must be remembered and
 re-dispatched when one starts, not dropped.
 
 **Reference / conformance**: `SingleProcessTaskRunner`
-([`packages/runner-local/src/single-process-task-runner.ts`](../packages/runner-local/src/single-process-task-runner.ts)) —
+(`packages/runner-local/src/single-process-task-runner.ts`) —
 claim/execute/heartbeat/retry/dead-letter/recover for one process, with
 fire-and-forget dispatch (never awaits an execution inside its claim loop),
 evidence-based error classification (`error-classifier.ts`: an unrecognized
@@ -732,10 +737,10 @@ lifetime.
 
 ### Task execution
 
-[`tasks/task-executor.ts`](../packages/host/src/tasks/task-executor.ts),
-[`tasks/executor-registry.ts`](../packages/host/src/tasks/executor-registry.ts),
-[`tasks/task-service.ts`](../packages/host/src/tasks/task-service.ts),
-[`tasks/task-event-writer.ts`](../packages/host/src/tasks/task-event-writer.ts)
+`tasks/task-executor.ts`,
+`tasks/executor-registry.ts`,
+`tasks/task-service.ts`,
+`tasks/task-event-writer.ts`
 
 The kind-dispatch layer built on top of `TaskStore`/`TaskRunner`: what turns
 a claimed task into a running executor and a submitted request into a
@@ -777,7 +782,7 @@ accident:
   subagents](architecture.md#task-dependencies-and-subagents), [ADR
   0003](adr/0003-task-dependencies-and-subagents.md).
 - A host executor answering a CONVERSATION drives
-  [`turn/projection.ts`](../packages/host/src/turn/projection.ts)
+  `turn/projection.ts`
   (`createRunProjector`) rather than writing messages itself, and its turns
   are submitted with `SubmitMessageInput.kind` set to its own kind. The
   projection — chain appends off the run's own last write with
@@ -793,7 +798,7 @@ accident:
 
 ### `WritePolicy`
 
-[`ports/write-policy.ts`](../packages/host/src/ports/write-policy.ts)
+`ports/write-policy.ts`
 
 Decides whether a staged write applies immediately or waits for a human.
 Three modes: `auto_readonly_confirm_writes` (default — writes stage and
@@ -823,14 +828,14 @@ answer could time out, turning "needs confirmation" into "tool failed".
   collide on one key.
 
 **Reference**: `SessionWritePolicy`
-([`packages/host/src/policy/session-write-policy.ts`](../packages/host/src/policy/session-write-policy.ts))
+(`packages/host/src/policy/session-write-policy.ts`)
 — allowances live only for the process lifetime, on purpose: persisting a
 "yes, go ahead" from a conversation the user was watching into a future
 session they are not would silently extend consent past where it was given.
 
 ### `ProposalApplier`
 
-[`ports/proposal-applier.ts`](../packages/host/src/ports/proposal-applier.ts)
+`ports/proposal-applier.ts`
 
 The host side of a write — the only component that actually changes the
 world. Everything else in the proposal pipeline is bookkeeping around this
@@ -848,7 +853,7 @@ than discarding the half that worked.
 
 ### `VerificationHook`
 
-[`ports/verification.ts`](../packages/host/src/ports/verification.ts)
+`ports/verification.ts`
 
 Post-run "did the work actually land?" check — a run that called tools and
 narrated success can still have achieved nothing. `verify()` returns a
@@ -868,7 +873,7 @@ throws fails the turn, as it always did.
 
 ### The correction harness
 
-[`turn/correction-harness.ts`](../packages/host/src/turn/correction-harness.ts)
+`turn/correction-harness.ts`
 
 Set `TurnRunnerDeps.correction = { maxPasses? }` (default 3, hard-capped at 5)
 and the deficiencies are fed **back to the model** for bounded correction
@@ -950,7 +955,7 @@ blanking it.
 
 ### `ContextProvider`
 
-[`ports/context-provider.ts`](../packages/host/src/ports/context-provider.ts)
+`ports/context-provider.ts`
 
 What the host pins into a chat's context: bindings (the objects the model
 is working on) and system-prompt text. Resolved **per run**, not stored on
@@ -959,7 +964,7 @@ deleted or go stale between one turn and the next.
 
 ### `AttachmentResolver`
 
-[`ports/attachment-resolver.ts`](../packages/host/src/ports/attachment-resolver.ts)
+`ports/attachment-resolver.ts`
 
 `resolve(ref, { chatId }) → { mediaType, base64 } | null`. Turns the `ref`
 image sources in stored messages into bytes a provider can be shown. **The
@@ -1001,7 +1006,7 @@ refs never notices the port exists.
 
 ### `ToolSetContributor`
 
-[`ports/tool-contributor.ts`](../packages/host/src/ports/tool-contributor.ts)
+`ports/tool-contributor.ts`
 
 A source of tools for a run, contributed per run rather than registered
 once at boot — which tools exist depends on what the chat is bound to and
@@ -1048,11 +1053,11 @@ contributor that cannot answer without a chat returns nothing there.
 namespace `mcp`, `privileged: true`, turns every connected MCP server's tools
 into `AiTool`s, failing the whole contribution closed on a canonical-id
 collision rather than silently dropping one. See
-[`packages/mcp-client/README.md`](../packages/mcp-client/README.md).
+`packages/mcp-client/README.md`.
 
 ### `ToolGuard`
 
-[`ports/tool-guard.ts`](../packages/host/src/ports/tool-guard.ts)
+`ports/tool-guard.ts`
 
 Visibility and executability policy over whatever the contributors offered,
 wired as `TurnRunnerDeps.toolGuards`. Two hooks, both optional, checked at
@@ -1091,7 +1096,7 @@ and callable, exactly as before the port existed.
 
 ### `ToolCatalog`
 
-[`ports/tool-catalog.ts`](../packages/host/src/ports/tool-catalog.ts)
+`ports/tool-catalog.ts`
 
 Enumerate tools **without running a turn** — what `GET /v1/tools` needs and
 what it answered 501 without. `listTools({ chatId })` reports what that
@@ -1125,7 +1130,7 @@ hands out. See [`docs/rust/parity.md`](rust/parity.md).
 
 ### `SecretStore`
 
-[`ports/secret-store.ts`](../packages/host/src/ports/secret-store.ts)
+`ports/secret-store.ts`
 
 Keeps API keys and tokens out of the records that describe them. A
 `ProviderConfig` is read, listed, and shipped to a UI freely; the key it
@@ -1134,7 +1139,7 @@ uses is resolved from a `ref` only at the moment a client is built
 
 ### `AuthorizationPort`
 
-[`ports/authorization.ts`](../packages/host/src/ports/authorization.ts)
+`ports/authorization.ts`
 
 "Is this actor allowed near this resource?" — separate from `WritePolicy`,
 which answers "may this apply without confirmation?" A desktop host wires a
@@ -1148,7 +1153,7 @@ read and no host call. The `subject` is the principal (an object verbatim,
 anything else under `metadata.principal`), the `action` is `read` for `GET`
 and `write` for every other method, and the `resource` comes from the route
 table in
-[`transport-http/src/authorize.ts`](../packages/transport-http/src/authorize.ts),
+`transport-http/src/authorize.ts`,
 which is `satisfies Record<RestOperation, …>` so a route added to
 `REST_ROUTES` cannot ship without one. `GET /v1/version` is the single
 exemption. A refusal is a `403` problem with code `forbidden`, carrying the
@@ -1166,7 +1171,7 @@ must supply the port (or filter in front of the handler).
 
 ### `UsageAuthorizer`
 
-[`ports/usage-authorizer.ts`](../packages/host/src/ports/usage-authorizer.ts)
+`ports/usage-authorizer.ts`
 
 Spend control around provider calls: `authorize()` before, `record()`
 after. Two methods rather than one because the interesting failure is
@@ -1205,7 +1210,7 @@ exactly as it did before the port was enforced.
 
 ## System seams
 
-[`ports/system.ts`](../packages/host/src/ports/system.ts)
+`ports/system.ts`
 
 `Clock` (`now()`/`nowIso()`), `IdGenerator` (one method per entity kind —
 `taskId`, `attemptId`, `eventId`, `proposalId`, `operationId`, `messageId`,
@@ -1235,9 +1240,9 @@ are provided as the obvious real implementations.
 ```
 
 Source: `PROPOSAL_TRANSITIONS` in
-[`packages/host/src/proposals/state-machine.ts`](../packages/host/src/proposals/state-machine.ts),
+`packages/host/src/proposals/state-machine.ts`,
 driven by `ProposalService`
-([`packages/host/src/proposals/proposal-service.ts`](../packages/host/src/proposals/proposal-service.ts)).
+(`packages/host/src/proposals/proposal-service.ts`).
 
 Notes:
 

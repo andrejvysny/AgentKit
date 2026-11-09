@@ -15,7 +15,7 @@
  *
  * NOT part of the normal `bun run ci` gate — it shells out to real `npm
  * pack`/`npm install` (network access for each package's real, non-workspace
- * dependencies — typebox, ajv, the MCP SDK), which is slower and less
+ * dependencies — typebox, ajv), which is slower and less
  * hermetic than the rest of this repo's checks. It has its own CI job.
  *
  * WHY THIS CATCHES BUGS `bun test`/`node-smoke` CANNOT — two real,
@@ -72,31 +72,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 /** Dependency order — a package may only depend on ones earlier in this list. */
-const PACKAGES = [
-  "contracts",
-  "client",
-  "react",
-  "core",
-  "host",
-  // Ahead of the adapters: both `adapters-memory` and `adapters-sqlite` depend
-  // on it, and `withRewrittenDeps` can only point a `workspace:*` at a tarball
-  // an EARLIER entry already packed.
-  "mcp-client",
-  "adapters-memory",
-  "adapters-sqlite",
-  "runner-local",
-  "testing",
-  "transport-http",
-];
-
-/**
- * Packages the consumer check script does NOT import. `npm pack` + `npm
- * install` still cover them — the packed `exports` must point into `dist/` and
- * the tarball must install — but `@agentkit/adapters-sqlite` is built on
- * `bun:sqlite` and declares `engines.bun` only, so importing it from a plain
- * `node check.mjs` would fail by design rather than find a bug.
- */
-const NOT_NODE_IMPORTABLE = new Set(["@agentkit/adapters-sqlite"]);
+const PACKAGES = ["contracts", "client", "react", "core", "testing"];
 
 /**
  * Peer dependencies the consumer project must install for the packages above to
@@ -250,9 +226,6 @@ function main() {
         process.exit(1);
       }
       console.log(`  ok   packed exports point at ${entry}`);
-      if (NOT_NODE_IMPORTABLE.has(pkg.name)) {
-        console.log("  note installed but not imported below — Bun-only");
-      }
     }
 
     console.log(

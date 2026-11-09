@@ -18,8 +18,7 @@
  * passes an `AbortSignal` into `fetch`, and a happy-dom `fetch` applies the
  * window's own same-origin policy to a `127.0.0.1:<port>` URL it was never told
  * about. `bun test` also runs every package's tests in ONE process, so a
- * swapped-out global would follow this file into `@agentkit/transport-http`'s
- * suite.
+ * swapped-out global would follow this file into another package's suite.
  *
  * So: snapshot the platform globals, register happy-dom, put the platform ones
  * back. What is left over from happy-dom is the part that was actually wanted —

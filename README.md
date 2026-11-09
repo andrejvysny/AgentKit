@@ -1,12 +1,15 @@
 # AgentKit
 
 AgentKit is an embeddable AI-assistant framework extracted from OpenPCB's
-assistant module: a pure, in-process chat-with-tools loop (`@agentkit/core`)
-wrapped in a durable orchestration layer (`@agentkit/host`) over a small set
-of storage/execution ports, with wire DTOs (`@agentkit/contracts`) and test
-support (`@agentkit/testing`) shared across both. See
-[`docs/architecture.md`](docs/architecture.md) for the full layer
-breakdown and an ASCII diagram.
+assistant module. The backend — durable store, sessions, governance, providers,
+MCP, REST/SSE — is a Rust workspace (`rust/`) reached from TypeScript through
+`@agentkit/native`. The TypeScript packages are the API surface around it:
+wire DTOs (`@agentkit/contracts`), a typed REST/SSE client
+(`@agentkit/client`), React hooks (`@agentkit/react`), the in-process provider
+lane (`@agentkit/core`) and test support (`@agentkit/testing`). The frozen
+TypeScript backend was deleted in 0.8.0
+([ADR 0023](docs/adr/0023-retire-typescript-backend.md)). See
+[`docs/architecture.md`](docs/architecture.md) for the full layer breakdown.
 
 **Status:** pre-release, 0.x. APIs may change without notice.
 
@@ -34,7 +37,7 @@ npm install /absolute/path/agentkit-VERSION.tgz   # qualified artifact (current)
 ```
 
 `npm install` / `bun install` then works with subpath imports
-(`agentkit/core`, `agentkit/host`, `agentkit/adapters-sqlite`, `agentkit/native`, …) backed by
+(`agentkit/core`, `agentkit/client`, `agentkit/native`, …) backed by
 a packed `dist/` — no build step for the consumer. `agentkit/native` runs
 the whole backend on the Rust runtime through the Node-API binding and pulls
 the prebuilt addon for your platform (`linux-x64-gnu`, `linux-arm64-gnu`,
@@ -57,31 +60,21 @@ isolated installation without a Rust toolchain.
 | [`packages/client`](packages/client) — `@agentkit/client` | Typed REST v1 + SSE client for the contract: one method per route, `streamRun` as an auto-resuming async iterable, derived run phases, problem+json as typed errors. Browser and Node; no dependency but `@agentkit/contracts`. | 0.1.0-dev |
 | [`packages/react`](packages/react) — `@agentkit/react` | Headless React hooks over `@agentkit/client`: `useChat` (optimistic send, streamed deltas, reconcile), `useRun`, `useBranches`, `useProposals`, `useProviders`. No components, no styling; `react` is a peer dependency. | 0.1.0-dev |
 | [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`, multimodal content-part mapping for OpenAI-compatible providers. | 0.5.0-dev |
-| [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: `TaskStore` + kind-dispatched executors, `TurnRunner` as the `chat.turn` executor, proposal lifecycle, write policy. | 0.1.0-dev |
 | [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` + `TaskRunner` conformance suites. | 0.1.0-dev |
-| [`packages/adapters-memory`](packages/adapters-memory) — `@agentkit/adapters-memory` | Map-backed `AssistantStore` for tests and local development. No durability, no rollback. | 0.1.0-dev |
-| [`packages/adapters-sqlite`](packages/adapters-sqlite) — `@agentkit/adapters-sqlite` | Durable `AssistantStore` over `bun:sqlite` — the production store for a single-process host. **Bun only.** | 0.1.0-dev |
-| [`packages/runner-local`](packages/runner-local) — `@agentkit/runner-local` | Single-process `TaskRunner`: claim, execute, heartbeat, classified retry with backoff, dead-letter, recover. | 0.1.0-dev |
-| [`packages/mcp-client`](packages/mcp-client) — `@agentkit/mcp-client` | Optional adapter: bridges MCP servers' tools into a run as a `ToolSetContributor`, on the official `@modelcontextprotocol/sdk`. | 0.1.0-dev |
-| [`packages/transport-http`](packages/transport-http) — `@agentkit/transport-http` | Optional adapter: fetch-standard REST v1 + SSE handler serving `packages/contracts/src/rest.ts`, zero framework dependencies. | 0.1.0-dev |
 | [`packages/native`](packages/native) — `@agentkit/native` | Thin Node-API binding over the Rust backend (`rust/crates/*`): durable store, sessions, governance, providers, MCP, HTTP — all in Rust, no logic mirrored in TypeScript. | publishable; npm lane gated |
 | [`packages/native-*`](packages/native-linux-x64-gnu) — `@agentkit/native-<platform>` | Prebuilt per-platform addons (`linux-x64-gnu`, `linux-arm64-gnu`, `darwin-arm64`, `darwin-x64`, `win32-x64-msvc`), pulled in automatically as optional dependencies; installation never builds Rust. | publishable; npm lane gated |
 
 ## Layers
 
 ```
-adapters-memory / adapters-sqlite / runner-local  →  @agentkit/host  →  @agentkit/core  →  @agentkit/contracts
+@agentkit/react → @agentkit/client → @agentkit/contracts      (REST/SSE consumers)
+@agentkit/core  → @agentkit/native → Rust engine (rust/crates) (in-process backend)
 ```
 
-Each package depends only on the ones to its right, with one documented
-exception: `adapters-memory` and `adapters-sqlite` also depend sideways on
-`@agentkit/mcp-client`, purely for the `McpServerConfigStore` port's DTOs
-and errors (they live in `mcp-client`, not `contracts`, today). See
-[`docs/roadmap.md`](docs/roadmap.md)'s "MCP config types toward
-`@agentkit/contracts`" item for the plan to close it. Full diagram, the event
-flow (`seq`/`eventId` stamping, lease fencing), the run/attempt/lease model,
-and the loop invariants `runChat()` preserves: see
-[`docs/architecture.md`](docs/architecture.md).
+The TypeScript packages carry no orchestration logic; the Rust engine owns
+every runtime rule. See [`docs/architecture.md`](docs/architecture.md) for the
+full layer breakdown, the event flow (`seq`/`eventId` stamping, lease fencing),
+the run/attempt/lease model, and the loop invariants.
 
 ## Example embedding
 
@@ -103,7 +96,7 @@ Every package is **ESM-only** (`"type": "module"`, no CJS build) and requires
 is the primary runtime; `@agentkit/contracts` and `@agentkit/core` are also
 tested under plain Node (see `node-smoke` below), but the rest of the
 toolchain (tests, `bun run ci`) is Bun-only. The backend itself — chat loop,
-durable store, host orchestration, providers, MCP, coding toolpack — runs on
+durable store, orchestration, providers, MCP, coding toolpack — runs on
 **Rust** through `@agentkit/native` (Node-API 9; Node ≥22, Bun ≥1.4; see
 [`docs/rust/parity.md`](docs/rust/parity.md) for the per-slice status and
 [`docs/rust/acceptance.md`](docs/rust/acceptance.md) for the verification
@@ -117,9 +110,9 @@ ledger); there is no TypeScript backend fallback.
 - [`docs/contracts.md`](docs/contracts.md) — the event vocabulary, v2 base
   fields, warning codes, tool envelope, `run.usage` semantics, generic
   kinds, TypeBox conventions.
-- [`docs/ports.md`](docs/ports.md) — the full port catalog (responsibility,
-  key invariant, reference adapter per port) and the proposal lifecycle
-  diagram.
+- [`docs/ports.md`](docs/ports.md) — the port catalog (responsibility, key
+  invariant per port) and the proposal lifecycle diagram; reference
+  implementations are historical (deleted in 0.8.0).
 - [`docs/non-goals.md`](docs/non-goals.md) — what this repository
   deliberately does not include yet, and where it will live.
 - [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P5a, P5b,
@@ -151,26 +144,17 @@ bun run ci        # install --frozen-lockfile && typecheck && test && build
 
 Other useful scripts (see [`package.json`](package.json)): `bun run
 typecheck`, `bun run build`, and per-package variants
-(`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
-`bun run test:client`,
-`bun run test:testing`, `bun run test:adapters-memory`,
-`bun run test:adapters-sqlite`, `bun run test:runner-local`,
-`bun run test:mcp-client`, `bun run test:transport-http`).
+(`bun run test:core`, `bun run test:contracts`, `bun run test:client`,
+`bun run test:react`, `bun run test:testing`).
 
 Bun is the primary runtime, but every published `@agentkit/*` package must
 stay Node-loadable — a `bun:` import anywhere in one passes the whole Bun
 suite and breaks the first Node consumer. `scripts/node-smoke.mjs` runs the
-built dists (contracts, client, core, host, adapters-memory, runner-local,
-mcp-client, transport-http, testing) under plain Node:
+built dists (contracts, client, react, core, testing) under plain Node:
 Ajv-validating a golden event, constructing a REST client over the whole route
-table, driving `runChat` with a stub provider, loading
-the host port vocabulary, claiming a task out of the in-memory store, driving
-that task to `completed` through the local runner's claim loop, constructing an
-mcp-client manager, serving a request through transport-http, and
-round-tripping a golden trace through testing. `@agentkit/adapters-sqlite` is the one
-exception, Bun-only by construction (`bun:sqlite`) — see its
-[README](packages/adapters-sqlite/README.md). **Build first** — it reads
-`dist/`, which is not checked in:
+table, driving `runChat` with a stub provider (which must fail honestly without
+the native binding), and round-tripping a golden trace through testing. **Build
+first** — it reads `dist/`, which is not checked in:
 
 ```sh
 bun run build && bun run smoke:node

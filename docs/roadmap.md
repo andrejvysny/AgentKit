@@ -1,5 +1,10 @@
 # Roadmap
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 Future work, in dependency order. This file is **not** a list of current
 guarantees — everything here is unimplemented unless a phase is explicitly
 marked done. Current guarantees live in `docs/architecture.md`,

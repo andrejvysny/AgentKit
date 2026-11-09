@@ -24,14 +24,14 @@ const lines = (found: Array<{ line: number }>) => found.map((f) => f.line);
 describe("findResidualSpecifiers", () => {
   it("flags a quoted specifier the rewrite could not handle", () => {
     // A SUBPATH import: the rewrite's regex stops at the package name, so this
-    // survives it — and used to be collapsed into `import "agentkit/host/x.js"`,
+    // survives it — and used to be collapsed into `import "agentkit/core/x.js"`,
     // which resolves to nothing.
     const found = findResidualSpecifiers(
-      ['import { a } from "@agentkit/host/internal.js";'].join("\n"),
+      ['import { a } from "@agentkit/core/internal.js";'].join("\n"),
     );
     expect(found.length).toBe(1);
     expect(found[0]?.line).toBe(1);
-    expect(found[0]?.text).toContain("@agentkit/host/internal.js");
+    expect(found[0]?.text).toContain("@agentkit/core/internal.js");
   });
 
   it("flags a single-quoted specifier and an unknown package alike", () => {
@@ -52,7 +52,7 @@ describe("findResidualSpecifiers", () => {
     const found = findResidualSpecifiers(
       [
         "// fine",
-        'import a from "@agentkit/host/a.js";',
+        'import a from "@agentkit/core/a.js";',
         "// fine",
         "// fine",
         "const b = `@agentkit/${pkg}`;",
@@ -62,13 +62,13 @@ describe("findResidualSpecifiers", () => {
   });
 
   it("leaves prose mentions alone — including backticked ones", () => {
-    // This codebase writes `@agentkit/host` inside doc comments constantly.
+    // This codebase writes `@agentkit/core` inside doc comments constantly.
     // Those are precisely what the collapse to `agentkit/` is FOR; flagging
     // them would fail every build.
     const found = findResidualSpecifiers(
       [
         "/**",
-        " * The `@agentkit/host` port this implements.",
+        " * The `@agentkit/core` port this implements.",
         " * See @agentkit/contracts for the schema.",
         " */",
         "// resolved against @agentkit/core at build time",
@@ -93,10 +93,10 @@ describe("external platform packages keep their scoped name", () => {
     "addon = requireLocal(`@agentkit/native-${key}/package.json`);";
 
   it("never collapses the template literal that builds a platform package name", () => {
-    const prose = "// see @agentkit/core and `@agentkit/host`";
+    const prose = "// see @agentkit/core and `@agentkit/core`";
     const out = collapseAgentkitScope(`${loaderLine}\n${prose}\n`);
     expect(out).toContain(loaderLine);
-    expect(out).toContain("// see agentkit/core and `agentkit/host`");
+    expect(out).toContain("// see agentkit/core and `agentkit/core`");
     expect(findResidualSpecifiers(loaderLine)).toEqual([]);
     expect(hasUnexpectedScope(loaderLine)).toBe(false);
     expect(hasUnexpectedScope(prose)).toBe(true);

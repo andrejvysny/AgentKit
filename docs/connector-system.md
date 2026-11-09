@@ -142,14 +142,12 @@ database; malformed or unknown tables still fail closed.
 `SkillService` catalogs explicitly configured application bundles or directory
 sources, parses safe scalar/block `SKILL.md` frontmatter, activates explicitly
 selected instruction hashes, and progressively reads bounded references. Complex
-YAML tags, anchors and collections are refused. `fileSkillSource` from `@agentkit/runner-local/filesystem`
-checks real paths, symlink containment, file type, byte limits and cancellation.
+YAML tags, anchors and collections are refused. The removed TypeScript `fileSkillSource` (0.8.0, ADR 0023;
+see commit `a31dcb1`) checked real paths, symlink containment, file type, byte limits and cancellation.
 It opens without following a final symlink, verifies file identity before and
 after bounded reads, and detects parent substitution before reading. Portable
 Node filesystem APIs do not provide atomic ancestor resolution against a hostile
 process continuously renaming directories; such deployments need an OS sandbox.
-Default package imports do not load filesystem services; the umbrella package
-exposes them through `agentkit/runner-local/filesystem`.
 Supporting-resource reads include a content hash and an optional audit callback.
 `metadata.requires-connectors` can declare comma-separated dependencies on
 already selected authorized connectors. A declaration never creates a grant.

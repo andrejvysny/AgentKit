@@ -7,7 +7,7 @@ chat-with-tools loop.
 Pure TypeScript. One runtime dependency: `ajv`. No DB, no HTTP framework, no
 DOM, no provider SDKs. Uses global `fetch`. Nothing here survives a process
 restart — durable orchestration (retries across process boundaries, a
-persisted event log, proposal review) is `@agentkit/host`'s job; see
+persisted event log, proposal review) is the Rust engine's job (reached through `@agentkit/native`); see
 [`docs/architecture.md`](../../docs/architecture.md).
 
 ## Modules

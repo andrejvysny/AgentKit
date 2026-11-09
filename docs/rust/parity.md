@@ -1,5 +1,10 @@
 # Rust parity baseline
 
+> **0.8.0 note.** The frozen TypeScript backend packages were deleted ([ADR 0023](../adr/0023-retire-typescript-backend.md)); the
+> API freeze was re-baselined to the 13 remaining reports ([api/README.md](api/README.md)). Mentions below of
+> `packages/host`, `transport-http`, `adapters-*`, `runner-local` and `mcp-client` are historical records; the source
+> is at commit `a31dcb1`. Differential testing against them ended with the deletion.
+
 ## Migration checkpoint: 30 October 2026
 
 The reviewed starting commit is `5a4bb61a479cc8ca3dfb0e24a8a0e1e0b37a9c61`.

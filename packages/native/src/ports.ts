@@ -1,8 +1,8 @@
 /**
  * Store port types `NativeAssistantStore` implements, owned by this package.
  *
- * Types only: the TypeScript host these used to come from (`@agentkit/host`)
- * is gone, so the port shapes the binding maps onto live here. The
+ * Types only: the deleted TypeScript host these used to come from
+ * (ADR 0023), so the port shapes the binding maps onto live here. The
  * engine (Rust) owns every runtime rule; nothing in this file executes.
  */
 import type {
@@ -742,7 +742,7 @@ export interface ImportChatInput {
  * The caller supplies identity, the tree links, the `active` flags and the tool
  * linkage; the STORE assigns `orderKey`, `depth` and `branchIndex`. That split is the whole
  * design: those three are derived facts with rules
- * (`packages/host/src/conversation/message-tree.ts`) that every append in this
+ * (implemented by the Rust store) that every append in this
  * port already obeys, and letting an import name them would let it write a chat
  * no append could have produced — which the very next append would then have to
  * reconcile.

@@ -77,7 +77,7 @@ export type AiTextPart = Static<typeof AiTextPartSchema>;
  * values — an adapter serializes them directly. A `ref` is an opaque handle into
  * the host's own blob storage, and it is the host that turns it into a `data`
  * source (per provider pass, in memory, under byte budgets) before a request is
- * built; see `AttachmentResolver` in `@agentkit/host`. Storing the handle rather
+ * built; see the attachment resolver in the Rust engine. Storing the handle rather
  * than the bytes is what keeps a conversation replayable without carrying
  * megabytes of base64 through every append, every fork and every `listMessages`
  * page — and what lets the same stored message be re-resolved at a different

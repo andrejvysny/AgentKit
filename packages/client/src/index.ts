@@ -1,6 +1,6 @@
 /**
  * Public barrel for `@agentkit/client`: the typed REST v1 + SSE client for the
- * surface `@agentkit/contracts` defines and `@agentkit/transport-http` serves.
+ * surface `@agentkit/contracts` defines and the Rust server (`agentkit-http`) serves.
  *
  * It depends on `@agentkit/contracts` and nothing else — no HTTP library, no
  * polyfill, no bundler assumption. Everything it calls (`fetch`, `URL`,

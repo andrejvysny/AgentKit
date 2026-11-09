@@ -11,8 +11,8 @@ import type {
  * `satisfies Record<RestOperation, unknown>`, so a route added to
  * `@agentkit/contracts` breaks this file's compile until it is implemented, and
  * a method named after a route that no longer exists fails the excess-property
- * check. That is the same guarantee `@agentkit/transport-http`'s dispatch table
- * gives on the server side, for the same reason: a contract route reachable from
+ * check. The Rust server (`agentkit-http`) compiles its router from the same
+ * table, for the same reason: a contract route reachable from
  * neither end is discoverable only as somebody's 404.
  *
  * ARGUMENT SHAPE. `(params, body?, opts?)`, with `params` OMITTED on the routes

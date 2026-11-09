@@ -1,5 +1,10 @@
 # Rust native SDK acceptance audit
 
+> **0.8.0 note.** The frozen TypeScript backend packages were deleted ([ADR 0023](../adr/0023-retire-typescript-backend.md)); the
+> API freeze was re-baselined to the 13 remaining reports ([api/README.md](api/README.md)). Mentions below of
+> `packages/host`, `transport-http`, `adapters-*`, `runner-local` and `mcp-client` are historical records; the source
+> is at commit `a31dcb1`. Differential testing against them ended with the deletion.
+
 Current qualification policy: [local gates](../../DEVELOPING.md#local-gates-no-hosted-ci).
 Hosted workflow references below are historical. Run
 `bun run qualify:local /absolute/new/outside-directory` for a source-bound
@@ -82,7 +87,7 @@ after the final code change.
 
 All 39 routes have a positive-path socket test using the unchanged TypeScript
 client against the actual Rust host and SQLite in
-[the REST interoperability suite](../../packages/transport-http/tests/rust-interop.test.ts).
+the REST interoperability suite (`packages/transport-http/tests/rust-interop.test.ts`, deleted in 0.8.0).
 It checks representative response schemas, branch/search/regeneration, proposal
 receipts, settings, provider/model/configuration and policy ports. The server uses
 scripted provider/network/domain adapters, not live services. A separate generic

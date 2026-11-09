@@ -1,8 +1,13 @@
 # Non-goals
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 Deferred surface — work this repository deliberately does not include yet,
 and where each piece is expected to land when it does. None of this is
-implemented in `packages/` today; do not import paths named
+implemented today; do not import paths named
 below.
 
 - **Styled UI / component library.** `@agentkit/react` ships (ADR
@@ -12,18 +17,15 @@ below.
   name, no CSS import. A consuming app (OpenPCB, a cloud-agent service,
   OneCAD) still owns its own visual design and component tree, built either
   on those hooks or directly against `@agentkit/client` / the
-  `@agentkit/host` port contracts and the `AiRunEvent` stream.
+  REST v1 contract and the `AiRunEvent` stream.
 - **OpenPCB compatibility wrapper.** No shim maps `@openpcb/ai-core`'s old
   API onto `@agentkit/core`. OpenPCB's own migration to this package is a
   separate, future change in the OpenPCB repository — this session made
   **no commits** to OpenPCB or task-system, reference-reading only.
-- **Cloud-agent Redis/Postgres adapters.** The reference adapters ship only
-  an in-memory store (`@agentkit/adapters-memory`) and a `bun:sqlite` store
-  (`@agentkit/adapters-sqlite`), both single-process — as is
-  `@agentkit/runner-local` (see their READMEs). A
-  distributed deployment needs its own `AssistantStore`/`TaskRunner`
-  implementation over a networked backend — the port interfaces in
-  `packages/host/src/ports/` are what such an adapter implements against.
+- **Cloud-agent Redis/Postgres adapters.** The Rust engine ships a
+  single-process SQLite store and worker. A distributed deployment needs its own
+  store/runner implementation over a networked backend, built in Rust against
+  the engine's store traits.
 - **OneCAD `HostBridge`.** No integration code for OneCAD exists here.
   OneCAD would implement the same host ports a desktop or cloud embedding
   does; nothing OneCAD-specific belongs in this repository.

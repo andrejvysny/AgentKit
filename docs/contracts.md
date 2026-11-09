@@ -1,5 +1,10 @@
 # Contracts
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 `@agentkit/contracts` is the serialized surface every other package and
 every embedding host agrees on. This document covers the run-event
 vocabulary, the tool envelope, usage accounting, message content parts, the
@@ -224,7 +229,7 @@ persists `event.data.modelResultJson ?? event.data.resultJson` as the
 `role: "tool"` message's content (what gets replayed into the model's
 context on every later turn), while the full payload stays only on the
 event log
-([`packages/host/src/turn/projection.ts`](../packages/host/src/turn/projection.ts))
+(`packages/host/src/turn/projection.ts`)
 — for a host's own turn executor as much as for `chat.turn`, since both
 drive the same projector.
 
@@ -364,7 +369,7 @@ versioned HTTP surface as **types and JSON Schemas only** — this package
 stays server-free by design, so the shapes are reviewable and validatable
 independent of any adapter. `@agentkit/transport-http` is the official
 adapter that serves it (fetch-standard handler, SSE `streamRun`; see
-[`packages/transport-http/README.md`](../packages/transport-http/README.md)
+`packages/transport-http/README.md`
 and [ADR 0005](adr/0005-http-transport.md)); `@agentkit/client` is the
 official typed client calling it, and `@agentkit/react` is headless React
 hooks over that client (see
@@ -389,7 +394,7 @@ hooks over that client (see
 The surface is grouped as follows. Everything past the conversation block is
 **management**: the routes a settings pane and a chat sidebar need, and the
 reason the adapter's optional dependencies exist (see
-[`packages/transport-http/README.md`](../packages/transport-http/README.md) —
+`packages/transport-http/README.md` —
 an unwired dependency answers **501**, never 404).
 
 | Operation | Method + path |
@@ -437,7 +442,7 @@ carries another credential). `McpServerDto`, by contrast, publishes its
 `secretRefs` map whole — the record carries refs, never values.
 
 **DTOs are projections of host records, not copies.** Each one mirrors a
-record in [`packages/host/src/ports/`](../packages/host/src/ports/) with the
+record in `packages/host/src/ports/` with the
 orchestrator's internals removed — leases and fencing tokens, queue
 bookkeeping (`priority`, `availableAt`, `attemptCount`, `poisonCount`), the
 host-shaped `envelope`/`operations` body of a proposal, the `operationId` and

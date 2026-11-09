@@ -792,7 +792,7 @@ function mapMessageContent(
  * `null` means "nothing faithful to send", which today is exactly one case: an
  * image whose source is a host `ref`. A ref is a handle into the HOST's blob
  * storage, resolved to inline data before a request is built (see
- * `AttachmentResolver` in `@agentkit/host`) — one that reaches this mapping was
+ * the attachment resolver in the Rust engine) — one that reaches this mapping was
  * never resolved, and the host has already said so with an
  * `attachment_unresolved` warning. Serializing it would put a made-up URL on the
  * wire; re-warning here would report the same dropped image twice under a

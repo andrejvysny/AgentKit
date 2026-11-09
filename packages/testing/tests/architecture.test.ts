@@ -25,22 +25,12 @@ const PACKAGES = join(REPO, "packages");
 
 /** Allowed `.streamChat(` call sites → why. */
 const STREAM_CHAT_SITES: Record<string, string> = {
-  "host/src/context/bounded-context-client.ts":
-    "context admission wrapper delegating one request to the wrapped client",
-  "host/src/context/compaction-usage.ts":
-    "records observed billing while delegating the same compaction request",
   "core/src/runs/native-provider.ts":
     "JavaScript provider callback requested by the Rust loop, without model orchestration",
 };
 
 /** Allowed `.execute(` call sites → why. */
 const EXECUTE_SITES: Record<string, string> = {
-  "host/src/turn/guarded-tool.ts":
-    "ToolGuard wrapper delegating after durable execution admission",
-  "host/src/tasks/executor-registry.ts":
-    "task dispatch to a TaskExecutor (not a tool)",
-  "runner-local/src/single-process-task-runner.ts":
-    "runner dispatch to a TaskWorker (not a tool)",
   "core/src/runs/native-loop.ts":
     "JavaScript tool callback after Rust schema, budget, and timeout admission",
 };
@@ -48,9 +38,6 @@ const EXECUTE_SITES: Record<string, string> = {
 /** Allowed `runChat(` / `runAgentLoop(` call sites outside their definitions. */
 const LOOP_DRIVER_SITES: Record<string, string> = {
   "core/src/runs/run-loop.ts": "runChat facade over runAgentLoop",
-  "host/src/turn/turn-runner.ts": "TurnRunner.runPass, the one host driver",
-  "host/src/context/compactor.ts":
-    "session context compaction: one tool-less summarization request",
 };
 
 const FORBIDDEN_DEPENDENCY = /^@(earendil-works|mariozechner)\//;
@@ -106,7 +93,7 @@ describe("architecture: one agent loop (ADR 0015)", () => {
     expect(packageSources().size).toBeGreaterThan(100);
   });
 
-  it("calls a provider only from wrappers and the native provider bridge", () => {
+  it("calls a provider only from the native provider bridge", () => {
     const sites = sitesMatching(/\.streamChat\(/g);
     expect([...sites.keys()].sort()).toEqual(
       Object.keys(STREAM_CHAT_SITES).sort(),
@@ -120,7 +107,7 @@ describe("architecture: one agent loop (ADR 0015)", () => {
     expect(sites.get("core/src/runs/native-loop.ts")).toBe(1);
   });
 
-  it("drives the loop only from the runChat facade and TurnRunner", () => {
+  it("drives the loop only from the runChat facade", () => {
     const sites = sitesMatching(
       /(?<!function\s)(?<![\w.])(runChat|runAgentLoop)\(/g,
     );

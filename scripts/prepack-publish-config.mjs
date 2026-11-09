@@ -35,12 +35,12 @@
  * version. The workspace protocol is a link-time fiction of the monorepo:
  * npm cannot resolve it for an installed consumer (`EUNSUPPORTEDPROTOCOL`),
  * and a packed manifest that keeps one is a hard gate failure —
- * `rust/scripts/check-native-package.mjs` and `scripts/qualify-package.mjs`
- * both refuse any tarball whose package.json still contains `workspace:`.
+ * `rust/scripts/check-native-package.mjs`
+ * refuses any tarball whose package.json still contains `workspace:`.
  * Resolution walks the sibling package (`../<name>` etc.) for its real
  * version and falls back to the packed package's own version, which is
  * correct under this repo's lockstep versioning (every workspace ships the
- * same `0.1.0-dev` until `snapshot-release` bumps them together) and is what
+ * same `0.1.0-dev` until the native lockstep release bumps them together) and is what
  * lets a staged single-package copy — where no sibling exists, as in
  * `check-native-package.mjs`'s staging directory — pack cleanly.
  */

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0 — unreleased
+
+**Breaking: the TypeScript backend is deleted** ([ADR 0023](docs/adr/0023-retire-typescript-backend.md)). The Rust engine behind `agentkit/native` is the only backend. Nothing was published to npm, so no registry consumer is affected.
+
+- Removed packages: `@agentkit/host`, `@agentkit/adapters-memory`, `@agentkit/adapters-sqlite`, `@agentkit/runner-local`, `@agentkit/transport-http`, `@agentkit/mcp-client`.
+- Removed `agentkit` subpaths and replacements: `agentkit/host` -> `agentkit/native` (`NativeStore`, `createService`); `agentkit/transport-http` -> Rust REST/SSE server (`service.startHttpServer`) + `agentkit/client`; `agentkit/adapters-memory`, `agentkit/adapters-sqlite`, `agentkit/adapters-sqlite-node` -> `NativeStore`; `agentkit/runner-local`, `agentkit/runner-local/filesystem` -> the native service worker and `NativeManagedContent`; `agentkit/mcp-client` -> the Rust MCP client in the engine.
+- The umbrella drops its `@modelcontextprotocol/*` dependencies and the optional `better-sqlite3` peer. Root dev dependencies `better-sqlite3` and `node-gyp` are gone.
+- `CONTRACT_VERSION` stays `0.7.0` (the wire contract did not change). The umbrella moves `0.7.0` -> `0.8.0`.
+
+**Changed (Rust architecture cleanup).**
+
+- Layered crates per [ADR 0021](docs/adr/0021-layered-crate-architecture.md): `agentkit-kernel` (shared sha256 and canonical JSON), workspace-inherited metadata/lints, `check:arch` gate, `agentkit-runtime` composition root with `AgentRuntime::builder()` (the HTTP fixture and the egui host build through it), `transport-http` and `host::http` merged into `agentkit-http`.
+- `@agentkit/client` and `@agentkit/react` suites run only against the Rust HTTP fixture (`bun run build:fixture`).
+- Fix: `reasoningContent` is persisted into assistant message metadata.
+- Security dependency upgrades: tokio 1.54.1 (RUSTSEC-2026-0386), rmcp 3.9.0 (RUSTSEC-2026-0457/0461/0462), rusqlite 0.41.1 / libsqlite3-sys 0.39.1 (RUSTSEC-2026-0459). `cargo-deny` now gates advisories, licenses, sources and layer bans.
+- Live TypeScript packages, examples and scripts no longer import the frozen backend; `native` and `testing` carry their own port types.
+- Public API reports re-baselined to the 13 remaining entry points (`docs/rust/api`).
+
+**Removed (tooling).** `snapshot:release`, `qualify:package`, `source:digest` and the scripts behind them (`scripts/snapshot-release.mjs`, `scripts/release/{foundation.mjs,foundation/,fixture-projection.mjs,publication.mjs,qualify-candidates.mjs,source-proof.mjs}`, `scripts/qualify-package.mjs`, `scripts/source-digest.mjs`, `scripts/sqlite-durability.mjs`, `scripts/node-sqlite-conformance.mjs`, `scripts/qualification/{consumer.mjs,types.ts,electron-native.cjs,responses-openpcb-smoke.mjs,sqlite-fixture.mjs}`) and their tests. The native lockstep release lane and `qualify:local` / `qualify:cold` remain.
+
 ## Unreleased — Unified agent runtime M0–M7
 
 **Hybrid M1 hardening: admission, recovery, profile and credential contracts tightened (review of `ab936de`).** Behavior changes callers must know about:

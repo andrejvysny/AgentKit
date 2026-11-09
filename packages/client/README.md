@@ -6,8 +6,8 @@ with that contract's own DTOs, plus the two things a hand-rolled client
 reliably gets wrong: resuming an SSE run stream across a dropped connection, and
 retrying an idempotent write with the key that made it.
 
-It is the mirror of [`@agentkit/transport-http`](../transport-http): that package
-serves the contract, this one calls it. Both compile their routing from the same
+It is the mirror of the Rust HTTP server (`agentkit-http`): that crate
+serves the contract, this package calls it. Both compile their routing from the same
 `REST_ROUTES` table rather than transcribing paths, so a renamed segment breaks
 the server and the client together instead of leaving one asking for a URL the
 other stopped serving.
@@ -276,8 +276,8 @@ are applied last — they are decided by the operation, not by the caller.
 ## Tests
 
 `bun run test:client` from the repo root. The suite runs the real
-`@agentkit/transport-http` handler over the reference in-memory store behind
-`Bun.serve` on an ephemeral port — a stub would test the stub. The resume test
+Rust HTTP fixture server (`agentkit-runtime`'s `http_fixture` example) on an
+ephemeral port — a stub would test the stub. The resume test
 supplies its own `fetch` that re-wraps the response body and errors it after a
 fixed number of SSE frames, which is what a reset connection looks like to
 `fetch`, and asserts the whole log still arrives exactly once across a dozen

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Assembles `packages/agentkit/dist` from the twelve source packages' own
+ * Assembles `packages/agentkit/dist` from the six source packages' own
  * builds, producing the `agentkit` umbrella package — the single
  * installable artifact this repo ships (see `packages/agentkit/README.md`).
  *
@@ -15,7 +15,7 @@
  * What it does, in order:
  *
  *   1. Asserts every source package's `dist/index.js` exists.
- *   2. Computes the union of the twelve packages' runtime `dependencies`
+ *   2. Computes the union of the six packages' runtime `dependencies`
  *      (excluding `@agentkit/*`) and cross-checks it against
  *      `packages/agentkit/package.json`'s own `dependencies` — a
  *      conflicting range between two source packages, or drift between the
@@ -82,13 +82,7 @@ const SUBPATHS = [
   // the only way a peer dependency can work.
   "react",
   "core",
-  "host",
   "testing",
-  "mcp-client",
-  "transport-http",
-  "adapters-memory",
-  "adapters-sqlite",
-  "runner-local",
   "native",
 ];
 
@@ -160,7 +154,7 @@ for (const depName of Object.keys(declared)) {
 if (driftMessages.length > 0) {
   fail(
     `packages/agentkit/package.json's "dependencies" is out of sync with ` +
-      "the union of the twelve source packages' runtime dependencies:\n" +
+      "the union of the six source packages' runtime dependencies:\n" +
       `${driftMessages.join("\n")}\n` +
       "Update packages/agentkit/package.json to match.",
   );

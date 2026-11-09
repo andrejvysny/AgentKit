@@ -19,11 +19,10 @@ TypeScript is the API surface around it:
   retired `ts`) fails closed with `invalid_input`.
 - `@agentkit/contracts` holds wire DTOs and JSON Schemas. `@agentkit/client`
   and `@agentkit/react` consume the REST v1 + SSE contract.
-- `@agentkit/host`, `@agentkit/adapters-memory`, `@agentkit/adapters-sqlite`,
-  `@agentkit/runner-local`, `@agentkit/transport-http` and
-  `@agentkit/mcp-client` are frozen libraries slated for deletion (see
-  [TypeScript packages](#typescript-packages)). They are not on any
-  production path.
+- The former TypeScript backend (`@agentkit/host`, `adapters-memory`,
+  `adapters-sqlite`, `runner-local`, `transport-http`, `mcp-client`) was deleted
+  in 0.8.0 ([ADR 0023](adr/0023-retire-typescript-backend.md)). The Rust engine
+  is the only backend.
 
 Status of parity and qualification is tracked in
 [`docs/rust/parity.md`](rust/parity.md) and
@@ -188,17 +187,12 @@ Further detail: [`docs/execution-lifecycle.md`](execution-lifecycle.md),
 | `@agentkit/react` | Live. Headless hooks over `@agentkit/client` |
 | `@agentkit/testing` | Live, dev. Mocks, fixtures, golden traces, conformance suites |
 | `agentkit` (`packages/agentkit`) | Live. Umbrella package with subpath exports |
-| `@agentkit/host` | Frozen. `TurnRunner`, `TaskService`, `ConversationService` remain exported; only static `REASONING_EFFORTS` metadata is imported in production |
-| `@agentkit/adapters-memory`, `@agentkit/adapters-sqlite` | Frozen. Production storage is Rust `SqliteStore` |
-| `@agentkit/runner-local` | Frozen. Queue, worker and lease engine live in Rust |
-| `@agentkit/transport-http` | Frozen. Production REST/SSE is the Rust server; the TS server remains the behavioural reference the Rust route table is proven against |
-| `@agentkit/mcp-client` | Frozen. Production MCP is the Rust client and server |
 
-Frozen packages persist under the API-freeze constraint and are exercised by
-their own suites. They are slated for deletion in the ADR 0021 migration (phase
-P6, tracked in Plane). No live package, example or script imports them (the
-decoupling step removed the composition-ownership gate along with the last
-imports). The package ledger is in
+The six frozen TypeScript backend packages (`host`, `adapters-memory`,
+`adapters-sqlite`, `runner-local`, `transport-http`, `mcp-client`) were deleted
+in 0.8.0 ([ADR 0023](adr/0023-retire-typescript-backend.md)); the umbrella
+dropped their subpaths. Their source is recoverable from commit `a31dcb1`
+(`git show a31dcb1:packages/host/src/...`). The package ledger is in
 [`docs/rust/parity.md`](rust/parity.md).
 
 ## Contracts and codegen
@@ -259,14 +253,15 @@ There is no hosted CI; all gates run locally. See
   [0018](adr/0018-coding-tool-pack.md),
   [0019](adr/0019-human-approval-plan-mode-and-side-effect-receipts.md),
   [0020](adr/0020-execution-ownership-and-recovery.md),
-  [0021](adr/0021-layered-crate-architecture.md). Earlier ADRs (0001–0014) are
+  [0021](adr/0021-layered-crate-architecture.md),
+  [0023](adr/0023-retire-typescript-backend.md). Earlier ADRs (0001–0014) are
   history; where they describe TypeScript implementations they are superseded
   by the Rust engine.
 - [`docs/rust/`](rust): `parity.md`, `acceptance.md`, `native-admission.md`,
   `native-binding-milestone.md`, `provider-authority.md`,
   `numeric-event-cursors.md`.
-- [`docs/contracts.md`](contracts.md), [`docs/ports.md`](ports.md) (TypeScript
-  port catalog, frozen), [`docs/non-goals.md`](non-goals.md),
+- [`docs/contracts.md`](contracts.md), [`docs/ports.md`](ports.md) (port catalog;
+  TypeScript reference implementations deleted in 0.8.0), [`docs/non-goals.md`](non-goals.md),
   [`docs/roadmap.md`](roadmap.md).
 - [`rust/README.md`](../rust/README.md): embedding, connections and consent,
   verification commands.

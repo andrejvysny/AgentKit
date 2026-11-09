@@ -1,9 +1,9 @@
 # Developing / consuming `agentkit`
 
 AgentKit ships as **one** installable package, `agentkit`, with subpath
-imports (`agentkit/host`, `agentkit/adapters-sqlite`, …) backed by an
+imports (`agentkit/core`, `agentkit/native`, …) backed by an
 umbrella package (`packages/agentkit`) whose `dist/` is assembled from the
-twelve `@agentkit/*` source packages by `scripts/build-umbrella.mjs`. See
+six `@agentkit/*` source packages by `scripts/build-umbrella.mjs`. See
 [`packages/agentkit/README.md`](packages/agentkit/README.md) for the
 subpath table.
 
@@ -16,29 +16,25 @@ iterate:
 | **`npm link`**                  | You're actively editing AgentKit and want a consumer to pick up changes | one-time `npm link` ritual          | rebuild + relink → next import  |
 | **TypeScript path overlay**      | You're editing both repos at once and want IDE jump-to-source without a dist rebuild | drop-in `tsconfig.dev.json`        | instant (no build at all)        |
 
-## 1. Exact candidate artifact install
+## 1. Exact artifact install
 
 The prepared source version is not evidence of a published release. No installable
 release tag was found during the 2026-10-06 audit. Do not pin a speculative
 `v0.5.0` or use `#master` as an installable artifact: the source root is a
 private workspace and does not contain the built umbrella at its root.
 
-Build and pack an isolated source snapshot, retain its source manifest and tarball
-SHA-256, then install that exact tarball:
+Build and pack the umbrella from a clean checkout, retain the tarball SHA-256,
+then install that exact tarball:
 
 ```sh
 npm install /absolute/path/agentkit-VERSION.tgz
 # or
 bun add /absolute/path/agentkit-VERSION.tgz
-# Node SQLite consumers also install the optional native peer explicitly:
-npm install better-sqlite3@13.0.3
 ```
 
-The Node SQLite subpath requires Node >=22 because of its native peer. The
-portable package engine remains Node >=20; the Bun SQLite subpath still requires
-Bun. An Electron consumer must package a compatible native addon and validate its
-actual Electron runtime. Rebuild from source only when the selected addon requires it;
-the qualified driver 13.0.3 uses a Node-API prebuild.
+Node >=20 is the portable package engine. `agentkit/native` loads the prebuilt
+platform addon; an Electron consumer must package a compatible addon and
+validate its actual Electron runtime.
 
 ## 2. `npm link` (recommended for active development)
 
@@ -56,13 +52,8 @@ cd packages/agentkit
 npm link
 ```
 
-Source installs pin `node-gyp` 10.3.1 and use Bun's hoisted linker. On fresh
-Bun 1.3.14 and 1.4.0 workspace installs, the isolated linker can start the native
-peer's implicit build before the local build tool is available, fall back to
-cached `bunx node-gyp`, and remove the failed optional driver while returning
-success. The checked-in install configuration avoids that order; required Node
-SQLite tests still prove the driver is installed and loadable. Clean package
-consumers are qualified separately with their own lockfiles.
+Source installs use Bun's hoisted linker (`bunfig.toml`) so the native wrapper
+and its platform packages resolve from the root `node_modules`.
 
 ### From the consumer:
 
@@ -100,22 +91,8 @@ each source package's `src/index.ts`:
       "agentkit/client": ["../AgentKit/packages/client/src/index.ts"],
       "agentkit/react": ["../AgentKit/packages/react/src/index.ts"],
       "agentkit/core": ["../AgentKit/packages/core/src/index.ts"],
-      "agentkit/host": ["../AgentKit/packages/host/src/index.ts"],
       "agentkit/testing": ["../AgentKit/packages/testing/src/index.ts"],
-      "agentkit/mcp-client": ["../AgentKit/packages/mcp-client/src/index.ts"],
-      "agentkit/transport-http": [
-        "../AgentKit/packages/transport-http/src/index.ts"
-      ],
-      "agentkit/adapters-memory": [
-        "../AgentKit/packages/adapters-memory/src/index.ts"
-      ],
-      "agentkit/adapters-sqlite-node": ["../AgentKit/packages/adapters-sqlite/src/node.ts"],
-      "agentkit/adapters-sqlite": [
-        "../AgentKit/packages/adapters-sqlite/src/index.ts"
-      ],
-      "agentkit/runner-local": [
-        "../AgentKit/packages/runner-local/src/index.ts"
-      ]
+      "agentkit/native": ["../AgentKit/packages/native/src/index.ts"]
     }
   }
 }
@@ -127,100 +104,20 @@ through `node_modules`, so pair it with `npm link` (workflow 2) if you want
 the runtime behavior to follow too. Not committed by default — opt in per
 developer.
 
-## Qualifying a release candidate
+## Releases
 
-The umbrella package version is the lockstep artifact version. Individual
-`@agentkit/*` source packages retain their development versions. Foundation
-`0.6.0` and Responses `0.7.0` are separate, unpublished candidate tracks.
-Foundation does not wait for Responses tests or provider integration acceptance.
+The umbrella package version is the lockstep artifact version (`0.8.0`).
+Individual `@agentkit/*` source packages retain their development versions. The
+TypeScript candidate-snapshot flow of the `0.6`/`0.7` releases (inverse patches,
+`snapshot-release`, `qualify-candidates`) was removed with the TypeScript backend
+([ADR 0023](docs/adr/0023-retire-typescript-backend.md)).
 
-Both are reproducible from the current integrated Git source. The snapshot helper
-copies tracked and untracked nonignored regular files, detects source and Git
-changes during the copy, and records each original file hash. Foundation applies
-the reviewed inverse patches in `scripts/release/foundation/` from that captured
-copy and removes the explicitly listed Responses and private-continuation files.
-It retains current generic stream, storage, archive, budget, fencing, recovery,
-managed connector, skill and template behavior. Both current-source candidates
-use schema 10 and the identical immutable v8-to-v9-to-v10 migration chain. The v9
-continuation table DDL remains reserved history in foundation; its provider and
-private-store APIs are absent. The earlier schema-8 foundation projection is
-superseded for these unpublished candidates. No temporary prior snapshot is an input.
-Patch drift fails closed: review and update the affected patch rather than restoring
-an old file or weakening the check.
-
-Each snapshot records its baseline commit, dirty diff hash, original file hashes,
-requested exclusions, present exclusions with hashes, patch hashes, and changed-file
-before/after hashes. Only the copy's umbrella, wire contract, workspace lock metadata,
-and golden trace versions change. Candidate-only mirrored Rust fixtures and native
-contract-version constants follow the selected wire version; fixture hashes, schema
-counts and mirrored schema bundles are regenerated deterministically from captured
-JSON after validating the original manifests. Foundation removes only the excluded
-continuation schema. This is a TypeScript runtime feature projection; native optional
-managed services retain their documented 501 boundary. The source manifest includes projection metadata
-and patches; it excludes generated dist, dependencies, Git metadata, and build info.
-Its digest supplements, rather than replaces, the Git and transformation evidence.
-
-Choose a new directory outside the checkout. Foundation qualification runs only its
-own projected source and exact package artifact:
-
-```sh
-CANDIDATE_TRACK=foundation node scripts/release/qualify-candidates.mjs \
-  /tmp/agentkit-foundation-candidates
-# On macOS, add the exact Electron native runtime gate:
-CANDIDATE_TRACK=foundation ELECTRON_VERSION=41.6.1 \
-  node scripts/release/qualify-candidates.mjs /tmp/agentkit-foundation-electron
-```
-
-For Responses, select `CANDIDATE_TRACK=responses`. That track first qualifies a fresh
-foundation artifact, then independently builds and packs `0.7.0` and uses the exact
-foundation bytes for populated schema-10 candidate continuity qualification. The
-independent Node and Bun SQLite gates still exercise real v8-to-v10 upgrades,
-rollback, refusal and reopen. Each source
-is frozen and archived before its build, checked again afterward, and packed once.
-The output retains source manifests, provenance, source archives, package tarballs,
-source gates, package qualification, runtime logs, consumer locks, and bundle metafiles.
-The helper never tags, pushes, publishes, or repacks a supplied artifact.
-
-To inspect or build a source projection separately:
-
-```sh
-node scripts/snapshot-release.mjs /tmp/agentkit-release-a 0.6.0 foundation
-node scripts/snapshot-release.mjs /tmp/agentkit-release-b 0.7.0 responses
-```
-
-Use the `sha256` value from `source-manifest.json`, not the hash of that JSON
-file. The qualification command never repacks the supplied artifact. It installs
-that same tarball in two new consumers with npm and Bun; checks published imports
-and declarations with `npx tsc`; bundles browser graphs; bundles a CommonJS host
-with `better-sqlite3` external; loads the installed native addon, writes and
-reopens SQLite; and drives the Node fake-provider host over HTTP/SSE through
-shutdown and reopen. The Bun consumer explicitly trusts the installed native
-peer's lifecycle script; it never edits `node_modules` manually.
-
-The retained evidence includes artifact/source digests, runtime versions,
-platform/architecture, Node ABI, commands and logs, dependency lockfiles, and
-bundle metafiles. CommonJS bundling under Node alone is not an Electron runtime qualification.
-The optional exact `--electron 41.6.1` gate installs a clean Electron consumer,
-executes its actual binary with `ELECTRON_RUN_AS_NODE=1`, loads the external
-native addon from the CommonJS bundle, and reopens its database before and after
-`npm rebuild better-sqlite3`. It records Electron/Node versions, module ABI,
-Node-API version, loaded binary paths, and binary hashes. Driver 13.0.3 ships
-Node-API 10 prebuilds with `gypfile: false` and no install lifecycle script:
-that npm rebuild is a lifecycle check, not a source/ABI recompilation claim.
-This qualifies that Electron native runtime in RunAsNode mode, not a GUI,
-renderer, signed installer, or arbitrary Electron version. See
-[Electron native module guidance](https://www.electronjs.org/docs/latest/tutorial/using-native-node-modules). No Electron GUI, PCB domain,
-OAuth provider, paid credential, or restricted DevKit is involved.
-
-For a Responses candidate, append `--responses true`. This adds clean-consumer
-mock Responses host runs, tool dispatch, proposal auto-apply and rejection,
-verification replay, and private continuation close/reopen checks. Append
-`--migration-from /absolute/path/agentkit-0.6.0.tgz` to seed a populated schema-10
-database using that exact foundation artifact, then reopen it with the Responses
-candidate. This is candidate continuity, not a schema upgrade. The option requires
-`--responses true`; both artifact digests and
-fixture digests are recorded. The fake applier writes a fixture ledger only;
-these checks do not qualify a PCB application or paid provider credentials.
+A release is the umbrella tarball plus the native platform packages, qualified
+from the exact bytes: `bun run build && bun run build:umbrella`, then
+`node rust/scripts/check-native-umbrella.mjs` and
+`node rust/scripts/check-native-package.mjs`. Native packages ship through the
+gated lockfile lane in `scripts/release/native-lockstep.mjs` and
+`scripts/release/native-publish.mjs`. Nothing here tags, pushes or publishes.
 
 ## Local gates (no hosted CI)
 
@@ -246,7 +143,7 @@ the qualification. Candidate
 artifacts and final evidence are made read-only. It reuses the existing
 packed-crate, native package, umbrella and artifact verifiers; it publishes
 nothing. `qualify:cold` separately exercises disposable cold declaration
-builds and installed strict consumers.
+builds.
 
 Results distinguish `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, and `INCONCLUSIVE`.
 `--only gate,gate` runs a diagnostic subset; omitted gates remain `NOT RUN`.

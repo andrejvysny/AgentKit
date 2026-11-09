@@ -9,10 +9,6 @@
  * `agentkit/<x>` subpath import works", under both package managers a
  * consumer might reasonably use.
  *
- * `agentkit/adapters-sqlite` is `bun:sqlite`-backed and must NOT be imported
- * under plain Node — it is checked separately, with a `bun` script, inside
- * the bun-installed project only.
- *
  * This script builds nothing itself:
  *
  *   bun run build && bun run build:umbrella && node scripts/umbrella-smoke.mjs
@@ -20,7 +16,7 @@
  *
  * Not part of `bun run ci` — like `pack-smoke`, it shells out to real `npm
  * pack`/`npm install`/`bun add` (network access for agentkit's real,
- * non-workspace dependencies: typebox, ajv, the MCP SDK). It has its own CI
+ * non-workspace dependencies: typebox, ajv). It has its own CI
  * job, `umbrella-smoke`, which runs after `build`.
  */
 import { spawnSync } from "node:child_process";
@@ -43,8 +39,8 @@ const UMBRELLA_DIR = join(ROOT, "packages", "agentkit");
  * The umbrella's one peer dependency, installed alongside the tarball.
  *
  * `agentkit/react` imports `react`, and the umbrella declares it as an OPTIONAL
- * peer — optional because the other eleven subpaths have nothing to do with
- * React and an installer that only wants `agentkit/host` should not be told it
+ * peer — optional because the other subpaths have nothing to do with
+ * React and an installer that only wants `agentkit/core` should not be told it
  * is missing something. Optional also means npm will NOT install it on its own,
  * so a consumer that wants the hooks installs React itself; this is that
  * consumer.
@@ -169,102 +165,17 @@ check(
   \`runChat without the binding must fail honestly, got: \${runOutcome}\`,
 );
 
-const host = await import("agentkit/host");
-console.log("agentkit/host");
-check(typeof host.TurnRunner === "function", "exports TurnRunner");
-check(
-  host.isTaskTransitionAllowed("queued", "running") === true,
-  "task transition table answers",
-);
-
 const testing = await import("agentkit/testing");
 console.log("agentkit/testing");
 const trace = testing.loadGoldenTrace("chat-only");
 check(Array.isArray(trace) && trace.length > 0, \`loadGoldenTrace("chat-only") returned \${trace?.length ?? 0} event(s)\`);
 
-const mcp = await import("agentkit/mcp-client");
-console.log("agentkit/mcp-client");
-const nullSecrets = { async get() { return null; }, async set() {}, async delete() {}, async listRefs() { return []; } };
-const manager = new mcp.McpClientManager({ secrets: nullSecrets }, [
-  { alias: "gh", transport: { kind: "stdio", command: "gh-mcp" } },
-]);
-check(typeof mcp.McpClientManager === "function", "exports McpClientManager");
-check(manager.aliases().join(",") === "gh", "manager registers its configured alias");
-
-const transport = await import("agentkit/transport-http");
-console.log("agentkit/transport-http");
-check(typeof transport.createRestHandler === "function", "exports createRestHandler");
-const handler = transport.createRestHandler({
-  store: {},
-  turns: { async submitMessage() { throw new Error("unreachable"); } },
-  tasks: { async cancelTask() { throw new Error("unreachable"); } },
-  packages: { agentkit: "umbrella-smoke" },
-});
-const versionResponse = await handler(new Request("http://x/v1/version"));
-check(versionResponse.status === 200, \`GET /v1/version answered \${versionResponse.status}\`);
-
-const adaptersMemory = await import("agentkit/adapters-memory");
-console.log("agentkit/adapters-memory");
-check(typeof adaptersMemory.MemoryAssistantStore === "function", "exports MemoryAssistantStore");
-const store = new adaptersMemory.MemoryAssistantStore();
-await store.tasks.createTask({ taskId: "umbrella-smoke", kind: "umbrella.smoke", scopeId: "umbrella-scope", payload: {} });
-const claim = await store.tasks.claimNext({ ownerId: "umbrella-smoke", now: new Date(), scopesBusy: [] });
-check(claim?.task.status === "running" && typeof claim?.lease.leaseToken === "string", "claimNext hands back a running task with a lease");
-
-const runnerLocal = await import("agentkit/runner-local");
-console.log("agentkit/runner-local");
-check(typeof runnerLocal.SingleProcessTaskRunner === "function", "exports SingleProcessTaskRunner");
-await store.tasks.releaseLease(claim.lease.leaseToken);
-await store.tasks.endAttempt({ attemptId: claim.attempt.attemptId, status: "completed" });
-await store.tasks.transitionTask("umbrella-smoke", ["running"], "completed", { finishedAt: new Date().toISOString() });
-await store.tasks.createTask({ taskId: "umbrella-smoke-run", kind: "umbrella.smoke", scopeId: "umbrella-scope-2", payload: {} });
-const runner = new runnerLocal.SingleProcessTaskRunner({ store, pollMs: 5 });
-const handle = await runner.startWorker({
-  async execute({ taskId, attemptId }) {
-    await store.tasks.transitionTask(taskId, ["running"], "completed", { finishedAt: new Date().toISOString() });
-    await store.tasks.endAttempt({ attemptId, status: "completed" });
-  },
-}, { concurrency: 1 });
-await runner.enqueue({ taskId: "umbrella-smoke-run", scopeId: "umbrella-scope-2" });
-let ran = null;
-for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
-  ran = await store.tasks.getTask("umbrella-smoke-run");
-  if (ran?.status === "completed") break;
-  await new Promise((resolve) => setTimeout(resolve, 5));
-}
-await handle.stop();
-check(ran?.status === "completed", \`the runner drove a queued task to "\${ran?.status}"\`);
-
 if (failures.length > 0) {
   console.error(\`\\n\${failures.length} check(s) failed\`);
   process.exit(1);
 }
 `;
 }
-
-/** Bun-only check for agentkit/adapters-sqlite: must never be imported under Node. */
-const BUN_SQLITE_CHECK_SCRIPT = `
-const failures = [];
-function check(condition, message) {
-  if (condition) console.log(\`  ok   \${message}\`);
-  else { console.error(\`  FAIL \${message}\`); failures.push(message); }
-}
-
-const sqlite = await import("agentkit/adapters-sqlite");
-console.log("agentkit/adapters-sqlite (bun only)");
-check(typeof sqlite.SqliteAssistantStore === "function", "exports SqliteAssistantStore");
-
-const store = new sqlite.SqliteAssistantStore(":memory:");
-await store.tasks.createTask({ taskId: "umbrella-smoke-sqlite", kind: "umbrella.smoke", scopeId: "umbrella-scope", payload: {} });
-const claim = await store.tasks.claimNext({ ownerId: "umbrella-smoke", now: new Date(), scopesBusy: [] });
-check(claim?.task.status === "running" && typeof claim?.lease.leaseToken === "string", "claimNext hands back a running task with a lease");
-store.close();
-
-if (failures.length > 0) {
-  console.error(\`\\n\${failures.length} check(s) failed\`);
-  process.exit(1);
-}
-`;
 
 function main() {
   console.log("umbrella-smoke: packing the agentkit umbrella with npm\n");
@@ -381,23 +292,6 @@ function main() {
     if (!bunProjectNodeChecked.ok) {
       console.error(
         "\numbrella-smoke FAILED — bun-installed checks under node did not pass.",
-      );
-      process.exit(1);
-    }
-
-    // agentkit/adapters-sqlite: bun-only, checked with a bun script against
-    // the bun-installed project only — never imported under plain node.
-    writeFileSync(
-      join(bunProjectDir, "smoke-sqlite.mjs"),
-      BUN_SQLITE_CHECK_SCRIPT,
-    );
-    const sqliteChecked = run("bun", ["run", "smoke-sqlite.mjs"], {
-      cwd: bunProjectDir,
-    });
-    console.log(`\n${sqliteChecked.output.trim()}`);
-    if (!sqliteChecked.ok) {
-      console.error(
-        "\numbrella-smoke FAILED — bun-only adapters-sqlite check did not pass.",
       );
       process.exit(1);
     }

@@ -1,7 +1,7 @@
 {
   "name": "agentkit",
-  "version": "0.7.0",
-  "description": "Embeddable AI-assistant framework: chat-with-tools loop, durable task orchestration, and storage/transport adapters, as one installable package with subpath imports.",
+  "version": "0.8.0",
+  "description": "Embeddable AI-assistant framework: typed contracts, REST client, React hooks, provider-lane core facade and the native Rust engine binding, as one installable package with subpath imports.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -36,41 +36,9 @@
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js"
     },
-    "./host": {
-      "types": "./dist/host/index.d.ts",
-      "import": "./dist/host/index.js"
-    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
-    },
-    "./mcp-client": {
-      "types": "./dist/mcp-client/index.d.ts",
-      "import": "./dist/mcp-client/index.js"
-    },
-    "./transport-http": {
-      "types": "./dist/transport-http/index.d.ts",
-      "import": "./dist/transport-http/index.js"
-    },
-    "./adapters-memory": {
-      "types": "./dist/adapters-memory/index.d.ts",
-      "import": "./dist/adapters-memory/index.js"
-    },
-    "./adapters-sqlite": {
-      "types": "./dist/adapters-sqlite/index.d.ts",
-      "import": "./dist/adapters-sqlite/index.js"
-    },
-    "./runner-local": {
-      "types": "./dist/runner-local/index.d.ts",
-      "import": "./dist/runner-local/index.js"
-    },
-    "./adapters-sqlite-node": {
-      "types": "./dist/adapters-sqlite/node.d.ts",
-      "import": "./dist/adapters-sqlite/node.js"
-    },
-    "./runner-local/filesystem": {
-      "types": "./dist/runner-local/file-skill-source.d.ts",
-      "import": "./dist/runner-local/file-skill-source.js"
     },
     "./native": {
       "types": "./dist/native/index.d.ts",
@@ -85,10 +53,7 @@
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",
     "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "@modelcontextprotocol/client": "2.4.0",
-    "@modelcontextprotocol/server": "2.4.0",
-    "@modelcontextprotocol/core": "2.4.0"
+    "ajv-formats": "^3.0.1"
   },
   "optionalDependencies": {
     "@agentkit/native-darwin-arm64": "0.1.0-dev",
@@ -98,14 +63,10 @@
     "@agentkit/native-win32-x64-msvc": "0.1.0-dev"
   },
   "peerDependencies": {
-    "react": ">=18",
-    "better-sqlite3": "^13.0.3"
+    "react": ">=18"
   },
   "peerDependenciesMeta": {
     "react": {
-      "optional": true
-    },
-    "better-sqlite3": {
       "optional": true
     }
   }

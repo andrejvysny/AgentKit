@@ -67,7 +67,7 @@ const echoTool: ExampleTool = {
   },
 };
 
-/** Takes `clock` rather than reading `Date.now()` — see `packages/host/src/ports/system.ts`. */
+/** Takes `clock` rather than reading `Date.now()`. */
 function createNowTool(clock: Clock): ExampleTool {
   return {
     definition: {

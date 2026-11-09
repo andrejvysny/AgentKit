@@ -10,7 +10,7 @@
  * This file lives under `tests/`, not `src/`, on purpose: it imports
  * `@agentkit/core` at runtime to drive `runChat`, and
  * `packages/testing/src/**` must stay core-runtime-free (see this package's
- * README — `@agentkit/core`/`@agentkit/host` are peer dependencies used only
+ * README — `@agentkit/core` is a peer dependencies used only
  * in this package's own tests, never imported at runtime by `src/`, so that
  * `@agentkit/core`'s tests can import mocks from `@agentkit/testing` without
  * a circular runtime dependency). `tests/` is where the package's own tests
