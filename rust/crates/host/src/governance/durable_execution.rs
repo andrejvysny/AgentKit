@@ -15,8 +15,8 @@
 use super::staging::{ToolContributionContext, ToolGuardContext};
 use crate::ExecutionContext;
 use agentkit_core::{CoreError, ToolContext, ToolDefinition, ToolResult};
+use agentkit_kernel::sha256_hex;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 /// Host-owned durable execution bundle for one staged run.
@@ -77,14 +77,6 @@ impl std::fmt::Debug for DurableExecution {
             .field("chat_id", &self.chat_id)
             .finish_non_exhaustive()
     }
-}
-
-pub(super) fn sha256_hex(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
 }
 
 /// Canonical JSON: object keys sorted, exactly as the TypeScript
@@ -297,7 +289,7 @@ fn js_number(number: &serde_json::Number) -> String {
 /// BOTH this and [`args_sha256`] so one operation has one identity across
 /// the two ports.
 pub fn ts_args_sha256(input: &Value) -> String {
-    sha256_hex(&ts_canonical_json(input))
+    sha256_hex(ts_canonical_json(input))
 }
 
 /// sha-256 of the canonical-JSON arguments.

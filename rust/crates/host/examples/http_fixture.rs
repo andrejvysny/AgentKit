@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(options));
     let host = AgentHost::new(
         store.clone(),
-        HashMap::from([("chat.turn".into(), executor)]),
+        HashMap::from([(agentkit_host::CHAT_TURN_TASK_KIND.into(), executor)]),
         Arc::new(SystemRuntime),
         HostOptions::default(),
     )?;

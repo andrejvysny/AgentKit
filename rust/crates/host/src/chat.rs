@@ -615,8 +615,8 @@ pub struct SubmitChat {
 impl AgentHost {
     /// Persists the input, display placeholder, and queued work in one transaction.
     pub async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle> {
-        if !self.supports("chat.turn") {
-            return Err(HostError::UnknownKind("chat.turn".into()));
+        if !self.supports(CHAT_TURN_TASK_KIND) {
+            return Err(HostError::UnknownKind(CHAT_TURN_TASK_KIND.into()));
         }
         if self
             .store
@@ -636,7 +636,7 @@ impl AgentHost {
         let assistant = format!("{}_assistant", input.task_id);
         let task = SubmitTask {
             task_id: input.task_id.clone(),
-            kind: "chat.turn".into(),
+            kind: CHAT_TURN_TASK_KIND.into(),
             scope_id: input.chat_id.clone(),
             payload: json!({"chatId":input.chat_id,"model":input.model,"content":input.content,"userMessageId":user,"assistantMessageId":assistant,"parentMessageId":input.parent_message_id}),
             priority: 0,
@@ -701,7 +701,7 @@ mod tool_gate_tests {
         store
             .submit(SubmitTask {
                 task_id: "run".into(),
-                kind: "chat.turn".into(),
+                kind: CHAT_TURN_TASK_KIND.into(),
                 scope_id: "chat".into(),
                 payload: json!({}),
                 priority: 0,

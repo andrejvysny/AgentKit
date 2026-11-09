@@ -243,7 +243,7 @@ impl AgentHost {
 
     pub fn resolves_provider_snapshots(&self) -> bool {
         self.executors
-            .get("chat.turn")
+            .get(CHAT_TURN_TASK_KIND)
             .is_some_and(|executor| executor.resolves_provider_snapshots())
     }
 

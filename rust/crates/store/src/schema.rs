@@ -836,22 +836,13 @@ fn migrate_free_receipts(connection: &mut Connection) -> Result<()> {
 const LEGACY_CONTEXT_SHA256: &str =
     "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
 
-pub(crate) fn sha256_hex(text: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(text.as_bytes());
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
-}
-
 /// Canonical JSON: object keys sorted (JavaScript-semantic number
 /// spellings preserved from `parse_javascript_json`), exactly the shape the
 // host's `args_sha256`/`execution_id` hashing feeds to sha-256.
 fn canonical_sha256(value: &serde_json::Value) -> String {
     let sorted = sort_keys(value);
     let text = serde_json::to_string(&sorted).unwrap_or_else(|_| "null".into());
-    sha256_hex(&text)
+    agentkit_kernel::sha256_hex(&text)
 }
 
 fn sort_keys(value: &serde_json::Value) -> serde_json::Value {

@@ -9,7 +9,7 @@ impl DesktopBackend {
         match input.operation.as_str() {
             "getVersion" => Ok(output(
                 200,
-                json!({"restApiVersion":"v1","contractVersion":"0.7.0","packages":{"host":"0.1.0"}}),
+                json!({"restApiVersion":"v1","contractVersion":agentkit_contracts::CONTRACT_VERSION,"packages":{"host":"0.1.0"}}),
             )),
             "getSettings" | "updateSettings" => self.settings(input).await,
             "listProposals" => {

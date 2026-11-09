@@ -11,9 +11,9 @@
 
 mod fs;
 
+use agentkit_kernel::sha256_hex;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::{ChatExecutorOptions, ExecutionContext, HostResult};
 
@@ -181,9 +181,4 @@ async fn session_workspace(context: &ExecutionContext, chat_id: &str) -> HostRes
     };
     Ok(crate::session::read_session_descriptor(&chat.metadata)
         .and_then(|descriptor| descriptor.get("workspace").cloned()))
-}
-
-fn sha256_hex(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

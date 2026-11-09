@@ -3,13 +3,13 @@ use super::config::{RoleSpec, SubagentConfig};
 use super::guard::WorkspaceLeaseRegistry;
 use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{
-    AgentSendResult, AgentSessionService, CreateSessionInput, FollowUpInput, HostError, HostResult,
-    SendInput, SharedRuntime, SteerInput, WhenBusy, read_session_descriptor,
+    AgentSendResult, AgentSessionService, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput,
+    HostError, HostResult, SendInput, SharedRuntime, SteerInput, WhenBusy, read_session_descriptor,
 };
+use agentkit_kernel::sha256_hex;
 use agentkit_store::{RegisterSubagent, SqliteStore, SubagentRecord, TaskRecord, TaskStatus};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio_util::sync::CancellationToken;
 
@@ -146,13 +146,6 @@ fn session_error(error: crate::SessionError) -> HostError {
     HostError::Execution(format!("{}: {}", error.code, error.message))
 }
 
-fn sha256_hex(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 pub(super) fn is_terminal_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
@@ -172,7 +165,7 @@ const SUBAGENT_OVERALL_MS_CEILING: u64 = 30 * 60 * 1_000;
 pub fn child_identity(parent_chat_id: &str, parent_task_id: &str, spawn_key: &str) -> String {
     format!(
         "sub_{}",
-        &sha256_hex(&format!("{parent_chat_id}|{parent_task_id}|{spawn_key}"))[..24]
+        &sha256_hex(format!("{parent_chat_id}|{parent_task_id}|{spawn_key}"))[..24]
     )
 }
 
@@ -761,7 +754,7 @@ impl SubagentService {
         let content = compose_child_prompt(role, request);
         let input_id = format!(
             "subin:{}",
-            &sha256_hex(&format!("{child_chat_id}:turn"))[..24]
+            &sha256_hex(format!("{child_chat_id}:turn"))[..24]
         );
         let send = match self
             .session
@@ -878,7 +871,7 @@ impl SubagentService {
         }
         let input_id = format!(
             "submsg:{}",
-            &sha256_hex(&format!("{child_chat_id}:{message_key}"))[..24]
+            &sha256_hex(format!("{child_chat_id}:{message_key}"))[..24]
         );
         let result = match mode {
             "steer" => {
@@ -1134,7 +1127,7 @@ impl SubagentService {
                 }
                 let input_id = format!(
                     "subresume:{}",
-                    &sha256_hex(&format!("{child_chat_id}:{resume_key}"))[..24]
+                    &sha256_hex(format!("{child_chat_id}:{resume_key}"))[..24]
                 );
                 let status = task
                     .as_ref()
@@ -1409,7 +1402,7 @@ impl SubagentService {
         // and follows (rebind + reactivate) a queued input the runner's
         // settle plan promoted into a fresh turn.
         let config = self.config();
-        if task.kind == "chat.turn"
+        if task.kind == CHAT_TURN_TASK_KIND
             && let Some(row) = self.store.get_subagent(&task.scope_id).await?
         {
             let view = self.refresh(&row).await?;
@@ -1501,7 +1494,9 @@ impl SubagentService {
         Ok(tasks
             .into_iter()
             .filter(|task| {
-                task.kind == "chat.turn" && !task.status.is_terminal() && !task.cancel_requested
+                task.kind == CHAT_TURN_TASK_KIND
+                    && !task.status.is_terminal()
+                    && !task.cancel_requested
             })
             .max_by_key(|task| task.enqueued_at))
     }

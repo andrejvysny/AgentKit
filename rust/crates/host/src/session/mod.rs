@@ -25,6 +25,7 @@ pub use execution_authority::{
 pub use report::{FALLBACK_CONTEXT_WINDOW_TOKENS, list_turn_tasks, session_usage, summarize_turn};
 
 use crate::{HostResult, SharedRuntime};
+use agentkit_kernel::sha256_hex;
 use agentkit_store::{
     AgentInputKind, AgentInputPatch, AgentInputQuery, AgentInputRecord, AgentInputSettlePolicy,
     AgentInputStatus, AnswerHumanRequest, AnswerReceipt, COMPACT_REQUESTED_METADATA_KEY,
@@ -35,7 +36,6 @@ use agentkit_store::{
 };
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 /// A session-domain failure with the TypeScript error's code (`chat_busy`,
@@ -292,11 +292,6 @@ struct Deps {
 #[derive(Clone)]
 pub struct AgentSessionService {
     deps: Arc<Deps>,
-}
-
-fn sha256_hex(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// A stale-answer refusal carrying the TypeScript `AnswerStaleError` text
@@ -2079,7 +2074,7 @@ impl AgentSessionService {
 
     fn hash_of(&self, kind: QueueKind, content: &Value) -> String {
         let envelope = json!({"kind": kind.as_str(), "content": content});
-        sha256_hex(&serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into()))
+        sha256_hex(serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into()))
     }
 
     async fn submit_turn(

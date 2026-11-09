@@ -65,6 +65,7 @@ dependencies = [
 name = "agentkit-contracts"
 version = "0.1.0"
 dependencies = [
+ "agentkit-kernel",
  "fluent-uri",
  "getrandom 0.3.4",
  "jsonschema",
@@ -72,7 +73,6 @@ dependencies = [
  "ryu-js",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.18",
 ]
 
@@ -123,6 +123,7 @@ dependencies = [
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-kernel",
  "agentkit-mcp",
  "agentkit-store",
  "agentkit-transport-http",
@@ -143,6 +144,15 @@ dependencies = [
  "tokio-util",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "agentkit-kernel"
+version = "0.1.0"
+dependencies = [
+ "ryu-js",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -238,6 +248,7 @@ name = "agentkit-store"
 version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
+ "agentkit-kernel",
  "chrono",
  "ring",
  "rusqlite",

@@ -104,7 +104,7 @@ pub async fn seed(store: &SqliteStore) -> HostResult<()> {
         store
             .submit(agentkit_store::SubmitTask {
                 task_id: "resume-me".into(),
-                kind: "chat.turn".into(),
+                kind: agentkit_host::CHAT_TURN_TASK_KIND.into(),
                 scope_id: "resume-chat".into(),
                 payload: json!({"chatId":"resume-chat","model":"m1"}),
                 priority: 0,
@@ -120,7 +120,7 @@ pub async fn seed(store: &SqliteStore) -> HostResult<()> {
                 owner_id: "crashed-fixture".into(),
                 now: 0,
                 ttl_ms: 3,
-                kinds: vec!["chat.turn".into()],
+                kinds: vec![agentkit_host::CHAT_TURN_TASK_KIND.into()],
                 busy_scopes: vec![],
                 max_attempts: 3,
             })

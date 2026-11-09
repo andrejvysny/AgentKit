@@ -159,7 +159,7 @@ async fn create_host(path: PathBuf, ui: &UiSender, offline: bool) -> HostResult<
         Arc::new(ToolRegistry::default()),
     ));
     let executors: HashMap<String, Arc<dyn agentkit_host::TaskExecutor>> = HashMap::from([(
-        "chat.turn".into(),
+        agentkit_host::CHAT_TURN_TASK_KIND.into(),
         executor as Arc<dyn agentkit_host::TaskExecutor>,
     )]);
     let verification = Arc::new(verification::LocalVerifier::new(store.clone()));

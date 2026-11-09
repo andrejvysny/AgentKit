@@ -4,7 +4,7 @@
 //! the same tree total as the original one.
 
 use super::service::{SUBAGENT_PROVIDER_REQUESTS_CEILING, is_terminal_status};
-use crate::{HostError, HostResult};
+use crate::{CHAT_TURN_TASK_KIND, HostError, HostResult};
 use agentkit_store::{SqliteStore, SubagentRecord};
 use std::collections::HashSet;
 
@@ -80,7 +80,7 @@ async fn child_charge(
     let tasks = store.list_tasks(Some(row.child_chat_id.clone())).await?;
     let mut charged = 0u64;
     let mut live_turn = false;
-    for task in tasks.iter().filter(|task| task.kind == "chat.turn") {
+    for task in tasks.iter().filter(|task| task.kind == CHAT_TURN_TASK_KIND) {
         let used = task
             .runtime_state
             .as_ref()

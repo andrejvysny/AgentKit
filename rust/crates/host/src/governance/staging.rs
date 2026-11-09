@@ -772,8 +772,8 @@ fn approval_spec(
             serde_json::json!({"digest": digest, "label": label}),
         );
     }
-    let content_hash = super::durable_execution::sha256_hex(
-        &serde_json::to_string(&Value::Object(envelope)).unwrap_or_else(|_| "{}".into()),
+    let content_hash = agentkit_kernel::sha256_hex(
+        serde_json::to_string(&Value::Object(envelope)).unwrap_or_else(|_| "{}".into()),
     );
     agentkit_core::HumanRequestSpec {
         request_id,

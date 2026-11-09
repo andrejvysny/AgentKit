@@ -39,6 +39,7 @@ keyring = "=3.6.3"
 zeroize = "=1.9.1"
 
 agentkit-contracts = { path = "crates/contracts", version = "0.1.0" }
+agentkit-kernel = { path = "crates/kernel", version = "0.1.0" }
 agentkit-core = { path = "crates/core", version = "0.1.0" }
 agentkit-connections = { path = "crates/connections", version = "0.1.0" }
 agentkit-host = { path = "crates/host", version = "0.1.0" }

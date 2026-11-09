@@ -135,7 +135,7 @@ impl ExecutionContext {
         let event = json!({
             "type": event_type, "data": data, "runId": self.task.task_id,
             "seq": seq, "eventId": self.runtime.id(), "timestamp": timestamp,
-            "contractVersion": "0.7.0", "attemptId": self.attempt_id
+            "contractVersion": agentkit_contracts::CONTRACT_VERSION, "attemptId": self.attempt_id
         });
         self.store
             .append_events(self.fence.clone(), vec![event], now)

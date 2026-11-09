@@ -1,0 +1,17 @@
+[package]
+name = "agentkit-kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit foundation primitives: sha-256 hex and canonical JSON"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[lints]
+workspace = true
+
+[dependencies]
+ryu-js = "=1.0.3"
+serde_json.workspace = true
+sha2.workspace = true
