@@ -1,4 +1,4 @@
-use agentkit_host::*;
+use agentkit_engine::*;
 use agentkit_store::{ClaimInput, SqliteStore, StoreError, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use std::{
@@ -25,7 +25,7 @@ struct Idle;
 
 #[async_trait]
 impl TaskExecutor for Idle {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
 }

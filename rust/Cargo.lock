@@ -144,6 +144,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-engine"
+version = "0.1.0"
+dependencies = [
+ "agentkit-contracts",
+ "agentkit-core",
+ "agentkit-governance",
+ "agentkit-store",
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "agentkit-governance"
 version = "0.1.0"
 dependencies = [
@@ -160,6 +178,7 @@ version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-engine",
  "agentkit-governance",
  "agentkit-kernel",
  "agentkit-mcp",

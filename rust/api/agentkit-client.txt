@@ -33,10 +33,10 @@ pub agentkit_client::Call::query: alloc::collections::btree::map::BTreeMap<alloc
 pub struct agentkit_client::ChatLoad
 pub struct agentkit_client::ChatState
 impl agentkit_client::ChatState
-pub fn agentkit_client::ChatState::messages(&self) -> &[agentkit_contracts::generated::message_dto::MessageDto]
+pub fn agentkit_client::ChatState::messages(&self) -> &[agentkit_contracts::dto::message_dto::MessageDto]
 pub fn agentkit_client::ChatState::observe(&mut self, &agentkit_client::ChatLoad, &serde_json::value::Value) -> core::result::Result<bool, agentkit_client::ClientError>
-pub fn agentkit_client::ChatState::proposals(&self) -> &[agentkit_contracts::generated::proposal_dto::ProposalDto]
-pub fn agentkit_client::ChatState::replace(&mut self, &agentkit_client::ChatLoad, alloc::vec::Vec<agentkit_contracts::generated::message_dto::MessageDto>, alloc::vec::Vec<agentkit_contracts::generated::proposal_dto::ProposalDto>) -> core::result::Result<bool, agentkit_client::ClientError>
+pub fn agentkit_client::ChatState::proposals(&self) -> &[agentkit_contracts::dto::proposal_dto::ProposalDto]
+pub fn agentkit_client::ChatState::replace(&mut self, &agentkit_client::ChatLoad, alloc::vec::Vec<agentkit_contracts::dto::message_dto::MessageDto>, alloc::vec::Vec<agentkit_contracts::dto::proposal_dto::ProposalDto>) -> core::result::Result<bool, agentkit_client::ClientError>
 pub fn agentkit_client::ChatState::runs(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_client::RunState>
 pub fn agentkit_client::ChatState::select(&mut self, &str) -> agentkit_client::ChatLoad
 pub fn agentkit_client::ChatState::settle(&mut self, &agentkit_client::ChatLoad, &str, &str) -> bool

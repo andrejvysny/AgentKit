@@ -1,7 +1,7 @@
 use agentkit_core::*;
 use agentkit_host::{
-    AgentHost, ChatExecutor, ChatExecutorOptions, ContextProvider, HostOptions, HostResult,
-    SubmitChat, TaskExecutor,
+    AgentHost, ChatExecutor, ChatExecutorOptions, ChatHostExt, ContextProvider, HostOptions,
+    HostResult, SubmitChat, TaskExecutor,
 };
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;

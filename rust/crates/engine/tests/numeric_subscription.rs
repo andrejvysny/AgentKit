@@ -1,5 +1,5 @@
-use agentkit_host::{
-    AgentHost, ExecutionContext, HostOptions, HostResult, RunUpdate, SystemRuntime, TaskExecutor,
+use agentkit_engine::{
+    AgentHost, EngineResult, ExecutionContext, HostOptions, RunUpdate, SystemRuntime, TaskExecutor,
 };
 use agentkit_store::{SqliteStore, SubmitTask};
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 struct FractionalEvents;
 #[async_trait]
 impl TaskExecutor for FractionalEvents {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
 }
@@ -30,7 +30,7 @@ async fn append_events(store: &SqliteStore) {
     store.append_events(lease.fence(), events, 1).await.unwrap();
 }
 
-async fn completed_run() -> agentkit_host::RunHandle {
+async fn completed_run() -> agentkit_engine::RunHandle {
     let store = SqliteStore::memory(16).unwrap();
     let host = AgentHost::new(
         store.clone(),

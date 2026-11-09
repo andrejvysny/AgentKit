@@ -5,7 +5,7 @@ fn failure(
     retryable: Option<bool>,
     status: Option<u16>,
     message: &str,
-) -> HostError {
+) -> EngineError {
     ExecutionFailure {
         code: code.map(str::to_owned),
         retryable,
@@ -19,7 +19,7 @@ fn failure(
 fn classifier_preserves_structured_signal_precedence() {
     use ExecutionErrorKind::*;
     for (error, kind, reason) in [
-        (HostError::Cancelled, Cancelled, "aborted"),
+        (EngineError::Cancelled, Cancelled, "aborted"),
         (
             failure(Some("ABORT_ERR"), Some(true), Some(503), "cancel"),
             Cancelled,
@@ -97,7 +97,7 @@ fn classifier_matches_network_http_and_default_terminal_heuristics() {
         None,
         "unknown commit"
     )));
-    assert!(retry_is_safe(&HostError::from(
+    assert!(retry_is_safe(&EngineError::from(
         ExecutionFailure::safe_to_retry("read-only lookup")
     )));
 }

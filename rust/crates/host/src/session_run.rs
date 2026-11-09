@@ -625,6 +625,7 @@ mod tests {
         AgentInputPatch, ClaimInput, CreateAgentInput, MessageInput, SqliteStore, SubmitTask,
     };
     use serde_json::json;
+    use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
     /// A claimed task plus the execution context the runner would build,

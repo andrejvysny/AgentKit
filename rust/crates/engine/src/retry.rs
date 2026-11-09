@@ -2,7 +2,7 @@
 //! explicit replay-safety gate: a socket or HTTP failure cannot prove a domain
 //! write did not commit. Unknown outcomes remain terminal even when transient.
 //! SafeToRetry requires evidence that an effect did not land or is idempotent.
-use crate::{HostError, HostResult};
+use crate::{EngineError, EngineResult};
 
 /// A transient failure does not by itself prove that replaying an effect is safe.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,15 +87,15 @@ fn host_code(code: &str) -> Option<ExecutionErrorKind> {
 }
 
 /// Matches the TypeScript classifier; scheduling additionally requires explicit replay safety.
-pub fn classify_execution_error(error: &HostError) -> ExecutionErrorClassification {
+pub fn classify_execution_error(error: &EngineError) -> ExecutionErrorClassification {
     use ExecutionErrorKind::*;
-    if matches!(error, HostError::Cancelled) {
+    if matches!(error, EngineError::Cancelled) {
         return classification(Cancelled, "aborted");
     }
     if let Some(result) = classify_host_error(error) {
         return result;
     }
-    let HostError::Failure(failure) = error else {
+    let EngineError::Failure(failure) = error else {
         return classify_message(&error.to_string(), None);
     };
     if failure.code.as_deref() == Some("ABORT_ERR") {
@@ -127,26 +127,28 @@ pub fn classify_execution_error(error: &HostError) -> ExecutionErrorClassificati
     classify_message(&failure.message, failure.code.as_deref())
 }
 
-fn classify_host_error(error: &HostError) -> Option<ExecutionErrorClassification> {
+fn classify_host_error(error: &EngineError) -> Option<ExecutionErrorClassification> {
     use agentkit_store::StoreError;
     let code = match error {
-        HostError::UnknownKind(_) => "executor_not_found",
-        HostError::NoExecutorForKind(_) => "no_executor_for_kind",
-        HostError::Store(StoreError::LeaseLost(_)) => "lease_lost",
-        HostError::Store(StoreError::InvalidTransition(_)) => "invalid_task_transition",
-        HostError::Store(StoreError::NotFound(_)) => "not_found",
-        HostError::Store(StoreError::Duplicate(_)) => "duplicate_task",
-        HostError::Store(StoreError::InvalidInput(message))
+        EngineError::UnknownKind(_) => "executor_not_found",
+        EngineError::NoExecutorForKind(_) => "no_executor_for_kind",
+        EngineError::Store(StoreError::LeaseLost(_)) => "lease_lost",
+        EngineError::Store(StoreError::InvalidTransition(_)) => "invalid_task_transition",
+        EngineError::Store(StoreError::NotFound(_)) => "not_found",
+        EngineError::Store(StoreError::Duplicate(_)) => "duplicate_task",
+        EngineError::Store(StoreError::InvalidInput(message))
             if message.starts_with("unknown dependency:") =>
         {
             "unknown_dependency"
         }
-        HostError::Store(StoreError::InvalidInput(message))
+        EngineError::Store(StoreError::InvalidInput(message))
             if message.starts_with("event seq must be") =>
         {
             "seq_conflict"
         }
-        HostError::Store(StoreError::InvalidInput(message)) if message == "invalid_fork_point" => {
+        EngineError::Store(StoreError::InvalidInput(message))
+            if message == "invalid_fork_point" =>
+        {
             "invalid_fork_point"
         }
         _ => return None,
@@ -221,8 +223,8 @@ fn classify_message(message: &str, code: Option<&str>) -> ExecutionErrorClassifi
     classification(Terminal, "unclassified")
 }
 
-pub(crate) fn retry_is_safe(error: &HostError) -> bool {
-    matches!(error,HostError::Failure(failure) if failure.retry_safety==RetrySafety::SafeToRetry)
+pub(crate) fn retry_is_safe(error: &EngineError) -> bool {
+    matches!(error,EngineError::Failure(failure) if failure.retry_safety==RetrySafety::SafeToRetry)
 }
 
 #[derive(Clone, Debug)]
@@ -243,21 +245,21 @@ impl Default for RetryBackoff {
 }
 
 impl RetryBackoff {
-    pub(crate) fn validate(&self) -> HostResult<()> {
+    pub(crate) fn validate(&self) -> EngineResult<()> {
         if self.base_ms > i64::MAX as u64
             || self.max_ms > i64::MAX as u64 / 2
             || !self.jitter_ratio.is_finite()
             || !(0.0..=1.0).contains(&self.jitter_ratio)
         {
-            return Err(HostError::Execution("invalid retry backoff".into()));
+            return Err(EngineError::Execution("invalid retry backoff".into()));
         }
         Ok(())
     }
 
-    pub fn delay_ms(&self, attempt_count: u32, random_unit: f64) -> HostResult<i64> {
+    pub fn delay_ms(&self, attempt_count: u32, random_unit: f64) -> EngineResult<i64> {
         self.validate()?;
         if !random_unit.is_finite() || !(0.0..=1.0).contains(&random_unit) {
-            return Err(HostError::Execution("invalid retry jitter sample".into()));
+            return Err(EngineError::Execution("invalid retry jitter sample".into()));
         }
         if self.base_ms == 0 {
             return Ok(0);

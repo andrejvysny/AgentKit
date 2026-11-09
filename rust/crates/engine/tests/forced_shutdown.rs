@@ -1,4 +1,4 @@
-use agentkit_host::*;
+use agentkit_engine::*;
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
@@ -21,7 +21,7 @@ struct ToolRunner {
 
 #[async_trait]
 impl TaskExecutor for ToolRunner {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         context.check_cancelled()?;
         self.tools_started.fetch_add(1, Ordering::SeqCst);
         self.started.send(()).unwrap();
@@ -33,7 +33,7 @@ impl TaskExecutor for ToolRunner {
         let _ = context
             .emit("run.cancelled", json!({"reason":"aborted"}))
             .await;
-        Err(HostError::Cancelled)
+        Err(EngineError::Cancelled)
     }
 }
 

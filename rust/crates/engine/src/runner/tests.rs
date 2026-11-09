@@ -1,4 +1,5 @@
 use super::*;
+use crate::Runtime;
 use agentkit_core::HumanRequestSpec;
 use agentkit_store::{AgentInputKind, AnswerHumanRequest, CreateAgentInput, ParkTurn};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
@@ -19,7 +20,7 @@ impl Runtime for Clock {
 struct Silent;
 #[async_trait::async_trait]
 impl TaskExecutor for Silent {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
 }
@@ -27,7 +28,7 @@ impl TaskExecutor for Silent {
 struct Counter(Arc<AtomicUsize>);
 #[async_trait::async_trait]
 impl TaskExecutor for Counter {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -175,7 +176,7 @@ async fn heartbeat_still_refuses_expired_and_replaced_leases() {
         }
         assert!(matches!(
             host.heartbeat(&context).await,
-            Err(HostError::Store(StoreError::LeaseLost(_)))
+            Err(EngineError::Store(StoreError::LeaseLost(_)))
         ));
         assert!(context.cancellation.is_cancelled());
     }
@@ -207,7 +208,7 @@ async fn runner_admission_refuses_unregistered_kind_before_landing_rows() {
         Err(error) => error,
     };
     assert!(
-        matches!(&error, HostError::NoExecutorForKind(kind) if kind == "nobody.registered"),
+        matches!(&error, EngineError::NoExecutorForKind(kind) if kind == "nobody.registered"),
         "{error}"
     );
     assert_eq!(
@@ -228,7 +229,7 @@ async fn runner_admission_refuses_unregistered_kind_before_landing_rows() {
         AgentHost::new(store.clone(), HashMap::new(), clock, HostOptions::default()).unwrap();
     assert!(matches!(
         empty.submit(queued_task("any", "runnable")).await,
-        Err(HostError::NoExecutorForKind(kind)) if kind == "runnable"
+        Err(EngineError::NoExecutorForKind(kind)) if kind == "runnable"
     ));
     assert!(store.get_task("any").await.unwrap().is_none());
 }
@@ -288,7 +289,11 @@ async fn runner_claim_steps_over_unrunnable_kinds_without_starving_the_queue() {
 struct ConflictFor(&'static str);
 #[async_trait::async_trait]
 impl SessionFlushPlanner for ConflictFor {
-    async fn settle_plan(&self, settling: &TaskRecord, _completed: bool) -> HostResult<SettlePlan> {
+    async fn settle_plan(
+        &self,
+        settling: &TaskRecord,
+        _completed: bool,
+    ) -> EngineResult<SettlePlan> {
         Ok(SettlePlan {
             // The chat carries no session descriptor, so any expectation
             // fails the store's atomic descriptor check.

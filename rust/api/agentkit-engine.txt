@@ -1,0 +1,157 @@
+pub mod agentkit_engine
+pub enum agentkit_engine::EngineError
+pub agentkit_engine::EngineError::Cancelled
+pub agentkit_engine::EngineError::Execution(alloc::string::String)
+pub agentkit_engine::EngineError::Failure(agentkit_engine::ExecutionFailure)
+pub agentkit_engine::EngineError::NoExecutorForKind(alloc::string::String)
+pub agentkit_engine::EngineError::NotFound(alloc::string::String)
+pub agentkit_engine::EngineError::Store(agentkit_store::StoreError)
+pub agentkit_engine::EngineError::UnknownKind(alloc::string::String)
+impl core::convert::From<agentkit_engine::EngineError> for agentkit_governance::error::GovernanceError
+pub fn agentkit_governance::error::GovernanceError::from(agentkit_engine::EngineError) -> Self
+impl core::convert::From<agentkit_governance::error::GovernanceError> for agentkit_engine::EngineError
+pub fn agentkit_engine::EngineError::from(agentkit_governance::error::GovernanceError) -> Self
+pub enum agentkit_engine::ExecutionErrorKind
+pub agentkit_engine::ExecutionErrorKind::Cancelled
+pub agentkit_engine::ExecutionErrorKind::Terminal
+pub agentkit_engine::ExecutionErrorKind::Transient
+pub enum agentkit_engine::RetrySafety
+pub agentkit_engine::RetrySafety::SafeToRetry
+pub agentkit_engine::RetrySafety::UnknownOutcome
+pub enum agentkit_engine::RunUpdate
+pub agentkit_engine::RunUpdate::Event(agentkit_store::models::EventRecord)
+pub agentkit_engine::RunUpdate::Settled(alloc::boxed::Box<agentkit_store::models::TaskRecord>)
+pub struct agentkit_engine::AdmissionGate
+impl agentkit_engine::AdmissionGate
+pub fn agentkit_engine::AdmissionGate::supports(&self, &str) -> bool
+pub struct agentkit_engine::AgentHost
+impl agentkit_engine::AgentHost
+pub fn agentkit_engine::AgentHost::admission_gate(&self) -> agentkit_engine::AdmissionGate
+pub async fn agentkit_engine::AgentHost::cancel(&self, &str) -> agentkit_engine::EngineResult<()>
+pub fn agentkit_engine::AgentHost::executor_resolves_provider_snapshots(&self, &str) -> bool
+pub fn agentkit_engine::AgentHost::new(agentkit_store::actor::SqliteStore, std::collections::hash::map::HashMap<alloc::string::String, alloc::rcs::arc::Arc<dyn agentkit_engine::TaskExecutor>>, agentkit_engine::SharedRuntime, agentkit_engine::HostOptions) -> agentkit_engine::EngineResult<Self>
+pub async fn agentkit_engine::AgentHost::recover(&self) -> agentkit_engine::EngineResult<alloc::vec::Vec<agentkit_store::models::TaskRecord>>
+pub async fn agentkit_engine::AgentHost::recover_expired(&self) -> agentkit_engine::EngineResult<alloc::vec::Vec<agentkit_store::models::TaskRecord>>
+pub async fn agentkit_engine::AgentHost::resume(&self, &str) -> agentkit_engine::EngineResult<agentkit_store::models::TaskRecord>
+pub fn agentkit_engine::AgentHost::run_handle(&self, &str) -> agentkit_engine::RunHandle
+pub async fn agentkit_engine::AgentHost::run_once(&self) -> agentkit_engine::EngineResult<bool>
+pub fn agentkit_engine::AgentHost::runtime(&self) -> &agentkit_engine::SharedRuntime
+pub async fn agentkit_engine::AgentHost::set_session_flush_planner(&self, alloc::rcs::arc::Arc<dyn agentkit_engine::SessionFlushPlanner>)
+pub fn agentkit_engine::AgentHost::start_worker(&self) -> agentkit_engine::WorkerHandle
+pub fn agentkit_engine::AgentHost::store(&self) -> &agentkit_store::actor::SqliteStore
+pub async fn agentkit_engine::AgentHost::submit(&self, agentkit_store::models::SubmitTask) -> agentkit_engine::EngineResult<agentkit_engine::RunHandle>
+pub fn agentkit_engine::AgentHost::supported_kinds(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_engine::AgentHost::supports(&self, &str) -> bool
+pub fn agentkit_engine::AgentHost::wake(&self)
+pub fn agentkit_engine::AgentHost::wake_handle(&self) -> agentkit_engine::WakeHandle
+pub struct agentkit_engine::ExecutionContext
+pub agentkit_engine::ExecutionContext::attempt_id: alloc::string::String
+pub agentkit_engine::ExecutionContext::cancellation: tokio_util::sync::cancellation_token::CancellationToken
+pub agentkit_engine::ExecutionContext::event_gate: alloc::rcs::arc::Arc<tokio::sync::mutex::Mutex<()>>
+pub agentkit_engine::ExecutionContext::fence: agentkit_store::models::LeaseFence
+pub agentkit_engine::ExecutionContext::interruption: tokio_util::sync::cancellation_token::CancellationToken
+pub agentkit_engine::ExecutionContext::runtime: agentkit_engine::SharedRuntime
+pub agentkit_engine::ExecutionContext::store: agentkit_store::actor::SqliteStore
+pub agentkit_engine::ExecutionContext::suspension: alloc::rcs::arc::Arc<tokio::sync::mutex::Mutex<core::option::Option<agentkit_core::types::HumanRequestSpec>>>
+pub agentkit_engine::ExecutionContext::task: agentkit_store::models::TaskRecord
+impl agentkit_engine::ExecutionContext
+pub fn agentkit_engine::ExecutionContext::check_cancelled(&self) -> agentkit_engine::EngineResult<()>
+pub async fn agentkit_engine::ExecutionContext::emit(&self, &str, serde_json::value::Value) -> agentkit_engine::EngineResult<()>
+pub async fn agentkit_engine::ExecutionContext::park_on_children(&self) -> agentkit_engine::EngineResult<bool>
+pub async fn agentkit_engine::ExecutionContext::report_progress(&self, serde_json::value::Value) -> agentkit_engine::EngineResult<()>
+pub async fn agentkit_engine::ExecutionContext::spawn_child(&self, agentkit_store::models::SubmitTask) -> agentkit_engine::EngineResult<agentkit_store::models::TaskRecord>
+impl agentkit_engine::ExecutionContext
+pub async fn agentkit_engine::ExecutionContext::check_dispatch(&self) -> agentkit_engine::EngineResult<()>
+pub fn agentkit_engine::ExecutionContext::dispatch_guard(&self) -> alloc::rcs::arc::Arc<dyn agentkit_core::dispatch::DispatchGuard>
+pub struct agentkit_engine::ExecutionErrorClassification
+pub agentkit_engine::ExecutionErrorClassification::kind: agentkit_engine::ExecutionErrorKind
+pub agentkit_engine::ExecutionErrorClassification::reason: alloc::string::String
+pub struct agentkit_engine::ExecutionFailure
+pub agentkit_engine::ExecutionFailure::code: core::option::Option<alloc::string::String>
+pub agentkit_engine::ExecutionFailure::http_status: core::option::Option<u16>
+pub agentkit_engine::ExecutionFailure::message: alloc::string::String
+pub agentkit_engine::ExecutionFailure::retry_safety: agentkit_engine::RetrySafety
+pub agentkit_engine::ExecutionFailure::retryable: core::option::Option<bool>
+impl agentkit_engine::ExecutionFailure
+pub fn agentkit_engine::ExecutionFailure::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_engine::ExecutionFailure::safe_to_retry(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_engine::HostOptions
+pub agentkit_engine::HostOptions::concurrency: usize
+pub agentkit_engine::HostOptions::lease_ttl_ms: i64
+pub agentkit_engine::HostOptions::max_attempts: u32
+pub agentkit_engine::HostOptions::poll_interval_ms: u64
+pub agentkit_engine::HostOptions::recovery: agentkit_store::models::RecoveryMode
+pub agentkit_engine::HostOptions::recovery_sweep_interval_ms: u64
+pub agentkit_engine::HostOptions::retry_backoff: agentkit_engine::RetryBackoff
+pub agentkit_engine::HostOptions::settled_observers: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_engine::TaskSettledObserver>>
+pub agentkit_engine::HostOptions::verification: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_engine::VerificationHook>>
+pub agentkit_engine::HostOptions::verification_timeout_ms: u64
+impl core::default::Default for agentkit_engine::HostOptions
+pub fn agentkit_engine::HostOptions::default() -> Self
+pub struct agentkit_engine::RetryBackoff
+pub agentkit_engine::RetryBackoff::base_ms: u64
+pub agentkit_engine::RetryBackoff::jitter_ratio: f64
+pub agentkit_engine::RetryBackoff::max_ms: u64
+impl agentkit_engine::RetryBackoff
+pub fn agentkit_engine::RetryBackoff::delay_ms(&self, u32, f64) -> agentkit_engine::EngineResult<i64>
+impl core::default::Default for agentkit_engine::RetryBackoff
+pub fn agentkit_engine::RetryBackoff::default() -> Self
+pub struct agentkit_engine::RunHandle
+pub agentkit_engine::RunHandle::task_id: alloc::string::String
+impl agentkit_engine::RunHandle
+pub async fn agentkit_engine::RunHandle::cancel(&self) -> agentkit_engine::EngineResult<()>
+pub async fn agentkit_engine::RunHandle::resume(&self) -> agentkit_engine::EngineResult<agentkit_store::models::TaskRecord>
+pub async fn agentkit_engine::RunHandle::status(&self) -> agentkit_engine::EngineResult<core::option::Option<agentkit_store::models::TaskRecord>>
+pub fn agentkit_engine::RunHandle::subscribe(&self, core::option::Option<u64>) -> tokio::sync::mpsc::bounded::Receiver<agentkit_engine::EngineResult<agentkit_engine::RunUpdate>>
+pub fn agentkit_engine::RunHandle::subscribe_after_number(&self, core::option::Option<f64>) -> tokio::sync::mpsc::bounded::Receiver<agentkit_engine::EngineResult<agentkit_engine::RunUpdate>>
+pub struct agentkit_engine::SettlePlan
+pub agentkit_engine::SettlePlan::convert: alloc::vec::Vec<agentkit_store::session_ops::StagedCandidate>
+pub agentkit_engine::SettlePlan::expected_descriptor: core::option::Option<serde_json::value::Value>
+pub agentkit_engine::SettlePlan::staging: core::option::Option<agentkit_store::session_ops::TurnStaging>
+pub struct agentkit_engine::SystemRuntime
+impl agentkit_engine::Runtime for agentkit_engine::SystemRuntime
+pub fn agentkit_engine::SystemRuntime::id(&self) -> alloc::string::String
+pub fn agentkit_engine::SystemRuntime::now_ms(&self) -> i64
+pub fn agentkit_engine::SystemRuntime::random(&self) -> f64
+pub struct agentkit_engine::VerificationInput
+pub agentkit_engine::VerificationInput::context: agentkit_engine::ExecutionContext
+pub agentkit_engine::VerificationInput::final_content: alloc::string::String
+pub agentkit_engine::VerificationInput::pass: u32
+pub agentkit_engine::VerificationInput::tool_call_count: usize
+pub struct agentkit_engine::VerificationReport
+pub agentkit_engine::VerificationReport::deficiencies: alloc::vec::Vec<alloc::string::String>
+pub agentkit_engine::VerificationReport::status: alloc::string::String
+pub struct agentkit_engine::WakeHandle
+impl agentkit_engine::WakeHandle
+pub fn agentkit_engine::WakeHandle::wake(&self)
+pub async fn agentkit_engine::WakeHandle::wake_active(&self, &str)
+pub struct agentkit_engine::WorkerHandle
+impl agentkit_engine::WorkerHandle
+pub fn agentkit_engine::WorkerHandle::abort(&self)
+pub async fn agentkit_engine::WorkerHandle::interrupt_active(&self)
+pub async fn agentkit_engine::WorkerHandle::join(&mut self) -> agentkit_engine::EngineResult<()>
+pub async fn agentkit_engine::WorkerHandle::shutdown(self) -> agentkit_engine::EngineResult<()>
+pub async fn agentkit_engine::WorkerHandle::stop(&self)
+pub trait agentkit_engine::Runtime: core::marker::Send + core::marker::Sync
+pub fn agentkit_engine::Runtime::id(&self) -> alloc::string::String
+pub fn agentkit_engine::Runtime::now_ms(&self) -> i64
+pub fn agentkit_engine::Runtime::random(&self) -> f64
+impl agentkit_engine::Runtime for agentkit_engine::SystemRuntime
+pub fn agentkit_engine::SystemRuntime::id(&self) -> alloc::string::String
+pub fn agentkit_engine::SystemRuntime::now_ms(&self) -> i64
+pub fn agentkit_engine::SystemRuntime::random(&self) -> f64
+pub trait agentkit_engine::SessionFlushPlanner: core::marker::Send + core::marker::Sync
+pub fn agentkit_engine::SessionFlushPlanner::settle_plan<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord, bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<agentkit_engine::SettlePlan>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_engine::TaskExecutor: core::marker::Send + core::marker::Sync
+pub fn agentkit_engine::TaskExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_engine::TaskExecutor::handles_verification(&self) -> bool
+pub fn agentkit_engine::TaskExecutor::resolves_provider_snapshots(&self) -> bool
+pub trait agentkit_engine::TaskSettledObserver: core::marker::Send + core::marker::Sync
+pub fn agentkit_engine::TaskSettledObserver::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_engine::VerificationHook: core::marker::Send + core::marker::Sync
+pub fn agentkit_engine::VerificationHook::verify<'life0, 'async_trait>(&'life0 self, agentkit_engine::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<agentkit_engine::VerificationReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_engine::VerificationHook::verify_optional<'life0, 'async_trait>(&'life0 self, agentkit_engine::VerificationInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<core::option::Option<agentkit_engine::VerificationReport>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_engine::VerificationHook::verify_pass<'life0, 'async_trait>(&'life0 self, agentkit_engine::VerificationInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<agentkit_engine::VerificationReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_engine::classify_execution_error(&agentkit_engine::EngineError) -> agentkit_engine::ExecutionErrorClassification
+pub type agentkit_engine::EngineResult<T> = core::result::Result<T, agentkit_engine::EngineError>
+pub type agentkit_engine::SharedRuntime = alloc::rcs::arc::Arc<dyn agentkit_engine::Runtime>

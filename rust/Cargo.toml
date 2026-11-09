@@ -45,6 +45,7 @@ agentkit-kernel = { path = "crates/kernel", version = "0.1.0" }
 agentkit-core = { path = "crates/core", version = "0.1.0" }
 agentkit-governance = { path = "crates/governance", version = "0.1.0" }
 agentkit-connections = { path = "crates/connections", version = "0.1.0" }
+agentkit-engine = { path = "crates/engine", version = "0.1.0" }
 agentkit-agents = { path = "crates/agents", version = "0.1.0" }
 agentkit-host = { path = "crates/host", version = "0.1.0" }
 agentkit-store = { path = "crates/store", version = "0.1.0" }

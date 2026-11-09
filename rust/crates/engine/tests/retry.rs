@@ -1,4 +1,4 @@
-use agentkit_host::*;
+use agentkit_engine::*;
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
@@ -41,7 +41,7 @@ struct Script {
 
 #[async_trait]
 impl TaskExecutor for Script {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         if self.calls.fetch_add(1, Ordering::SeqCst) >= self.failures {
             return Ok(());
         }
@@ -57,11 +57,11 @@ impl TaskExecutor for Script {
                 ..ExecutionFailure::new("bad credentials")
             },
             FailureStyle::RawNetwork => {
-                return Err(HostError::Execution(
+                return Err(EngineError::Execution(
                     "ECONNRESET after domain commit".into(),
                 ));
             }
-            FailureStyle::Aborted => return Err(HostError::Cancelled),
+            FailureStyle::Aborted => return Err(EngineError::Cancelled),
         };
         Err(failure.into())
     }

@@ -613,14 +613,28 @@ pub struct SubmitChat {
     pub content: Value,
     pub parent_message_id: Option<String>,
 }
-impl AgentHost {
+/// Chat-level operations on the generic engine host. The engine knows no chat
+/// task kind, so these live host-side as an extension trait.
+#[async_trait]
+pub trait ChatHostExt {
     /// Persists the input, display placeholder, and queued work in one transaction.
-    pub async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle> {
+    async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle>;
+    /// Whether the registered chat-turn executor resolves provider snapshots.
+    fn resolves_provider_snapshots(&self) -> bool;
+}
+
+#[async_trait]
+impl ChatHostExt for AgentHost {
+    fn resolves_provider_snapshots(&self) -> bool {
+        self.executor_resolves_provider_snapshots(CHAT_TURN_TASK_KIND)
+    }
+
+    async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle> {
         if !self.supports(CHAT_TURN_TASK_KIND) {
             return Err(HostError::UnknownKind(CHAT_TURN_TASK_KIND.into()));
         }
         if self
-            .store
+            .store()
             .get_chat(&input.chat_id)
             .await?
             .is_some_and(|chat| {
@@ -641,7 +655,7 @@ impl AgentHost {
             scope_id: input.chat_id.clone(),
             payload: json!({"chatId":input.chat_id,"model":input.model,"content":input.content,"userMessageId":user,"assistantMessageId":assistant,"parentMessageId":input.parent_message_id}),
             priority: 0,
-            now: self.runtime.now_ms(),
+            now: self.runtime().now_ms(),
             available_at: None,
             depends_on: vec![],
             parent_task_id: None,
@@ -666,7 +680,7 @@ impl AgentHost {
                 ..MessageInput::default()
             },
         ];
-        self.store.submit_turn(task, messages).await?;
+        self.store().submit_turn(task, messages).await?;
         Ok(self.run_handle(&input.task_id))
     }
 }
@@ -676,6 +690,7 @@ mod tool_gate_tests {
     use super::*;
     use agentkit_core::{ChatRequest, ProviderStream};
     use agentkit_store::{ClaimInput, SqliteStore, SubmitTask};
+    use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
     struct Clock;

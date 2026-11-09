@@ -1,4 +1,4 @@
-use agentkit_host::*;
+use agentkit_engine::*;
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
@@ -9,7 +9,7 @@ struct Completed;
 
 #[async_trait]
 impl TaskExecutor for Completed {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         context.emit("run.completed", json!({"iterations":1})).await
     }
 }
@@ -18,7 +18,7 @@ struct Verify;
 
 #[async_trait]
 impl VerificationHook for Verify {
-    async fn verify(&self, context: ExecutionContext) -> HostResult<VerificationReport> {
+    async fn verify(&self, context: ExecutionContext) -> EngineResult<VerificationReport> {
         assert_eq!(context.task.status, TaskStatus::Running);
         Ok(VerificationReport {
             status: "pass".into(),
@@ -93,7 +93,7 @@ struct ExternalEffect {
 
 #[async_trait]
 impl TaskExecutor for ExternalEffect {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.committed.notify_one();
         self.release.notified().await;
         context

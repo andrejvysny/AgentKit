@@ -1,10 +1,19 @@
-use crate::*;
-use agentkit_store::{ClaimInput, RecoveryMode, RetryTask, SettleTask, SubmitTask, TaskStatus};
+use crate::{
+    EngineError, EngineResult, ExecutionContext, ExecutionErrorKind, RetryBackoff, RunHandle,
+    SharedRuntime, TaskExecutor, TaskSettledObserver, VerificationHook, classify_execution_error,
+};
+use agentkit_store::{
+    ClaimInput, RecoveryMode, RetryTask, SettleTask, SqliteStore, StoreError, SubmitTask,
+    TaskRecord, TaskStatus,
+};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
     time::Duration,
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::Mutex, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 
 /// Upper bound on one settled observer call (see `HostOptions`).
 const SETTLED_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -119,7 +128,11 @@ pub trait SessionFlushPlanner: Send + Sync {
     /// The plan also carries the session's CURRENT descriptor config
     /// ([`SettlePlan::staging`]) so anything the snapshot missed is staged
     /// the way a submission made now would stage it.
-    async fn settle_plan(&self, settling: &TaskRecord, completed: bool) -> HostResult<SettlePlan> {
+    async fn settle_plan(
+        &self,
+        settling: &TaskRecord,
+        completed: bool,
+    ) -> EngineResult<SettlePlan> {
         let _ = (settling, completed);
         Ok(SettlePlan {
             expected_descriptor: None,
@@ -241,9 +254,10 @@ impl AgentHost {
         }
     }
 
-    pub fn resolves_provider_snapshots(&self) -> bool {
+    /// Whether the executor registered for `kind` resolves provider snapshots.
+    pub fn executor_resolves_provider_snapshots(&self, kind: &str) -> bool {
         self.executors
-            .get(CHAT_TURN_TASK_KIND)
+            .get(kind)
             .is_some_and(|executor| executor.resolves_provider_snapshots())
     }
 
@@ -252,13 +266,15 @@ impl AgentHost {
         executors: HashMap<String, Arc<dyn TaskExecutor>>,
         runtime: SharedRuntime,
         options: HostOptions,
-    ) -> HostResult<Self> {
+    ) -> EngineResult<Self> {
         if options.lease_ttl_ms < 3
             || options.max_attempts == 0
             || options.concurrency == 0
             || options.poll_interval_ms == 0
         {
-            return Err(HostError::Execution("invalid host execution limits".into()));
+            return Err(EngineError::Execution(
+                "invalid host execution limits".into(),
+            ));
         }
         options.retry_backoff.validate()?;
         Ok(Self {
@@ -295,7 +311,7 @@ impl AgentHost {
         self.wake.notify_one();
     }
 
-    pub async fn submit(&self, input: SubmitTask) -> HostResult<RunHandle> {
+    pub async fn submit(&self, input: SubmitTask) -> EngineResult<RunHandle> {
         let (id, kind, scope) = (
             input.task_id.clone(),
             input.kind.clone(),
@@ -306,7 +322,7 @@ impl AgentHost {
         // duplicate replay of an identical task is refused too: nothing this
         // host can ever claim belongs in its queue.
         if !self.supports(&kind) {
-            return Err(HostError::NoExecutorForKind(kind));
+            return Err(EngineError::NoExecutorForKind(kind));
         }
         let task = match self.store.submit(input).await {
             Ok(task) => task,
@@ -327,7 +343,7 @@ impl AgentHost {
         }
     }
 
-    pub async fn recover(&self) -> HostResult<Vec<TaskRecord>> {
+    pub async fn recover(&self) -> EngineResult<Vec<TaskRecord>> {
         if self.options.recovery == RecoveryMode::Manual {
             self.store.interrupt_queued(self.runtime.now_ms()).await?;
         }
@@ -348,7 +364,7 @@ impl AgentHost {
     /// Live local runs heartbeat at ttl/3, so their leases never satisfy
     /// `expires_at <= now`. A run stalled past its TTL is recovered like a
     /// dead owner's; fencing already rejects its later writes (`LeaseLost`).
-    pub async fn recover_expired(&self) -> HostResult<Vec<TaskRecord>> {
+    pub async fn recover_expired(&self) -> EngineResult<Vec<TaskRecord>> {
         let recovered = self
             .store
             .recover(
@@ -364,7 +380,7 @@ impl AgentHost {
         Ok(recovered)
     }
 
-    async fn sweep_loop(self, stop: CancellationToken) -> HostResult<()> {
+    async fn sweep_loop(self, stop: CancellationToken) -> EngineResult<()> {
         let period = Duration::from_millis(self.options.recovery_sweep_interval_ms);
         loop {
             tokio::select! {
@@ -378,7 +394,7 @@ impl AgentHost {
         }
     }
 
-    pub async fn cancel(&self, task_id: &str) -> HostResult<()> {
+    pub async fn cancel(&self, task_id: &str) -> EngineResult<()> {
         let mut orphaned = false;
         let mut frontier = VecDeque::from([task_id.to_owned()]);
         let mut visited = HashSet::new();
@@ -409,7 +425,7 @@ impl AgentHost {
         self.hard_stop.cancel();
     }
 
-    pub async fn resume(&self, task_id: &str) -> HostResult<TaskRecord> {
+    pub async fn resume(&self, task_id: &str) -> EngineResult<TaskRecord> {
         let task = self
             .store
             .resume_task(task_id, self.runtime.now_ms())
@@ -435,7 +451,7 @@ impl AgentHost {
             let mut failure = None;
             while let Some(result) = workers.join_next().await {
                 let result = result
-                    .map_err(|error| HostError::Execution(error.to_string()))
+                    .map_err(|error| EngineError::Execution(error.to_string()))
                     .and_then(|result| result);
                 if let Err(error) = result {
                     stop.cancel();
@@ -461,7 +477,7 @@ impl AgentHost {
         self,
         stop: CancellationToken,
         admission: Arc<Mutex<()>>,
-    ) -> HostResult<()> {
+    ) -> EngineResult<()> {
         loop {
             let context = {
                 let _guard = admission.lock().await;
@@ -479,7 +495,7 @@ impl AgentHost {
                     // attempt: park the task Interrupted (resumable, lease
                     // dropped) so its concurrency slot is not lost until a
                     // restart, and keep serving the queue.
-                    Err(HostError::Store(
+                    Err(EngineError::Store(
                         agentkit_store::StoreError::SessionDescriptorChanged(scope),
                     )) => {
                         eprintln!(
@@ -513,7 +529,7 @@ impl AgentHost {
         }
     }
 
-    pub async fn run_once(&self) -> HostResult<bool> {
+    pub async fn run_once(&self) -> EngineResult<bool> {
         let Some(context) = self.claim_context().await? else {
             return Ok(false);
         };
@@ -521,7 +537,7 @@ impl AgentHost {
         Ok(true)
     }
 
-    async fn claim_context(&self) -> HostResult<Option<ExecutionContext>> {
+    async fn claim_context(&self) -> EngineResult<Option<ExecutionContext>> {
         // The store reads an EMPTY kind filter as "any kind", so a host with
         // no executors must not ask at all: there is nothing it may claim.
         if self.executors.is_empty() || self.hard_stop.is_cancelled() {
@@ -571,23 +587,23 @@ impl AgentHost {
         Ok(Some(context))
     }
 
-    async fn run_claimed(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn run_claimed(&self, context: ExecutionContext) -> EngineResult<()> {
         let result = self.execute_and_settle(context.clone()).await;
         self.active.lock().await.remove(&context.task.task_id);
         self.watches.lock().await.remove(&context.task.task_id);
         result
     }
 
-    async fn execute_and_settle(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute_and_settle(&self, context: ExecutionContext) -> EngineResult<()> {
         self.heartbeat(&context).await?;
         if context.cancellation.is_cancelled() {
-            return self.settle(&context, Err(HostError::Cancelled)).await;
+            return self.settle(&context, Err(EngineError::Cancelled)).await;
         }
         let Some(executor) = self.executors.get(&context.task.kind) else {
             return self
                 .settle(
                     &context,
-                    Err(HostError::UnknownKind(context.task.kind.clone())),
+                    Err(EngineError::UnknownKind(context.task.kind.clone())),
                 )
                 .await;
         };
@@ -607,7 +623,7 @@ impl AgentHost {
                     hook.verify(context.clone()),
                 )
                 .await
-                .map_err(|_| HostError::Execution("hook_timeout: verify".into()))??;
+                .map_err(|_| EngineError::Execution("hook_timeout: verify".into()))??;
                 context
                     .emit(
                         "run.verification",
@@ -683,7 +699,7 @@ impl AgentHost {
         self.settle(&context, outcome).await
     }
 
-    async fn heartbeat(&self, context: &ExecutionContext) -> HostResult<()> {
+    async fn heartbeat(&self, context: &ExecutionContext) -> EngineResult<()> {
         // The execution future and this heartbeat are polled by one select
         // loop. Waiting for a parking executor's guard would stop that future
         // from publishing its suspension and releasing the guard: skip this
@@ -772,7 +788,7 @@ impl AgentHost {
         context: &ExecutionContext,
         what: &str,
         error: &agentkit_store::StoreError,
-    ) -> HostResult<()> {
+    ) -> EngineResult<()> {
         eprintln!(
             "agentkit: {what} commit for {} refused by the store ({error}); interrupting the attempt for recovery",
             context.task.task_id
@@ -795,7 +811,11 @@ impl AgentHost {
         Ok(())
     }
 
-    async fn settle(&self, context: &ExecutionContext, outcome: HostResult<()>) -> HostResult<()> {
+    async fn settle(
+        &self,
+        context: &ExecutionContext,
+        outcome: EngineResult<()>,
+    ) -> EngineResult<()> {
         let cancelled = self
             .store
             .get_task(&context.task.task_id)
@@ -974,9 +994,9 @@ impl AgentHost {
     async fn schedule_retry(
         &self,
         context: &ExecutionContext,
-        error: &HostError,
+        error: &EngineError,
         reason: &str,
-    ) -> HostResult<()> {
+    ) -> EngineResult<()> {
         let sample = self.runtime.random();
         let delay = self
             .options
@@ -985,7 +1005,7 @@ impl AgentHost {
         let now = self.runtime.now_ms();
         let available_at = now
             .checked_add(delay)
-            .ok_or_else(|| HostError::Execution("retry deadline overflow".into()))?;
+            .ok_or_else(|| EngineError::Execution("retry deadline overflow".into()))?;
         self.store
             .retry_task(RetryTask {
                 fence: context.fence.clone(),
@@ -1001,7 +1021,7 @@ impl AgentHost {
 
 pub struct WorkerHandle {
     cancellation: CancellationToken,
-    task: JoinHandle<HostResult<()>>,
+    task: JoinHandle<EngineResult<()>>,
     admission: Arc<Mutex<()>>,
     host: AgentHost,
 }
@@ -1015,10 +1035,10 @@ impl WorkerHandle {
 
     /// Waits for the worker without consuming the handle, so a caller can
     /// bound the wait, escalate with `interrupt_active`, and wait again.
-    pub async fn join(&mut self) -> HostResult<()> {
+    pub async fn join(&mut self) -> EngineResult<()> {
         (&mut self.task)
             .await
-            .map_err(|error| HostError::Execution(error.to_string()))?
+            .map_err(|error| EngineError::Execution(error.to_string()))?
     }
 
     /// Hard-stops active runs for process shutdown: each run's execution
@@ -1035,14 +1055,13 @@ impl WorkerHandle {
     }
 
     /// Stops admissions and waits for admitted attempts to finish.
-    pub async fn shutdown(self) -> HostResult<()> {
+    pub async fn shutdown(self) -> EngineResult<()> {
         self.stop().await;
         self.task
             .await
-            .map_err(|error| HostError::Execution(error.to_string()))?
+            .map_err(|error| EngineError::Execution(error.to_string()))?
     }
 }
 
 #[cfg(test)]
-#[path = "runner_tests.rs"]
 mod tests;

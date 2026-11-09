@@ -1,4 +1,4 @@
-use agentkit_host::*;
+use agentkit_engine::*;
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
@@ -21,7 +21,7 @@ struct Blocking {
 
 #[async_trait]
 impl TaskExecutor for Blocking {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.maximum.fetch_max(active, Ordering::SeqCst);
         self.started.send(context.task.task_id.clone()).unwrap();

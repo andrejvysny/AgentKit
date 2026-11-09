@@ -1,5 +1,5 @@
 use agentkit_core::*;
-use agentkit_host::{AgentHost, ChatExecutor, HostOptions, SubmitChat, TaskExecutor};
+use agentkit_host::{AgentHost, ChatExecutor, ChatHostExt, HostOptions, SubmitChat, TaskExecutor};
 use agentkit_providers::*;
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;

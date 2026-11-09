@@ -15,8 +15,8 @@
 //! one parent spawns each scenario through `--exact` with private env.
 //! ---------------------------------------------------------------------------
 
-use agentkit_host::{
-    AgentHost, ExecutionContext, HostOptions, HostResult, SystemRuntime, TaskExecutor,
+use agentkit_engine::{
+    AgentHost, EngineResult, ExecutionContext, HostOptions, SystemRuntime, TaskExecutor,
 };
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
@@ -28,7 +28,7 @@ struct Trivial;
 
 #[async_trait]
 impl TaskExecutor for Trivial {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
 }

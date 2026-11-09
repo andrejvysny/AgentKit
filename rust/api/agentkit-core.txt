@@ -182,7 +182,7 @@ pub fn agentkit_core::RetryProvider::stream_chat(&self, agentkit_core::ChatReque
 pub fn agentkit_core::RetryProvider::supports_usage_cleanup(&self) -> bool
 pub fn agentkit_core::RetryProvider::tracks_transport_requests(&self) -> bool
 pub struct agentkit_core::RunHandle
-pub agentkit_core::RunHandle::events: tokio_stream::wrappers::mpsc_bounded::ReceiverStream<agentkit_contracts::generated::ai_run_event::AiRunEvent>
+pub agentkit_core::RunHandle::events: tokio_stream::wrappers::mpsc_bounded::ReceiverStream<agentkit_contracts::dto::ai_run_event::AiRunEvent>
 pub agentkit_core::RunHandle::result: tokio::runtime::task::join::JoinHandle<agentkit_core::RunResult>
 pub struct agentkit_core::RunOptions
 pub agentkit_core::RunOptions::attempt_id: core::option::Option<alloc::string::String>
@@ -320,8 +320,8 @@ pub fn agentkit_core::RetryHooks::sleep<'life0, 'life1, 'async_trait>(&'life0 se
 pub trait agentkit_core::RunEventGate: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::RunEventGate::wait<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_core::RunEventSink: core::marker::Send + core::marker::Sync
-pub fn agentkit_core::RunEventSink::append<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_contracts::generated::ai_run_event::AiRunEvent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_core::RunEventSink::append_messages<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_contracts::generated::ai_run_event::AiRunEvent, &'life2 [agentkit_core::ChatMessage]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_core::RunEventSink::append<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_contracts::dto::ai_run_event::AiRunEvent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_core::RunEventSink::append_messages<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_contracts::dto::ai_run_event::AiRunEvent, &'life2 [agentkit_core::ChatMessage]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_core::RunHooks: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::RunHooks::call<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, usize, serde_json::value::Value, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<serde_json::value::Value, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_core::RunHooks::indexes(&self, &str) -> alloc::vec::Vec<usize>

@@ -1,5 +1,5 @@
-use agentkit_host::{
-    AgentHost, ExecutionContext, HostOptions, HostResult, RunUpdate, SystemRuntime, TaskExecutor,
+use agentkit_engine::{
+    AgentHost, EngineResult, ExecutionContext, HostOptions, RunUpdate, SystemRuntime, TaskExecutor,
 };
 use agentkit_store::{SqliteStore, SubmitTask};
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 struct Idle;
 #[async_trait]
 impl TaskExecutor for Idle {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
 }

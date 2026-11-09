@@ -1,5 +1,5 @@
-use agentkit_host::{
-    AgentHost, ExecutionContext, HostOptions, HostResult, SystemRuntime, TaskExecutor,
+use agentkit_engine::{
+    AgentHost, EngineResult, ExecutionContext, HostOptions, SystemRuntime, TaskExecutor,
 };
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ struct BlockedExecution {
 }
 #[async_trait]
 impl TaskExecutor for BlockedExecution {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.started.send(()).unwrap();
         self.go.acquire().await.unwrap().forget();
         let progress = context.report_progress(json!({"done":true}));

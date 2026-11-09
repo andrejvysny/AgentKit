@@ -1,5 +1,5 @@
-use crate::*;
-use agentkit_store::EventRecord;
+use crate::{AgentHost, EngineError, EngineResult};
+use agentkit_store::{EventRecord, TaskRecord};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -16,26 +16,26 @@ pub enum RunUpdate {
 }
 
 impl RunHandle {
-    pub async fn status(&self) -> HostResult<Option<TaskRecord>> {
+    pub async fn status(&self) -> EngineResult<Option<TaskRecord>> {
         Ok(self.host.store.get_task(&self.task_id).await?)
     }
 
-    pub async fn cancel(&self) -> HostResult<()> {
+    pub async fn cancel(&self) -> EngineResult<()> {
         self.host.cancel(&self.task_id).await
     }
 
-    pub async fn resume(&self) -> HostResult<TaskRecord> {
+    pub async fn resume(&self) -> EngineResult<TaskRecord> {
         self.host.resume(&self.task_id).await
     }
 
-    pub fn subscribe(&self, after_seq: Option<u64>) -> mpsc::Receiver<HostResult<RunUpdate>> {
+    pub fn subscribe(&self, after_seq: Option<u64>) -> mpsc::Receiver<EngineResult<RunUpdate>> {
         self.subscribe_after_number(after_seq.map(|value| value as f64))
     }
 
     pub fn subscribe_after_number(
         &self,
         after_seq: Option<f64>,
-    ) -> mpsc::Receiver<HostResult<RunUpdate>> {
+    ) -> mpsc::Receiver<EngineResult<RunUpdate>> {
         let (sender, receiver) = mpsc::channel(64);
         let handle = self.clone();
         tokio::spawn(async move {
@@ -49,8 +49,8 @@ impl RunHandle {
     async fn follow(
         &self,
         mut cursor: Option<f64>,
-        sender: &mpsc::Sender<HostResult<RunUpdate>>,
-    ) -> HostResult<()> {
+        sender: &mpsc::Sender<EngineResult<RunUpdate>>,
+    ) -> EngineResult<()> {
         loop {
             if sender.is_closed() {
                 return Ok(());
@@ -58,7 +58,7 @@ impl RunHandle {
             let task = self
                 .status()
                 .await?
-                .ok_or_else(|| HostError::Execution("task not found".into()))?;
+                .ok_or_else(|| EngineError::Execution("task not found".into()))?;
             let events = self
                 .host
                 .store

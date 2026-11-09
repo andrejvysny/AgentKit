@@ -1,10 +1,10 @@
-use crate::{ExecutionContext, HostResult};
+use crate::{EngineResult, ExecutionContext};
 use agentkit_core::{CoreError, DispatchFence, DispatchGuard};
 use async_trait::async_trait;
 use std::sync::Arc;
 
 impl ExecutionContext {
-    pub async fn check_dispatch(&self) -> HostResult<()> {
+    pub async fn check_dispatch(&self) -> EngineResult<()> {
         self.check_cancelled()?;
         if let Err(error) = self
             .store

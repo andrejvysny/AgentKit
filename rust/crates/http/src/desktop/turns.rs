@@ -1,5 +1,6 @@
 use super::chats::string;
 use super::*;
+use agentkit_host::ChatHostExt;
 use agentkit_store::{MessageInput, SubmitTask, TaskRecord, TaskStatus};
 use serde_json::json;
 

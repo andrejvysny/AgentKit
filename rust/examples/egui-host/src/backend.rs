@@ -1,5 +1,7 @@
 use crate::{bridge::*, proposals, provider, verification};
-use agentkit_host::{AgentHost, HostResult, RunUpdate, Runtime, SubmitChat, SystemRuntime};
+use agentkit_host::{
+    AgentHost, ChatHostExt, HostResult, RunUpdate, Runtime, SubmitChat, SystemRuntime,
+};
 use agentkit_runtime::AgentRuntime;
 use agentkit_store::SqliteStore;
 use serde_json::json;

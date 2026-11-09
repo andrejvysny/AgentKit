@@ -1,4 +1,4 @@
-use agentkit_host::*;
+use agentkit_engine::*;
 use agentkit_store::{SqliteStore, StoreError, SubmitTask, TaskRecord, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
@@ -38,7 +38,7 @@ struct Fanout {
 
 #[async_trait]
 impl TaskExecutor for Fanout {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.captured.send(context.clone()).unwrap();
         if let Some(gate) = &self.gate {
             gate.acquire().await.unwrap().forget();
@@ -73,7 +73,7 @@ struct Leaves {
 
 #[async_trait]
 impl TaskExecutor for Leaves {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.trace.lock().await.push(context.task.task_id.clone());
         context.report_progress(json!({"done":0,"total":1})).await?;
         context
@@ -82,10 +82,10 @@ impl TaskExecutor for Leaves {
         self.started.send(context.task.task_id.clone()).unwrap();
         tokio::select! {
             permit=self.gate.acquire()=>permit.unwrap().forget(),
-            _=context.cancellation.cancelled()=>return Err(HostError::Cancelled),
+            _=context.cancellation.cancelled()=>return Err(EngineError::Cancelled),
         }
         if context.task.payload["explode"] == true {
-            return Err(HostError::Execution("leaf work exploded".into()));
+            return Err(EngineError::Execution("leaf work exploded".into()));
         }
         context.report_progress(json!({"done":1,"total":1})).await?;
         context
@@ -105,7 +105,7 @@ struct Join {
 
 #[async_trait]
 impl TaskExecutor for Join {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         for dependency in &context.task.depends_on {
             assert_eq!(
@@ -372,11 +372,11 @@ async fn completed_parent_context_cannot_spawn_or_rewrite_progress_with_expired_
     terminal(environment.host.store(), "parent").await;
     assert!(matches!(
         parent.spawn_child(task("late", "demo.leaf")).await,
-        Err(HostError::Store(StoreError::LeaseLost(_)))
+        Err(EngineError::Store(StoreError::LeaseLost(_)))
     ));
     assert!(matches!(
         parent.report_progress(json!({"corrupt":true})).await,
-        Err(HostError::Store(StoreError::LeaseLost(_)))
+        Err(EngineError::Store(StoreError::LeaseLost(_)))
     ));
     assert!(
         environment
@@ -413,11 +413,11 @@ async fn cancelled_active_parent_cannot_spawn_children_or_report_new_progress() 
     environment.host.cancel("parent").await.unwrap();
     assert!(matches!(
         parent.spawn_child(task("after-cancel", "demo.leaf")).await,
-        Err(HostError::Cancelled)
+        Err(EngineError::Cancelled)
     ));
     assert!(matches!(
         parent.report_progress(json!({"afterCancel":true})).await,
-        Err(HostError::Cancelled)
+        Err(EngineError::Cancelled)
     ));
     gate.add_permits(1);
     let task = terminal(environment.host.store(), "parent").await;

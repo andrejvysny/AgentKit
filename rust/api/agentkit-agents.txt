@@ -1,14 +1,14 @@
 pub mod agentkit_agents
 pub enum agentkit_agents::AgentsError
 pub agentkit_agents::AgentsError::AdvisorNotConfigured
-pub agentkit_agents::AgentsError::Host(agentkit_host::HostError)
+pub agentkit_agents::AgentsError::Host(agentkit_engine::error::EngineError)
 pub agentkit_agents::AgentsError::InvalidAdmission(alloc::string::String)
 pub agentkit_agents::AgentsError::InvalidAgent(alloc::string::String)
 pub agentkit_agents::AgentsError::SubagentsNotConfigured
+impl core::convert::From<agentkit_agents::AgentsError> for agentkit_engine::error::EngineError
+pub fn agentkit_engine::error::EngineError::from(agentkit_agents::AgentsError) -> Self
 impl core::convert::From<agentkit_agents::AgentsError> for agentkit_governance::error::GovernanceError
 pub fn agentkit_governance::error::GovernanceError::from(agentkit_agents::AgentsError) -> Self
-impl core::convert::From<agentkit_agents::AgentsError> for agentkit_host::HostError
-pub fn agentkit_host::HostError::from(agentkit_agents::AgentsError) -> Self
 impl core::convert::From<agentkit_core::types::CoreError> for agentkit_agents::AgentsError
 pub fn agentkit_agents::AgentsError::from(agentkit_core::types::CoreError) -> Self
 impl core::convert::From<agentkit_store::StoreError> for agentkit_agents::AgentsError
@@ -126,7 +126,7 @@ pub async fn agentkit_agents::AgentDefinitionService::revisions(&self, &str) -> 
 pub async fn agentkit_agents::AgentDefinitionService::set_model(&self, &str, i64, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
 pub fn agentkit_agents::AgentDefinitionService::store(&self) -> &agentkit_store::actor::SqliteStore
 pub async fn agentkit_agents::AgentDefinitionService::update(&self, &str, i64, agentkit_store::agents::AgentDefinition) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
-pub fn agentkit_agents::AgentDefinitionService::with_runtime(agentkit_store::actor::SqliteStore, agentkit_host::ports::SharedRuntime) -> Self
+pub fn agentkit_agents::AgentDefinitionService::with_runtime(agentkit_store::actor::SqliteStore, agentkit_engine::ports::SharedRuntime) -> Self
 pub struct agentkit_agents::AwaitOutcome
 pub agentkit_agents::AwaitOutcome::results: alloc::vec::Vec<agentkit_agents::AwaitResult>
 pub agentkit_agents::AwaitOutcome::settled: bool
@@ -250,7 +250,7 @@ pub async fn agentkit_agents::SubagentService::effective_role_of(&self, &agentki
 pub fn agentkit_agents::SubagentService::leases(&self) -> &agentkit_agents::WorkspaceLeaseRegistry
 pub async fn agentkit_agents::SubagentService::list(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_agents::SubagentView>>
 pub async fn agentkit_agents::SubagentService::message(&self, &str, serde_json::value::Value, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::MessageReceipt>
-pub fn agentkit_agents::SubagentService::new(agentkit_store::actor::SqliteStore, agentkit_host::session::AgentSessionService, agentkit_host::ports::SharedRuntime, agentkit_agents::SubagentConfig) -> Self
+pub fn agentkit_agents::SubagentService::new(agentkit_store::actor::SqliteStore, agentkit_host::session::AgentSessionService, agentkit_engine::ports::SharedRuntime, agentkit_agents::SubagentConfig) -> Self
 pub fn agentkit_agents::SubagentService::now_ms(&self) -> i64
 pub async fn agentkit_agents::SubagentService::observe_settled(&self, &agentkit_store::models::TaskRecord) -> agentkit_agents::AgentsResult<()>
 pub async fn agentkit_agents::SubagentService::reap_orphans(&self) -> agentkit_agents::AgentsResult<usize>
@@ -263,10 +263,10 @@ pub async fn agentkit_agents::SubagentService::spawn(&self, &agentkit_agents::Sp
 pub async fn agentkit_agents::SubagentService::status(&self, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub fn agentkit_agents::SubagentService::store(&self) -> &agentkit_store::actor::SqliteStore
 pub fn agentkit_agents::SubagentService::with_routable_providers(self, alloc::collections::btree::set::BTreeSet<alloc::string::String>) -> Self
+impl agentkit_engine::ports::TaskSettledObserver for agentkit_agents::SubagentService
+pub fn agentkit_agents::SubagentService::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl agentkit_host::ports::DelegationGuidance for agentkit_agents::SubagentService
 pub fn agentkit_agents::SubagentService::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-impl agentkit_host::ports::TaskSettledObserver for agentkit_agents::SubagentService
-pub fn agentkit_agents::SubagentService::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_agents::SubagentView
 pub agentkit_agents::SubagentView::child_chat_id: alloc::string::String
 pub agentkit_agents::SubagentView::created_at: i64
@@ -314,18 +314,18 @@ pub async fn agentkit_agents::TeammateService::tasks(&self, &str) -> agentkit_ag
 pub async fn agentkit_agents::TeammateService::tasks_page(&self, &str, core::option::Option<i64>, usize) -> agentkit_agents::AgentsResult<agentkit_store::teammates::AgentTaskPage>
 pub async fn agentkit_agents::TeammateService::unfinished_tasks(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_store::models::TaskRecord>>
 pub async fn agentkit_agents::TeammateService::wait_for_children(&self, agentkit_store::models::LeaseFence) -> agentkit_agents::AgentsResult<bool>
-pub fn agentkit_agents::TeammateService::with_runtime(agentkit_store::actor::SqliteStore, agentkit_host::ports::SharedRuntime) -> Self
+pub fn agentkit_agents::TeammateService::with_runtime(agentkit_store::actor::SqliteStore, agentkit_engine::ports::SharedRuntime) -> Self
 pub struct agentkit_agents::Watchdog
 impl agentkit_agents::Watchdog
 pub fn agentkit_agents::Watchdog::config(&self) -> agentkit_agents::AdvisorConfig
 pub fn agentkit_agents::Watchdog::engine(&self) -> &agentkit_agents::AdvisorEngine
 pub fn agentkit_agents::Watchdog::forget_run(&self, &str)
-pub fn agentkit_agents::Watchdog::new(agentkit_agents::AdvisorEngine, alloc::rcs::arc::Arc<std::sync::poison::mutex::Mutex<agentkit_agents::AdvisorConfig>>, agentkit_host::ports::SharedRuntime) -> Self
+pub fn agentkit_agents::Watchdog::new(agentkit_agents::AdvisorEngine, alloc::rcs::arc::Arc<std::sync::poison::mutex::Mutex<agentkit_agents::AdvisorConfig>>, agentkit_engine::ports::SharedRuntime) -> Self
 pub fn agentkit_agents::Watchdog::observe_tool_calls(&self, &str, &str, &[agentkit_core::types::ToolCall])
 pub fn agentkit_agents::Watchdog::observe_tool_result(&self, &str, &str, &str, &str, core::option::Option<&str>)
 pub fn agentkit_agents::Watchdog::observe_turn_settled(&self, &agentkit_store::models::TaskRecord)
-impl agentkit_host::ports::TaskSettledObserver for agentkit_agents::Watchdog
-pub fn agentkit_agents::Watchdog::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_engine::ports::TaskSettledObserver for agentkit_agents::Watchdog
+pub fn agentkit_agents::Watchdog::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_agents::WatchdogRunHooks
 impl agentkit_agents::WatchdogRunHooks
 pub fn agentkit_agents::WatchdogRunHooks::forget_run(&self, &str)

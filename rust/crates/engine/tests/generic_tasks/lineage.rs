@@ -61,7 +61,7 @@ async fn explicit_generic_resubmit_returns_original_without_reexecution_or_paylo
     input.scope_id = "foreign-scope".into();
     assert!(matches!(
         environment.host.submit(input).await,
-        Err(HostError::Store(StoreError::Duplicate(_)))
+        Err(EngineError::Store(StoreError::Duplicate(_)))
     ));
     worker.shutdown().await.unwrap();
     assert_eq!(environment.join_calls.load(Ordering::SeqCst), 1);
@@ -91,7 +91,7 @@ async fn unregistered_kind_is_refused_at_admission_and_ignored_by_the_worker() {
         input.parent_task_id = None;
         assert!(matches!(
             host.submit(input).await,
-            Err(HostError::NoExecutorForKind(kind)) if kind == "nobody.registered"
+            Err(EngineError::NoExecutorForKind(kind)) if kind == "nobody.registered"
         ));
         assert!(
             host.store().get_task("orphan").await.unwrap().is_none(),
