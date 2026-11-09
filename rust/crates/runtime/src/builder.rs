@@ -14,7 +14,7 @@ use agentkit_host::{
     AdvisorEventSink, AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
     ChatExecutor, ChatExecutorOptions, CodingPermissionAuthority, ContentAuthority, HostOptions,
     ProfileRegistry, ProviderRegistry, SharedRuntime, SystemRuntime, TaskExecutor, ToolContributor,
-    ToolGuard,
+    ToolGuard, VerificationHook,
 };
 use serde_json::Value;
 
@@ -53,6 +53,8 @@ pub struct AgentRuntimeBuilder {
     default_provider_id: Option<String>,
     default_model: Option<String>,
     advisor_sink: Option<Arc<dyn AdvisorEventSink>>,
+    lease_ttl_ms: i64,
+    verification: Option<Arc<dyn VerificationHook>>,
 }
 
 impl AgentRuntimeBuilder {
@@ -76,6 +78,8 @@ impl AgentRuntimeBuilder {
             default_provider_id: None,
             default_model: None,
             advisor_sink: None,
+            lease_ttl_ms: HostOptions::default().lease_ttl_ms,
+            verification: None,
         }
     }
 
@@ -143,6 +147,18 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    /// Task lease TTL in milliseconds (host default when unset).
+    pub fn lease_ttl_ms(mut self, lease_ttl_ms: i64) -> Self {
+        self.lease_ttl_ms = lease_ttl_ms;
+        self
+    }
+
+    /// Post-run verification hook run by the host after a turn settles.
+    pub fn verification(mut self, hook: Arc<dyn VerificationHook>) -> Self {
+        self.verification = Some(hook);
+        self
+    }
+
     /// Build the runtime. Recovery runs before the worker claims any task,
     /// so restart reconciliation always precedes new modifying work.
     pub async fn build(self) -> Result<AgentRuntime, RuntimeError> {
@@ -160,6 +176,8 @@ impl AgentRuntimeBuilder {
             default_provider_id,
             default_model,
             advisor_sink,
+            lease_ttl_ms,
+            verification,
         } = self;
         let provider = default_provider
             .ok_or_else(|| RuntimeError::invalid("a default provider is required"))?;
@@ -268,6 +286,8 @@ impl AgentRuntimeBuilder {
                 // free. The child term is the START-TIME subagent
                 // `maxConcurrency`; `configureSubagents` clamps later raises
                 // to it, because the pool is fixed once the worker starts.
+                lease_ttl_ms,
+                verification,
                 concurrency: BASE_WORKERS + usize::try_from(subagent_max_concurrency).unwrap_or(0),
                 // Orphan reaping on parent settlement (subagents) and
                 // turn-failure tracking (watchdog). Failures never unwind

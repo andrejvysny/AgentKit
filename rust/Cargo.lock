@@ -105,6 +105,7 @@ dependencies = [
  "agentkit-connections",
  "agentkit-core",
  "agentkit-host",
+ "agentkit-runtime",
  "agentkit-store",
  "async-stream",
  "async-trait",
@@ -225,16 +226,27 @@ dependencies = [
 name = "agentkit-runtime"
 version = "0.1.0"
 dependencies = [
+ "agentkit-connections",
+ "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
  "agentkit-lsp",
  "agentkit-store",
  "agentkit-toolpacks-coding",
+ "agentkit-transport-http",
  "async-trait",
+ "axum",
+ "chrono",
+ "futures",
+ "http",
  "libc",
+ "reqwest",
+ "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 

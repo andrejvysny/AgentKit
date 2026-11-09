@@ -1,11 +1,9 @@
 use crate::{bridge::*, proposals, provider, verification};
-use agentkit_core::ToolRegistry;
-use agentkit_host::{
-    AgentHost, ChatExecutor, HostOptions, HostResult, RunUpdate, Runtime, SubmitChat, SystemRuntime,
-};
+use agentkit_host::{AgentHost, HostResult, RunUpdate, Runtime, SubmitChat, SystemRuntime};
+use agentkit_runtime::AgentRuntime;
 use agentkit_store::SqliteStore;
 use serde_json::json;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 const CHAT_ID: &str = "egui-reference-chat";
 
@@ -21,14 +19,15 @@ async fn serve(
     ui: &UiSender,
     offline: bool,
 ) -> HostResult<()> {
-    let host = create_host(path, ui, offline).await?;
-    let recovered = host.recover().await?;
-    ui.send(Update::Status(format!(
-        "Native host ready. {} expired runs recovered; interrupted work needs explicit Resume.",
-        recovered.len()
-    )));
+    let mut runtime = create_runtime(path, ui, offline).await?;
+    let host = runtime.host().clone();
+    ui.send(Update::Status(
+        "Native host ready. Expired runs recovered; interrupted work needs explicit Resume.".into(),
+    ));
     refresh(&host, ui).await?;
-    let worker = host.start_worker();
+    let worker = runtime.take_worker().ok_or_else(|| {
+        agentkit_host::HostError::Execution("runtime worker already taken".into())
+    })?;
     while let Some(command) = commands.recv().await {
         if let Err(error) = dispatch(&host, command, ui).await {
             ui.send(Update::Error(error.to_string()));
@@ -130,7 +129,7 @@ pub async fn run_demo(path: PathBuf, mut commands: Commands, ui: UiSender) {
     }
 }
 
-async fn create_host(path: PathBuf, ui: &UiSender, offline: bool) -> HostResult<AgentHost> {
+async fn create_runtime(path: PathBuf, ui: &UiSender, offline: bool) -> HostResult<AgentRuntime> {
     let store = SqliteStore::open(path, 128)?;
     let runtime = Arc::new(SystemRuntime);
     if store.get_chat(CHAT_ID).await?.is_none() {
@@ -154,25 +153,15 @@ async fn create_host(path: PathBuf, ui: &UiSender, offline: bool) -> HostResult<
         models: selection.models,
         label: selection.label,
     });
-    let executor = Arc::new(ChatExecutor::new(
-        selection.provider,
-        Arc::new(ToolRegistry::default()),
-    ));
-    let executors: HashMap<String, Arc<dyn agentkit_host::TaskExecutor>> = HashMap::from([(
-        agentkit_host::CHAT_TURN_TASK_KIND.into(),
-        executor as Arc<dyn agentkit_host::TaskExecutor>,
-    )]);
     let verification = Arc::new(verification::LocalVerifier::new(store.clone()));
-    AgentHost::new(
-        store,
-        executors,
-        runtime,
-        HostOptions {
-            lease_ttl_ms: 3_000,
-            verification: Some(verification),
-            ..HostOptions::default()
-        },
-    )
+    AgentRuntime::builder(store)
+        .clock(runtime)
+        .default_provider(selection.provider)
+        .lease_ttl_ms(3_000)
+        .verification(verification)
+        .build()
+        .await
+        .map_err(|error| agentkit_host::HostError::Execution(error.to_string()))
 }
 
 async fn pin_provider(store: &SqliteStore, binding: serde_json::Value) -> HostResult<()> {

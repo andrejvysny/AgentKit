@@ -1,36 +1,15 @@
 //! Test server backed by the real native host and SQLite. Domain I/O is scripted.
-#[cfg(feature = "http")]
-#[path = "http_fixture/mcp_secrets.rs"]
-mod mcp_secrets;
-#[cfg(feature = "http")]
-#[path = "http_fixture/ports.rs"]
-mod ports;
-
-#[cfg(feature = "http")]
-#[path = "http_fixture/backend.rs"]
 mod backend;
-#[cfg(feature = "http")]
-#[path = "http_fixture/callback.rs"]
 mod callback;
-#[cfg(feature = "http")]
-#[path = "http_fixture/contributor.rs"]
 mod contributor;
-#[cfg(feature = "http")]
-#[path = "http_fixture/provider.rs"]
+mod mcp_secrets;
+mod ports;
 mod provider;
-#[cfg(feature = "http")]
-use agentkit_core::ToolRegistry;
-#[cfg(feature = "http")]
-use agentkit_host::{
-    AgentHost, ChatExecutor, HostOptions, SystemRuntime, TaskExecutor, http::DesktopBackend,
-};
-#[cfg(feature = "http")]
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
 
-#[cfg(feature = "http")]
+use agentkit_host::{SystemRuntime, ToolContributor, http::DesktopBackend};
+use agentkit_runtime::AgentRuntime;
+use std::{collections::BTreeMap, sync::Arc};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use agentkit_connections::{
@@ -52,12 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             scripted.clone()
         };
-    let mut options = agentkit_host::ChatExecutorOptions::default();
+    let mut contributors: Vec<Arc<dyn ToolContributor>> = Vec::new();
     if let Ok(names) = std::env::var("AGENTKIT_TEST_CONTRIBUTORS") {
         let names: Vec<String> = serde_json::from_str(&names)?;
         let url = std::env::var("AGENTKIT_TEST_PROVIDER_URL")?;
         let token = std::env::var("AGENTKIT_TEST_PROVIDER_TOKEN")?;
-        options.tool_contributors = names
+        contributors = names
             .into_iter()
             .enumerate()
             .map(|(index, namespace)| {
@@ -66,18 +45,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     namespace,
                     url: url.trim_end_matches("/provider").into(),
                     token: token.clone(),
-                }) as Arc<dyn agentkit_host::ToolContributor>
+                }) as Arc<dyn ToolContributor>
             })
             .collect();
     }
-    let executor: Arc<dyn TaskExecutor> =
-        Arc::new(ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(options));
-    let host = AgentHost::new(
-        store.clone(),
-        HashMap::from([(agentkit_host::CHAT_TURN_TASK_KIND.into(), executor)]),
-        Arc::new(SystemRuntime),
-        HostOptions::default(),
-    )?;
+    // The builder recovers and starts the worker; the fixture keeps the
+    // handle so it can shut the worker down after the server stops.
+    let mut runtime = AgentRuntime::builder(store.clone())
+        .default_provider(provider)
+        .extra_contributors(contributors)
+        .build()
+        .await?;
+    let host = runtime.host().clone();
     let native_ports = Arc::new(ports::FixturePorts {
         store: store.clone(),
     });
@@ -160,7 +139,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .unwrap();
     });
-    let worker = host.start_worker();
+    let worker = runtime
+        .take_worker()
+        .ok_or("runtime worker already taken")?;
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     println!(
         "{}",
@@ -190,9 +171,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     worker.shutdown().await?;
     Ok(())
-}
-#[cfg(not(feature = "http"))]
-fn main() {
-    eprintln!("Enable feature http to run the native HTTP fixture.");
-    std::process::exit(1);
 }

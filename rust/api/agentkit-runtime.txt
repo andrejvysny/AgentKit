@@ -41,10 +41,12 @@ pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs
 pub fn agentkit_runtime::AgentRuntimeBuilder::default_provider(self, alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::external_tools(self, agentkit_runtime::ExternalToolsPolicy) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::extra_contributors(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_host::governance::staging::ToolContributor>>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::lease_ttl_ms(self, i64) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::plan(self, agentkit_runtime::PlanConfiguration) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::profiles(self, alloc::vec::Vec<serde_json::value::Value>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::session_defaults(self, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::subagent_max_concurrency(self, i64) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::verification(self, alloc::rcs::arc::Arc<dyn agentkit_host::ports::VerificationHook>) -> Self
 pub struct agentkit_runtime::CodingLane
 impl agentkit_runtime::CodingLane
 pub async fn agentkit_runtime::CodingLane::dispose(&self)
