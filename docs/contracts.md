@@ -503,7 +503,14 @@ host error (`UsageDeniedError`, raised when the `UsageAuthorizer` refuses a
 provider call), mapped to **429** because the caller may retry once the budget
 refills.
 
-## TypeBox as the single source of truth
+## Rust is the source of truth; TypeBox mirrors it
+
+The wire authority is `agentkit-contracts`
+([ADR 0022](adr/0022-rust-contract-authority.md)): the hand-owned DTOs in
+`rust/crates/contracts/src/dto/`, the route table in `routes.rs` and
+`schema_bundle.json`. The TypeBox schemas below are the hand-written TypeScript
+mirror; `bun run contracts:check` fails when a TypeBox schema emits JSON that
+differs from the Rust bundle. Change the Rust side first, then the TypeScript.
 
 Every wire DTO is declared once as a `<Name>Schema` TypeBox value; its
 TypeScript type is `Static<typeof <Name>Schema>` under the name the type has
@@ -531,7 +538,7 @@ from `Static<typeof Schema>`, and the divergent field is re-declared over it:
 | `AiRunWarningEvent` | `data.code` narrows to `AiRunWarningCode \| (string & {})`; the schema keeps it `Type.String()` for forward-compat. |
 | `AiRunEvent` | Spelled out as a union rather than `Static<typeof AiRunEventSchema>`, so the `run.warning` member carries the layered `AiRunWarningEvent` type instead of the schema's raw `code: string`. |
 
-One exemption from "TypeBox is the source of truth" itself:
+One exemption from "every DTO is derived from its schema":
 `AiJsonSchemaObject`
 ([`packages/contracts/src/json-schema.ts`](../packages/contracts/src/json-schema.ts))
 is a hand-written interface, not derived from a schema. It is a *meta-type*

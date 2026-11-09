@@ -186,6 +186,7 @@ AGENTKIT_REQUIRE_NATIVE=1 bun test packages/native --timeout 60000
 node rust/scripts/check-native-package.mjs
 
 # TypeScript workspace
+bun run contracts:check   # fixtures current + TypeBox == Rust schema bundle
 bun run lint && bun run typecheck
 bun run build && bun run build:umbrella && node rust/scripts/check-native-umbrella.mjs
 bun run check:api

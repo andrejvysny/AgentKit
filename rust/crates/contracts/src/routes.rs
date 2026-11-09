@@ -1,4 +1,4 @@
-// Generated from packages/contracts/src via codegen/generate.mjs.
+// REST v1 route table. Hand-owned (ADR 0022).
 use serde::{Deserialize, Serialize};
 
 pub const CONTRACT_VERSION: &str = "0.7.0";

@@ -1,11 +1,14 @@
 #!/usr/bin/env bun
-/** Export reviewable Rust parity inputs from the TypeScript authority. */
+/**
+ * Export reviewable parity inputs. Schemas and run-event variants come from the
+ * Rust-owned bundle (ADR 0022); routes are pure TS data checked against Rust by
+ * the contracts parity test; goldens come from the testing package.
+ */
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import * as schemas from "../packages/contracts/src/schemas.js";
 import {
-  AiRunEventSchema,
   CONTRACT_VERSION,
   REST_API_VERSION,
   REST_ROUTES,
@@ -22,7 +25,23 @@ import {
 
 const ROOT = resolve(import.meta.dir, "..");
 export const FIXTURE_DIR = join(ROOT, "rust/fixtures");
+// The contracts crate packages a copy of the exported files for its own tests.
+const CRATE_FIXTURE_DIR = join(ROOT, "rust/crates/contracts/tests/fixtures");
+const BUNDLE_PATH = join(ROOT, "rust/crates/contracts/src/schema_bundle.json");
 export const BASELINE_SHA = "36577829cfbfd78e5b0492d826f46ba6131835b6";
+
+interface RunEventSchema {
+  properties: { type: { const: string } };
+}
+interface SchemaBundle {
+  AiRunEventSchema: { anyOf: RunEventSchema[] };
+  [name: string]: unknown;
+}
+
+/** The Rust-owned schema bundle: the wire authority. */
+export function loadSchemaBundle(): SchemaBundle {
+  return JSON.parse(readFileSync(BUNDLE_PATH, "utf8")) as SchemaBundle;
+}
 
 /** Sort object keys only; array order and all JSON schema semantics survive. */
 export function canonicalJson(value: unknown): string {
@@ -97,6 +116,7 @@ async function idempotencyVectors(): Promise<unknown> {
 /** No timestamps, git queries, network calls or random identities are emitted. */
 export async function buildFixtures(): Promise<Map<string, string>> {
   const files = new Map<string, string>();
+  const schemas = loadSchemaBundle();
   files.set("schemas.json", canonicalJson(schemas));
   files.set(
     "routes.json",
@@ -123,7 +143,7 @@ export async function buildFixtures(): Promise<Map<string, string>> {
     "run-events.json",
     canonicalJson({
       contractVersion: CONTRACT_VERSION,
-      variants: AiRunEventSchema.anyOf.map((schema) => ({
+      variants: schemas.AiRunEventSchema.anyOf.map((schema) => ({
         type: schema.properties.type.const,
         schema,
       })),
@@ -150,7 +170,7 @@ export async function buildFixtures(): Promise<Map<string, string>> {
       contractVersion: CONTRACT_VERSION,
       schemaCount: Object.keys(schemas).length,
       routeCount: Object.keys(REST_ROUTES).length,
-      eventVariantCount: AiRunEventSchema.anyOf.length,
+      eventVariantCount: schemas.AiRunEventSchema.anyOf.length,
       goldenTraceCount: GOLDEN_TRACE_NAMES.length,
       independentlyCheckedFixtures: ["conformance/", "schema-validation.json"],
       sha256: hashes,
@@ -187,19 +207,25 @@ export async function exportFixtures(
 ): Promise<string[]> {
   const files = await buildFixtures();
   const drift: string[] = [];
+  const targets = [directory];
+  if (directory === FIXTURE_DIR) targets.push(CRATE_FIXTURE_DIR);
   for (const [path, body] of files) {
-    const target = join(directory, path);
-    if (check) {
-      const actual = await readFile(target, "utf8").catch(
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        },
-      );
-      if (actual !== body) drift.push(path);
-    } else {
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, body);
+    for (const root of targets) {
+      const target = join(root, path);
+      if (check) {
+        const actual = await readFile(target, "utf8").catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          },
+        );
+        if (actual !== body) {
+          drift.push(root === directory ? path : `${path} (crate copy)`);
+        }
+      } else {
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, body);
+      }
     }
   }
   const unexpected = (await existingFiles(directory)).filter(

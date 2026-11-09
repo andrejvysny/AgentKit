@@ -1,27 +1,24 @@
 # AgentKit contracts for Rust
 
-This crate exposes the wire DTOs from `packages/contracts/src`, all 20 run-event
-variants, and the 63 REST v1 operations. The TypeBox schemas remain authoritative.
-The embedded schema bundle is compared with the independently exported TypeScript
-fixtures by the parity tests.
+This crate is the wire source of truth (ADR 0022). It exposes the wire DTOs, all 20
+run-event variants, and the 63 REST v1 operations. DTOs live in `src/dto/`, routes
+in `src/routes.rs` and the embedded JSON Schema bundle in `src/schema_bundle.json`;
+all three are hand-owned and edited together. `@agentkit/contracts` (TypeBox) mirrors
+them and is checked against the bundle.
 
-Generate DTOs and routes after an intentional TypeScript contract change:
+After a contract change, from the repository root:
 
 ```sh
-bun scripts/export-rust-fixtures.ts
-bun rust/crates/contracts/codegen/generate.mjs
-cargo fmt --manifest-path rust/Cargo.toml -p agentkit-contracts
+bun run contracts:generate   # re-export fixtures from the bundle
+bun run contracts:check      # fixtures current + TypeBox == bundle
+cargo test --manifest-path rust/Cargo.toml -p agentkit-contracts --all-features
 ```
-
-The generator imports the TypeScript source directly. It requires Bun, installed
-repository dependencies, and Rust 1.97.0 with rustfmt. Generated code is checked
-in; consumers do not run a TypeScript build.
 
 ## Current export fixtures and migration delta
 
 `rust/fixtures/schemas.json` and its packaged copy in `tests/fixtures` describe
-current TypeScript exports. They are regenerated together with their manifests
-through the exporter and code generator above. The Rust parity test compares the
+the Rust bundle (routes and goldens come from TypeScript data). They are regenerated
+together with their manifests through the exporter above. The Rust parity test compares the
 entire embedded schema bundle with these exports, without migration exceptions;
 exporter checks and release projection also reject any drift. Historical contract
 snapshots remain available through Git rather than replacing this current check.
@@ -54,10 +51,10 @@ required fields, and closed objects. Constraints such as URL patterns, numeric
 bounds, and minimum array lengths require the validation helpers. Call those
 helpers at untrusted input boundaries.
 
-Generated DTOs implement `JsonDeserialize` and custom Serde decoding that retain
+DTOs implement `JsonDeserialize` and custom Serde decoding that retain
 arbitrary objects, including keys matching Serde's private number/raw-value
 markers. This works through both `serde_json::from_str` and `from_value` for the
-generated structs and unions. Use `deserialize_validated` or
+DTO structs and unions. Use `deserialize_validated` or
 `JsonDeserialize::from_json` for container aliases such as `AiJsonSchemaObject`;
 plain Serde decoding of an external `Value` or standard map still has Serde's
 private-marker ambiguity.
@@ -65,7 +62,7 @@ private-marker ambiguity.
 Application structs can preserve JSON fields with
 `#[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]`.
 The adapter supports `Value`, `Vec`, `Option`, `BTreeMap`, `HashMap`, Serde maps,
-and generated DTOs. Retain `#[serde(default)]` where omission is allowed. Serde
+and DTOs. Retain `#[serde(default)]` where omission is allowed. Serde
 flattening and untagged-enum buffering discard the raw representation; implement
 `JsonDeserialize` with explicit field extraction for those structures, as the
 generator does.
@@ -135,7 +132,7 @@ cargo clippy --manifest-path rust/Cargo.toml -p agentkit-contracts --all-targets
 cargo check --manifest-path rust/Cargo.toml -p agentkit-contracts --target wasm32-unknown-unknown --locked
 ```
 
-Tests cover the frozen schema and route exports, all generated DTOs, all event
+Tests cover the frozen schema and route exports, all DTOs, all event
 variants, every exported golden trace, missing versus null fields, unknown-field
 round trips, closed discriminators, media/URL constraints, continuation bounds,
 remote-reference refusal, local references, and actual TypeScript idempotency

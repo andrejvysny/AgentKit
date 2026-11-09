@@ -3,6 +3,9 @@
 Serialized surface shared across AgentKit packages: provider/tool/run-event DTOs,
 JSON Schema types, source refs, context bindings, and prompt shapes.
 
+The Rust crate `agentkit-contracts` is the wire authority (ADR 0022); the schemas
+here mirror it and `bun run contracts:check` fails on drift.
+
 Every wire DTO is declared once as a [TypeBox](https://github.com/sinclairzx81/typebox)
 schema — `<Name>Schema` — and its TypeScript type is derived from it via
 `Static<typeof <Name>Schema>`. One declaration, two artifacts: the compile-time

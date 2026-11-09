@@ -182,7 +182,7 @@ Further detail: [`docs/execution-lifecycle.md`](execution-lifecycle.md),
 |---|---|
 | `@agentkit/native` | Live. Node-API binding wrappers (`src/`), committed napi loader and `index.d.ts` (`generated/`), per-platform addons `@agentkit/native-<platform>` |
 | `@agentkit/core` | Live. Public loop API over Rust (`runChat`, `runAgentLoop`), tool registry and content-part helpers |
-| `@agentkit/contracts` | Live. Wire DTOs, JSON Schemas (TypeBox), REST v1 route table; codegen input (below) |
+| `@agentkit/contracts` | Live. Wire DTOs, JSON Schemas (TypeBox), REST v1 route table; hand-written mirror of the Rust contracts (below) |
 | `@agentkit/client` | Live. Typed REST v1 + SSE client, auto-resuming `streamRun`, derived run phases |
 | `@agentkit/react` | Live. Headless hooks over `@agentkit/client` |
 | `@agentkit/testing` | Live, dev. Mocks, fixtures, golden traces, conformance suites |
@@ -195,19 +195,15 @@ dropped their subpaths. Their source is recoverable from commit `a31dcb1`
 (`git show a31dcb1:packages/host/src/...`). The package ledger is in
 [`docs/rust/parity.md`](rust/parity.md).
 
-## Contracts and codegen
+## Contracts
 
-[`packages/contracts`](../packages/contracts/src) (TypeBox schemas and
-`src/rest.ts`) is the authoritative wire source today.
-`rust/crates/contracts/codegen/generate.mjs` (run with Bun from the repository
-root) reads it and writes the Rust DTOs under `rust/crates/contracts/src/generated/`
-and `schema_bundle.json`. The Rust crate validates offline against that
-bundle. The wire authority is contract `0.7.0`, REST `v1`.
-
-The Rust contract definitions will become authoritative and generate the
-TypeScript schemas (decided 2026-11-09; recorded in ADR 0022 when the flip
-lands, after the TypeScript backend is retired). Until then TypeBox stays the
-source of truth. See
+`agentkit-contracts` is the wire authority ([ADR 0022](adr/0022-rust-contract-authority.md)):
+hand-owned DTOs in `rust/crates/contracts/src/dto/`, the route table in
+`routes.rs` and the JSON Schema bundle `schema_bundle.json`, which the crate
+validates against offline. [`packages/contracts`](../packages/contracts/src)
+(TypeBox schemas and `src/rest.ts`) is the hand-written TypeScript mirror with a
+frozen public API; `bun run contracts:check` asserts that it emits exactly the
+Rust bundle. There is no code generator. Contract `0.7.0`, REST `v1`. See
 [`docs/contracts.md`](contracts.md) for the event vocabulary, warning codes and
 tool envelope.
 

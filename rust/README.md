@@ -1,7 +1,7 @@
 # AgentKit Rust
 
 This workspace is an independent native implementation alongside the TypeScript
-packages. The wire authority is AgentKit contract `0.7.0`, REST `v1`, frozen at
+packages. The wire authority is the Rust `agentkit-contracts` crate (ADR 0022): contract `0.7.0`, REST `v1`, frozen at
 `36577829cfbfd78e5b0492d826f46ba6131835b6`. It uses a new SQLite database identity
 and does not open or migrate the TypeScript schema-9 database.
 

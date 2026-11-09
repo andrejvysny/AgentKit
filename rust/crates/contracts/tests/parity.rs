@@ -4,7 +4,7 @@ mod support;
 use support::{example, fixture};
 
 #[test]
-fn schemas_match_frozen_typescript_exports_and_compile() {
+fn schemas_match_exported_fixture_and_compile() {
     assert_eq!(
         serde_json::to_value(schemas()).unwrap(),
         fixture("schemas.json")
@@ -12,6 +12,16 @@ fn schemas_match_frozen_typescript_exports_and_compile() {
     assert_eq!(schemas().len(), 130);
     for (name, schema) in schemas() {
         compile_schema(schema).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+}
+
+#[test]
+fn every_route_request_schema_is_in_the_bundle() {
+    let bundle = schemas();
+    for route in REST_ROUTES {
+        if let Some(name) = route.request_schema {
+            assert!(bundle.contains_key(name), "{}: {name}", route.operation);
+        }
     }
 }
 
@@ -232,7 +242,7 @@ fn request_validation_uses_route_schema() {
     assert!(validate_request(RestOperation::GetVersion, &json!({})).is_err());
 }
 
-include!("support/generated_roundtrips.rs");
+include!("support/dto_roundtrips.rs");
 
 #[test]
 fn safe_integral_numbers_preserve_javascript_integer_wire_shape() {
