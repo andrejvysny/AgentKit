@@ -1,5 +1,5 @@
 use crate::{ChatMessage, CoreError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 pub(crate) fn text(message: &ChatMessage, strict: bool) -> Result<String, CoreError> {
     if let Some(text) = message.content.as_str() {
         return Ok(text.into());

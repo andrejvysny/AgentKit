@@ -40,10 +40,10 @@ impl SseDecoder {
     }
     pub fn finish(&mut self) -> Result<Vec<SseFrame>, CoreError> {
         let mut frames = vec![];
-        if !self.line.is_empty() {
-            if let Some(frame) = self.consume_line()? {
-                frames.push(frame);
-            }
+        if !self.line.is_empty()
+            && let Some(frame) = self.consume_line()?
+        {
+            frames.push(frame);
         }
         if let Some(frame) = self.flush() {
             frames.push(frame);

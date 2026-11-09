@@ -6,7 +6,7 @@ mod responses_request;
 mod responses_state;
 mod transport;
 pub use chat_completions::ChatCompletionsProvider;
-pub use presets::{preset_by_kind, provider_presets, ProviderPreset};
+pub use presets::{ProviderPreset, preset_by_kind, provider_presets};
 pub use responses::ResponsesProvider;
 pub use responses_request::{build_responses_request, build_responses_request_with_warnings};
 pub use transport::{AuthKind, ConnectionIdentity, TrustedTransport};

@@ -1,10 +1,10 @@
 use agentkit_core::{providers::*, *};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 struct Transport {
     identity: ConnectionIdentity,
@@ -88,9 +88,11 @@ async fn chat_stream_keeps_reasoning_separate_and_records_trailing_usage() {
         .await;
     assert!(events.iter().all(Result::is_ok));
     assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Event {data,..}) if data["content"]=="yes"&&data["reasoningContent"]=="private thought")));
-    assert!(events
-        .iter()
-        .any(|event| matches!(event,Ok(ProviderEvent::Usage(data)) if data["totalTokens"]==5)));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,Ok(ProviderEvent::Usage(data)) if data["totalTokens"]==5))
+    );
     assert!(transport.checks.load(Ordering::SeqCst) >= 4);
 }
 #[tokio::test]
@@ -107,12 +109,16 @@ async fn chat_malformed_tool_frames_never_dispatch_tool_calls() {
         .stream_chat(request(), CancellationToken::new())
         .collect()
         .await;
-    assert!(events
-        .iter()
-        .any(|event| matches!(event,Err(error) if error.code=="incomplete_stream")));
-    assert!(!events
-        .iter()
-        .any(|event| matches!(event, Ok(ProviderEvent::ToolRequested(_)))));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,Err(error) if error.code=="incomplete_stream"))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Ok(ProviderEvent::ToolRequested(_))))
+    );
 }
 #[tokio::test]
 async fn compatibility_fallback_reserves_each_request_and_never_exceeds_budget() {
@@ -142,9 +148,11 @@ async fn compatibility_fallback_reserves_each_request_and_never_exceeds_budget()
         .collect()
         .await;
     assert_eq!(transport.sent.lock().unwrap().len(), 1);
-    assert!(events
-        .iter()
-        .any(|event| matches!(event,Err(error) if error.code=="execution_budget_exhausted")));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,Err(error) if error.code=="execution_budget_exhausted"))
+    );
 }
 fn terminal(output: Vec<Value>) -> Value {
     json!({"type":"response.completed","response":{"status":"completed","output":output,"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}})
@@ -216,9 +224,11 @@ async fn responses_accepts_reencrypted_reasoning_in_terminal_output() {
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok), "{events:?}");
-    assert!(saved.states.lock().unwrap()[0]
-        .to_string()
-        .contains("terminal"));
+    assert!(
+        saved.states.lock().unwrap()[0]
+            .to_string()
+            .contains("terminal")
+    );
 }
 fn tool_progress(events: &[Result<ProviderEvent, CoreError>]) -> Vec<(String, String, u64)> {
     events
@@ -323,9 +333,11 @@ fn responses_request_asks_for_reasoning_summary_by_default() {
         body_for(Some(ReasoningEffort::Medium), ReasoningSummary::Off)["reasoning"],
         json!({"effort":"medium"})
     );
-    assert!(body_for(None, ReasoningSummary::Off)
-        .get("reasoning")
-        .is_none());
+    assert!(
+        body_for(None, ReasoningSummary::Off)
+            .get("reasoning")
+            .is_none()
+    );
 }
 fn responses_transport(provider_id: &str, replies: Vec<(u16, String)>) -> Arc<Transport> {
     let mut transport = Transport::new("responses", replies);
@@ -399,9 +411,11 @@ async fn responses_summary_retry_is_once_and_only_for_summary_rejections() {
         .stream_chat(request(), CancellationToken::new())
         .collect()
         .await;
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, Err(error) if error.code == "provider_error")));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Err(error) if error.code == "provider_error"))
+    );
     assert_eq!(unrelated.sent.lock().unwrap().len(), 1);
     let twice = responses_transport(
         "summary-twice",
@@ -694,12 +708,16 @@ async fn responses_rejects_mismatched_output_and_unknown_events() {
             .stream_chat(request(), CancellationToken::new())
             .collect()
             .await;
-        assert!(events
-            .iter()
-            .any(|event| matches!(event,Err(error) if error.code==code)));
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Ok(ProviderEvent::Completed { .. }))));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event,Err(error) if error.code==code))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Ok(ProviderEvent::Completed { .. })))
+        );
     }
 }
 struct Saved {
@@ -746,11 +764,13 @@ async fn private_reasoning_continuation_is_persisted_then_replayed_under_exact_s
         .push(ChatMessage::text("assistant", "answer"));
     input.messages.push(ChatMessage::text("user", "next"));
     let body = build_responses_request(&input, &transport.identity, false).unwrap();
-    assert!(body["input"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["type"] == "reasoning" && item["encrypted_content"] == "opaque"));
+    assert!(
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["type"] == "reasoning" && item["encrypted_content"] == "opaque")
+    );
     input.continuation_scope.as_mut().unwrap().branch_id = "wrong".into();
     assert_eq!(
         build_responses_request(&input, &transport.identity, false)
@@ -786,12 +806,16 @@ async fn private_persistence_failure_preserves_usage_and_exposes_no_completion()
         .collect()
         .await;
     assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["finalForCall"]==false&&data["totalTokens"]==5)));
-    assert!(events
-        .iter()
-        .any(|event| matches!(event,Err(error) if error.code=="store_error")));
-    assert!(!events
-        .iter()
-        .any(|event| matches!(event, Ok(ProviderEvent::Completed { .. }))));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,Err(error) if error.code=="store_error"))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Ok(ProviderEvent::Completed { .. })))
+    );
 }
 
 struct CappedStreamTransport;
@@ -838,9 +862,11 @@ async fn chat_limit_failure_terminates_without_waiting_for_hostile_socket_eof() 
     )
     .await
     .expect("cap failure must not wait for more bytes");
-    assert!(events
-        .iter()
-        .any(|event| matches!(event,Err(error) if error.code=="stream_limit_exceeded")));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,Err(error) if error.code=="stream_limit_exceeded"))
+    );
 }
 
 #[tokio::test]
@@ -1072,9 +1098,11 @@ async fn chat_stream_surfaces_url_citation_annotations_on_delta_and_completed() 
     );
     // Text deltas stay plain `Delta` events — the citation frames never
     // replace or swallow them.
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, Ok(ProviderEvent::Delta(text)) if text == "Paris.")));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Ok(ProviderEvent::Delta(text)) if text == "Paris."))
+    );
     // The completed event carries every citation the call attested.
     assert!(events.iter().any(|event| matches!(
         event,

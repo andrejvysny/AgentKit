@@ -1,7 +1,7 @@
 use agentkit_core::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 struct OverflowProvider;
@@ -94,9 +94,11 @@ fn assert_callback_input(input: &Value) {
         agentkit_contracts::javascript_number(&input["rounded"]),
         Some(9007199254740992.0)
     );
-    assert!(agentkit_contracts::javascript_number(&input["zero"])
-        .unwrap()
-        .is_sign_negative());
+    assert!(
+        agentkit_contracts::javascript_number(&input["zero"])
+            .unwrap()
+            .is_sign_negative()
+    );
 }
 fn assert_serialized_output(events: &[agentkit_contracts::AiRunEvent]) {
     let success = events
@@ -132,16 +134,22 @@ fn registry_preserves_schema_identity_and_instance_literals() {
             inputs: Arc::new(Mutex::new(vec![])),
         }))
         .unwrap();
-    assert!(registry
-        .validate_input("echo", &json!({"payload":{"$id":"user","$schema":"data"}}))
-        .is_empty());
-    assert!(!registry
-        .validate_input("echo", &json!({"payload":{}}))
-        .is_empty());
-    assert!(!registry
-        .validate_input(
-            "echo",
-            &json!({"payload":{"$id":"user","$schema":"data"},"other":1})
-        )
-        .is_empty());
+    assert!(
+        registry
+            .validate_input("echo", &json!({"payload":{"$id":"user","$schema":"data"}}))
+            .is_empty()
+    );
+    assert!(
+        !registry
+            .validate_input("echo", &json!({"payload":{}}))
+            .is_empty()
+    );
+    assert!(
+        !registry
+            .validate_input(
+                "echo",
+                &json!({"payload":{"$id":"user","$schema":"data"},"other":1})
+            )
+            .is_empty()
+    );
 }

@@ -1,7 +1,7 @@
-use super::{content, ConnectionIdentity};
+use super::{ConnectionIdentity, content};
 use crate::{ChatMessage, ChatRequest, CoreError, ReasoningSummary, ToolCall};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 const MAX_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
@@ -253,10 +253,10 @@ fn message_digest(messages: &[ChatMessage]) -> Result<String, CoreError> {
         .iter()
         .map(|message| {
             let mut item = json!({"role":message.role,"content":message.content});
-            if let Some(id) = &message.tool_call_id {
-                if !id.is_empty() {
-                    item["toolCallId"] = id.clone().into();
-                }
+            if let Some(id) = &message.tool_call_id
+                && !id.is_empty()
+            {
+                item["toolCallId"] = id.clone().into();
             }
             if !message.tool_calls.is_empty() {
                 item["toolCalls"] =

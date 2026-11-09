@@ -19,7 +19,7 @@ pub use agentkit_contracts::AiRunEvent;
 pub use dispatch::{DispatchFence, DispatchGuard};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 pub use registry::{RegistryError, ToolRegistry};
-pub use run::{run_chat, RunEventGate, RunHandle, RunOptions, RunResult, Terminal};
+pub use run::{RunEventGate, RunHandle, RunOptions, RunResult, Terminal, run_chat};
 pub use runtime::{Runtime, SystemRuntime};
 pub use tokio_util::sync::CancellationToken;
 pub use types::*;

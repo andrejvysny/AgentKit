@@ -1,7 +1,7 @@
 use agentkit_core::{providers::*, *};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 struct Transport {
@@ -67,8 +67,8 @@ fn responses_schema_overflow_matches_ajv_acceptance_then_javascript_parameter_cl
     );
 }
 #[test]
-fn responses_accepts_unique_items_in_array_tool_schemas_and_still_fails_closed_on_unknown_constructs(
-) {
+fn responses_accepts_unique_items_in_array_tool_schemas_and_still_fails_closed_on_unknown_constructs()
+ {
     // `artifact_design_to_site` (OneMind pack_artifacts, byte-identical to the TS
     // chat-artifacts definition) declares `uniqueItems` on its frame/artboard id
     // arrays. The keyword is Draft-07 core vocabulary and the contracts validator
@@ -144,9 +144,11 @@ fn responses_strips_annotations_and_accepts_format_pattern() {
     assert!(parameters["properties"]["when"].get("readOnly").is_none());
     // a property literally named "examples" survives; its annotation does not
     assert_eq!(parameters["properties"]["examples"]["pattern"], "^a");
-    assert!(parameters["properties"]["examples"]
-        .get("examples")
-        .is_none());
+    assert!(
+        parameters["properties"]["examples"]
+            .get("examples")
+            .is_none()
+    );
 }
 #[test]
 fn responses_excludes_ref_tool_but_sends_the_rest() {

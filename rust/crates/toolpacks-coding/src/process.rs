@@ -2406,10 +2406,10 @@ impl DriverCtx {
         {
             Ok(_) => None,
             Err(error) => {
-                // `forget` skips `WorkspaceLease::drop`, whose deferred
+                // `ManuallyDrop` skips `WorkspaceLease::drop`, whose deferred
                 // release would otherwise undo exactly that.
                 if let Some(lease) = lease.take() {
-                    std::mem::forget(lease);
+                    let _leaked = std::mem::ManuallyDrop::new(lease);
                 }
                 Some(error)
             }

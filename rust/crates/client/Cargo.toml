@@ -9,9 +9,12 @@ description = "Typed HTTP and event-stream client for AgentKit"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "../../../README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
-agentkit-contracts = { path = "../contracts", version = "0.1.0" }
-async-stream = "=0.3.6"
+agentkit-contracts = { workspace = true }
+async-stream.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -20,6 +23,6 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-agentkit-transport-http = { path = "../transport-http", version = "0.1.0" }
+agentkit-transport-http = { workspace = true }
 async-trait.workspace = true
-axum = "=0.8.8"
+axum.workspace = true

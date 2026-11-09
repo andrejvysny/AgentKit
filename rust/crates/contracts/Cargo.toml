@@ -9,6 +9,9 @@ description = "Canonical AgentKit contracts, validation, and identity hashing"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

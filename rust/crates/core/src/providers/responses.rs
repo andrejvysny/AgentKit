@@ -1,14 +1,14 @@
 use super::{
+    AuthKind, ConnectionIdentity, TrustedTransport,
     chat_completions::usage_data,
     responses_request::{build_responses_request_with_warnings, make_continuation},
     responses_state::{ResponsesResult, ResponsesState},
     transport::{dispatch, dispatch_status, failure, read_json},
-    AuthKind, ConnectionIdentity, TrustedTransport,
 };
-use crate::{sse::SseDecoder, ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream};
+use crate::{ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, sse::SseDecoder};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex, OnceLock, PoisonError},
@@ -172,12 +172,11 @@ impl ResponsesProvider {
             let result = match outcome {
                 Ok(result) => result,
                 Err(error) => {
-                    if let Some(usage) = observed_usage {
-                        if let Ok(data) = response_usage(&usage, &input.model, &call_id, false) {
+                    if let Some(usage) = observed_usage
+                        && let Ok(data) = response_usage(&usage, &input.model, &call_id, false) {
                             provider.transport.check_authority().await?;
                             yield ProviderEvent::Usage(data);
                         }
-                    }
                     Err(error)?;
                     unreachable!()
                 }
@@ -192,12 +191,11 @@ impl ResponsesProvider {
                 Ok(Some(state)) => yield ProviderEvent::Continuation(state),
                 Ok(None) => {},
                 Err(error) => {
-                    if let Some(usage) = &result.usage {
-                        if let Ok(data) = response_usage(usage, &input.model, &call_id, false) {
+                    if let Some(usage) = &result.usage
+                        && let Ok(data) = response_usage(usage, &input.model, &call_id, false) {
                             provider.transport.check_authority().await?;
                             yield ProviderEvent::Usage(data);
                         }
-                    }
                     Err(error)?;
                 }
             }

@@ -1,28 +1,31 @@
 [package]
 name = "agentkit-store"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 description = "SQLite persistence and execution leases for AgentKit"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "../../../README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
-agentkit-contracts = { path = "../contracts", version = "0.1.0" }
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+agentkit-contracts = { workspace = true }
+chrono = { workspace = true, features = ["std"] }
 # AGENTKIT-72 at-rest sealing. `ring` is already in the workspace Cargo.lock
 # (the rustls stack behind the `http` feature); this edge adds no new crate to
 # the build graph and keeps the pinned lockfile green.
 ring = "=0.17.14"
-rusqlite = { version = "0.38", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+rusqlite = { workspace = true, features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
-thiserror = "2"
-tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
-uuid = { version = "1", features = ["v4", "v7"] }
+thiserror.workspace = true
+tokio.workspace = true
+uuid = { workspace = true, features = ["v7"] }
 
 [features]
 # Off by default: importing a TypeScript adapters-sqlite database is a migration
@@ -30,5 +33,5 @@ uuid = { version = "1", features = ["v4", "v7"] }
 ts-import = []
 
 [dev-dependencies]
-rusqlite = { version = "0.38", features = ["hooks"] }
-tempfile = "3"
+rusqlite = { workspace = true, features = ["hooks"] }
+tempfile.workspace = true

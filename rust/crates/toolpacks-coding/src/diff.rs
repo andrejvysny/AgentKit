@@ -44,7 +44,7 @@ fn diff_ops<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Op<'a>> {
     }
     let mid_a = &a[head..a.len() - tail];
     let mid_b = &b[head..b.len() - tail];
-    let mut ops: Vec<Op> = a[..head]
+    let mut ops: Vec<Op<'_>> = a[..head]
         .iter()
         .map(|text| Op {
             kind: OpKind::Same,
@@ -88,7 +88,7 @@ fn lcs_ops<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Op<'a>> {
             };
         }
     }
-    let mut ops: Vec<Op> = Vec::new();
+    let mut ops: Vec<Op<'_>> = Vec::new();
     let mut i = 0usize;
     let mut j = 0usize;
     while i < a.len() && j < b.len() {

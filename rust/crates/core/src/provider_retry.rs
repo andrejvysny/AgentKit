@@ -101,9 +101,8 @@ fn retry_stream(
     Box::pin(async_stream::stream! {
         let attempts = policy.attempts();
         for attempt in 1..=attempts {
-            if attempt > 1 {
-                if let Err(error) = reserve_retry(&provider, &request).await { yield Err(error); return; }
-            }
+            if attempt > 1
+                && let Err(error) = reserve_retry(&provider, &request).await { yield Err(error); return; }
             yield Ok(ProviderEvent::RequestStarted);
             let stream = provider.stream_chat(request.clone(), cancellation.child_token());
             let mut events = attempt_stream(stream, cancellation.clone(), attempt, attempts);

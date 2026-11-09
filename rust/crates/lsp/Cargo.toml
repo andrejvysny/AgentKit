@@ -9,9 +9,12 @@ description = "AgentKit native LSP client, language-server lifecycle manager and
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
-agentkit-contracts = { path = "../contracts", version = "0.1.0" }
-agentkit-core = { path = "../core", version = "0.1.0" }
+agentkit-contracts = { workspace = true }
+agentkit-core = { workspace = true }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -20,7 +23,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["process"] }
 
 [target.'cfg(unix)'.dependencies]
-libc = "=0.2.191"
+libc.workspace = true
 
 [dev-dependencies]
-tempfile = "=3.27.0"
+tempfile.workspace = true

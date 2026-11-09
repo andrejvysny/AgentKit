@@ -1,7 +1,7 @@
 use super::State;
 use crate::budget::{minimum, timeout};
 use crate::{CoreError, ToolCall, ToolRegistry};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 enum Outcome {
@@ -128,7 +128,7 @@ impl State {
                 _ => {
                     return Ok(Some(
                         "A loop hook could not authorize this tool call.".into(),
-                    ))
+                    ));
                 }
             };
             // Frozen decision table (`runToolGate` in loop-hooks.ts). The

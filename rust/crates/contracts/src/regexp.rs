@@ -18,7 +18,7 @@ impl Keyword for Pattern {
     fn validate<'i>(
         &self,
         instance: &'i Value,
-        location: &LazyLocation,
+        location: &LazyLocation<'_, '_>,
     ) -> Result<(), jsonschema::ValidationError<'i>> {
         if self.is_valid(instance) {
             return Ok(());

@@ -1,11 +1,12 @@
 use crate::{
+    ChatMessage, ChatProvider, ChatRequest, CoreError, ProviderEvent, Runtime, SystemRuntime,
+    ToolCall, ToolLimits, ToolRegistry,
     budget::{minimum, timeout},
-    tool_execution, ChatMessage, ChatProvider, ChatRequest, CoreError, ProviderEvent, Runtime,
-    SystemRuntime, ToolCall, ToolLimits, ToolRegistry,
+    tool_execution,
 };
 use agentkit_contracts::AiRunEvent;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -215,11 +216,11 @@ impl State {
         }
         let event = serde_json::from_value(value)
             .map_err(|_| CoreError::new("provider_error", "Invalid provider event"))?;
-        if let Some(sink) = &self.options.event_sink {
-            if let Err(error) = sink.append_messages(&event, &self.pending_messages).await {
-                self.options.cancellation.cancel();
-                return Err(error);
-            }
+        if let Some(sink) = &self.options.event_sink
+            && let Err(error) = sink.append_messages(&event, &self.pending_messages).await
+        {
+            self.options.cancellation.cancel();
+            return Err(error);
         }
         self.seq += 1;
         self.pending_messages.clear();
@@ -246,10 +247,8 @@ impl State {
                 _ = self.options.cancellation.cancelled() => false,
             }
         };
-        if sent {
-            if let Some(gate) = &self.options.event_gate {
-                gate.wait(&self.options.cancellation).await;
-            }
+        if sent && let Some(gate) = &self.options.event_gate {
+            gate.wait(&self.options.cancellation).await;
         }
         Ok(())
     }
@@ -473,10 +472,10 @@ impl State {
         request.continuation = self.continuation.clone();
         request.continuation_required |= request.continuation.is_some();
         let budget = request.budget.clone();
-        if !provider.tracks_transport_requests() {
-            if let Some(budget) = &budget {
-                budget.consume("providerRequests").await?;
-            }
+        if !provider.tracks_transport_requests()
+            && let Some(budget) = &budget
+        {
+            budget.consume("providerRequests").await?;
         }
         let usage_cleanup = provider.supports_usage_cleanup();
         let provider_cancellation = self.options.cancellation.child_token();
@@ -663,10 +662,10 @@ impl State {
             return Ok(());
         }
         let now = self.options.runtime.now_ms();
-        if let Some((at, bytes)) = turn.preparing.get(&id) {
-            if args_bytes <= *bytes || now.saturating_sub(*at) < PREPARING_INTERVAL_MS {
-                return Ok(());
-            }
+        if let Some((at, bytes)) = turn.preparing.get(&id)
+            && (args_bytes <= *bytes || now.saturating_sub(*at) < PREPARING_INTERVAL_MS)
+        {
+            return Ok(());
         }
         turn.preparing.insert(id.clone(), (now, args_bytes));
         self.emit(
@@ -731,10 +730,11 @@ impl State {
         let mut budget_error = None;
         let mut pending_suspension: Option<(crate::HumanRequestSpec, ToolCall)> = None;
         for (index, call) in calls.iter().enumerate() {
-            if self.options.batch_suspension && self.options.cancellation.is_cancelled() {
-                if let Some((_, held)) = pending_suspension.take() {
-                    self.cancel_suspended(&held).await?;
-                }
+            if self.options.batch_suspension
+                && self.options.cancellation.is_cancelled()
+                && let Some((_, held)) = pending_suspension.take()
+            {
+                self.cancel_suspended(&held).await?;
             }
             let mut executed = false;
             let outcome = if self.options.cancellation.is_cancelled() || cancelled {
@@ -818,7 +818,15 @@ impl State {
                                 json!({"phase":"execution","retryable":false}),
                             )
                         } else if pending_suspension.is_some() {
-                            tool_execution::failed(call, &CoreError::new("suspend_conflict", "Another tool call in this step is already waiting for human input."), self.options.limits.max_bytes, json!({"phase":"execution","retryable":false}))
+                            tool_execution::failed(
+                                call,
+                                &CoreError::new(
+                                    "suspend_conflict",
+                                    "Another tool call in this step is already waiting for human input.",
+                                ),
+                                self.options.limits.max_bytes,
+                                json!({"phase":"execution","retryable":false}),
+                            )
                         } else {
                             pending_suspension = Some((spec, call.clone()));
                             continue;
@@ -849,10 +857,10 @@ impl State {
                         .unwrap_or("Execution failed"),
                 ));
             }
-            if let Some(budget) = &self.options.request.budget {
-                if let Err(error) = budget.check() {
-                    budget_error = Some(error);
-                }
+            if let Some(budget) = &self.options.request.budget
+                && let Err(error) = budget.check()
+            {
+                budget_error = Some(error);
             }
             // The seeded history may have reconciled this call with a
             // synthesized "missing result" failure (the crash-residue rule).

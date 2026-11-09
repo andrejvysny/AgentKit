@@ -118,14 +118,14 @@ impl ExecutionBudget {
                 return Err(error);
             }
         };
-        if let Some(checkpoint) = &self.checkpoint {
-            if let Err(error) = checkpoint.checkpoint(state).await {
-                let mut failure = self
-                    .failure
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                return Err(failure.get_or_insert(error).clone());
-            }
+        if let Some(checkpoint) = &self.checkpoint
+            && let Err(error) = checkpoint.checkpoint(state).await
+        {
+            let mut failure = self
+                .failure
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            return Err(failure.get_or_insert(error).clone());
         }
         self.check()
     }

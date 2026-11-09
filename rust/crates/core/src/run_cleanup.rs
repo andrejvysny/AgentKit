@@ -1,7 +1,7 @@
 use super::State;
 use crate::{CoreError, ProviderEvent, ProviderStream, ToolContext};
 use futures_util::{FutureExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 impl State {
     /// Preserve already-observed billing without waiting on an uncooperative stream.

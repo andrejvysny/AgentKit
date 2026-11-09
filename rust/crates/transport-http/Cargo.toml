@@ -9,18 +9,21 @@ description = "Authenticated AgentKit REST and resumable event-stream routes"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "../../../README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
-agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-contracts = { workspace = true }
 async-trait.workspace = true
-axum = "=0.8.8"
-async-stream = "=0.3.6"
+axum.workspace = true
+async-stream.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 percent-encoding = "=2.3.2"
 tokio.workspace = true
-url = "=2.5.8"
+url.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true
-tower = { version = "=0.5.3", features = ["util"] }
+tower = { workspace = true, features = ["util"] }

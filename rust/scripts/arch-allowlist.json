@@ -5,7 +5,6 @@
     "R1 agentkit-host -> axum",
     "R1 agentkit-host -> reqwest",
     "R1b agentkit-host -> agentkit-connections",
-    "R1b agentkit-host -> agentkit-mcp",
     "R1b agentkit-host -> agentkit-store",
     "R1b agentkit-host -> agentkit-transport-http",
     "R5 agentkit-client src/lib.rs pub use presentation::*",

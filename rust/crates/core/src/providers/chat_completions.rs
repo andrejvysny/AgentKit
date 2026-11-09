@@ -1,15 +1,14 @@
 use super::{
-    content,
+    ConnectionIdentity, TrustedTransport, content,
     transport::{self, read_json},
-    ConnectionIdentity, TrustedTransport,
 };
 use crate::{
-    sse::{SseDecoder, SseFrame},
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, ToolCall,
+    sse::{SseDecoder, SseFrame},
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
@@ -598,13 +597,8 @@ impl ChatState {
     fn tool_delta(&mut self, delta: &Value) -> Result<usize, CoreError> {
         let id = delta["id"].as_str().unwrap_or("");
         let name = delta["function"]["name"].as_str().unwrap_or("");
-        let index = agentkit_contracts::javascript_number(&delta["index"]).map(|number| {
-            if number == 0.0 {
-                0
-            } else {
-                number.to_bits()
-            }
-        });
+        let index = agentkit_contracts::javascript_number(&delta["index"])
+            .map(|number| if number == 0.0 { 0 } else { number.to_bits() });
         let same = |slot: &&usize| {
             let call = &self.calls[**slot];
             (id.is_empty() || call.id.is_empty() || call.id == id)

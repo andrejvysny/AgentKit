@@ -8,24 +8,27 @@ publish.workspace = true
 description = "Thin Node-API binding over the native AgentKit runtime"
 repository = "https://github.com/andrejvysny/AgentKit"
 
+[lints]
+workspace = true
+
 [lib]
 name = "agentkit_napi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-agentkit-store = { path = "../store", version = "0.1.0" }
-agentkit-host = { path = "../host", version = "0.1.0", features = ["http"] }
-agentkit-core = { path = "../core", version = "0.1.0" }
-agentkit-connections = { path = "../connections", version = "0.1.0" }
-agentkit-mcp = { path = "../mcp", version = "0.1.0" }
-agentkit-contracts = { path = "../contracts", version = "0.1.0" }
-agentkit-transport-http = { path = "../transport-http", version = "0.1.0" }
-agentkit-toolpacks-coding = { path = "../toolpacks-coding", version = "0.1.0" }
-agentkit-lsp = { path = "../lsp", version = "0.1.0" }
-libc = "=0.2.191"
-axum = "=0.8.8"
-http = "=1.5.0"
-tokio-util = { version = "=0.7.20", features = ["rt"] }
+agentkit-store = { workspace = true }
+agentkit-host = { workspace = true, features = ["http"] }
+agentkit-core = { workspace = true }
+agentkit-connections = { workspace = true }
+agentkit-mcp = { workspace = true }
+agentkit-contracts = { workspace = true }
+agentkit-transport-http = { workspace = true }
+agentkit-toolpacks-coding = { workspace = true }
+agentkit-lsp = { workspace = true }
+libc.workspace = true
+axum.workspace = true
+http.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 napi = { version = "=3.15.0", default-features = false, features = ["napi9", "async", "tokio_rt"] }
 napi-derive = { version = "=3.6.13", default-features = false, features = ["strict", "type-def"] }
 serde.workspace = true
@@ -35,4 +38,4 @@ tokio.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
-uuid = { version = "=1.28.0", features = ["v4"] }
+uuid.workspace = true
