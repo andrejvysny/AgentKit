@@ -81,6 +81,7 @@ name = "agentkit-core"
 version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
+ "agentkit-kernel",
  "async-stream",
  "async-trait",
  "chrono",
@@ -89,7 +90,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -103,7 +103,6 @@ version = "0.1.0"
 dependencies = [
  "agentkit-client",
  "agentkit-connections",
- "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
  "agentkit-store",
@@ -159,7 +158,6 @@ dependencies = [
 name = "agentkit-lsp"
 version = "0.1.0"
 dependencies = [
- "agentkit-contracts",
  "agentkit-core",
  "async-trait",
  "libc",
@@ -167,7 +165,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -193,7 +190,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tower",
  "tracing",
  "url",
  "uuid",
@@ -222,7 +218,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "uuid",
@@ -282,6 +277,7 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
+ "agentkit-kernel",
  "agentkit-store",
  "async-trait",
  "futures",

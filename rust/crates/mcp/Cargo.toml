@@ -30,7 +30,6 @@ sse-stream = "=0.2.6"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tokio-util.workspace = true
-tower = { workspace = true, features = ["util"] }
 tracing = "=0.1.44"
 uuid.workspace = true
 url.workspace = true

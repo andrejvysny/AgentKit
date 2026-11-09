@@ -8,18 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-use sha2::{Digest, Sha256};
+use agentkit_kernel::sha256_hex;
 
 use crate::errors::{CodingError, file_created_elsewhere_error};
 
 pub fn sha256(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sha256_hex(data)
 }
 
 fn errno(error: &io::Error) -> Option<i32> {

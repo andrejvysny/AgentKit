@@ -1,0 +1,128 @@
+pub mod agentkit_lsp
+pub enum agentkit_lsp::RpcFailure
+pub agentkit_lsp::RpcFailure::Cancelled
+pub agentkit_lsp::RpcFailure::Disconnected(alloc::string::String)
+pub agentkit_lsp::RpcFailure::Rpc
+pub agentkit_lsp::RpcFailure::Rpc::code: i64
+pub agentkit_lsp::RpcFailure::Rpc::data: core::option::Option<serde_json::value::Value>
+pub agentkit_lsp::RpcFailure::Rpc::message: alloc::string::String
+pub agentkit_lsp::RpcFailure::Timeout
+pub enum agentkit_lsp::SyncAction
+pub agentkit_lsp::SyncAction::Changed
+pub agentkit_lsp::SyncAction::Changed::text: alloc::string::String
+pub agentkit_lsp::SyncAction::Changed::uri: alloc::string::String
+pub agentkit_lsp::SyncAction::Changed::version: i64
+pub agentkit_lsp::SyncAction::Opened
+pub agentkit_lsp::SyncAction::Opened::text: alloc::string::String
+pub agentkit_lsp::SyncAction::Opened::uri: alloc::string::String
+pub agentkit_lsp::SyncAction::Opened::version: i64
+pub agentkit_lsp::SyncAction::Unchanged
+pub agentkit_lsp::SyncAction::Unchanged::uri: alloc::string::String
+pub agentkit_lsp::SyncAction::Unchanged::version: i64
+pub struct agentkit_lsp::Connection
+impl agentkit_lsp::Connection
+pub fn agentkit_lsp::Connection::attach(impl tokio::io::async_read::AsyncRead + core::marker::Unpin + core::marker::Send + 'static, impl tokio::io::async_write::AsyncWrite + core::marker::Unpin + core::marker::Send + 'static, alloc::rcs::arc::Arc<(dyn core::ops::function::Fn(alloc::string::String, core::option::Option<serde_json::value::Value>) + core::marker::Send + core::marker::Sync)>, alloc::rcs::arc::Arc<(dyn core::ops::function::Fn(alloc::string::String, core::option::Option<serde_json::value::Value>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<serde_json::value::Value, agentkit_lsp::RpcErrorObject>> + core::marker::Send + 'static)>> + core::marker::Send + core::marker::Sync)>) -> alloc::rcs::arc::Arc<Self>
+pub fn agentkit_lsp::Connection::is_broken(&self) -> core::option::Option<alloc::string::String>
+pub async fn agentkit_lsp::Connection::notify(&alloc::rcs::arc::Arc<Self>, &str, serde_json::value::Value) -> core::result::Result<(), agentkit_lsp::RpcFailure>
+pub async fn agentkit_lsp::Connection::request(&alloc::rcs::arc::Arc<Self>, &str, serde_json::value::Value, core::time::Duration, tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<serde_json::value::Value, agentkit_lsp::RpcFailure>
+pub struct agentkit_lsp::DocumentStore
+impl agentkit_lsp::DocumentStore
+pub async fn agentkit_lsp::DocumentStore::await_publish(&self, &str, core::time::Duration) -> core::option::Option<alloc::vec::Vec<serde_json::value::Value>>
+pub fn agentkit_lsp::DocumentStore::ensure(&self, &std::path::Path) -> core::result::Result<agentkit_lsp::SyncAction, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::DocumentStore::new() -> Self
+pub fn agentkit_lsp::DocumentStore::opened_uris(&self) -> alloc::vec::Vec<(alloc::string::String, std::path::PathBuf)>
+pub fn agentkit_lsp::DocumentStore::published(&self, &str) -> core::option::Option<alloc::vec::Vec<serde_json::value::Value>>
+pub fn agentkit_lsp::DocumentStore::record_publish(&self, &str, alloc::vec::Vec<serde_json::value::Value>)
+pub fn agentkit_lsp::DocumentStore::record_publish_versioned(&self, &str, core::option::Option<i64>, alloc::vec::Vec<serde_json::value::Value>)
+pub fn agentkit_lsp::DocumentStore::text(&self, &str) -> core::option::Option<alloc::rcs::arc::Arc<str>>
+pub fn agentkit_lsp::DocumentStore::version(&self, &str) -> core::option::Option<i64>
+pub struct agentkit_lsp::LanguageSpec
+pub agentkit_lsp::LanguageSpec::extensions: &'static [&'static str]
+pub agentkit_lsp::LanguageSpec::id: &'static str
+pub struct agentkit_lsp::LspConfig
+pub agentkit_lsp::LspConfig::allow_workspace_binaries: bool
+pub agentkit_lsp::LspConfig::diagnostics_wait_ms: u64
+pub agentkit_lsp::LspConfig::idle_timeout_ms: u64
+pub agentkit_lsp::LspConfig::init_timeout_ms: u64
+pub agentkit_lsp::LspConfig::max_restarts: usize
+pub agentkit_lsp::LspConfig::request_timeout_ms: u64
+pub agentkit_lsp::LspConfig::restart_window_ms: u64
+pub agentkit_lsp::LspConfig::servers: alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_lsp::ServerCommand>
+impl agentkit_lsp::LspConfig
+pub fn agentkit_lsp::LspConfig::from_json(&str) -> core::result::Result<Self, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::LspConfig::normalize(&mut self)
+impl core::default::Default for agentkit_lsp::LspConfig
+pub fn agentkit_lsp::LspConfig::default() -> Self
+pub struct agentkit_lsp::LspPool
+impl agentkit_lsp::LspPool
+pub async fn agentkit_lsp::LspPool::acquire(&alloc::rcs::arc::Arc<Self>, &std::path::Path, &str, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_lsp::ServerHandle>, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::LspPool::canonical_root(&std::path::Path) -> core::result::Result<std::path::PathBuf, agentkit_core::types::CoreError>
+pub async fn agentkit_lsp::LspPool::close(&self)
+pub fn agentkit_lsp::LspPool::config(&self) -> &agentkit_lsp::LspConfig
+pub fn agentkit_lsp::LspPool::evict_idle(&self)
+pub fn agentkit_lsp::LspPool::new(agentkit_lsp::LspConfig) -> alloc::rcs::arc::Arc<Self>
+pub fn agentkit_lsp::LspPool::slot_status(&self, &std::path::Path, &str) -> core::option::Option<(u64, u32)>
+pub struct agentkit_lsp::RpcErrorObject
+pub agentkit_lsp::RpcErrorObject::code: i64
+pub agentkit_lsp::RpcErrorObject::data: core::option::Option<serde_json::value::Value>
+pub agentkit_lsp::RpcErrorObject::message: alloc::string::String
+pub struct agentkit_lsp::ServerCommand
+pub agentkit_lsp::ServerCommand::args: alloc::vec::Vec<alloc::string::String>
+pub agentkit_lsp::ServerCommand::command: alloc::string::String
+pub agentkit_lsp::ServerCommand::env: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub struct agentkit_lsp::ServerHandle
+pub agentkit_lsp::ServerHandle::language: alloc::string::String
+pub agentkit_lsp::ServerHandle::root: std::path::PathBuf
+impl agentkit_lsp::ServerHandle
+pub async fn agentkit_lsp::ServerHandle::acquire(&alloc::rcs::arc::Arc<Self>, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_lsp::ServerProcess>, agentkit_core::types::CoreError>
+pub async fn agentkit_lsp::ServerHandle::close(&self)
+pub async fn agentkit_lsp::ServerHandle::diagnostics_all_opened(&alloc::rcs::arc::Arc<Self>, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::types::CoreError>
+pub async fn agentkit_lsp::ServerHandle::diagnostics_for_file(&alloc::rcs::arc::Arc<Self>, &std::path::Path, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::ServerHandle::document_text(&self, &str) -> core::option::Option<alloc::rcs::arc::Arc<str>>
+pub async fn agentkit_lsp::ServerHandle::guarded_request(&alloc::rcs::arc::Arc<Self>, &str, core::option::Option<&std::path::Path>, &(dyn core::ops::function::Fn(&str) -> serde_json::value::Value + core::marker::Sync), &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<serde_json::value::Value, agentkit_core::types::CoreError>
+pub async fn agentkit_lsp::ServerHandle::guarded_request_with_text(&alloc::rcs::arc::Arc<Self>, &str, core::option::Option<&std::path::Path>, &(dyn core::ops::function::Fn(&str, core::option::Option<&alloc::rcs::arc::Arc<str>>) -> core::result::Result<serde_json::value::Value, agentkit_core::types::CoreError> + core::marker::Sync + '_), &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<serde_json::value::Value, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::ServerHandle::live_generation(&self) -> core::option::Option<u64>
+pub fn agentkit_lsp::ServerHandle::live_pid(&self) -> core::option::Option<u32>
+impl agentkit_lsp::ServerHandle
+pub fn agentkit_lsp::ServerHandle::idle_for(&self) -> core::time::Duration
+pub fn agentkit_lsp::ServerHandle::is_idle(&self, core::time::Duration) -> bool
+pub fn agentkit_lsp::ServerHandle::new(std::path::PathBuf, alloc::string::String, agentkit_lsp::ServerCommand, alloc::rcs::arc::Arc<agentkit_lsp::LspConfig>) -> Self
+pub fn agentkit_lsp::ServerHandle::touch(&self)
+pub struct agentkit_lsp::ServerProcess
+pub agentkit_lsp::ServerProcess::capabilities: serde_json::value::Value
+pub agentkit_lsp::ServerProcess::generation: u64
+pub agentkit_lsp::ServerProcess::language: alloc::string::String
+pub agentkit_lsp::ServerProcess::pid: u32
+pub agentkit_lsp::ServerProcess::root: std::path::PathBuf
+impl agentkit_lsp::ServerProcess
+pub fn agentkit_lsp::ServerProcess::broken_reason(&self) -> core::option::Option<alloc::string::String>
+pub async fn agentkit_lsp::ServerProcess::diagnostics_for_uri(&self, &str) -> core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::ServerProcess::is_broken(&self) -> bool
+pub async fn agentkit_lsp::ServerProcess::notify(&self, &str, serde_json::value::Value) -> core::result::Result<(), agentkit_core::types::CoreError>
+pub async fn agentkit_lsp::ServerProcess::request(&self, &str, serde_json::value::Value, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<serde_json::value::Value, agentkit_core::types::CoreError>
+pub async fn agentkit_lsp::ServerProcess::shutdown(&self)
+pub fn agentkit_lsp::ServerProcess::store(&self) -> &alloc::rcs::arc::Arc<agentkit_lsp::DocumentStore>
+pub async fn agentkit_lsp::ServerProcess::sync_document(&self, &std::path::Path) -> core::result::Result<(alloc::string::String, i64), agentkit_core::types::CoreError>
+impl core::ops::drop::Drop for agentkit_lsp::ServerProcess
+pub fn agentkit_lsp::ServerProcess::drop(&mut self)
+pub const agentkit_lsp::CANCELLED: &str
+pub const agentkit_lsp::INVALID_FILE: &str
+pub const agentkit_lsp::INVALID_INPUT: &str
+pub const agentkit_lsp::LANGUAGES: &[agentkit_lsp::LanguageSpec]
+pub const agentkit_lsp::PROTOCOL: &str
+pub const agentkit_lsp::REQUEST_TIMEOUT: &str
+pub const agentkit_lsp::SERVER_CRASHED: &str
+pub const agentkit_lsp::SERVER_ERROR: &str
+pub const agentkit_lsp::SERVER_NOT_FOUND: &str
+pub const agentkit_lsp::SERVER_UNAVAILABLE: &str
+pub const agentkit_lsp::STALE_RESULT: &str
+pub fn agentkit_lsp::detect_language(&std::path::Path) -> core::option::Option<&'static str>
+pub fn agentkit_lsp::language_for_extension(&str) -> core::option::Option<&'static str>
+pub fn agentkit_lsp::language_for_path(&std::path::Path) -> core::option::Option<&'static str>
+pub fn agentkit_lsp::lsp_tools(alloc::rcs::arc::Arc<agentkit_lsp::LspPool>, &std::path::Path) -> alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>>
+pub fn agentkit_lsp::normalize_diagnostics(&str, &[serde_json::value::Value]) -> alloc::vec::Vec<serde_json::value::Value>
+pub fn agentkit_lsp::normalize_diagnostics_with_text(&str, &[serde_json::value::Value], core::option::Option<alloc::rcs::arc::Arc<str>>) -> alloc::vec::Vec<serde_json::value::Value>
+pub fn agentkit_lsp::path_to_uri(&std::path::Path) -> alloc::string::String
+pub fn agentkit_lsp::resolve_confined(&std::path::Path, &str) -> core::result::Result<std::path::PathBuf, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::resolve_server_command(&alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_lsp::ServerCommand>, &str, &std::path::Path, bool) -> core::result::Result<agentkit_lsp::ServerCommand, agentkit_core::types::CoreError>
+pub fn agentkit_lsp::uri_to_path(&str) -> core::result::Result<std::path::PathBuf, alloc::string::String>

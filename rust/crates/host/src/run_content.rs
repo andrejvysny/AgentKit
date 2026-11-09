@@ -1,11 +1,11 @@
 //! Selected managed content is frozen before turn admission, outside chat history.
 use crate::{ExecutionContext, HostError, HostResult};
 use agentkit_core::ChatMessage;
+use agentkit_kernel::sha256_hex;
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -206,8 +206,5 @@ pub fn validate_frozen_run_content(value: &Value) -> HostResult<FrozenRunContent
 
 fn snapshot_digest(snapshot: &FrozenRunContent) -> String {
     let value = serde_json::json!({"selection":snapshot.selection,"authorizedConnectors":snapshot.authorized_connectors,"authorityIdentity":snapshot.authority_identity,"messages":snapshot.messages});
-    format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&value).expect("content serialization"))
-    )
+    sha256_hex(serde_json::to_vec(&value).expect("content serialization"))
 }

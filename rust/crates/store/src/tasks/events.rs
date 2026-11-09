@@ -500,13 +500,7 @@ pub fn redact_event(event: &serde_json::Value) -> serde_json::Value {
                 items.iter().map(|item| walk(item, tool_payload)).collect(),
             ),
             serde_json::Value::String(text) if tool_payload && text.len() > MAX_TOOL_TEXT_BYTES => {
-                let digest = {
-                    use sha2::Digest as _;
-                    sha2::Sha256::digest(text.as_bytes())
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>()
-                };
+                let digest = agentkit_kernel::sha256_hex(text.as_bytes());
                 object!({
                     "truncated": true,
                     "sha256": digest,

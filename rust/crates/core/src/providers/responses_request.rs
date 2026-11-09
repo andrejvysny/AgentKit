@@ -1,8 +1,8 @@
 use super::{ConnectionIdentity, content};
 use crate::{ChatMessage, ChatRequest, CoreError, ReasoningSummary, ToolCall};
+use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 const MAX_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -266,7 +266,7 @@ fn message_digest(messages: &[ChatMessage]) -> Result<String, CoreError> {
         })
         .collect();
     let bytes = bounded(&Value::Array(stable))?;
-    Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))
+    Ok(sha256_hex(bytes.as_bytes()))
 }
 fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
     let mut items = vec![];

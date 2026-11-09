@@ -1,0 +1,248 @@
+pub mod agentkit_connections
+pub enum agentkit_connections::Capability
+pub agentkit_connections::Capability::Chat
+pub agentkit_connections::Capability::Embeddings
+pub agentkit_connections::Capability::ModelDiscovery
+pub agentkit_connections::Capability::Probe
+pub agentkit_connections::Capability::Responses
+pub enum agentkit_connections::ConnectionError
+pub agentkit_connections::ConnectionError::AlreadyExists
+pub agentkit_connections::ConnectionError::AuthorityPoisoned
+pub agentkit_connections::ConnectionError::ConsentDenied
+pub agentkit_connections::ConnectionError::Disabled
+pub agentkit_connections::ConnectionError::Exhausted
+pub agentkit_connections::ConnectionError::InvalidConfiguration
+pub agentkit_connections::ConnectionError::InvalidIdentifier
+pub agentkit_connections::ConnectionError::MutationPending
+pub agentkit_connections::ConnectionError::NetworkFailed
+pub agentkit_connections::ConnectionError::NetworkUnavailable
+pub agentkit_connections::ConnectionError::NotFound
+pub agentkit_connections::ConnectionError::Poisoned
+pub agentkit_connections::ConnectionError::SecretMissing
+pub agentkit_connections::ConnectionError::SecretUnavailable
+pub agentkit_connections::ConnectionError::StaleGeneration
+pub agentkit_connections::ConnectionError::UnsupportedCapability
+pub agentkit_connections::ConnectionError::UnsupportedModel
+pub struct agentkit_connections::AppConnections
+impl agentkit_connections::AppConnections
+pub fn agentkit_connections::AppConnections::app_id(&self) -> &agentkit_connections::AppId
+pub fn agentkit_connections::AppConnections::create(&self, agentkit_connections::ConnectionId, agentkit_connections::ConnectionConfig) -> core::result::Result<agentkit_connections::Connection, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::delete(&self, &agentkit_connections::ConnectionId, u64) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::export(&self) -> core::result::Result<agentkit_connections::RepositorySnapshot, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::get(&self, &agentkit_connections::ConnectionId) -> core::result::Result<agentkit_connections::Connection, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::list(&self) -> core::result::Result<alloc::vec::Vec<agentkit_connections::Connection>, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::update(&self, &agentkit_connections::ConnectionId, u64, agentkit_connections::ConnectionConfig) -> core::result::Result<agentkit_connections::Connection, agentkit_connections::ConnectionError>
+impl agentkit_connections::AppConnections
+pub fn agentkit_connections::AppConnections::reserve_create(&self, agentkit_connections::ConnectionId, agentkit_connections::ConnectionConfig) -> core::result::Result<agentkit_connections::RepositoryMutation, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::reserve_delete(&self, &agentkit_connections::ConnectionId, u64) -> core::result::Result<agentkit_connections::RepositoryMutation, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::reserve_snapshot(&self) -> core::result::Result<agentkit_connections::RepositoryMutation, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::AppConnections::reserve_update(&self, &agentkit_connections::ConnectionId, u64, agentkit_connections::ConnectionConfig) -> core::result::Result<agentkit_connections::RepositoryMutation, agentkit_connections::ConnectionError>
+pub struct agentkit_connections::AppId(_)
+impl agentkit_connections::AppId
+pub fn agentkit_connections::AppId::as_str(&self) -> &str
+pub fn agentkit_connections::AppId::new(impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, agentkit_connections::ConnectionError>
+impl core::convert::From<agentkit_connections::AppId> for alloc::string::String
+pub fn alloc::string::String::from(agentkit_connections::AppId) -> Self
+impl core::convert::TryFrom<alloc::string::String> for agentkit_connections::AppId
+pub type agentkit_connections::AppId::Error = agentkit_connections::ConnectionError
+pub fn agentkit_connections::AppId::try_from(alloc::string::String) -> core::result::Result<Self, Self::Error>
+pub struct agentkit_connections::Connection
+pub agentkit_connections::Connection::app_id: agentkit_connections::AppId
+pub agentkit_connections::Connection::config: agentkit_connections::ConnectionConfig
+pub agentkit_connections::Connection::generation: u64
+pub agentkit_connections::Connection::id: agentkit_connections::ConnectionId
+impl agentkit_connections::Connection
+pub fn agentkit_connections::Connection::provider(&self, &str) -> core::result::Result<agentkit_connections::ProviderProjection, agentkit_connections::ConnectionError>
+pub struct agentkit_connections::ConnectionConfig
+pub agentkit_connections::ConnectionConfig::account: core::option::Option<alloc::string::String>
+pub agentkit_connections::ConnectionConfig::allow_insecure_http: bool
+pub agentkit_connections::ConnectionConfig::capabilities: alloc::collections::btree::set::BTreeSet<agentkit_connections::Capability>
+pub agentkit_connections::ConnectionConfig::credential_required: bool
+pub agentkit_connections::ConnectionConfig::enabled: bool
+pub agentkit_connections::ConnectionConfig::endpoint: url::Url
+pub agentkit_connections::ConnectionConfig::extra_header_names: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub agentkit_connections::ConnectionConfig::label: alloc::string::String
+pub agentkit_connections::ConnectionConfig::models: alloc::vec::Vec<agentkit_connections::Model>
+pub agentkit_connections::ConnectionConfig::provider_kind: alloc::string::String
+pub struct agentkit_connections::ConnectionId(_)
+impl agentkit_connections::ConnectionId
+pub fn agentkit_connections::ConnectionId::as_str(&self) -> &str
+pub fn agentkit_connections::ConnectionId::new(impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, agentkit_connections::ConnectionError>
+impl core::convert::From<agentkit_connections::ConnectionId> for alloc::string::String
+pub fn alloc::string::String::from(agentkit_connections::ConnectionId) -> Self
+impl core::convert::TryFrom<alloc::string::String> for agentkit_connections::ConnectionId
+pub type agentkit_connections::ConnectionId::Error = agentkit_connections::ConnectionError
+pub fn agentkit_connections::ConnectionId::try_from(alloc::string::String) -> core::result::Result<Self, Self::Error>
+pub struct agentkit_connections::ConnectionRepository
+impl agentkit_connections::ConnectionRepository
+pub fn agentkit_connections::ConnectionRepository::export(&self) -> core::result::Result<agentkit_connections::RepositorySnapshot, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::ConnectionRepository::for_app(&self, agentkit_connections::AppId) -> agentkit_connections::AppConnections
+pub fn agentkit_connections::ConnectionRepository::restore(agentkit_connections::RepositorySnapshot) -> core::result::Result<Self, agentkit_connections::ConnectionError>
+pub struct agentkit_connections::ConsentToken
+pub struct agentkit_connections::EnvironmentSecretStore
+impl agentkit_connections::EnvironmentSecretStore
+pub fn agentkit_connections::EnvironmentSecretStore::new(alloc::collections::btree::map::BTreeMap<agentkit_connections::SecretKey, alloc::string::String>) -> Self
+impl agentkit_connections::SecretStore for agentkit_connections::EnvironmentSecretStore
+pub fn agentkit_connections::EnvironmentSecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::EnvironmentSecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::EnvironmentSecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_connections::KeychainSecretStore
+impl agentkit_connections::KeychainSecretStore
+pub fn agentkit_connections::KeychainSecretStore::new(impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, agentkit_connections::ConnectionError>
+impl agentkit_connections::SecretStore for agentkit_connections::KeychainSecretStore
+pub fn agentkit_connections::KeychainSecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::KeychainSecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::KeychainSecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_connections::MemorySecretStore
+impl agentkit_connections::SecretStore for agentkit_connections::MemorySecretStore
+pub fn agentkit_connections::MemorySecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::MemorySecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::MemorySecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_connections::Model
+pub agentkit_connections::Model::capabilities: alloc::collections::btree::set::BTreeSet<agentkit_connections::Capability>
+pub agentkit_connections::Model::context_window_tokens: core::option::Option<u64>
+pub agentkit_connections::Model::display_name: core::option::Option<alloc::string::String>
+pub agentkit_connections::Model::id: alloc::string::String
+pub struct agentkit_connections::NativeConnections
+impl agentkit_connections::NativeConnections
+pub fn agentkit_connections::NativeConnections::approve(&self, &agentkit_connections::RequestPlan) -> core::result::Result<agentkit_connections::ConsentToken, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::approve_scope(&self, &agentkit_connections::RequestPlan) -> core::result::Result<agentkit_connections::ConsentToken, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::credential_key(&self, &agentkit_connections::ConnectionId) -> core::result::Result<agentkit_connections::SecretKey, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::credential_key_at(&self, &agentkit_connections::ConnectionId, u64) -> core::result::Result<agentkit_connections::SecretKey, agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::NativeConnections::execute(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ConsentToken) -> core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::NativeConnections::execute_resolved_with<T: core::marker::Send, F>(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ConsentToken, F) -> core::result::Result<T, agentkit_connections::ConnectionError> where F: for<'a> core::ops::function::FnOnce(&'a agentkit_connections::RequestPlan, &'a agentkit_connections::ResolvedSecrets) -> agentkit_connections::DispatchFuture<'a, T>
+pub async fn agentkit_connections::NativeConnections::execute_with<T: core::marker::Send, F>(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ConsentToken, F) -> core::result::Result<T, agentkit_connections::ConnectionError> where F: for<'a> core::ops::function::FnOnce(&'a agentkit_connections::RequestPlan, core::option::Option<&'a agentkit_connections::Secret>) -> agentkit_connections::DispatchFuture<'a, T>
+pub fn agentkit_connections::NativeConnections::fence(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ConsentToken) -> core::result::Result<agentkit_connections::RequestFence, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::new(agentkit_connections::AppConnections, agentkit_connections::SharedSecretStore, alloc::rcs::arc::Arc<dyn agentkit_connections::ConnectionNetwork>) -> Self
+pub fn agentkit_connections::NativeConnections::plan(&self, &agentkit_connections::ConnectionId, agentkit_connections::PlanInput) -> core::result::Result<agentkit_connections::RequestPlan, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::plan_to(&self, &agentkit_connections::ConnectionId, agentkit_connections::PlanInput, url::Url) -> core::result::Result<agentkit_connections::RequestPlan, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::revoke(&self, &agentkit_connections::ConsentToken) -> core::result::Result<(), agentkit_connections::ConnectionError>
+impl agentkit_connections::NativeConnections
+pub async fn agentkit_connections::NativeConnections::discover_models(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ConsentToken) -> core::result::Result<alloc::vec::Vec<agentkit_connections::Model>, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::plan_discovery(&self, &agentkit_connections::ConnectionId) -> core::result::Result<agentkit_connections::RequestPlan, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::plan_probe(&self, &agentkit_connections::ConnectionId) -> core::result::Result<agentkit_connections::RequestPlan, agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::NativeConnections::probe(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ConsentToken) -> core::result::Result<agentkit_connections::ProbeResult, agentkit_connections::ConnectionError>
+impl agentkit_connections::NativeConnections
+pub fn agentkit_connections::NativeConnections::header_key(&self, &agentkit_connections::ConnectionId) -> core::result::Result<agentkit_connections::SecretKey, agentkit_connections::ConnectionError>
+pub fn agentkit_connections::NativeConnections::header_key_at(&self, &agentkit_connections::ConnectionId, u64) -> core::result::Result<agentkit_connections::SecretKey, agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::NativeConnections::provision_headers(&self, &agentkit_connections::ConnectionId, alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_connections::Secret>) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::NativeConnections::provision_headers_at(&self, &agentkit_connections::ConnectionId, u64, alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_connections::Secret>) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub struct agentkit_connections::NetworkResponse
+pub agentkit_connections::NetworkResponse::body: alloc::vec::Vec<u8>
+pub agentkit_connections::NetworkResponse::status: u16
+pub struct agentkit_connections::PlanInput
+pub agentkit_connections::PlanInput::capability: agentkit_connections::Capability
+pub agentkit_connections::PlanInput::disclosed_data: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub agentkit_connections::PlanInput::model: core::option::Option<alloc::string::String>
+pub agentkit_connections::PlanInput::payload: alloc::vec::Vec<u8>
+pub struct agentkit_connections::ProbeResult
+pub agentkit_connections::ProbeResult::http_status: u16
+pub agentkit_connections::ProbeResult::reachable: bool
+pub struct agentkit_connections::ProviderProjection
+pub agentkit_connections::ProviderProjection::account: core::option::Option<alloc::string::String>
+pub agentkit_connections::ProviderProjection::app_id: agentkit_connections::AppId
+pub agentkit_connections::ProviderProjection::base_url: alloc::string::String
+pub agentkit_connections::ProviderProjection::capabilities: alloc::collections::btree::set::BTreeSet<agentkit_connections::Capability>
+pub agentkit_connections::ProviderProjection::connection_id: agentkit_connections::ConnectionId
+pub agentkit_connections::ProviderProjection::default_model: alloc::string::String
+pub agentkit_connections::ProviderProjection::enabled: bool
+pub agentkit_connections::ProviderProjection::generation: u64
+pub agentkit_connections::ProviderProjection::id: alloc::string::String
+pub agentkit_connections::ProviderProjection::kind: alloc::string::String
+pub agentkit_connections::ProviderProjection::label: alloc::string::String
+pub struct agentkit_connections::RepositoryMutation
+impl agentkit_connections::RepositoryMutation
+pub fn agentkit_connections::RepositoryMutation::abort(self) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::RepositoryMutation::baseline(&self) -> &agentkit_connections::RepositorySnapshot
+pub fn agentkit_connections::RepositoryMutation::connection(&self) -> core::option::Option<&agentkit_connections::Connection>
+pub fn agentkit_connections::RepositoryMutation::credential_key(&self) -> core::option::Option<agentkit_connections::SecretKey>
+pub fn agentkit_connections::RepositoryMutation::finish(self) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::RepositoryMutation::header_key(&self) -> core::option::Option<agentkit_connections::SecretKey>
+pub fn agentkit_connections::RepositoryMutation::publish(&mut self) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::RepositoryMutation::snapshot(&self) -> &agentkit_connections::RepositorySnapshot
+impl core::ops::drop::Drop for agentkit_connections::RepositoryMutation
+pub fn agentkit_connections::RepositoryMutation::drop(&mut self)
+pub struct agentkit_connections::RepositorySnapshot
+pub agentkit_connections::RepositorySnapshot::connections: alloc::vec::Vec<agentkit_connections::Connection>
+pub agentkit_connections::RepositorySnapshot::last_generation: u64
+pub agentkit_connections::RepositorySnapshot::version: u32
+pub struct agentkit_connections::RequestFence
+impl agentkit_connections::RequestFence
+pub fn agentkit_connections::RequestFence::check(&self) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub struct agentkit_connections::RequestPlan
+impl agentkit_connections::RequestPlan
+pub fn agentkit_connections::RequestPlan::capability(&self) -> &agentkit_connections::Capability
+pub fn agentkit_connections::RequestPlan::connection(&self) -> &agentkit_connections::Connection
+pub fn agentkit_connections::RequestPlan::destination(&self) -> &url::Url
+pub fn agentkit_connections::RequestPlan::disclosed_data(&self) -> &alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub fn agentkit_connections::RequestPlan::model(&self) -> core::option::Option<&str>
+pub fn agentkit_connections::RequestPlan::payload(&self) -> &[u8]
+pub struct agentkit_connections::ReqwestConnectionNetwork
+impl agentkit_connections::ReqwestConnectionNetwork
+pub fn agentkit_connections::ReqwestConnectionNetwork::new(core::time::Duration, usize) -> core::result::Result<Self, agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::ReqwestConnectionNetwork::send_streaming(&self, &agentkit_connections::RequestPlan, core::option::Option<&agentkit_connections::Secret>) -> core::result::Result<reqwest::async_impl::response::Response, agentkit_connections::ConnectionError>
+pub async fn agentkit_connections::ReqwestConnectionNetwork::send_streaming_resolved(&self, &agentkit_connections::RequestPlan, &agentkit_connections::ResolvedSecrets) -> core::result::Result<reqwest::async_impl::response::Response, agentkit_connections::ConnectionError>
+impl agentkit_connections::ConnectionNetwork for agentkit_connections::ReqwestConnectionNetwork
+pub fn agentkit_connections::ReqwestConnectionNetwork::check_available(&self, &agentkit_connections::RequestPlan) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::ReqwestConnectionNetwork::send<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, core::option::Option<&'life2 agentkit_connections::Secret>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::ReqwestConnectionNetwork::send_resolved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, &'life2 agentkit_connections::ResolvedSecrets) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::ReqwestConnectionNetwork::supports_extra_headers(&self) -> bool
+pub struct agentkit_connections::ResolvedSecrets
+pub agentkit_connections::ResolvedSecrets::api_key: core::option::Option<agentkit_connections::Secret>
+pub agentkit_connections::ResolvedSecrets::headers: alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_connections::Secret>
+pub struct agentkit_connections::Secret(_)
+impl agentkit_connections::Secret
+pub fn agentkit_connections::Secret::expose(&self) -> &str
+pub fn agentkit_connections::Secret::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_connections::SecretKey
+impl agentkit_connections::SecretKey
+pub fn agentkit_connections::SecretKey::reference(&self) -> alloc::string::String
+pub struct agentkit_connections::UnavailableNetwork
+impl agentkit_connections::ConnectionNetwork for agentkit_connections::UnavailableNetwork
+pub fn agentkit_connections::UnavailableNetwork::check_available(&self, &agentkit_connections::RequestPlan) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::UnavailableNetwork::send<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, core::option::Option<&'life2 agentkit_connections::Secret>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::UnavailableNetwork::send_resolved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, &'life2 agentkit_connections::ResolvedSecrets) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::UnavailableNetwork::supports_extra_headers(&self) -> bool
+pub struct agentkit_connections::UnavailableSecretStore
+impl agentkit_connections::SecretStore for agentkit_connections::UnavailableSecretStore
+pub fn agentkit_connections::UnavailableSecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::UnavailableSecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::UnavailableSecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_connections::ConnectionNetwork: core::marker::Send + core::marker::Sync
+pub fn agentkit_connections::ConnectionNetwork::check_available(&self, &agentkit_connections::RequestPlan) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::ConnectionNetwork::send<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, core::option::Option<&'life2 agentkit_connections::Secret>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::ConnectionNetwork::send_resolved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, &'life2 agentkit_connections::ResolvedSecrets) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::ConnectionNetwork::supports_extra_headers(&self) -> bool
+impl agentkit_connections::ConnectionNetwork for agentkit_connections::ReqwestConnectionNetwork
+pub fn agentkit_connections::ReqwestConnectionNetwork::check_available(&self, &agentkit_connections::RequestPlan) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::ReqwestConnectionNetwork::send<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, core::option::Option<&'life2 agentkit_connections::Secret>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::ReqwestConnectionNetwork::send_resolved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, &'life2 agentkit_connections::ResolvedSecrets) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::ReqwestConnectionNetwork::supports_extra_headers(&self) -> bool
+impl agentkit_connections::ConnectionNetwork for agentkit_connections::UnavailableNetwork
+pub fn agentkit_connections::UnavailableNetwork::check_available(&self, &agentkit_connections::RequestPlan) -> core::result::Result<(), agentkit_connections::ConnectionError>
+pub fn agentkit_connections::UnavailableNetwork::send<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, core::option::Option<&'life2 agentkit_connections::Secret>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::UnavailableNetwork::send_resolved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::RequestPlan, &'life2 agentkit_connections::ResolvedSecrets) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::NetworkResponse, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_connections::UnavailableNetwork::supports_extra_headers(&self) -> bool
+pub trait agentkit_connections::SecretStore: core::marker::Send + core::marker::Sync
+pub fn agentkit_connections::SecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::SecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::SecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_connections::SecretStore for agentkit_connections::EnvironmentSecretStore
+pub fn agentkit_connections::EnvironmentSecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::EnvironmentSecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::EnvironmentSecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_connections::SecretStore for agentkit_connections::KeychainSecretStore
+pub fn agentkit_connections::KeychainSecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::KeychainSecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::KeychainSecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_connections::SecretStore for agentkit_connections::MemorySecretStore
+pub fn agentkit_connections::MemorySecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::MemorySecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::MemorySecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_connections::SecretStore for agentkit_connections::UnavailableSecretStore
+pub fn agentkit_connections::UnavailableSecretStore::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::UnavailableSecretStore::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::UnavailableSecretStore::put<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_connections::SecretKey, agentkit_connections::Secret) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_connections::ConnectionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_connections::encode_header_secret(&alloc::collections::btree::set::BTreeSet<alloc::string::String>, &alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_connections::Secret>) -> core::result::Result<agentkit_connections::Secret, agentkit_connections::ConnectionError>
+pub type agentkit_connections::DispatchFuture<'a, T> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<T, agentkit_connections::ConnectionError>> + core::marker::Send + 'a)>>
+pub type agentkit_connections::SharedSecretStore = alloc::rcs::arc::Arc<dyn agentkit_connections::SecretStore>

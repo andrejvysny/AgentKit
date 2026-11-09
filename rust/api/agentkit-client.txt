@@ -1,0 +1,96 @@
+pub mod agentkit_client
+pub use agentkit_client::RestOperation
+pub enum agentkit_client::ClientError
+pub agentkit_client::ClientError::Http
+pub agentkit_client::ClientError::Http::code: alloc::string::String
+pub agentkit_client::ClientError::Http::detail: alloc::string::String
+pub agentkit_client::ClientError::Http::problem: serde_json::value::Value
+pub agentkit_client::ClientError::Http::status: u16
+pub agentkit_client::ClientError::InvalidRequest(alloc::string::String)
+pub agentkit_client::ClientError::Json(serde_json::error::Error)
+pub agentkit_client::ClientError::Protocol(alloc::string::String)
+pub agentkit_client::ClientError::Transport(reqwest::error::Error)
+pub agentkit_client::ClientError::UncertainDelivery
+pub agentkit_client::ClientError::UncertainDelivery::cause: alloc::string::String
+pub agentkit_client::ClientError::UncertainDelivery::key: alloc::string::String
+pub enum agentkit_client::RunPhase
+pub agentkit_client::RunPhase::Cancelled
+pub agentkit_client::RunPhase::Completed
+pub agentkit_client::RunPhase::Failed
+pub agentkit_client::RunPhase::Incomplete
+pub agentkit_client::RunPhase::Interrupted
+pub agentkit_client::RunPhase::Queued
+pub agentkit_client::RunPhase::Running
+pub agentkit_client::RunPhase::Settling
+pub agentkit_client::RunPhase::Streaming
+pub agentkit_client::RunPhase::WaitingApproval
+pub struct agentkit_client::Call
+pub agentkit_client::Call::body: core::option::Option<serde_json::value::Value>
+pub agentkit_client::Call::headers: http::header::map::HeaderMap
+pub agentkit_client::Call::idempotency_key: core::option::Option<alloc::string::String>
+pub agentkit_client::Call::path: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub agentkit_client::Call::query: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub struct agentkit_client::ChatLoad
+pub struct agentkit_client::ChatState
+impl agentkit_client::ChatState
+pub fn agentkit_client::ChatState::messages(&self) -> &[agentkit_contracts::generated::message_dto::MessageDto]
+pub fn agentkit_client::ChatState::observe(&mut self, &agentkit_client::ChatLoad, &serde_json::value::Value) -> core::result::Result<bool, agentkit_client::ClientError>
+pub fn agentkit_client::ChatState::proposals(&self) -> &[agentkit_contracts::generated::proposal_dto::ProposalDto]
+pub fn agentkit_client::ChatState::replace(&mut self, &agentkit_client::ChatLoad, alloc::vec::Vec<agentkit_contracts::generated::message_dto::MessageDto>, alloc::vec::Vec<agentkit_contracts::generated::proposal_dto::ProposalDto>) -> core::result::Result<bool, agentkit_client::ClientError>
+pub fn agentkit_client::ChatState::runs(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_client::RunState>
+pub fn agentkit_client::ChatState::select(&mut self, &str) -> agentkit_client::ChatLoad
+pub fn agentkit_client::ChatState::settle(&mut self, &agentkit_client::ChatLoad, &str, &str) -> bool
+pub struct agentkit_client::Client
+pub agentkit_client::Client::call_timeout: core::time::Duration
+pub agentkit_client::Client::max_idempotent_retries: usize
+pub agentkit_client::Client::max_response_bytes: usize
+pub agentkit_client::Client::retry_delay: core::time::Duration
+pub agentkit_client::Client::stream_idle_timeout: core::time::Duration
+impl agentkit_client::Client
+pub async fn agentkit_client::Client::call(&self, agentkit_contracts::routes::RestOperation, agentkit_client::Call) -> core::result::Result<serde_json::value::Value, agentkit_client::ClientError>
+pub async fn agentkit_client::Client::call_typed<T: agentkit_contracts::json_deserialize::JsonDeserialize>(&self, agentkit_contracts::routes::RestOperation, agentkit_client::Call) -> core::result::Result<T, agentkit_client::ClientError>
+pub fn agentkit_client::Client::new(&str) -> core::result::Result<Self, agentkit_client::ClientError>
+pub async fn agentkit_client::Client::submit_message(&self, &str, serde_json::value::Value, &str) -> core::result::Result<serde_json::value::Value, agentkit_client::ClientError>
+pub fn agentkit_client::Client::with_headers(self, http::header::map::HeaderMap) -> Self
+pub fn agentkit_client::Client::with_http_client(self, reqwest::async_impl::client::Client) -> Self
+impl agentkit_client::Client
+pub fn agentkit_client::Client::stream_run(&self, &str, agentkit_client::StreamOptions) -> futures_core::stream::BoxStream<'static, core::result::Result<serde_json::value::Value, agentkit_client::ClientError>>
+pub struct agentkit_client::ConnectionChoice
+pub agentkit_client::ConnectionChoice::connection_id: alloc::string::String
+pub agentkit_client::ConnectionChoice::generation: u64
+pub agentkit_client::ConnectionChoice::model: alloc::string::String
+pub struct agentkit_client::ConnectionState
+impl agentkit_client::ConnectionState
+pub fn agentkit_client::ConnectionState::choices(&self) -> &[agentkit_client::ConnectionChoice]
+pub fn agentkit_client::ConnectionState::refresh(&mut self, alloc::vec::Vec<agentkit_client::ConnectionChoice>)
+pub fn agentkit_client::ConnectionState::select(&mut self, &agentkit_client::ConnectionChoice) -> core::result::Result<(), agentkit_client::ClientError>
+pub fn agentkit_client::ConnectionState::selected(&self) -> core::option::Option<&agentkit_client::ConnectionChoice>
+pub struct agentkit_client::RunState
+pub agentkit_client::RunState::last_event_id: core::option::Option<alloc::string::String>
+pub agentkit_client::RunState::last_seq: core::option::Option<f64>
+pub agentkit_client::RunState::started_new_pass: bool
+pub agentkit_client::RunState::status: core::option::Option<alloc::string::String>
+pub agentkit_client::RunState::text: alloc::string::String
+impl agentkit_client::RunState
+pub fn agentkit_client::RunState::observe(&mut self, &serde_json::value::Value) -> core::result::Result<bool, agentkit_client::ClientError>
+pub fn agentkit_client::RunState::outcome(&self) -> core::option::Option<agentkit_client::RunPhase>
+pub fn agentkit_client::RunState::phase(&self) -> agentkit_client::RunPhase
+pub struct agentkit_client::SseDecoder
+impl agentkit_client::SseDecoder
+pub fn agentkit_client::SseDecoder::feed(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<agentkit_client::SseFrame>, agentkit_client::ClientError>
+pub fn agentkit_client::SseDecoder::finish(&mut self)
+pub fn agentkit_client::SseDecoder::has_partial_frame(&self) -> bool
+pub fn agentkit_client::SseDecoder::new(usize) -> Self
+pub struct agentkit_client::SseFrame
+pub agentkit_client::SseFrame::data: core::option::Option<alloc::string::String>
+pub agentkit_client::SseFrame::event: core::option::Option<alloc::string::String>
+pub agentkit_client::SseFrame::id: core::option::Option<alloc::string::String>
+pub agentkit_client::SseFrame::retry: core::option::Option<u64>
+pub struct agentkit_client::StreamOptions
+pub agentkit_client::StreamOptions::last_event_id: core::option::Option<alloc::string::String>
+pub agentkit_client::StreamOptions::max_frame_bytes: usize
+pub agentkit_client::StreamOptions::max_retries: usize
+pub agentkit_client::StreamOptions::max_total_reconnects: usize
+pub agentkit_client::StreamOptions::retry_delay: core::time::Duration
+impl core::default::Default for agentkit_client::StreamOptions
+pub fn agentkit_client::StreamOptions::default() -> Self

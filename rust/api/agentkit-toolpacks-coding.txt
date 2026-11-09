@@ -1,0 +1,1120 @@
+pub mod agentkit_toolpacks_coding
+pub use agentkit_toolpacks_coding::CodingMode
+pub use agentkit_toolpacks_coding::CodingPermissionAuthority
+pub use agentkit_toolpacks_coding::CodingRole
+pub use agentkit_toolpacks_coding::PLAN_MODE_BLOCKED_HINT
+pub use agentkit_toolpacks_coding::PermissionContext
+pub use agentkit_toolpacks_coding::SessionExecutionAuthority
+pub mod agentkit_toolpacks_coding::args
+pub fn agentkit_toolpacks_coding::args::as_record(&serde_json::value::Value) -> core::result::Result<&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::args::opt_bool(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<bool>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::args::opt_int(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str, i64, i64) -> core::result::Result<core::option::Option<i64>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::args::opt_string(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str, usize) -> core::result::Result<core::option::Option<alloc::string::String>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::args::req_string(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str, usize) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub mod agentkit_toolpacks_coding::command_fingerprint
+pub enum agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+pub agentkit_toolpacks_coding::command_fingerprint::FingerprintError::Io(core::io::error::Error)
+pub agentkit_toolpacks_coding::command_fingerprint::FingerprintError::Message(alloc::string::String)
+impl core::error::Error for agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+impl core::fmt::Debug for agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+pub fn agentkit_toolpacks_coding::command_fingerprint::FingerprintError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+pub fn agentkit_toolpacks_coding::command_fingerprint::FingerprintError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn agentkit_toolpacks_coding::command_fingerprint::command_fingerprint(&str, &str, &str, &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<core::option::Option<alloc::string::String>, agentkit_toolpacks_coding::command_fingerprint::FingerprintError>
+pub fn agentkit_toolpacks_coding::command_fingerprint::direct_script_files(&str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, agentkit_toolpacks_coding::command_fingerprint::FingerprintError>
+pub fn agentkit_toolpacks_coding::command_fingerprint::leading_executable(&[alloc::string::String]) -> core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_coding::command_fingerprint::script_executable(&str) -> core::option::Option<alloc::string::String>
+pub mod agentkit_toolpacks_coding::command_policy
+pub enum agentkit_toolpacks_coding::command_policy::CommandClass
+pub agentkit_toolpacks_coding::command_policy::CommandClass::Eligible
+pub agentkit_toolpacks_coding::command_policy::CommandClass::HighRisk
+pub agentkit_toolpacks_coding::command_policy::CommandClass::Unknown
+impl agentkit_toolpacks_coding::command_policy::CommandClass
+pub fn agentkit_toolpacks_coding::command_policy::CommandClass::as_str(&self) -> &'static str
+pub struct agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R: agentkit_toolpacks_coding::command_policy::WorkspaceResolver>
+pub agentkit_toolpacks_coding::command_policy::CodingStandingApproval::resolver: R
+impl<R: agentkit_toolpacks_coding::command_policy::WorkspaceResolver> agentkit_host::governance::durable_execution::StandingApprovalPolicy for agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R>
+pub fn agentkit_toolpacks_coding::command_policy::CodingStandingApproval<R>::key_for<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext, &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<core::option::Option<(alloc::string::String, alloc::string::String)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
+impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
+pub fn agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_coding::command_policy::ShellArgs
+pub agentkit_toolpacks_coding::command_policy::ShellArgs::command: alloc::string::String
+pub agentkit_toolpacks_coding::command_policy::ShellArgs::cwd: core::option::Option<alloc::string::String>
+pub struct agentkit_toolpacks_coding::command_policy::StandingApprovalKey
+pub agentkit_toolpacks_coding::command_policy::StandingApprovalKey::digest: alloc::string::String
+pub agentkit_toolpacks_coding::command_policy::StandingApprovalKey::label: alloc::string::String
+pub struct agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace
+pub agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace::context: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace::environment: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace::identity: alloc::string::String
+pub agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace::root: alloc::string::String
+pub trait agentkit_toolpacks_coding::command_policy::WorkspaceResolver: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_coding::command_policy::WorkspaceResolver::resolve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::command_policy::classify_shell_command(&str) -> agentkit_toolpacks_coding::command_policy::CommandClass
+pub async fn agentkit_toolpacks_coding::command_policy::coding_standing_approval_key(&str, core::option::Option<&str>, &str, &agentkit_toolpacks_coding::command_policy::ShellArgs, &agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace) -> core::option::Option<agentkit_toolpacks_coding::command_policy::StandingApprovalKey>
+pub fn agentkit_toolpacks_coding::command_policy::high_risk_refusal(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::command_policy::is_shell_tool(&str) -> bool
+pub fn agentkit_toolpacks_coding::command_policy::shell_args_of(&serde_json::value::Value) -> core::option::Option<agentkit_toolpacks_coding::command_policy::ShellArgs>
+pub mod agentkit_toolpacks_coding::context
+pub enum agentkit_toolpacks_coding::context::ToolEffect
+pub agentkit_toolpacks_coding::context::ToolEffect::Read
+pub agentkit_toolpacks_coding::context::ToolEffect::Write
+impl agentkit_toolpacks_coding::context::ToolEffect
+pub fn agentkit_toolpacks_coding::context::ToolEffect::as_str(&self) -> &'static str
+pub struct agentkit_toolpacks_coding::context::EnvInit
+pub agentkit_toolpacks_coding::context::EnvInit::allow_git_writes: bool
+pub agentkit_toolpacks_coding::context::EnvInit::allow_sensitive: bool
+pub agentkit_toolpacks_coding::context::EnvInit::clock: agentkit_toolpacks_coding::types::Clock
+pub agentkit_toolpacks_coding::context::EnvInit::coordination_wait_ms: u64
+pub agentkit_toolpacks_coding::context::EnvInit::coordinator: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub agentkit_toolpacks_coding::context::EnvInit::environment: core::option::Option<alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>>
+pub agentkit_toolpacks_coding::context::EnvInit::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::context::EnvInit::network: bool
+pub agentkit_toolpacks_coding::context::EnvInit::platform: alloc::string::String
+pub agentkit_toolpacks_coding::context::EnvInit::sandbox: agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::context::EnvInit::sandbox_exec_path: alloc::string::String
+pub agentkit_toolpacks_coding::context::EnvInit::test_commands: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::context::EnvInit::workspace_root: alloc::string::String
+pub struct agentkit_toolpacks_coding::context::Outcome
+pub agentkit_toolpacks_coding::context::Outcome::details: core::option::Option<serde_json::value::Value>
+pub agentkit_toolpacks_coding::context::Outcome::ok: bool
+pub agentkit_toolpacks_coding::context::Outcome::summary: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::context::Outcome::text: alloc::string::String
+pub agentkit_toolpacks_coding::context::Outcome::truncated: bool
+pub agentkit_toolpacks_coding::context::Outcome::warnings: alloc::vec::Vec<alloc::string::String>
+impl agentkit_toolpacks_coding::context::Outcome
+pub fn agentkit_toolpacks_coding::context::Outcome::ok(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_toolpacks_coding::context::PackEnv
+pub agentkit_toolpacks_coding::context::PackEnv::allow_git_writes: bool
+pub agentkit_toolpacks_coding::context::PackEnv::allow_sensitive: bool
+pub agentkit_toolpacks_coding::context::PackEnv::clock: agentkit_toolpacks_coding::types::Clock
+pub agentkit_toolpacks_coding::context::PackEnv::coordination_wait_ms: u64
+pub agentkit_toolpacks_coding::context::PackEnv::coordinator: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub agentkit_toolpacks_coding::context::PackEnv::environment: core::option::Option<alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>>
+pub agentkit_toolpacks_coding::context::PackEnv::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::context::PackEnv::network: bool
+pub agentkit_toolpacks_coding::context::PackEnv::platform: alloc::string::String
+pub agentkit_toolpacks_coding::context::PackEnv::sandbox: agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::context::PackEnv::sandbox_exec_path: alloc::string::String
+pub agentkit_toolpacks_coding::context::PackEnv::test_commands: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::context::PackEnv::workspace_root: alloc::string::String
+impl agentkit_toolpacks_coding::context::PackEnv
+pub async fn agentkit_toolpacks_coding::context::PackEnv::dispose(&self)
+pub fn agentkit_toolpacks_coding::context::PackEnv::new(agentkit_toolpacks_coding::context::EnvInit) -> Self
+pub async fn agentkit_toolpacks_coding::context::PackEnv::root(&self) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::context::PackEnv::scratch(&self) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub struct agentkit_toolpacks_coding::context::ToolSpec
+pub agentkit_toolpacks_coding::context::ToolSpec::capability: &'static str
+pub agentkit_toolpacks_coding::context::ToolSpec::description: alloc::string::String
+pub agentkit_toolpacks_coding::context::ToolSpec::effect: agentkit_toolpacks_coding::context::ToolEffect
+pub agentkit_toolpacks_coding::context::ToolSpec::input_schema: serde_json::value::Value
+pub agentkit_toolpacks_coding::context::ToolSpec::name: &'static str
+pub agentkit_toolpacks_coding::context::ToolSpec::timeout_ms: u64
+pub fn agentkit_toolpacks_coding::context::define_tool<F, Fut>(agentkit_toolpacks_coding::context::ToolSpec, F) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool> where F: core::ops::function::Fn(agentkit_core::types::ToolContext, serde_json::value::Value) -> Fut + core::marker::Send + core::marker::Sync + 'static, Fut: core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::context::Outcome, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'static
+pub fn agentkit_toolpacks_coding::context::define_tool_with_effect_context<F, Fut>(agentkit_toolpacks_coding::context::ToolSpec, serde_json::value::Value, F) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool> where F: core::ops::function::Fn(agentkit_core::types::ToolContext, serde_json::value::Value) -> Fut + core::marker::Send + core::marker::Sync + 'static, Fut: core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::context::Outcome, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'static
+pub fn agentkit_toolpacks_coding::context::failure(&agentkit_toolpacks_coding::errors::CodingError) -> agentkit_toolpacks_coding::context::Outcome
+pub fn agentkit_toolpacks_coding::context::to_coding_error(impl core::convert::Into<alloc::string::String>, bool) -> agentkit_toolpacks_coding::errors::CodingError
+pub mod agentkit_toolpacks_coding::coordination
+pub enum agentkit_toolpacks_coding::coordination::WaitKind
+pub agentkit_toolpacks_coding::coordination::WaitKind::File
+pub agentkit_toolpacks_coding::coordination::WaitKind::Workspace
+pub struct agentkit_toolpacks_coding::coordination::AcquireFileInput
+pub agentkit_toolpacks_coding::coordination::AcquireFileInput::cancellation: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_toolpacks_coding::coordination::AcquireFileInput::execution_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::coordination::AcquireFileInput::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::coordination::AcquireFileInput::max_wait_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::coordination::AcquireFileInput::path: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::AcquireFileInput::root: alloc::string::String
+pub struct agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput
+pub agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput::cancellation: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput::execution_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput::max_wait_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput::root: alloc::string::String
+pub struct agentkit_toolpacks_coding::coordination::CommandCleanupIdentity
+pub agentkit_toolpacks_coding::coordination::CommandCleanupIdentity::execution_id: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::CommandCleanupIdentity::owner_pid: i64
+pub agentkit_toolpacks_coding::coordination::CommandCleanupIdentity::pgid: core::option::Option<i32>
+pub agentkit_toolpacks_coding::coordination::CommandCleanupIdentity::spawned_at_ms: u64
+pub struct agentkit_toolpacks_coding::coordination::CoordinationWait
+pub agentkit_toolpacks_coding::coordination::CoordinationWait::holders: alloc::vec::Vec<agentkit_toolpacks_coding::coordination::LeaseHolder>
+pub agentkit_toolpacks_coding::coordination::CoordinationWait::kind: agentkit_toolpacks_coding::coordination::WaitKind
+pub agentkit_toolpacks_coding::coordination::CoordinationWait::path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::coordination::CoordinationWait::root: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::CoordinationWait::waiter: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub struct agentkit_toolpacks_coding::coordination::ExecutionIntent
+pub agentkit_toolpacks_coding::coordination::ExecutionIntent::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::coordination::ExecutionIntent::identity: agentkit_toolpacks_coding::coordination::CommandCleanupIdentity
+pub agentkit_toolpacks_coding::coordination::ExecutionIntent::root: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::ExecutionIntent::spawned: bool
+pub struct agentkit_toolpacks_coding::coordination::InProcessCoordinator
+impl agentkit_toolpacks_coding::coordination::InProcessCoordinator
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::new(core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>) -> Self
+impl agentkit_toolpacks_coding::coordination::WorkspaceCoordinator for agentkit_toolpacks_coding::coordination::InProcessCoordinator
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_file<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireFileInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_workspace<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_execution_intent<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_execution<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence, &'life3 agentkit_toolpacks_coding::coordination::CommandCleanupIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_workspace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::reconcile_execution_intents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::record_execution_intent<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_coding::coordination::ExecutionIntent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_toolpacks_coding::coordination::WorkspaceQuarantine>, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::coordination::LeaseHolder::chat_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::coordination::LeaseHolder::label: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::LeaseHolder::run_id: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::LeaseHolder::tool: alloc::string::String
+pub agentkit_toolpacks_coding::coordination::LeaseHolder::tool_call_id: core::option::Option<alloc::string::String>
+pub struct agentkit_toolpacks_coding::coordination::QuarantineEvidence
+pub agentkit_toolpacks_coding::coordination::QuarantineEvidence::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::coordination::QuarantineEvidence::pids: alloc::vec::Vec<i32>
+pub agentkit_toolpacks_coding::coordination::QuarantineEvidence::reason: core::option::Option<alloc::string::String>
+pub struct agentkit_toolpacks_coding::coordination::WorkspaceLease
+impl agentkit_toolpacks_coding::coordination::WorkspaceLease
+pub async fn agentkit_toolpacks_coding::coordination::WorkspaceLease::release(&mut self)
+impl core::fmt::Debug for agentkit_toolpacks_coding::coordination::WorkspaceLease
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceLease::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for agentkit_toolpacks_coding::coordination::WorkspaceLease
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceLease::drop(&mut self)
+pub struct agentkit_toolpacks_coding::coordination::WorkspaceQuarantine
+pub agentkit_toolpacks_coding::coordination::WorkspaceQuarantine::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::coordination::WorkspaceQuarantine::identity: core::option::Option<agentkit_toolpacks_coding::coordination::CommandCleanupIdentity>
+pub agentkit_toolpacks_coding::coordination::WorkspaceQuarantine::pids: alloc::vec::Vec<i32>
+pub agentkit_toolpacks_coding::coordination::WorkspaceQuarantine::quarantined_at_ms: u64
+pub agentkit_toolpacks_coding::coordination::WorkspaceQuarantine::reason: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::coordination::WorkspaceQuarantine::root: alloc::string::String
+pub trait agentkit_toolpacks_coding::coordination::CoordinatorObserver: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_coding::coordination::CoordinatorObserver::on_acquired(&self, &agentkit_toolpacks_coding::coordination::CoordinationWait)
+pub fn agentkit_toolpacks_coding::coordination::CoordinatorObserver::on_waiting(&self, &agentkit_toolpacks_coding::coordination::CoordinationWait)
+pub trait agentkit_toolpacks_coding::coordination::WorkspaceCoordinator: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::acquire_file<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireFileInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::acquire_workspace<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::clear_execution_intent<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::clear_workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::quarantine_execution<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence, &'life3 agentkit_toolpacks_coding::coordination::CommandCleanupIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::quarantine_workspace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::reconcile_execution_intents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::record_execution_intent<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_coding::coordination::ExecutionIntent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator::workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_toolpacks_coding::coordination::WorkspaceQuarantine>, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_toolpacks_coding::coordination::WorkspaceCoordinator for agentkit_toolpacks_coding::coordination::InProcessCoordinator
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_file<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireFileInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_workspace<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_execution_intent<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_execution<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence, &'life3 agentkit_toolpacks_coding::coordination::CommandCleanupIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_workspace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::reconcile_execution_intents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::record_execution_intent<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_coding::coordination::ExecutionIntent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_toolpacks_coding::coordination::WorkspaceQuarantine>, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub async fn agentkit_toolpacks_coding::coordination::canonical_file_key(&str) -> alloc::string::String
+pub async fn agentkit_toolpacks_coding::coordination::canonical_root_key(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::coordination::create_in_process_workspace_coordinator(core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>) -> alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub fn agentkit_toolpacks_coding::coordination::default_in_process_coordinator() -> alloc::rcs::arc::Arc<agentkit_toolpacks_coding::coordination::InProcessCoordinator>
+pub fn agentkit_toolpacks_coding::coordination::default_workspace_coordinator() -> alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub type agentkit_toolpacks_coding::coordination::ReleaseFuture = futures_core::future::BoxFuture<'static, ()>
+pub mod agentkit_toolpacks_coding::coordination_lockdir
+pub struct agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions
+pub agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions::dir: alloc::string::String
+pub agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions::observer: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>
+pub agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions::on_error: core::option::Option<agentkit_toolpacks_coding::coordination_lockdir::OnError>
+pub agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions::poll_ms: core::option::Option<u64>
+pub fn agentkit_toolpacks_coding::coordination_lockdir::create_lockdir_workspace_coordinator(agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions) -> alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub type agentkit_toolpacks_coding::coordination_lockdir::OnError = alloc::rcs::arc::Arc<(dyn core::ops::function::Fn(alloc::string::String) + core::marker::Send + core::marker::Sync)>
+pub mod agentkit_toolpacks_coding::diff
+pub struct agentkit_toolpacks_coding::diff::UnifiedDiff
+pub agentkit_toolpacks_coding::diff::UnifiedDiff::added: usize
+pub agentkit_toolpacks_coding::diff::UnifiedDiff::diff: alloc::string::String
+pub agentkit_toolpacks_coding::diff::UnifiedDiff::removed: usize
+pub fn agentkit_toolpacks_coding::diff::unified_diff(&str, &str, &str) -> agentkit_toolpacks_coding::diff::UnifiedDiff
+pub mod agentkit_toolpacks_coding::edit_engine
+pub enum agentkit_toolpacks_coding::edit_engine::Eol
+pub agentkit_toolpacks_coding::edit_engine::Eol::Cr
+pub agentkit_toolpacks_coding::edit_engine::Eol::Crlf
+pub agentkit_toolpacks_coding::edit_engine::Eol::Lf
+impl agentkit_toolpacks_coding::edit_engine::Eol
+pub fn agentkit_toolpacks_coding::edit_engine::Eol::as_str(self) -> &'static str
+pub struct agentkit_toolpacks_coding::edit_engine::AppliedEdits
+pub agentkit_toolpacks_coding::edit_engine::AppliedEdits::base_content: alloc::string::String
+pub agentkit_toolpacks_coding::edit_engine::AppliedEdits::new_content: alloc::string::String
+pub agentkit_toolpacks_coding::edit_engine::AppliedEdits::output: alloc::string::String
+pub struct agentkit_toolpacks_coding::edit_engine::Edit
+pub agentkit_toolpacks_coding::edit_engine::Edit::new_text: alloc::string::String
+pub agentkit_toolpacks_coding::edit_engine::Edit::old_text: alloc::string::String
+pub struct agentkit_toolpacks_coding::edit_engine::SplitBom
+pub agentkit_toolpacks_coding::edit_engine::SplitBom::bom: alloc::string::String
+pub agentkit_toolpacks_coding::edit_engine::SplitBom::text: alloc::string::String
+pub fn agentkit_toolpacks_coding::edit_engine::apply_edits(&str, &[agentkit_toolpacks_coding::edit_engine::Edit], &str) -> core::result::Result<agentkit_toolpacks_coding::edit_engine::AppliedEdits, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::edit_engine::dominant_eol(&str) -> agentkit_toolpacks_coding::edit_engine::Eol
+pub fn agentkit_toolpacks_coding::edit_engine::normalize_for_fuzzy_match(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::edit_engine::normalize_to_lf(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::edit_engine::split_bom(&str) -> agentkit_toolpacks_coding::edit_engine::SplitBom
+pub mod agentkit_toolpacks_coding::errors
+pub struct agentkit_toolpacks_coding::errors::CodingError
+pub agentkit_toolpacks_coding::errors::CodingError::code: alloc::string::String
+pub agentkit_toolpacks_coding::errors::CodingError::message: alloc::string::String
+impl agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::errors::CodingError::new(&str, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_toolpacks_coding::errors::file_changed_error(&str) -> agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::errors::file_created_elsewhere_error(&str) -> agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::errors::file_not_read_error(&str, bool) -> agentkit_toolpacks_coding::errors::CodingError
+pub mod agentkit_toolpacks_coding::exec_tools
+pub fn agentkit_toolpacks_coding::exec_tools::run_command_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::exec_tools::run_tests_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::exec_tools::sanitized_env(&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, &str) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub mod agentkit_toolpacks_coding::fs_tools
+pub fn agentkit_toolpacks_coding::fs_tools::edit_file_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::fs_tools::list_dir_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::fs_tools::read_file_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::fs_tools::write_file_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub mod agentkit_toolpacks_coding::fs_util
+pub async fn agentkit_toolpacks_coding::fs_util::atomic_write<F>(&str, &[u8], &str, core::option::Option<F>) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError> where F: core::ops::function::FnOnce() -> futures_core::future::BoxFuture<'static, core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>>
+pub async fn agentkit_toolpacks_coding::fs_util::atomic_write_in_root<F>(core::option::Option<&str>, &str, &[u8], &str, core::option::Option<F>) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError> where F: core::ops::function::FnOnce() -> futures_core::future::BoxFuture<'static, core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>>
+pub async fn agentkit_toolpacks_coding::fs_util::create_if_absent(&str, &[u8], &str) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::fs_util::create_if_absent_in_root(core::option::Option<&str>, &str, &[u8], &str) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::fs_util::decode_utf8(&[u8]) -> core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_coding::fs_util::looks_binary(&[u8]) -> bool
+pub async fn agentkit_toolpacks_coding::fs_util::read_regular_file(&str, &str, u64) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::fs_util::read_regular_file_in_root(core::option::Option<&str>, &str, &str, u64) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::fs_util::sha256(&[u8]) -> alloc::string::String
+pub mod agentkit_toolpacks_coding::git_tool
+pub enum agentkit_toolpacks_coding::git_tool::GitCommand
+pub agentkit_toolpacks_coding::git_tool::GitCommand::Diff
+pub agentkit_toolpacks_coding::git_tool::GitCommand::Log
+pub agentkit_toolpacks_coding::git_tool::GitCommand::Show
+pub agentkit_toolpacks_coding::git_tool::GitCommand::Status
+pub struct agentkit_toolpacks_coding::git_tool::GitInvocation
+pub agentkit_toolpacks_coding::git_tool::GitInvocation::command: agentkit_toolpacks_coding::git_tool::GitCommand
+pub agentkit_toolpacks_coding::git_tool::GitInvocation::max_count: core::option::Option<i64>
+pub agentkit_toolpacks_coding::git_tool::GitInvocation::path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::git_tool::GitInvocation::rev: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::git_tool::GitInvocation::staged: core::option::Option<bool>
+pub const agentkit_toolpacks_coding::git_tool::GIT_SAFETY_ARGS: &[&str]
+pub fn agentkit_toolpacks_coding::git_tool::build_git_args(&str, &agentkit_toolpacks_coding::git_tool::GitInvocation, bool, &[alloc::string::String]) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_toolpacks_coding::git_tool::driver_overrides(&[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::git_tool::git_inspect_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub mod agentkit_toolpacks_coding::guard
+pub struct agentkit_toolpacks_coding::guard::CodingPermissionGuard
+impl agentkit_toolpacks_coding::guard::CodingPermissionGuard
+pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::new(agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions) -> Self
+impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::guard::CodingPermissionGuard
+pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions
+pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::mode: agentkit_core::permission::CodingMode
+pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::plan_tool_names: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions::role: core::option::Option<agentkit_core::permission::CodingRole>
+pub const agentkit_toolpacks_coding::guard::CODING_NAMESPACE: &str
+pub mod agentkit_toolpacks_coding::limits
+pub struct agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::limits::CodingLimits::command_default_timeout_sec: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::command_kill_grace_ms: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::command_max_log_bytes: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::command_max_timeout_sec: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::command_tail_max_bytes: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::command_tail_max_lines: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::edit_max_diff_bytes: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::edit_max_file_bytes: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::find_default_results: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::find_max_results: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::git_max_count: u32
+pub agentkit_toolpacks_coding::limits::CodingLimits::git_max_output_bytes: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::git_timeout_ms: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::ignore_file_max_bytes: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::list_max_entries: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::read_max_bytes: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::read_max_file_bytes: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::read_max_lines: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::repo_map_default_depth: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::repo_map_manifest_excerpt_bytes: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::repo_map_max_depth: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::repo_map_max_entries: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_default_matches: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_context: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_file_bytes: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_files: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_line_chars: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_matches: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_output_bytes: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_pattern_chars: usize
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_max_total_bytes: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::search_time_budget_ms: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::tool_timeout_ms: u64
+pub agentkit_toolpacks_coding::limits::CodingLimits::write_max_bytes: usize
+impl agentkit_toolpacks_coding::limits::CodingLimits
+pub fn agentkit_toolpacks_coding::limits::CodingLimits::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::default::Default for agentkit_toolpacks_coding::limits::CodingLimits
+pub fn agentkit_toolpacks_coding::limits::CodingLimits::default() -> Self
+pub struct agentkit_toolpacks_coding::limits::CodingLimitsOverride
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::command_default_timeout_sec: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::command_kill_grace_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::command_max_log_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::command_max_timeout_sec: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::command_tail_max_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::command_tail_max_lines: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::edit_max_diff_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::edit_max_file_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::find_default_results: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::find_max_results: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::git_max_count: core::option::Option<u32>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::git_max_output_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::git_timeout_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::ignore_file_max_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::list_max_entries: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::read_max_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::read_max_file_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::read_max_lines: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::repo_map_default_depth: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::repo_map_manifest_excerpt_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::repo_map_max_depth: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::repo_map_max_entries: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_default_matches: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_context: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_file_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_files: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_line_chars: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_matches: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_output_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_pattern_chars: core::option::Option<usize>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_max_total_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::search_time_budget_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::tool_timeout_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::limits::CodingLimitsOverride::write_max_bytes: core::option::Option<usize>
+impl agentkit_toolpacks_coding::limits::CodingLimitsOverride
+pub fn agentkit_toolpacks_coding::limits::CodingLimitsOverride::resolve(&self) -> agentkit_toolpacks_coding::limits::CodingLimits
+pub mod agentkit_toolpacks_coding::mutation_queue
+pub async fn agentkit_toolpacks_coding::mutation_queue::with_file_mutation_queue<T, F, Fut>(&str, F) -> core::result::Result<T, agentkit_toolpacks_coding::errors::CodingError> where F: core::ops::function::FnOnce() -> Fut, Fut: core::future::future::Future<Output = core::result::Result<T, agentkit_toolpacks_coding::errors::CodingError>>
+pub mod agentkit_toolpacks_coding::pack
+pub struct agentkit_toolpacks_coding::pack::CodingToolPack
+impl agentkit_toolpacks_coding::pack::CodingToolPack
+pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::dispose(&self)
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::env(&self) -> &alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>
+pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::new(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<Self>, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::shutdown(&self)
+impl agentkit_host::governance::staging::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::governance::staging::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::namespace(&self) -> &str
+pub const agentkit_toolpacks_coding::pack::CODING_TOOL_NAMES: &[&str]
+pub async fn agentkit_toolpacks_coding::pack::create_coding_tool_pack(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_toolpacks_coding::pack::CodingToolPack>, agentkit_toolpacks_coding::errors::CodingError>
+pub type agentkit_toolpacks_coding::pack::PackCancellation = tokio_util::sync::cancellation_token::CancellationToken
+pub mod agentkit_toolpacks_coding::paths
+pub enum agentkit_toolpacks_coding::paths::PathAccess
+pub agentkit_toolpacks_coding::paths::PathAccess::Read
+pub agentkit_toolpacks_coding::paths::PathAccess::Write
+pub struct agentkit_toolpacks_coding::paths::ConfineOptions
+pub agentkit_toolpacks_coding::paths::ConfineOptions::access: agentkit_toolpacks_coding::paths::PathAccess
+pub agentkit_toolpacks_coding::paths::ConfineOptions::allow_sensitive: bool
+pub struct agentkit_toolpacks_coding::paths::ConfinedPath
+pub agentkit_toolpacks_coding::paths::ConfinedPath::path: alloc::string::String
+pub agentkit_toolpacks_coding::paths::ConfinedPath::relative_path: alloc::string::String
+pub agentkit_toolpacks_coding::paths::ConfinedPath::root: alloc::string::String
+pub async fn agentkit_toolpacks_coding::paths::canonical_root(&str) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::paths::confine(&str, &str, agentkit_toolpacks_coding::paths::ConfineOptions) -> core::result::Result<agentkit_toolpacks_coding::paths::ConfinedPath, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::paths::is_git_segment(&str) -> bool
+pub fn agentkit_toolpacks_coding::paths::is_sensitive_path(&str) -> bool
+pub fn agentkit_toolpacks_coding::paths::is_sensitive_segment(&str) -> bool
+pub fn agentkit_toolpacks_coding::paths::relative(&str, &str) -> alloc::string::String
+pub async fn agentkit_toolpacks_coding::paths::resolve_inside_root(&str, &str) -> core::result::Result<agentkit_toolpacks_coding::paths::ConfinedPath, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::paths::sensitive_git_excludes() -> alloc::vec::Vec<alloc::string::String>
+pub mod agentkit_toolpacks_coding::plan_tool
+pub const agentkit_toolpacks_coding::plan_tool::SUBMIT_PLAN_CAPABILITY: &str
+pub const agentkit_toolpacks_coding::plan_tool::SUBMIT_PLAN_TOOL_NAME: &str
+pub fn agentkit_toolpacks_coding::plan_tool::args_sha256_of(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::plan_tool::submit_plan_tool(u64, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub mod agentkit_toolpacks_coding::process
+pub enum agentkit_toolpacks_coding::process::CleanupOutcome
+pub agentkit_toolpacks_coding::process::CleanupOutcome::Clean
+pub agentkit_toolpacks_coding::process::CleanupOutcome::Uncertain(agentkit_toolpacks_coding::process::Uncertainty)
+impl agentkit_toolpacks_coding::process::CleanupOutcome
+pub fn agentkit_toolpacks_coding::process::CleanupOutcome::is_clean(&self) -> bool
+pub fn agentkit_toolpacks_coding::process::CleanupOutcome::uncertainty(&self) -> agentkit_toolpacks_coding::process::Uncertainty
+pub enum agentkit_toolpacks_coding::process::TeardownScan
+pub agentkit_toolpacks_coding::process::TeardownScan::Ok
+pub agentkit_toolpacks_coding::process::TeardownScan::Unsupported
+pub struct agentkit_toolpacks_coding::process::Discovery
+pub agentkit_toolpacks_coding::process::Discovery::marked: alloc::vec::Vec<i32>
+pub agentkit_toolpacks_coding::process::Discovery::suspects: alloc::vec::Vec<i32>
+pub struct agentkit_toolpacks_coding::process::GroupHandle
+pub agentkit_toolpacks_coding::process::GroupHandle::leader: core::option::Option<agentkit_toolpacks_coding::process::LeaderProbe>
+pub agentkit_toolpacks_coding::process::GroupHandle::pgid: i32
+pub agentkit_toolpacks_coding::process::GroupHandle::reaped: alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>
+pub struct agentkit_toolpacks_coding::process::LeaderProbe
+pub agentkit_toolpacks_coding::process::LeaderProbe::exited: alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>
+pub agentkit_toolpacks_coding::process::LeaderProbe::pid: i32
+pub struct agentkit_toolpacks_coding::process::LiveExecution
+pub agentkit_toolpacks_coding::process::LiveExecution::execution_id: alloc::string::String
+pub agentkit_toolpacks_coding::process::LiveExecution::holder: alloc::string::String
+pub agentkit_toolpacks_coding::process::LiveExecution::pgid: core::option::Option<i32>
+pub agentkit_toolpacks_coding::process::LiveExecution::root: alloc::string::String
+pub agentkit_toolpacks_coding::process::LiveExecution::started_at_ms: u64
+pub struct agentkit_toolpacks_coding::process::OwnedExecution
+impl agentkit_toolpacks_coding::process::OwnedExecution
+pub async fn agentkit_toolpacks_coding::process::OwnedExecution::await_result(self) -> agentkit_toolpacks_coding::process::OwnedRunOutcome
+pub fn agentkit_toolpacks_coding::process::OwnedExecution::execution_id(&self) -> &str
+pub struct agentkit_toolpacks_coding::process::OwnedRunOutcome
+pub agentkit_toolpacks_coding::process::OwnedRunOutcome::cleanup: agentkit_toolpacks_coding::process::CleanupOutcome
+pub agentkit_toolpacks_coding::process::OwnedRunOutcome::quarantine_error: core::option::Option<agentkit_toolpacks_coding::errors::CodingError>
+pub agentkit_toolpacks_coding::process::OwnedRunOutcome::run: agentkit_toolpacks_coding::process::RunResult
+pub agentkit_toolpacks_coding::process::OwnedRunOutcome::stragglers: alloc::vec::Vec<i32>
+pub struct agentkit_toolpacks_coding::process::RunResult
+pub agentkit_toolpacks_coding::process::RunResult::aborted: bool
+pub agentkit_toolpacks_coding::process::RunResult::exit_code: core::option::Option<i32>
+pub agentkit_toolpacks_coding::process::RunResult::log_path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::process::RunResult::notice: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunResult::output: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunResult::quarantine_reason: core::option::Option<&'static str>
+pub agentkit_toolpacks_coding::process::RunResult::signal: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::process::RunResult::spawn_error: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::process::RunResult::teardown: agentkit_toolpacks_coding::process::Teardown
+pub agentkit_toolpacks_coding::process::RunResult::timed_out: bool
+pub agentkit_toolpacks_coding::process::RunResult::truncated: bool
+pub struct agentkit_toolpacks_coding::process::RunSpec
+pub agentkit_toolpacks_coding::process::RunSpec::args: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::process::RunSpec::cancellation: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_toolpacks_coding::process::RunSpec::cwd: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunSpec::env: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub agentkit_toolpacks_coding::process::RunSpec::execution_id: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunSpec::file: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunSpec::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::process::RunSpec::log_name: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunSpec::pgid_slot: core::option::Option<alloc::rcs::arc::Arc<core::sync::atomic::AtomicI64>>
+pub agentkit_toolpacks_coding::process::RunSpec::reaped_slot: core::option::Option<alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>>
+pub agentkit_toolpacks_coding::process::RunSpec::scratch: alloc::string::String
+pub agentkit_toolpacks_coding::process::RunSpec::timeout_ms: u64
+pub struct agentkit_toolpacks_coding::process::Teardown
+pub agentkit_toolpacks_coding::process::Teardown::escalated: bool
+pub agentkit_toolpacks_coding::process::Teardown::group_stuck: bool
+pub agentkit_toolpacks_coding::process::Teardown::scan: agentkit_toolpacks_coding::process::TeardownScan
+pub agentkit_toolpacks_coding::process::Teardown::survivors: alloc::vec::Vec<i32>
+pub agentkit_toolpacks_coding::process::Teardown::suspects: alloc::vec::Vec<i32>
+impl agentkit_toolpacks_coding::process::Teardown
+pub const fn agentkit_toolpacks_coding::process::Teardown::clean() -> Self
+pub fn agentkit_toolpacks_coding::process::Teardown::outcome(&self) -> agentkit_toolpacks_coding::process::CleanupOutcome
+pub const fn agentkit_toolpacks_coding::process::Teardown::unknown() -> Self
+pub struct agentkit_toolpacks_coding::process::Uncertainty
+pub agentkit_toolpacks_coding::process::Uncertainty::group_stuck: bool
+pub agentkit_toolpacks_coding::process::Uncertainty::scan_unsupported: bool
+pub agentkit_toolpacks_coding::process::Uncertainty::survivors: alloc::vec::Vec<i32>
+pub agentkit_toolpacks_coding::process::Uncertainty::suspects: alloc::vec::Vec<i32>
+impl agentkit_toolpacks_coding::process::Uncertainty
+pub fn agentkit_toolpacks_coding::process::Uncertainty::describe(&self) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::process::Uncertainty::is_empty(&self) -> bool
+pub const agentkit_toolpacks_coding::process::UNSUPPORTED_PLATFORM_MESSAGE: &str
+pub async fn agentkit_toolpacks_coding::process::drain_executions()
+pub async fn agentkit_toolpacks_coding::process::drain_workspace(&str)
+pub async fn agentkit_toolpacks_coding::process::kill_process_tree(i32) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::process::live_executions() -> alloc::vec::Vec<agentkit_toolpacks_coding::process::LiveExecution>
+pub async fn agentkit_toolpacks_coding::process::run_bounded(agentkit_toolpacks_coding::process::RunSpec) -> agentkit_toolpacks_coding::process::RunResult
+pub async fn agentkit_toolpacks_coding::process::run_bounded_with_discovery(agentkit_toolpacks_coding::process::RunSpec, core::option::Option<agentkit_toolpacks_coding::process::FindFn>) -> agentkit_toolpacks_coding::process::RunResult
+pub fn agentkit_toolpacks_coding::process::spawn_owned_execution(agentkit_toolpacks_coding::process::RunSpec, agentkit_toolpacks_coding::coordination::WorkspaceLease, alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>, alloc::string::String, agentkit_toolpacks_coding::coordination::LeaseHolder) -> agentkit_toolpacks_coding::process::OwnedExecution
+pub fn agentkit_toolpacks_coding::process::spawn_owned_execution_with_discovery(agentkit_toolpacks_coding::process::RunSpec, agentkit_toolpacks_coding::coordination::WorkspaceLease, alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>, alloc::string::String, agentkit_toolpacks_coding::coordination::LeaseHolder, core::option::Option<agentkit_toolpacks_coding::process::FindFn>) -> agentkit_toolpacks_coding::process::OwnedExecution
+pub async fn agentkit_toolpacks_coding::process::startup_recovery() -> usize
+pub async fn agentkit_toolpacks_coding::process::sweep_orphans(core::option::Option<u64>) -> usize
+pub type agentkit_toolpacks_coding::process::FindFn = alloc::rcs::arc::Arc<(dyn core::ops::function::Fn() -> futures_core::future::BoxFuture<'static, core::option::Option<agentkit_toolpacks_coding::process::Discovery>> + core::marker::Send + core::marker::Sync)>
+pub mod agentkit_toolpacks_coding::process_tree
+pub struct agentkit_toolpacks_coding::process_tree::MarkedProcess
+pub agentkit_toolpacks_coding::process_tree::MarkedProcess::exec_id: alloc::string::String
+pub agentkit_toolpacks_coding::process_tree::MarkedProcess::owner_pid: i64
+pub agentkit_toolpacks_coding::process_tree::MarkedProcess::pid: i32
+pub struct agentkit_toolpacks_coding::process_tree::MarkedScan
+pub agentkit_toolpacks_coding::process_tree::MarkedScan::marks: alloc::vec::Vec<agentkit_toolpacks_coding::process_tree::MarkedProcess>
+pub agentkit_toolpacks_coding::process_tree::MarkedScan::suspect_pids: alloc::vec::Vec<i32>
+pub struct agentkit_toolpacks_coding::process_tree::PsRow
+pub agentkit_toolpacks_coding::process_tree::PsRow::pid: i32
+pub agentkit_toolpacks_coding::process_tree::PsRow::ppid: i32
+pub agentkit_toolpacks_coding::process_tree::PsRow::started: alloc::string::String
+pub struct agentkit_toolpacks_coding::process_tree::TreeTracker
+impl agentkit_toolpacks_coding::process_tree::TreeTracker
+pub fn agentkit_toolpacks_coding::process_tree::TreeTracker::new(i32, u64, u64) -> Self
+pub async fn agentkit_toolpacks_coding::process_tree::TreeTracker::sample(&self) -> core::option::Option<alloc::vec::Vec<i32>>
+pub fn agentkit_toolpacks_coding::process_tree::TreeTracker::start(&self)
+pub fn agentkit_toolpacks_coding::process_tree::TreeTracker::stop(&self)
+pub const agentkit_toolpacks_coding::process_tree::EXEC_ID_ENV: &str
+pub async fn agentkit_toolpacks_coding::process_tree::descendant_pids(i32) -> alloc::vec::Vec<i32>
+pub fn agentkit_toolpacks_coding::process_tree::descendants_of(&[agentkit_toolpacks_coding::process_tree::PsRow], impl core::iter::traits::collect::IntoIterator<Item = i32>) -> alloc::vec::Vec<agentkit_toolpacks_coding::process_tree::PsRow>
+pub async fn agentkit_toolpacks_coding::process_tree::find_marked_processes(&str) -> core::option::Option<alloc::vec::Vec<i32>>
+pub async fn agentkit_toolpacks_coding::process_tree::find_marked_processes_outcome(&str, core::option::Option<u64>) -> core::option::Option<(alloc::vec::Vec<i32>, alloc::vec::Vec<i32>)>
+pub async fn agentkit_toolpacks_coding::process_tree::observe_start_identity(i32) -> core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_coding::process_tree::parse_environ(&str, i32) -> core::option::Option<agentkit_toolpacks_coding::process_tree::MarkedProcess>
+pub fn agentkit_toolpacks_coding::process_tree::parse_exec_id(&str) -> core::option::Option<(i64, alloc::string::String)>
+pub fn agentkit_toolpacks_coding::process_tree::parse_ps_output(&str) -> alloc::vec::Vec<agentkit_toolpacks_coding::process_tree::MarkedProcess>
+pub fn agentkit_toolpacks_coding::process_tree::parse_ps_table(&str) -> alloc::vec::Vec<agentkit_toolpacks_coding::process_tree::PsRow>
+pub async fn agentkit_toolpacks_coding::process_tree::run_ps(&[&str]) -> core::result::Result<alloc::string::String, core::io::error::Error>
+pub async fn agentkit_toolpacks_coding::process_tree::scan_marked_outcome(&str, core::option::Option<u64>) -> core::option::Option<agentkit_toolpacks_coding::process_tree::MarkedScan>
+pub mod agentkit_toolpacks_coding::sandbox
+pub struct agentkit_toolpacks_coding::sandbox::SandboxEnvironment
+pub agentkit_toolpacks_coding::sandbox::SandboxEnvironment::platform: alloc::string::String
+pub agentkit_toolpacks_coding::sandbox::SandboxEnvironment::sandbox_exec_path: alloc::string::String
+pub struct agentkit_toolpacks_coding::sandbox::SandboxPolicy
+pub agentkit_toolpacks_coding::sandbox::SandboxPolicy::allow_git_writes: bool
+pub agentkit_toolpacks_coding::sandbox::SandboxPolicy::network: bool
+pub agentkit_toolpacks_coding::sandbox::SandboxPolicy::readable: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::sandbox::SandboxPolicy::root: alloc::string::String
+pub agentkit_toolpacks_coding::sandbox::SandboxPolicy::scratch: alloc::string::String
+pub const agentkit_toolpacks_coding::sandbox::SANDBOX_EXEC: &str
+pub fn agentkit_toolpacks_coding::sandbox::sandbox_available(&agentkit_toolpacks_coding::sandbox::SandboxEnvironment) -> bool
+pub fn agentkit_toolpacks_coding::sandbox::sandbox_profile(&agentkit_toolpacks_coding::sandbox::SandboxPolicy) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::sandbox::toolchain_paths(&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> alloc::vec::Vec<alloc::string::String>
+pub mod agentkit_toolpacks_coding::search
+pub struct agentkit_toolpacks_coding::search::FindOutcome
+pub agentkit_toolpacks_coding::search::FindOutcome::paths: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::search::FindOutcome::stopped: alloc::string::String
+pub struct agentkit_toolpacks_coding::search::IgnoreMatcher
+impl agentkit_toolpacks_coding::search::IgnoreMatcher
+pub fn agentkit_toolpacks_coding::search::IgnoreMatcher::is_ignored(&self, &str, bool) -> bool
+pub struct agentkit_toolpacks_coding::search::RepoMapOutcome
+pub agentkit_toolpacks_coding::search::RepoMapOutcome::entries: usize
+pub agentkit_toolpacks_coding::search::RepoMapOutcome::text: alloc::string::String
+pub agentkit_toolpacks_coding::search::RepoMapOutcome::truncated: bool
+pub struct agentkit_toolpacks_coding::search::SearchBudget
+pub agentkit_toolpacks_coding::search::SearchBudget::entries_exhausted: bool
+pub agentkit_toolpacks_coding::search::SearchBudget::timed_out: bool
+pub struct agentkit_toolpacks_coding::search::SearchInput
+pub agentkit_toolpacks_coding::search::SearchInput::context: usize
+pub agentkit_toolpacks_coding::search::SearchInput::glob: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::search::SearchInput::ignore_case: bool
+pub agentkit_toolpacks_coding::search::SearchInput::limit: usize
+pub agentkit_toolpacks_coding::search::SearchInput::literal: bool
+pub agentkit_toolpacks_coding::search::SearchInput::offset: usize
+pub agentkit_toolpacks_coding::search::SearchInput::pattern: alloc::string::String
+pub agentkit_toolpacks_coding::search::SearchInput::target: alloc::string::String
+pub agentkit_toolpacks_coding::search::SearchInput::workspace_root: alloc::string::String
+pub struct agentkit_toolpacks_coding::search::SearchOutcome
+pub agentkit_toolpacks_coding::search::SearchOutcome::matches: usize
+pub agentkit_toolpacks_coding::search::SearchOutcome::text: alloc::string::String
+pub agentkit_toolpacks_coding::search::SearchOutcome::truncated: bool
+pub struct agentkit_toolpacks_coding::search::Walk
+impl agentkit_toolpacks_coding::search::Walk
+pub fn agentkit_toolpacks_coding::search::Walk::budget(&self) -> &agentkit_toolpacks_coding::search::SearchBudget
+pub async fn agentkit_toolpacks_coding::search::Walk::new(&str, &agentkit_toolpacks_coding::search::WalkOptions) -> core::result::Result<Self, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::search::Walk::next(&mut self) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::search::WalkEntry>, agentkit_toolpacks_coding::errors::CodingError>
+pub struct agentkit_toolpacks_coding::search::WalkEntry
+pub agentkit_toolpacks_coding::search::WalkEntry::depth: usize
+pub agentkit_toolpacks_coding::search::WalkEntry::is_directory: bool
+pub agentkit_toolpacks_coding::search::WalkEntry::path: alloc::string::String
+pub agentkit_toolpacks_coding::search::WalkEntry::rel: alloc::string::String
+pub struct agentkit_toolpacks_coding::search::WalkOptions
+pub agentkit_toolpacks_coding::search::WalkOptions::allow_sensitive: bool
+pub agentkit_toolpacks_coding::search::WalkOptions::clock: agentkit_toolpacks_coding::types::Clock
+pub agentkit_toolpacks_coding::search::WalkOptions::include_directories: bool
+pub agentkit_toolpacks_coding::search::WalkOptions::inherited_from: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::search::WalkOptions::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::search::WalkOptions::max_depth: core::option::Option<usize>
+pub agentkit_toolpacks_coding::search::WalkOptions::signal: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+impl agentkit_toolpacks_coding::search::WalkOptions
+pub fn agentkit_toolpacks_coding::search::WalkOptions::new(agentkit_toolpacks_coding::limits::CodingLimits, bool, agentkit_toolpacks_coding::types::Clock, core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>) -> Self
+pub const agentkit_toolpacks_coding::search::MANIFESTS: [&str; 7]
+pub fn agentkit_toolpacks_coding::search::compile_glob(&str) -> core::result::Result<regex::regex::string::Regex, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::search::find_files(&str, &str, &str, usize, &agentkit_toolpacks_coding::search::WalkOptions) -> core::result::Result<agentkit_toolpacks_coding::search::FindOutcome, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::search::glob_matches(&regex::regex::string::Regex, &str) -> bool
+pub async fn agentkit_toolpacks_coding::search::load_ignore_matcher(&str, &str, &agentkit_toolpacks_coding::limits::CodingLimits) -> agentkit_toolpacks_coding::search::IgnoreMatcher
+pub async fn agentkit_toolpacks_coding::search::repo_map(&str, &str, usize, &agentkit_toolpacks_coding::search::WalkOptions) -> core::result::Result<agentkit_toolpacks_coding::search::RepoMapOutcome, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::search::search_text(&agentkit_toolpacks_coding::search::SearchInput, &agentkit_toolpacks_coding::search::WalkOptions) -> core::result::Result<agentkit_toolpacks_coding::search::SearchOutcome, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::search::walk_tree(&str, &agentkit_toolpacks_coding::search::WalkOptions) -> core::result::Result<(alloc::vec::Vec<agentkit_toolpacks_coding::search::WalkEntry>, agentkit_toolpacks_coding::search::SearchBudget), agentkit_toolpacks_coding::errors::CodingError>
+pub mod agentkit_toolpacks_coding::search_tools
+pub fn agentkit_toolpacks_coding::search_tools::code_search_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::search_tools::find_files_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub fn agentkit_toolpacks_coding::search_tools::repo_map_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub mod agentkit_toolpacks_coding::truncate
+pub enum agentkit_toolpacks_coding::truncate::TruncatedBy
+pub agentkit_toolpacks_coding::truncate::TruncatedBy::Bytes
+pub agentkit_toolpacks_coding::truncate::TruncatedBy::Lines
+pub struct agentkit_toolpacks_coding::truncate::Truncation
+pub agentkit_toolpacks_coding::truncate::Truncation::content: alloc::string::String
+pub agentkit_toolpacks_coding::truncate::Truncation::first_line_exceeds_limit: bool
+pub agentkit_toolpacks_coding::truncate::Truncation::last_line_partial: bool
+pub agentkit_toolpacks_coding::truncate::Truncation::output_bytes: usize
+pub agentkit_toolpacks_coding::truncate::Truncation::output_lines: usize
+pub agentkit_toolpacks_coding::truncate::Truncation::total_bytes: usize
+pub agentkit_toolpacks_coding::truncate::Truncation::total_lines: usize
+pub agentkit_toolpacks_coding::truncate::Truncation::truncated: bool
+pub agentkit_toolpacks_coding::truncate::Truncation::truncated_by: core::option::Option<agentkit_toolpacks_coding::truncate::TruncatedBy>
+pub struct agentkit_toolpacks_coding::truncate::TruncationLimits
+pub agentkit_toolpacks_coding::truncate::TruncationLimits::max_bytes: usize
+pub agentkit_toolpacks_coding::truncate::TruncationLimits::max_lines: usize
+pub fn agentkit_toolpacks_coding::truncate::format_size(usize) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::truncate::split_lines(&str) -> alloc::vec::Vec<&str>
+pub fn agentkit_toolpacks_coding::truncate::tail_str_bytes(&str, usize) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::truncate::truncate_head(&str, agentkit_toolpacks_coding::truncate::TruncationLimits) -> agentkit_toolpacks_coding::truncate::Truncation
+pub fn agentkit_toolpacks_coding::truncate::truncate_tail(&str, agentkit_toolpacks_coding::truncate::TruncationLimits) -> agentkit_toolpacks_coding::truncate::Truncation
+pub mod agentkit_toolpacks_coding::types
+pub use agentkit_toolpacks_coding::types::CodingMode
+pub use agentkit_toolpacks_coding::types::CodingPermissionAuthority
+pub use agentkit_toolpacks_coding::types::CodingRole
+pub use agentkit_toolpacks_coding::types::PermissionContext
+pub enum agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::types::SandboxMode::Off
+pub agentkit_toolpacks_coding::types::SandboxMode::Required
+pub struct agentkit_toolpacks_coding::types::CodingToolPackOptions
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::allow_git_writes: bool
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::allow_sensitive: bool
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::clock: core::option::Option<agentkit_toolpacks_coding::types::Clock>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::coordination_wait_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::coordinator: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::environment: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::limits: agentkit_toolpacks_coding::limits::CodingLimitsOverride
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::network: bool
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::permission: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::platform: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::sandbox: agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::sandbox_exec_path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::test_commands: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::types::CodingToolPackOptions::workspace: agentkit_toolpacks_coding::types::CodingWorkspace
+impl agentkit_toolpacks_coding::types::CodingToolPackOptions
+pub fn agentkit_toolpacks_coding::types::CodingToolPackOptions::resolved_limits(&self) -> agentkit_toolpacks_coding::limits::CodingLimits
+impl core::default::Default for agentkit_toolpacks_coding::types::CodingToolPackOptions
+pub fn agentkit_toolpacks_coding::types::CodingToolPackOptions::default() -> Self
+pub struct agentkit_toolpacks_coding::types::CodingWorkspace
+pub agentkit_toolpacks_coding::types::CodingWorkspace::root: alloc::string::String
+pub fn agentkit_toolpacks_coding::types::system_clock() -> agentkit_toolpacks_coding::types::Clock
+pub type agentkit_toolpacks_coding::types::Clock = alloc::rcs::arc::Arc<(dyn core::ops::function::Fn() -> i64 + core::marker::Send + core::marker::Sync + 'static)>
+pub mod agentkit_toolpacks_coding::version_ledger
+pub struct agentkit_toolpacks_coding::version_ledger::LedgerEntry
+pub agentkit_toolpacks_coding::version_ledger::LedgerEntry::full: bool
+pub agentkit_toolpacks_coding::version_ledger::LedgerEntry::sha256: alloc::string::String
+pub fn agentkit_toolpacks_coding::version_ledger::clear_version_ledger()
+pub fn agentkit_toolpacks_coding::version_ledger::expected(core::option::Option<&str>, &str) -> core::option::Option<agentkit_toolpacks_coding::version_ledger::LedgerEntry>
+pub fn agentkit_toolpacks_coding::version_ledger::record_read(core::option::Option<&str>, &str, &str, bool)
+pub fn agentkit_toolpacks_coding::version_ledger::record_write(core::option::Option<&str>, &str, &str)
+pub enum agentkit_toolpacks_coding::CommandClass
+pub agentkit_toolpacks_coding::CommandClass::Eligible
+pub agentkit_toolpacks_coding::CommandClass::HighRisk
+pub agentkit_toolpacks_coding::CommandClass::Unknown
+impl agentkit_toolpacks_coding::command_policy::CommandClass
+pub fn agentkit_toolpacks_coding::command_policy::CommandClass::as_str(&self) -> &'static str
+pub enum agentkit_toolpacks_coding::Eol
+pub agentkit_toolpacks_coding::Eol::Cr
+pub agentkit_toolpacks_coding::Eol::Crlf
+pub agentkit_toolpacks_coding::Eol::Lf
+impl agentkit_toolpacks_coding::edit_engine::Eol
+pub fn agentkit_toolpacks_coding::edit_engine::Eol::as_str(self) -> &'static str
+pub enum agentkit_toolpacks_coding::FingerprintError
+pub agentkit_toolpacks_coding::FingerprintError::Io(core::io::error::Error)
+pub agentkit_toolpacks_coding::FingerprintError::Message(alloc::string::String)
+impl core::error::Error for agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+impl core::fmt::Debug for agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+pub fn agentkit_toolpacks_coding::command_fingerprint::FingerprintError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agentkit_toolpacks_coding::command_fingerprint::FingerprintError
+pub fn agentkit_toolpacks_coding::command_fingerprint::FingerprintError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum agentkit_toolpacks_coding::PathAccess
+pub agentkit_toolpacks_coding::PathAccess::Read
+pub agentkit_toolpacks_coding::PathAccess::Write
+pub enum agentkit_toolpacks_coding::SandboxMode
+pub agentkit_toolpacks_coding::SandboxMode::Off
+pub agentkit_toolpacks_coding::SandboxMode::Required
+pub enum agentkit_toolpacks_coding::TeardownScan
+pub agentkit_toolpacks_coding::TeardownScan::Ok
+pub agentkit_toolpacks_coding::TeardownScan::Unsupported
+pub enum agentkit_toolpacks_coding::ToolEffect
+pub agentkit_toolpacks_coding::ToolEffect::Read
+pub agentkit_toolpacks_coding::ToolEffect::Write
+impl agentkit_toolpacks_coding::context::ToolEffect
+pub fn agentkit_toolpacks_coding::context::ToolEffect::as_str(&self) -> &'static str
+pub enum agentkit_toolpacks_coding::TruncatedBy
+pub agentkit_toolpacks_coding::TruncatedBy::Bytes
+pub agentkit_toolpacks_coding::TruncatedBy::Lines
+pub enum agentkit_toolpacks_coding::WaitKind
+pub agentkit_toolpacks_coding::WaitKind::File
+pub agentkit_toolpacks_coding::WaitKind::Workspace
+pub struct agentkit_toolpacks_coding::AcquireFileInput
+pub agentkit_toolpacks_coding::AcquireFileInput::cancellation: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_toolpacks_coding::AcquireFileInput::execution_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::AcquireFileInput::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::AcquireFileInput::max_wait_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::AcquireFileInput::path: alloc::string::String
+pub agentkit_toolpacks_coding::AcquireFileInput::root: alloc::string::String
+pub struct agentkit_toolpacks_coding::AcquireWorkspaceInput
+pub agentkit_toolpacks_coding::AcquireWorkspaceInput::cancellation: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_toolpacks_coding::AcquireWorkspaceInput::execution_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::AcquireWorkspaceInput::holder: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub agentkit_toolpacks_coding::AcquireWorkspaceInput::max_wait_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::AcquireWorkspaceInput::root: alloc::string::String
+pub struct agentkit_toolpacks_coding::AppliedEdits
+pub agentkit_toolpacks_coding::AppliedEdits::base_content: alloc::string::String
+pub agentkit_toolpacks_coding::AppliedEdits::new_content: alloc::string::String
+pub agentkit_toolpacks_coding::AppliedEdits::output: alloc::string::String
+pub struct agentkit_toolpacks_coding::CodingError
+pub agentkit_toolpacks_coding::CodingError::code: alloc::string::String
+pub agentkit_toolpacks_coding::CodingError::message: alloc::string::String
+impl agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::errors::CodingError::new(&str, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_toolpacks_coding::CodingLimits
+pub agentkit_toolpacks_coding::CodingLimits::command_default_timeout_sec: u64
+pub agentkit_toolpacks_coding::CodingLimits::command_kill_grace_ms: u64
+pub agentkit_toolpacks_coding::CodingLimits::command_max_log_bytes: u64
+pub agentkit_toolpacks_coding::CodingLimits::command_max_timeout_sec: u64
+pub agentkit_toolpacks_coding::CodingLimits::command_tail_max_bytes: usize
+pub agentkit_toolpacks_coding::CodingLimits::command_tail_max_lines: usize
+pub agentkit_toolpacks_coding::CodingLimits::edit_max_diff_bytes: usize
+pub agentkit_toolpacks_coding::CodingLimits::edit_max_file_bytes: u64
+pub agentkit_toolpacks_coding::CodingLimits::find_default_results: usize
+pub agentkit_toolpacks_coding::CodingLimits::find_max_results: usize
+pub agentkit_toolpacks_coding::CodingLimits::git_max_count: u32
+pub agentkit_toolpacks_coding::CodingLimits::git_max_output_bytes: usize
+pub agentkit_toolpacks_coding::CodingLimits::git_timeout_ms: u64
+pub agentkit_toolpacks_coding::CodingLimits::ignore_file_max_bytes: u64
+pub agentkit_toolpacks_coding::CodingLimits::list_max_entries: usize
+pub agentkit_toolpacks_coding::CodingLimits::read_max_bytes: usize
+pub agentkit_toolpacks_coding::CodingLimits::read_max_file_bytes: u64
+pub agentkit_toolpacks_coding::CodingLimits::read_max_lines: usize
+pub agentkit_toolpacks_coding::CodingLimits::repo_map_default_depth: usize
+pub agentkit_toolpacks_coding::CodingLimits::repo_map_manifest_excerpt_bytes: usize
+pub agentkit_toolpacks_coding::CodingLimits::repo_map_max_depth: usize
+pub agentkit_toolpacks_coding::CodingLimits::repo_map_max_entries: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_default_matches: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_context: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_file_bytes: u64
+pub agentkit_toolpacks_coding::CodingLimits::search_max_files: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_line_chars: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_matches: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_output_bytes: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_pattern_chars: usize
+pub agentkit_toolpacks_coding::CodingLimits::search_max_total_bytes: u64
+pub agentkit_toolpacks_coding::CodingLimits::search_time_budget_ms: u64
+pub agentkit_toolpacks_coding::CodingLimits::tool_timeout_ms: u64
+pub agentkit_toolpacks_coding::CodingLimits::write_max_bytes: usize
+impl agentkit_toolpacks_coding::limits::CodingLimits
+pub fn agentkit_toolpacks_coding::limits::CodingLimits::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::default::Default for agentkit_toolpacks_coding::limits::CodingLimits
+pub fn agentkit_toolpacks_coding::limits::CodingLimits::default() -> Self
+pub struct agentkit_toolpacks_coding::CodingLimitsOverride
+pub agentkit_toolpacks_coding::CodingLimitsOverride::command_default_timeout_sec: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::command_kill_grace_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::command_max_log_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::command_max_timeout_sec: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::command_tail_max_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::command_tail_max_lines: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::edit_max_diff_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::edit_max_file_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::find_default_results: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::find_max_results: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::git_max_count: core::option::Option<u32>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::git_max_output_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::git_timeout_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::ignore_file_max_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::list_max_entries: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::read_max_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::read_max_file_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::read_max_lines: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::repo_map_default_depth: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::repo_map_manifest_excerpt_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::repo_map_max_depth: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::repo_map_max_entries: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_default_matches: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_context: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_file_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_files: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_line_chars: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_matches: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_output_bytes: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_pattern_chars: core::option::Option<usize>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_max_total_bytes: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::search_time_budget_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::tool_timeout_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingLimitsOverride::write_max_bytes: core::option::Option<usize>
+impl agentkit_toolpacks_coding::limits::CodingLimitsOverride
+pub fn agentkit_toolpacks_coding::limits::CodingLimitsOverride::resolve(&self) -> agentkit_toolpacks_coding::limits::CodingLimits
+pub struct agentkit_toolpacks_coding::CodingPermissionGuard
+impl agentkit_toolpacks_coding::guard::CodingPermissionGuard
+pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::new(agentkit_toolpacks_coding::guard::CodingPermissionGuardOptions) -> Self
+impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::guard::CodingPermissionGuard
+pub fn agentkit_toolpacks_coding::guard::CodingPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_coding::CodingPermissionGuardOptions
+pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::mode: agentkit_core::permission::CodingMode
+pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::plan_tool_names: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub agentkit_toolpacks_coding::CodingPermissionGuardOptions::role: core::option::Option<agentkit_core::permission::CodingRole>
+pub struct agentkit_toolpacks_coding::CodingToolPack
+impl agentkit_toolpacks_coding::pack::CodingToolPack
+pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::dispose(&self)
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::env(&self) -> &alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>
+pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::new(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<Self>, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::shutdown(&self)
+impl agentkit_host::governance::staging::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<alloc::vec::Vec<agentkit_host::governance::staging::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::namespace(&self) -> &str
+pub struct agentkit_toolpacks_coding::CodingToolPackOptions
+pub agentkit_toolpacks_coding::CodingToolPackOptions::allow_git_writes: bool
+pub agentkit_toolpacks_coding::CodingToolPackOptions::allow_sensitive: bool
+pub agentkit_toolpacks_coding::CodingToolPackOptions::clock: core::option::Option<agentkit_toolpacks_coding::types::Clock>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::coordination_wait_ms: core::option::Option<u64>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::coordinator: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::environment: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::limits: agentkit_toolpacks_coding::limits::CodingLimitsOverride
+pub agentkit_toolpacks_coding::CodingToolPackOptions::network: bool
+pub agentkit_toolpacks_coding::CodingToolPackOptions::permission: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::platform: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::sandbox: agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::CodingToolPackOptions::sandbox_exec_path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::test_commands: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::CodingToolPackOptions::workspace: agentkit_toolpacks_coding::types::CodingWorkspace
+impl agentkit_toolpacks_coding::types::CodingToolPackOptions
+pub fn agentkit_toolpacks_coding::types::CodingToolPackOptions::resolved_limits(&self) -> agentkit_toolpacks_coding::limits::CodingLimits
+impl core::default::Default for agentkit_toolpacks_coding::types::CodingToolPackOptions
+pub fn agentkit_toolpacks_coding::types::CodingToolPackOptions::default() -> Self
+pub struct agentkit_toolpacks_coding::CodingWorkspace
+pub agentkit_toolpacks_coding::CodingWorkspace::root: alloc::string::String
+pub struct agentkit_toolpacks_coding::ConfineOptions
+pub agentkit_toolpacks_coding::ConfineOptions::access: agentkit_toolpacks_coding::paths::PathAccess
+pub agentkit_toolpacks_coding::ConfineOptions::allow_sensitive: bool
+pub struct agentkit_toolpacks_coding::ConfinedPath
+pub agentkit_toolpacks_coding::ConfinedPath::path: alloc::string::String
+pub agentkit_toolpacks_coding::ConfinedPath::relative_path: alloc::string::String
+pub agentkit_toolpacks_coding::ConfinedPath::root: alloc::string::String
+pub struct agentkit_toolpacks_coding::CoordinationWait
+pub agentkit_toolpacks_coding::CoordinationWait::holders: alloc::vec::Vec<agentkit_toolpacks_coding::coordination::LeaseHolder>
+pub agentkit_toolpacks_coding::CoordinationWait::kind: agentkit_toolpacks_coding::coordination::WaitKind
+pub agentkit_toolpacks_coding::CoordinationWait::path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::CoordinationWait::root: alloc::string::String
+pub agentkit_toolpacks_coding::CoordinationWait::waiter: agentkit_toolpacks_coding::coordination::LeaseHolder
+pub struct agentkit_toolpacks_coding::Edit
+pub agentkit_toolpacks_coding::Edit::new_text: alloc::string::String
+pub agentkit_toolpacks_coding::Edit::old_text: alloc::string::String
+pub struct agentkit_toolpacks_coding::EnvInit
+pub agentkit_toolpacks_coding::EnvInit::allow_git_writes: bool
+pub agentkit_toolpacks_coding::EnvInit::allow_sensitive: bool
+pub agentkit_toolpacks_coding::EnvInit::clock: agentkit_toolpacks_coding::types::Clock
+pub agentkit_toolpacks_coding::EnvInit::coordination_wait_ms: u64
+pub agentkit_toolpacks_coding::EnvInit::coordinator: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub agentkit_toolpacks_coding::EnvInit::environment: core::option::Option<alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>>
+pub agentkit_toolpacks_coding::EnvInit::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::EnvInit::network: bool
+pub agentkit_toolpacks_coding::EnvInit::platform: alloc::string::String
+pub agentkit_toolpacks_coding::EnvInit::sandbox: agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::EnvInit::sandbox_exec_path: alloc::string::String
+pub agentkit_toolpacks_coding::EnvInit::test_commands: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::EnvInit::workspace_root: alloc::string::String
+pub struct agentkit_toolpacks_coding::HighRiskCommandGuard
+impl agentkit_host::governance::staging::ToolGuard for agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard
+pub fn agentkit_toolpacks_coding::command_policy::HighRiskCommandGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_host::governance::staging::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_host::HostResult<agentkit_host::governance::staging::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_coding::InProcessCoordinator
+impl agentkit_toolpacks_coding::coordination::InProcessCoordinator
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::new(core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>) -> Self
+impl agentkit_toolpacks_coding::coordination::WorkspaceCoordinator for agentkit_toolpacks_coding::coordination::InProcessCoordinator
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_file<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireFileInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_workspace<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_execution_intent<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_execution<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence, &'life3 agentkit_toolpacks_coding::coordination::CommandCleanupIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_workspace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::reconcile_execution_intents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::record_execution_intent<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_coding::coordination::ExecutionIntent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_toolpacks_coding::coordination::WorkspaceQuarantine>, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_coding::LeaseHolder
+pub agentkit_toolpacks_coding::LeaseHolder::chat_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::LeaseHolder::label: alloc::string::String
+pub agentkit_toolpacks_coding::LeaseHolder::run_id: alloc::string::String
+pub agentkit_toolpacks_coding::LeaseHolder::tool: alloc::string::String
+pub agentkit_toolpacks_coding::LeaseHolder::tool_call_id: core::option::Option<alloc::string::String>
+pub struct agentkit_toolpacks_coding::LedgerEntry
+pub agentkit_toolpacks_coding::LedgerEntry::full: bool
+pub agentkit_toolpacks_coding::LedgerEntry::sha256: alloc::string::String
+pub struct agentkit_toolpacks_coding::LockDirCoordinatorOptions
+pub agentkit_toolpacks_coding::LockDirCoordinatorOptions::dir: alloc::string::String
+pub agentkit_toolpacks_coding::LockDirCoordinatorOptions::observer: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>
+pub agentkit_toolpacks_coding::LockDirCoordinatorOptions::on_error: core::option::Option<agentkit_toolpacks_coding::coordination_lockdir::OnError>
+pub agentkit_toolpacks_coding::LockDirCoordinatorOptions::poll_ms: core::option::Option<u64>
+pub struct agentkit_toolpacks_coding::Outcome
+pub agentkit_toolpacks_coding::Outcome::details: core::option::Option<serde_json::value::Value>
+pub agentkit_toolpacks_coding::Outcome::ok: bool
+pub agentkit_toolpacks_coding::Outcome::summary: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::Outcome::text: alloc::string::String
+pub agentkit_toolpacks_coding::Outcome::truncated: bool
+pub agentkit_toolpacks_coding::Outcome::warnings: alloc::vec::Vec<alloc::string::String>
+impl agentkit_toolpacks_coding::context::Outcome
+pub fn agentkit_toolpacks_coding::context::Outcome::ok(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_toolpacks_coding::PackEnv
+pub agentkit_toolpacks_coding::PackEnv::allow_git_writes: bool
+pub agentkit_toolpacks_coding::PackEnv::allow_sensitive: bool
+pub agentkit_toolpacks_coding::PackEnv::clock: agentkit_toolpacks_coding::types::Clock
+pub agentkit_toolpacks_coding::PackEnv::coordination_wait_ms: u64
+pub agentkit_toolpacks_coding::PackEnv::coordinator: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub agentkit_toolpacks_coding::PackEnv::environment: core::option::Option<alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>>
+pub agentkit_toolpacks_coding::PackEnv::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::PackEnv::network: bool
+pub agentkit_toolpacks_coding::PackEnv::platform: alloc::string::String
+pub agentkit_toolpacks_coding::PackEnv::sandbox: agentkit_toolpacks_coding::types::SandboxMode
+pub agentkit_toolpacks_coding::PackEnv::sandbox_exec_path: alloc::string::String
+pub agentkit_toolpacks_coding::PackEnv::test_commands: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::PackEnv::workspace_root: alloc::string::String
+impl agentkit_toolpacks_coding::context::PackEnv
+pub async fn agentkit_toolpacks_coding::context::PackEnv::dispose(&self)
+pub fn agentkit_toolpacks_coding::context::PackEnv::new(agentkit_toolpacks_coding::context::EnvInit) -> Self
+pub async fn agentkit_toolpacks_coding::context::PackEnv::root(&self) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::context::PackEnv::scratch(&self) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub struct agentkit_toolpacks_coding::RunResult
+pub agentkit_toolpacks_coding::RunResult::aborted: bool
+pub agentkit_toolpacks_coding::RunResult::exit_code: core::option::Option<i32>
+pub agentkit_toolpacks_coding::RunResult::log_path: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::RunResult::notice: alloc::string::String
+pub agentkit_toolpacks_coding::RunResult::output: alloc::string::String
+pub agentkit_toolpacks_coding::RunResult::quarantine_reason: core::option::Option<&'static str>
+pub agentkit_toolpacks_coding::RunResult::signal: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::RunResult::spawn_error: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::RunResult::teardown: agentkit_toolpacks_coding::process::Teardown
+pub agentkit_toolpacks_coding::RunResult::timed_out: bool
+pub agentkit_toolpacks_coding::RunResult::truncated: bool
+pub struct agentkit_toolpacks_coding::RunSpec
+pub agentkit_toolpacks_coding::RunSpec::args: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::RunSpec::cancellation: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_toolpacks_coding::RunSpec::cwd: alloc::string::String
+pub agentkit_toolpacks_coding::RunSpec::env: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub agentkit_toolpacks_coding::RunSpec::execution_id: alloc::string::String
+pub agentkit_toolpacks_coding::RunSpec::file: alloc::string::String
+pub agentkit_toolpacks_coding::RunSpec::limits: agentkit_toolpacks_coding::limits::CodingLimits
+pub agentkit_toolpacks_coding::RunSpec::log_name: alloc::string::String
+pub agentkit_toolpacks_coding::RunSpec::pgid_slot: core::option::Option<alloc::rcs::arc::Arc<core::sync::atomic::AtomicI64>>
+pub agentkit_toolpacks_coding::RunSpec::reaped_slot: core::option::Option<alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>>
+pub agentkit_toolpacks_coding::RunSpec::scratch: alloc::string::String
+pub agentkit_toolpacks_coding::RunSpec::timeout_ms: u64
+pub struct agentkit_toolpacks_coding::SandboxEnvironment
+pub agentkit_toolpacks_coding::SandboxEnvironment::platform: alloc::string::String
+pub agentkit_toolpacks_coding::SandboxEnvironment::sandbox_exec_path: alloc::string::String
+pub struct agentkit_toolpacks_coding::SandboxPolicy
+pub agentkit_toolpacks_coding::SandboxPolicy::allow_git_writes: bool
+pub agentkit_toolpacks_coding::SandboxPolicy::network: bool
+pub agentkit_toolpacks_coding::SandboxPolicy::readable: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::SandboxPolicy::root: alloc::string::String
+pub agentkit_toolpacks_coding::SandboxPolicy::scratch: alloc::string::String
+pub struct agentkit_toolpacks_coding::ShellArgs
+pub agentkit_toolpacks_coding::ShellArgs::command: alloc::string::String
+pub agentkit_toolpacks_coding::ShellArgs::cwd: core::option::Option<alloc::string::String>
+pub struct agentkit_toolpacks_coding::SplitBom
+pub agentkit_toolpacks_coding::SplitBom::bom: alloc::string::String
+pub agentkit_toolpacks_coding::SplitBom::text: alloc::string::String
+pub struct agentkit_toolpacks_coding::Teardown
+pub agentkit_toolpacks_coding::Teardown::escalated: bool
+pub agentkit_toolpacks_coding::Teardown::group_stuck: bool
+pub agentkit_toolpacks_coding::Teardown::scan: agentkit_toolpacks_coding::process::TeardownScan
+pub agentkit_toolpacks_coding::Teardown::survivors: alloc::vec::Vec<i32>
+pub agentkit_toolpacks_coding::Teardown::suspects: alloc::vec::Vec<i32>
+impl agentkit_toolpacks_coding::process::Teardown
+pub const fn agentkit_toolpacks_coding::process::Teardown::clean() -> Self
+pub fn agentkit_toolpacks_coding::process::Teardown::outcome(&self) -> agentkit_toolpacks_coding::process::CleanupOutcome
+pub const fn agentkit_toolpacks_coding::process::Teardown::unknown() -> Self
+pub struct agentkit_toolpacks_coding::ToolSpec
+pub agentkit_toolpacks_coding::ToolSpec::capability: &'static str
+pub agentkit_toolpacks_coding::ToolSpec::description: alloc::string::String
+pub agentkit_toolpacks_coding::ToolSpec::effect: agentkit_toolpacks_coding::context::ToolEffect
+pub agentkit_toolpacks_coding::ToolSpec::input_schema: serde_json::value::Value
+pub agentkit_toolpacks_coding::ToolSpec::name: &'static str
+pub agentkit_toolpacks_coding::ToolSpec::timeout_ms: u64
+pub struct agentkit_toolpacks_coding::Truncation
+pub agentkit_toolpacks_coding::Truncation::content: alloc::string::String
+pub agentkit_toolpacks_coding::Truncation::first_line_exceeds_limit: bool
+pub agentkit_toolpacks_coding::Truncation::last_line_partial: bool
+pub agentkit_toolpacks_coding::Truncation::output_bytes: usize
+pub agentkit_toolpacks_coding::Truncation::output_lines: usize
+pub agentkit_toolpacks_coding::Truncation::total_bytes: usize
+pub agentkit_toolpacks_coding::Truncation::total_lines: usize
+pub agentkit_toolpacks_coding::Truncation::truncated: bool
+pub agentkit_toolpacks_coding::Truncation::truncated_by: core::option::Option<agentkit_toolpacks_coding::truncate::TruncatedBy>
+pub struct agentkit_toolpacks_coding::TruncationLimits
+pub agentkit_toolpacks_coding::TruncationLimits::max_bytes: usize
+pub agentkit_toolpacks_coding::TruncationLimits::max_lines: usize
+pub struct agentkit_toolpacks_coding::UnifiedDiff
+pub agentkit_toolpacks_coding::UnifiedDiff::added: usize
+pub agentkit_toolpacks_coding::UnifiedDiff::diff: alloc::string::String
+pub agentkit_toolpacks_coding::UnifiedDiff::removed: usize
+pub struct agentkit_toolpacks_coding::WorkspaceLease
+impl agentkit_toolpacks_coding::coordination::WorkspaceLease
+pub async fn agentkit_toolpacks_coding::coordination::WorkspaceLease::release(&mut self)
+impl core::fmt::Debug for agentkit_toolpacks_coding::coordination::WorkspaceLease
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceLease::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for agentkit_toolpacks_coding::coordination::WorkspaceLease
+pub fn agentkit_toolpacks_coding::coordination::WorkspaceLease::drop(&mut self)
+pub const agentkit_toolpacks_coding::CODING_NAMESPACE: &str
+pub const agentkit_toolpacks_coding::CODING_TOOL_NAMES: &[&str]
+pub const agentkit_toolpacks_coding::SANDBOX_EXEC: &str
+pub const agentkit_toolpacks_coding::SUBMIT_PLAN_CAPABILITY: &str
+pub const agentkit_toolpacks_coding::SUBMIT_PLAN_TOOL_NAME: &str
+pub trait agentkit_toolpacks_coding::CoordinatorObserver: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_coding::CoordinatorObserver::on_acquired(&self, &agentkit_toolpacks_coding::coordination::CoordinationWait)
+pub fn agentkit_toolpacks_coding::CoordinatorObserver::on_waiting(&self, &agentkit_toolpacks_coding::coordination::CoordinationWait)
+pub trait agentkit_toolpacks_coding::WorkspaceCoordinator: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::acquire_file<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireFileInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::acquire_workspace<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::clear_execution_intent<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::clear_workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::quarantine_execution<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence, &'life3 agentkit_toolpacks_coding::coordination::CommandCleanupIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::quarantine_workspace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::reconcile_execution_intents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::record_execution_intent<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_coding::coordination::ExecutionIntent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::WorkspaceCoordinator::workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_toolpacks_coding::coordination::WorkspaceQuarantine>, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_toolpacks_coding::coordination::WorkspaceCoordinator for agentkit_toolpacks_coding::coordination::InProcessCoordinator
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_file<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireFileInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::acquire_workspace<'life0, 'async_trait>(&'life0 self, agentkit_toolpacks_coding::coordination::AcquireWorkspaceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::coordination::WorkspaceLease, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_execution_intent<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::clear_workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_execution<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence, &'life3 agentkit_toolpacks_coding::coordination::CommandCleanupIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::quarantine_workspace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_toolpacks_coding::coordination::QuarantineEvidence) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::reconcile_execution_intents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::record_execution_intent<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_coding::coordination::ExecutionIntent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::coordination::InProcessCoordinator::workspace_quarantine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_toolpacks_coding::coordination::WorkspaceQuarantine>, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_coding::apply_edits(&str, &[agentkit_toolpacks_coding::edit_engine::Edit], &str) -> core::result::Result<agentkit_toolpacks_coding::edit_engine::AppliedEdits, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::args_sha256_of(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::as_record(&serde_json::value::Value) -> core::result::Result<&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::atomic_write<F>(&str, &[u8], &str, core::option::Option<F>) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError> where F: core::ops::function::FnOnce() -> futures_core::future::BoxFuture<'static, core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>>
+pub async fn agentkit_toolpacks_coding::canonical_file_key(&str) -> alloc::string::String
+pub async fn agentkit_toolpacks_coding::canonical_root(&str) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::canonical_root_key(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::classify_shell_command(&str) -> agentkit_toolpacks_coding::command_policy::CommandClass
+pub fn agentkit_toolpacks_coding::clear_version_ledger()
+pub async fn agentkit_toolpacks_coding::coding_standing_approval_key(&str, core::option::Option<&str>, &str, &agentkit_toolpacks_coding::command_policy::ShellArgs, &agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace) -> core::option::Option<agentkit_toolpacks_coding::command_policy::StandingApprovalKey>
+pub fn agentkit_toolpacks_coding::command_fingerprint(&str, &str, &str, &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<core::option::Option<alloc::string::String>, agentkit_toolpacks_coding::command_fingerprint::FingerprintError>
+pub async fn agentkit_toolpacks_coding::confine(&str, &str, agentkit_toolpacks_coding::paths::ConfineOptions) -> core::result::Result<agentkit_toolpacks_coding::paths::ConfinedPath, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::create_coding_tool_pack(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_toolpacks_coding::pack::CodingToolPack>, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::create_if_absent(&str, &[u8], &str) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::create_in_process_workspace_coordinator(core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::CoordinatorObserver>>) -> alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub fn agentkit_toolpacks_coding::create_lockdir_workspace_coordinator(agentkit_toolpacks_coding::coordination_lockdir::LockDirCoordinatorOptions) -> alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub fn agentkit_toolpacks_coding::decode_utf8(&[u8]) -> core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_coding::default_in_process_coordinator() -> alloc::rcs::arc::Arc<agentkit_toolpacks_coding::coordination::InProcessCoordinator>
+pub fn agentkit_toolpacks_coding::default_workspace_coordinator() -> alloc::rcs::arc::Arc<dyn agentkit_toolpacks_coding::coordination::WorkspaceCoordinator>
+pub fn agentkit_toolpacks_coding::define_tool<F, Fut>(agentkit_toolpacks_coding::context::ToolSpec, F) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool> where F: core::ops::function::Fn(agentkit_core::types::ToolContext, serde_json::value::Value) -> Fut + core::marker::Send + core::marker::Sync + 'static, Fut: core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_coding::context::Outcome, agentkit_toolpacks_coding::errors::CodingError>> + core::marker::Send + 'static
+pub fn agentkit_toolpacks_coding::direct_script_files(&str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, agentkit_toolpacks_coding::command_fingerprint::FingerprintError>
+pub fn agentkit_toolpacks_coding::dominant_eol(&str) -> agentkit_toolpacks_coding::edit_engine::Eol
+pub fn agentkit_toolpacks_coding::expected(core::option::Option<&str>, &str) -> core::option::Option<agentkit_toolpacks_coding::version_ledger::LedgerEntry>
+pub fn agentkit_toolpacks_coding::failure(&agentkit_toolpacks_coding::errors::CodingError) -> agentkit_toolpacks_coding::context::Outcome
+pub fn agentkit_toolpacks_coding::file_changed_error(&str) -> agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::file_created_elsewhere_error(&str) -> agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::file_not_read_error(&str, bool) -> agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::format_size(usize) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::high_risk_refusal(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::is_git_segment(&str) -> bool
+pub fn agentkit_toolpacks_coding::is_sensitive_path(&str) -> bool
+pub fn agentkit_toolpacks_coding::is_sensitive_segment(&str) -> bool
+pub fn agentkit_toolpacks_coding::is_shell_tool(&str) -> bool
+pub async fn agentkit_toolpacks_coding::kill_process_tree(i32) -> core::result::Result<(), agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::leading_executable(&[alloc::string::String]) -> core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_coding::looks_binary(&[u8]) -> bool
+pub fn agentkit_toolpacks_coding::normalize_for_fuzzy_match(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::normalize_to_lf(&str) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::opt_bool(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<bool>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::opt_int(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str, i64, i64) -> core::result::Result<core::option::Option<i64>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::opt_string(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str, usize) -> core::result::Result<core::option::Option<alloc::string::String>, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::read_regular_file(&str, &str, u64) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::record_read(core::option::Option<&str>, &str, &str, bool)
+pub fn agentkit_toolpacks_coding::record_write(core::option::Option<&str>, &str, &str)
+pub fn agentkit_toolpacks_coding::req_string(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str, usize) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::resolve_inside_root(&str, &str) -> core::result::Result<agentkit_toolpacks_coding::paths::ConfinedPath, agentkit_toolpacks_coding::errors::CodingError>
+pub async fn agentkit_toolpacks_coding::run_bounded(agentkit_toolpacks_coding::process::RunSpec) -> agentkit_toolpacks_coding::process::RunResult
+pub fn agentkit_toolpacks_coding::sandbox_available(&agentkit_toolpacks_coding::sandbox::SandboxEnvironment) -> bool
+pub fn agentkit_toolpacks_coding::sandbox_profile(&agentkit_toolpacks_coding::sandbox::SandboxPolicy) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::script_executable(&str) -> core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_coding::sensitive_git_excludes() -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_toolpacks_coding::sha256(&[u8]) -> alloc::string::String
+pub fn agentkit_toolpacks_coding::shell_args_of(&serde_json::value::Value) -> core::option::Option<agentkit_toolpacks_coding::command_policy::ShellArgs>
+pub fn agentkit_toolpacks_coding::split_bom(&str) -> agentkit_toolpacks_coding::edit_engine::SplitBom
+pub fn agentkit_toolpacks_coding::split_lines(&str) -> alloc::vec::Vec<&str>
+pub fn agentkit_toolpacks_coding::submit_plan_tool(u64, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_host::session::execution_authority::CodingPermissionAuthority>>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub async fn agentkit_toolpacks_coding::sweep_orphans(core::option::Option<u64>) -> usize
+pub fn agentkit_toolpacks_coding::system_clock() -> agentkit_toolpacks_coding::types::Clock
+pub fn agentkit_toolpacks_coding::to_coding_error(impl core::convert::Into<alloc::string::String>, bool) -> agentkit_toolpacks_coding::errors::CodingError
+pub fn agentkit_toolpacks_coding::toolchain_paths(&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_toolpacks_coding::truncate_head(&str, agentkit_toolpacks_coding::truncate::TruncationLimits) -> agentkit_toolpacks_coding::truncate::Truncation
+pub fn agentkit_toolpacks_coding::truncate_tail(&str, agentkit_toolpacks_coding::truncate::TruncationLimits) -> agentkit_toolpacks_coding::truncate::Truncation
+pub fn agentkit_toolpacks_coding::unified_diff(&str, &str, &str) -> agentkit_toolpacks_coding::diff::UnifiedDiff
+pub async fn agentkit_toolpacks_coding::with_file_mutation_queue<T, F, Fut>(&str, F) -> core::result::Result<T, agentkit_toolpacks_coding::errors::CodingError> where F: core::ops::function::FnOnce() -> Fut, Fut: core::future::future::Future<Output = core::result::Result<T, agentkit_toolpacks_coding::errors::CodingError>>
+pub type agentkit_toolpacks_coding::Clock = alloc::rcs::arc::Arc<(dyn core::ops::function::Fn() -> i64 + core::marker::Send + core::marker::Sync + 'static)>
+pub type agentkit_toolpacks_coding::OnError = alloc::rcs::arc::Arc<(dyn core::ops::function::Fn(alloc::string::String) + core::marker::Send + core::marker::Sync)>

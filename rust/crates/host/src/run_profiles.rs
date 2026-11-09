@@ -37,10 +37,10 @@
 //! values are recorded as digests, and secret references stay references.
 
 use crate::{HostError, HostResult};
+use agentkit_kernel::sha256_hex;
 use agentkit_store::{AgentBudgets, PinnedRunProfile, SqliteStore, run_profile_digest};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
 /// The host's default layer of the resolution: what governs where the
@@ -459,8 +459,7 @@ fn compiled_entry(source: &CompiledSource) -> Value {
 }
 
 fn value_digest(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    sha256_hex(value)
 }
 
 /// The local-provider vocabulary: kinds that never leave the machine.

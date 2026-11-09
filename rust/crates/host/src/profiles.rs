@@ -1,9 +1,9 @@
 //! Host-owned profiles. Sessions freeze resolved data, never mutable registry references.
 use crate::{HostError, HostResult};
 use agentkit_core::{ReasoningEffort, ToolRegistry};
+use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     sync::Arc,
@@ -129,10 +129,7 @@ impl AgentProfile {
     }
 
     pub fn digest(&self) -> String {
-        format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(self).expect("profile serialization"))
-        )
+        sha256_hex(serde_json::to_vec(self).expect("profile serialization"))
     }
 
     pub fn filter_tools(&self, registry: &ToolRegistry) -> HostResult<Arc<ToolRegistry>> {

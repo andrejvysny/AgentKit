@@ -51,8 +51,11 @@ impl DesktopBackend {
     }
 
     async fn submit_turn(&self, input: &OperationRequest) -> Result<OperationResponse, Problem> {
-        if !self.host.supports("chat.turn") {
-            return Err(Problem::host("executor_not_found", "chat.turn"));
+        if !self.host.supports(crate::CHAT_TURN_TASK_KIND) {
+            return Err(Problem::host(
+                "executor_not_found",
+                crate::CHAT_TURN_TASK_KIND,
+            ));
         }
         let store = self.host.store();
         let chat_id = &input.params["chatId"];
@@ -288,7 +291,7 @@ impl DesktopBackend {
             .map_err(|_| Problem::new(400, "invalid_request", "Invalid reasoningEffort."))?;
         let mut task = SubmitTask {
             task_id: key.task_id.clone(),
-            kind: "chat.turn".into(),
+            kind: crate::CHAT_TURN_TASK_KIND.into(),
             scope_id: chat_id.clone(),
             payload: json!({"chatId":chat_id,"model":model,"providerId":provider_id,
                 "userMessageId":user_id,"assistantMessageId":assistant_id,"httpRequest":input.body,

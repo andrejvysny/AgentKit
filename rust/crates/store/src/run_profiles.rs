@@ -53,9 +53,9 @@
 use crate::{
     AgentRecord, ChatRecord, Result, StoreError, TaskRecord, find_active_standing_grant, util,
 };
+use agentkit_kernel::sha256_hex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 
 const PERMISSION_VOCABULARY: [&str; 5] = ["read_only", "ask", "auto_edit", "full_auto", "plan"];
 
@@ -71,8 +71,7 @@ pub fn run_profile_digest(profile: &Value) -> String {
     let canonical = canonicalize(profile);
     // Value serialization cannot fail; sorting keys makes it order-stable.
     let text = serde_json::to_string(&canonical).expect("canonical profile serialization");
-    let digest = Sha256::digest(text.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    sha256_hex(text)
 }
 
 fn canonicalize(value: &Value) -> Value {

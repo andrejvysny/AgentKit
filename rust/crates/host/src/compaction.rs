@@ -2,8 +2,8 @@
 //! MIT, Copyright (c) 2025 Mario Zechner, earendil-works/pi commit
 //! 4a080252f06caf63a525d7873c5d94d3c23887e0.
 use agentkit_core::ChatMessage;
+use agentkit_kernel::sha256_hex;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 pub(super) type Entry = (ChatMessage, Option<String>);
 pub(super) const REVISION: &str = "agentkit-compaction-v1";
@@ -26,7 +26,7 @@ pub(super) fn hash_source(entries: &[Entry]) -> Option<String> {
         rows
     ]))
     .ok()?;
-    Some(format!("{:x}", Sha256::digest(encoded.as_bytes())))
+    Some(sha256_hex(encoded))
 }
 
 pub(super) fn apply_summary(entries: &[Entry], record: &Value) -> Option<Vec<Entry>> {
@@ -192,7 +192,7 @@ mod tests {
         let legacy_json =
             agentkit_contracts::stringify_javascript_value(&json!([["a", "assistant", "", null]]))
                 .unwrap();
-        legacy["sourceHash"] = json!(format!("{:x}", Sha256::digest(legacy_json.as_bytes())));
+        legacy["sourceHash"] = json!(sha256_hex(legacy_json));
         assert!(apply_summary(&input, &legacy).is_none());
     }
     #[test]

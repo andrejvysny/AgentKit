@@ -3,10 +3,10 @@ use agentkit_core::{
     ChatMessage, ChatProvider, ChatRequest, CoreError, ExecutionBudget, RunOptions, Terminal, Tool,
     ToolLimits, ToolRegistry, run_chat,
 };
+use agentkit_kernel::sha256_hex;
 use agentkit_store::{InsertFinding, SqliteStore};
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio_util::sync::CancellationToken;
@@ -107,21 +107,12 @@ const ADVISOR_CHAT_PREFIX: &str = "advisor:";
 /// vanished into the insert's idempotent path and escalation bookkeeping
 /// no-opped against stale rows.
 pub fn advisor_run_chat_id(review_chat: &str, origin: &ReviewOrigin, nonce: &str) -> String {
-    let digest = Sha256::digest(
-        format!(
-            "{review_chat}:{}:{}:{nonce}",
-            origin.source(),
-            origin.trigger()
-        )
-        .as_bytes(),
-    );
-    format!(
-        "{ADVISOR_CHAT_PREFIX}{}",
-        &digest
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()[..24]
-    )
+    let digest = sha256_hex(format!(
+        "{review_chat}:{}:{}:{nonce}",
+        origin.source(),
+        origin.trigger()
+    ));
+    format!("{ADVISOR_CHAT_PREFIX}{}", &digest[..24])
 }
 
 pub fn is_advisor_chat_id(chat_id: &str) -> bool {
@@ -569,13 +560,7 @@ impl AdvisorEngine {
         // an at-least-once caller replaying the same run cannot duplicate.
         let mut finding_ids = Vec::with_capacity(report.findings.len());
         for (index, finding) in report.findings.iter().enumerate() {
-            let finding_id = format!(
-                "find_{}",
-                &Sha256::digest(format!("{run_id}:{index}").as_bytes())
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()[..24]
-            );
+            let finding_id = format!("find_{}", &sha256_hex(format!("{run_id}:{index}"))[..24]);
             let detail = json!({
                 "runId": run_id,
                 "reportSummary": report.summary,
@@ -624,14 +609,8 @@ impl AdvisorEngine {
                 .iter()
                 .any(|finding| finding.severity == FindingSeverity::Critical)
         {
-            let digest = Sha256::digest(format!("{run_id}:escalate").as_bytes());
-            let request_id = format!(
-                "advise_{}",
-                &digest
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()[..24]
-            );
+            let digest = sha256_hex(format!("{run_id}:escalate"));
+            let request_id = format!("advise_{}", &digest[..24]);
             let criticals: Vec<&Finding> = report
                 .findings
                 .iter()

@@ -257,7 +257,7 @@ mod tests {
         store
             .submit(SubmitTask {
                 task_id: "run".into(),
-                kind: "chat.turn".into(),
+                kind: crate::CHAT_TURN_TASK_KIND.into(),
                 scope_id: "chat".into(),
                 payload: json!({}),
                 priority: 0,

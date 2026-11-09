@@ -3,9 +3,9 @@
 //! child, never widen it.
 
 use super::config::RoleSpec;
+use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 const SNAPSHOT_VERSION: u32 = 1;
 
@@ -55,10 +55,7 @@ impl RoleSnapshot {
     /// Lowercase hex sha256 of the canonical (fixed field order) JSON.
     pub fn digest(&self) -> String {
         let canonical = serde_json::to_string(self).expect("snapshot serializes");
-        Sha256::digest(canonical.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        sha256_hex(canonical)
     }
 
     /// Parse the snapshot from a child's `agentkit.subagent` metadata.

@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 agentkit-client = { workspace = true }
-agentkit-contracts = { workspace = true }
 agentkit-core = { workspace = true }
 agentkit-host = { workspace = true }
 agentkit-connections = { workspace = true, features = ["http"] }
