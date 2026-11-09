@@ -1,7 +1,7 @@
 use super::service::SubagentService;
-use crate::{
-    GovernanceResult, HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict,
-    read_session_descriptor,
+use crate::{AgentsResult, LeaseHeld};
+use agentkit_host::{
+    GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict, read_session_descriptor,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ impl WorkspaceLeaseRegistry {
         child_chat_id: &str,
         now_ms: i64,
         ttl_ms: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), LeaseHeld> {
         let Some(root) = root else { return Ok(()) };
         let root = lease_key(root);
         let mut table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -70,7 +70,9 @@ impl WorkspaceLeaseRegistry {
             .filter(|lease| lease.expires_at > now_ms)
             .filter(|lease| lease.child_chat_id != child_chat_id)
         {
-            return Err(holder.child_chat_id.clone());
+            return Err(LeaseHeld {
+                holder: holder.child_chat_id.clone(),
+            });
         }
         table.insert(
             root,
@@ -173,7 +175,7 @@ impl SubagentRoleGuard {
         &self,
         context: &ToolGuardContext,
         child_chat_id: &str,
-    ) -> HostResult<Option<String>> {
+    ) -> AgentsResult<Option<String>> {
         let config = self.service.config();
         // NOTE: deliberately NOT gated on `config.enabled`. Disabling
         // delegation stops NEW spawns; a child already mid-turn keeps its
@@ -188,7 +190,7 @@ impl SubagentRoleGuard {
         // it; a vanished role or malformed snapshot denies every tool.
         let role = match self.service.effective_role_of(&row, &config).await? {
             Ok(role) => role,
-            Err(reason) => return Ok(Some(reason)),
+            Err(reason) => return Ok(Some(reason.to_string())),
         };
         if role
             .tool_sets
@@ -226,7 +228,7 @@ impl SubagentRoleGuard {
             .map(str::to_owned)
     }
 
-    async fn lease_verdict(&self, context: &ToolGuardContext) -> HostResult<Option<String>> {
+    async fn lease_verdict(&self, context: &ToolGuardContext) -> AgentsResult<Option<String>> {
         if context.namespace != "coding"
             || !MUTATING_CODING_TOOLS.contains(&context.tool.name.as_str())
         {

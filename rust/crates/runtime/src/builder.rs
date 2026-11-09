@@ -7,13 +7,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use agentkit_agents::AdvisorEventSink;
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
 use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
 use agentkit_host::{
-    AdvisorEventSink, AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
-    ChatExecutor, ChatExecutorOptions, ContentAuthority, HostOptions, ProfileRegistry,
-    ProviderRegistry, SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
+    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ChatExecutor,
+    ChatExecutorOptions, ContentAuthority, HostOptions, ProfileRegistry, ProviderRegistry,
+    SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
 };
 use agentkit_providers::NativeProviderFactory;
 use serde_json::Value;
@@ -68,7 +69,7 @@ impl AgentRuntimeBuilder {
             external_tools: None,
             content_authority: None,
             profiles: Vec::new(),
-            subagent_max_concurrency: agentkit_host::SubagentConfig::default()
+            subagent_max_concurrency: agentkit_agents::SubagentConfig::default()
                 .limits
                 .max_concurrency,
             plan: PlanConfiguration {
@@ -324,11 +325,11 @@ impl AgentRuntimeBuilder {
         // bridge, and session service. Both are one-shot; configuration
         // (`configureSubagents`/`configureAdvisor`) is hot afterwards.
         subagent_lane.bind(
-            agentkit_host::SubagentService::new(
+            agentkit_agents::SubagentService::new(
                 lanes_store.clone(),
                 service.clone(),
                 runtime.clone(),
-                agentkit_host::SubagentConfig::default(),
+                agentkit_agents::SubagentConfig::default(),
             )
             .with_routable_providers(registry.ids().map(str::to_owned).collect()),
         )?;

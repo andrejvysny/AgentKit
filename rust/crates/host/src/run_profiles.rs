@@ -11,7 +11,7 @@
 //! — and seals the result with the store's single digest authority
 //! ([`agentkit_store::run_profile_digest`]). The seal rides the SAME
 //! admission transaction as the AGENTKIT-88 binding
-//! ([`crate::TeammateService::admit`]); revocation of anything referenced
+//! (`TeammateService::admit` (agentkit-agents)); revocation of anything referenced
 //! fences NEW dispatch through the store's one check-at-use evaluator.
 //!
 //! Refusals, all stable-coded under `run_profile_refused:`:

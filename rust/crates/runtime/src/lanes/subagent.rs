@@ -7,14 +7,15 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use agentkit_agents::{
+    AgentsError, AgentsResult, SubagentConfig, SubagentContributor, SubagentRoleGuard,
+    SubagentService, SubagentView,
+};
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor, ToolGuard,
     ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_host::{
-    DelegationGuidance, HostResult, SubagentConfig, SubagentContributor, SubagentRoleGuard,
-    SubagentService, SubagentView, TaskSettledObserver,
-};
+use agentkit_host::{DelegationGuidance, HostResult, TaskSettledObserver};
 use agentkit_store::TaskRecord;
 
 use crate::error::RuntimeError;
@@ -105,24 +106,20 @@ impl SubagentLane {
         .ok()
     }
 
-    pub(crate) async fn reap_orphans(&self) -> HostResult<usize> {
+    pub(crate) async fn reap_orphans(&self) -> AgentsResult<usize> {
         match self.service() {
             Some(service) => service.reap_orphans().await,
             None => Ok(0),
         }
     }
 
-    pub async fn list(&self, parent_chat_id: &str) -> HostResult<Vec<SubagentView>> {
-        let service = self.service().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::error::SUBAGENTS_NOT_CONFIGURED.into())
-        })?;
+    pub async fn list(&self, parent_chat_id: &str) -> AgentsResult<Vec<SubagentView>> {
+        let service = self.service().ok_or(AgentsError::SubagentsNotConfigured)?;
         service.list(parent_chat_id).await
     }
 
-    pub async fn status(&self, child_chat_id: &str) -> HostResult<SubagentView> {
-        let service = self.service().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::error::SUBAGENTS_NOT_CONFIGURED.into())
-        })?;
+    pub async fn status(&self, child_chat_id: &str) -> AgentsResult<SubagentView> {
+        let service = self.service().ok_or(AgentsError::SubagentsNotConfigured)?;
         service.status(child_chat_id).await
     }
 }
@@ -210,7 +207,7 @@ impl DelegationGuidance for SubagentLane {
 impl TaskSettledObserver for SubagentLane {
     async fn observe_settled(&self, task: &TaskRecord) -> HostResult<()> {
         match self.service() {
-            Some(service) => service.observe_settled(task).await,
+            Some(service) => Ok(service.observe_settled(task).await?),
             None => Ok(()),
         }
     }

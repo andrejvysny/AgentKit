@@ -1,6 +1,7 @@
 use super::config::{AdvisorConfig, FindingCategory, FindingSeverity, ReviewRequest};
+use crate::{AgentsError, AgentsResult};
 use agentkit_core::{
-    ChatMessage, ChatProvider, ChatRequest, CoreError, ExecutionBudget, RunOptions, Terminal, Tool,
+    ChatMessage, ChatProvider, ChatRequest, ExecutionBudget, RunOptions, Terminal, Tool,
     ToolLimits, ToolRegistry, run_chat,
 };
 use agentkit_kernel::sha256_hex;
@@ -139,7 +140,7 @@ pub struct AdvisorEngine {
     config: Arc<Mutex<AdvisorConfig>>,
     tools: Arc<dyn AdvisorToolSource>,
     events: Option<Arc<dyn AdvisorEventSink>>,
-    session: crate::AgentSessionService,
+    session: agentkit_host::AgentSessionService,
     /// Resizable at `configure` time: the permit pool is swapped to honor a
     /// hot `maxReviewConcurrency` change ("applies to the next review").
     /// In-flight holders keep the old pool until they finish.
@@ -152,11 +153,20 @@ pub struct AdvisorEngine {
     model_override: Option<String>,
     /// Providers an advisor/watchdog `providerId` may name; absent = only
     /// the default provider is routable.
-    providers: Option<Arc<crate::ProviderRegistry>>,
+    providers: Option<Arc<agentkit_host::ProviderRegistry>>,
+}
+
+/// The fixed inputs of one bounded advisor tool loop.
+struct LoopRun<'a> {
+    provider: &'a Arc<dyn ChatProvider>,
+    registry: &'a Arc<ToolRegistry>,
+    model: &'a str,
+    config: &'a AdvisorConfig,
+    run_id: &'a str,
+    cancellation: &'a CancellationToken,
 }
 
 impl AdvisorEngine {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn ChatProvider>,
         store: SqliteStore,
@@ -164,7 +174,7 @@ impl AdvisorEngine {
         config: AdvisorConfig,
         tools: Arc<dyn AdvisorToolSource>,
         events: Option<Arc<dyn AdvisorEventSink>>,
-        session: crate::AgentSessionService,
+        session: agentkit_host::AgentSessionService,
     ) -> Self {
         let config = config.effective();
         let reviews = Arc::new(tokio::sync::Semaphore::new(
@@ -185,7 +195,7 @@ impl AdvisorEngine {
         }
     }
 
-    pub fn with_providers(mut self, providers: Arc<crate::ProviderRegistry>) -> Self {
+    pub fn with_providers(mut self, providers: Arc<agentkit_host::ProviderRegistry>) -> Self {
         self.providers = Some(providers);
         self
     }
@@ -197,7 +207,7 @@ impl AdvisorEngine {
         &self,
         config: &AdvisorConfig,
         origin: &ReviewOrigin,
-    ) -> crate::HostResult<Arc<dyn ChatProvider>> {
+    ) -> AgentsResult<Arc<dyn ChatProvider>> {
         let (pinned, model) = match origin {
             ReviewOrigin::Explicit => (&config.provider_id, &config.model),
             ReviewOrigin::Watchdog { .. } => (&config.watchdog_provider_id, &config.watchdog_model),
@@ -212,11 +222,9 @@ impl AdvisorEngine {
             .providers
             .as_ref()
             .and_then(|registry| registry.get(id))
-            .ok_or_else(|| {
-                crate::HostError::Execution(format!("advisor_provider_unavailable: {id}"))
-            })?;
+            .ok_or_else(|| AgentsError::execution(format!("advisor_provider_unavailable: {id}")))?;
         if model.as_deref().is_none_or(str::is_empty) && self.model_override.is_none() {
-            return Err(crate::HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "advisor_model_required: provider {id} needs an explicit model"
             )));
         }
@@ -239,11 +247,11 @@ impl AdvisorEngine {
     }
 
     /// The reviewed chat's durable session model, when it is a session.
-    async fn session_model(&self, chat_id: &str) -> crate::HostResult<Option<String>> {
+    async fn session_model(&self, chat_id: &str) -> AgentsResult<Option<String>> {
         let Some(chat) = self.store.get_chat(chat_id).await? else {
             return Ok(None);
         };
-        Ok(crate::read_session_descriptor(&chat.metadata)
+        Ok(agentkit_host::read_session_descriptor(&chat.metadata)
             .and_then(|descriptor| descriptor["model"].as_str().map(str::to_owned))
             .filter(|model| !model.is_empty()))
     }
@@ -285,7 +293,7 @@ impl AdvisorEngine {
         request: &ReviewRequest,
         origin: ReviewOrigin,
         cancellation: CancellationToken,
-    ) -> crate::HostResult<AdvisorReport> {
+    ) -> AgentsResult<AdvisorReport> {
         // Permit BEFORE the window slot: a saturated engine must refuse
         // without spending budget it will never use.
         let permit = self.acquire_permit()?;
@@ -294,7 +302,7 @@ impl AdvisorEngine {
             .await
     }
 
-    fn acquire_permit(&self) -> crate::HostResult<tokio::sync::OwnedSemaphorePermit> {
+    fn acquire_permit(&self) -> AgentsResult<tokio::sync::OwnedSemaphorePermit> {
         let reviews = self
             .reviews
             .lock()
@@ -302,16 +310,16 @@ impl AdvisorEngine {
             .clone();
         reviews
             .try_acquire_owned()
-            .map_err(|_| crate::HostError::Execution("advisor_saturated".into()))
+            .map_err(|_| AgentsError::execution("advisor_saturated".into()))
     }
 
     /// Kill switch + loop guard (part 1: reviews never review reviews).
-    fn admit(&self, chat_id: &str) -> crate::HostResult<()> {
+    fn admit(&self, chat_id: &str) -> AgentsResult<()> {
         if !self.config().enabled {
-            return Err(crate::HostError::Execution("advisor_disabled".into()));
+            return Err(AgentsError::execution("advisor_disabled".into()));
         }
         if is_advisor_chat_id(chat_id) {
-            return Err(crate::HostError::Execution(
+            return Err(AgentsError::execution(
                 "advisor may not review an advisor run".into(),
             ));
         }
@@ -329,7 +337,7 @@ impl AdvisorEngine {
         &self,
         chat_id: &str,
         origin: &ReviewOrigin,
-    ) -> crate::HostResult<ReviewReservation> {
+    ) -> AgentsResult<ReviewReservation> {
         self.admit(chat_id)?;
         // Permit BEFORE the window slot, carried in the reservation: a
         // saturated pool refuses without spending budget, and nothing can
@@ -349,7 +357,7 @@ impl AdvisorEngine {
         &self,
         chat_id: &str,
         origin: &ReviewOrigin,
-    ) -> crate::HostResult<(String, i64)> {
+    ) -> AgentsResult<(String, i64)> {
         self.admit(chat_id)?;
         let config = self.config();
         let gate = {
@@ -376,7 +384,7 @@ impl AdvisorEngine {
         chat_id: &str,
         origin: &ReviewOrigin,
         config: &AdvisorConfig,
-    ) -> crate::HostResult<(String, i64)> {
+    ) -> AgentsResult<(String, i64)> {
         // Unique per attempt (clock + process-local counter): keeps repeat
         // reviews' finding ids from replaying the first attempt's rows.
         static ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -401,12 +409,12 @@ impl AdvisorEngine {
             )
             .await
             .map_err(|error| {
-                crate::HostError::Execution(format!(
+                AgentsError::execution(format!(
                     "advisor_rate_limited: review budget unavailable: {error}"
                 ))
             })?;
         if !reserved {
-            return Err(crate::HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "advisor_rate_limited: {} reviews already started for this chat within {} ms",
                 config.reviews_per_window, config.window_ms
             )));
@@ -423,7 +431,7 @@ impl AdvisorEngine {
         origin: ReviewOrigin,
         cancellation: CancellationToken,
         reservation: ReviewReservation,
-    ) -> crate::HostResult<AdvisorReport> {
+    ) -> AgentsResult<AdvisorReport> {
         let ReviewReservation {
             run_id,
             started_at,
@@ -440,14 +448,14 @@ impl AdvisorEngine {
         cancellation: CancellationToken,
         (run_id, _started_at): (String, i64),
         _permit: tokio::sync::OwnedSemaphorePermit,
-    ) -> crate::HostResult<AdvisorReport> {
+    ) -> AgentsResult<AdvisorReport> {
         let config = self.config();
         if !config.enabled {
-            return Err(crate::HostError::Execution("advisor_disabled".into()));
+            return Err(AgentsError::execution("advisor_disabled".into()));
         }
         if is_advisor_chat_id(&request.chat_id) {
             // Loop guard, part 1: reviews never review reviews.
-            return Err(crate::HostError::Execution(
+            return Err(AgentsError::execution(
                 "advisor may not review an advisor run".into(),
             ));
         }
@@ -462,7 +470,7 @@ impl AdvisorEngine {
             // own durable session model. Never send an empty `model` — a
             // provider rejects it, failing every review opaquely.
             None => self.session_model(&request.chat_id).await?.ok_or_else(|| {
-                crate::HostError::Execution(
+                AgentsError::execution(
                     "advisor_model_unconfigured: set advisor `model`/`watchdogModel` \
                          or review a session chat with a model"
                         .into(),
@@ -484,17 +492,15 @@ impl AdvisorEngine {
             ChatMessage::text("system", &system),
             ChatMessage::text("user", &user),
         ];
-        let first = self
-            .run_once(
-                &provider,
-                &registry,
-                &model,
-                request_messages.clone(),
-                &config,
-                &run_id,
-                &cancellation,
-            )
-            .await?;
+        let run = LoopRun {
+            provider: &provider,
+            registry: &registry,
+            model: &model,
+            config: &config,
+            run_id: &run_id,
+            cancellation: &cancellation,
+        };
+        let first = self.run_once(&run, request_messages.clone()).await?;
         let (content, mut report) = match parse_report(&first, config.max_findings) {
             Some(report) => (first, report),
             None => {
@@ -511,17 +517,7 @@ impl AdvisorEngine {
                      \"title\": string, \"evidence\": [{\"file\"?: string, \"line\"?: number, \
                      \"detail\": string}], \"recommendation\"?: string}]}.",
                 ));
-                let second = self
-                    .run_once(
-                        &provider,
-                        &registry,
-                        &model,
-                        repair,
-                        &config,
-                        &run_id,
-                        &cancellation,
-                    )
-                    .await?;
+                let second = self.run_once(&run, repair).await?;
                 match parse_report(&second, config.max_findings) {
                     Some(report) => (second, report),
                     None => {
@@ -646,7 +642,7 @@ impl AdvisorEngine {
                 .session
                 .steer_live(
                     &request.chat_id,
-                    &crate::SteerInput {
+                    &agentkit_host::SteerInput {
                         content: Value::String(note),
                         input_id: Some(request_id),
                         turn_id: None,
@@ -666,17 +662,19 @@ impl AdvisorEngine {
         Ok(report)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn run_once(
         &self,
-        provider: &Arc<dyn ChatProvider>,
-        registry: &Arc<ToolRegistry>,
-        model: &str,
+        run: &LoopRun<'_>,
         messages: Vec<ChatMessage>,
-        config: &AdvisorConfig,
-        run_id: &str,
-        cancellation: &CancellationToken,
-    ) -> crate::HostResult<String> {
+    ) -> AgentsResult<String> {
+        let LoopRun {
+            provider,
+            registry,
+            model,
+            config,
+            run_id,
+            cancellation,
+        } = *run;
         let limits = agentkit_core::BudgetLimits {
             provider_requests: config.provider_requests,
             overall_ms: config.overall_timeout_ms,
@@ -685,7 +683,7 @@ impl AdvisorEngine {
         };
         let budget = Arc::new(
             ExecutionBudget::new(limits, self.runtime.clone(), None)
-                .map_err(|error| crate::HostError::Execution(format!("invalid_budget: {error}")))?,
+                .map_err(|error| AgentsError::execution(format!("invalid_budget: {error}")))?,
         );
         let request = ChatRequest {
             run_id: run_id.to_owned(),
@@ -713,12 +711,12 @@ impl AdvisorEngine {
         let result = handle
             .result
             .await
-            .map_err(|error| crate::HostError::Execution(format!("advisor join: {error}")))?;
+            .map_err(|error| AgentsError::execution(format!("advisor join: {error}")))?;
         match result.terminal {
             Terminal::Completed => {}
-            Terminal::Cancelled => return Err(crate::HostError::Cancelled),
+            Terminal::Cancelled => return Err(AgentsError::cancelled()),
             Terminal::Failed => {
-                return Err(crate::HostError::Execution(
+                return Err(AgentsError::execution(
                     "advisor run failed (budget or provider)".into(),
                 ));
             }
@@ -853,13 +851,6 @@ fn parse_report(raw: &str, max_findings: usize) -> Option<AdvisorReport> {
         findings,
         finding_ids: vec![],
     })
-}
-
-/// Map a core error into the host's error channel.
-impl From<CoreError> for crate::HostError {
-    fn from(error: CoreError) -> Self {
-        crate::HostError::Execution(format!("{}: {}", error.code, error.message))
-    }
 }
 
 #[cfg(test)]

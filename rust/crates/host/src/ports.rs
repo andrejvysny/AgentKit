@@ -46,6 +46,17 @@ pub trait TaskSettledObserver: Send + Sync {
     async fn observe_settled(&self, task: &agentkit_store::TaskRecord) -> HostResult<()>;
 }
 
+/// Subagent coordination tools that change durable child state. They keep
+/// `effect: "read"` so the permission modes still admit them, but must carry
+/// execution receipts: on an attempt replay the recorded result is served
+/// instead of re-running the spawn/message/cancel/resume.
+pub fn is_mutating_subagent_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "subagent_spawn" | "subagent_message" | "subagent_cancel" | "subagent_resume"
+    )
+}
+
 /// Per-turn delegation guidance (subagent instructions) consulted by the
 /// executor for session turns. Implementations read durable/host config,
 /// never process-memory caches a restart could not rebuild.

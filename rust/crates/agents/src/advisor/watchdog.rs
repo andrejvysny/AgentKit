@@ -1,7 +1,8 @@
 use super::config::{AdvisorConfig, ReviewRequest};
 use super::engine::{AdvisorEngine, ReviewOrigin, is_advisor_chat_id};
-use crate::{CHAT_TURN_TASK_KIND, HostError, HostResult, SharedRuntime, TaskSettledObserver};
+use crate::{AgentsError, AgentsResult};
 use agentkit_core::{RunHooks, ToolCall};
+use agentkit_host::{CHAT_TURN_TASK_KIND, HostResult, SharedRuntime, TaskSettledObserver};
 use agentkit_store::{SqliteStore, TaskRecord, TaskStatus};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -567,9 +568,9 @@ pub async fn explicit_review(
     chat_id: &str,
     focus: String,
     cancellation: CancellationToken,
-) -> HostResult<super::engine::AdvisorReport> {
+) -> AgentsResult<super::engine::AdvisorReport> {
     if chat_id.is_empty() {
-        return Err(HostError::Execution("chatId is required".into()));
+        return Err(AgentsError::execution("chatId is required".into()));
     }
     engine
         .review(

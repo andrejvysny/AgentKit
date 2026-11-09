@@ -4,6 +4,7 @@
 //! derived display state, the mailbox, and a single-worker parent wait
 //! that releases executor capacity while keeping run ownership.
 
+use agentkit_agents::*;
 use agentkit_host::*;
 use agentkit_store::{
     AgentDefinition, AgentInputKind, AgentInputStatus, ClaimInput, CreateAgent, CreateAgentMailbox,
@@ -188,7 +189,7 @@ async fn unknown_agent_refuses_admission() {
         .expect_err("unknown agent is absence");
     assert!(matches!(
         error,
-        HostError::Store(agentkit_store::StoreError::NotFound(_))
+        AgentsError::Host(HostError::Store(agentkit_store::StoreError::NotFound(_)))
     ));
 }
 

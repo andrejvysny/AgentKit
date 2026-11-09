@@ -15,10 +15,11 @@ use napi::bindgen_prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use agentkit_agents::{AgentDefinitionService, AgentsError, TeammateAdmission, TeammateService};
 use agentkit_host::{
-    AgentDefinitionService, ApprovalGrantRef, ContextUnit, ContextUnitKind, ProjectSelection,
-    RunProfileDefaults, RunProfileService, Runtime, SelectedSource, SelectedSourceKind,
-    SharedRuntime, SystemRuntime, TaskProfileOverrides, TeammateAdmission, TeammateService,
+    ApprovalGrantRef, ContextUnit, ContextUnitKind, ProjectSelection, RunProfileDefaults,
+    RunProfileService, Runtime, SelectedSource, SelectedSourceKind, SharedRuntime, SystemRuntime,
+    TaskProfileOverrides,
 };
 use agentkit_store::{AgentDefinition, CreateAgent, SqliteStore, redact_event};
 
@@ -466,14 +467,19 @@ impl NativeTeammates {
 /// (`invalid_input`); store transition and duplicate legality keep this
 /// lane's namespace codes; everything else maps exactly as the crate-wide
 /// host mapping.
-fn map_host(error: agentkit_host::HostError) -> Error {
+fn map_host(error: impl Into<AgentsError>) -> Error {
     use agentkit_host::HostError as H;
     use agentkit_store::StoreError as S;
+    let error = match error.into() {
+        AgentsError::Host(inner) => inner,
+        refusal @ (AgentsError::InvalidAgent(_) | AgentsError::InvalidAdmission(_)) => {
+            return errors::invalid(refusal.to_string());
+        }
+        other => return errors::agents(other),
+    };
+    // Raised by the host-owned run-profile resolver, not the agents context.
     if let H::Execution(message) = &error
-        && (message.starts_with("invalid_agent")
-            || message.starts_with("invalid_admission")
-            || message.starts_with("invalid_overrides")
-            || message.starts_with("run_profile_refused"))
+        && (message.starts_with("invalid_overrides") || message.starts_with("run_profile_refused"))
     {
         return errors::invalid(message.clone());
     }

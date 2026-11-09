@@ -4,12 +4,13 @@
 //! the same tree total as the original one.
 
 use super::service::{SUBAGENT_PROVIDER_REQUESTS_CEILING, is_terminal_status};
-use crate::{CHAT_TURN_TASK_KIND, HostError, HostResult};
+use crate::{AgentsError, AgentsResult};
+use agentkit_host::CHAT_TURN_TASK_KIND;
 use agentkit_store::{SqliteStore, SubagentRecord};
 use std::collections::HashSet;
 
-fn exhausted(detail: String) -> HostError {
-    HostError::Execution(format!("subagent_budget_exhausted: {detail}"))
+fn exhausted(detail: String) -> AgentsError {
+    AgentsError::execution(format!("subagent_budget_exhausted: {detail}"))
 }
 
 /// Topmost non-subagent ancestor of `chat_id`. Prefers the `rootChatId`
@@ -20,7 +21,7 @@ pub(super) async fn root_of(
     store: &SqliteStore,
     chat_id: &str,
     max_depth: i64,
-) -> HostResult<String> {
+) -> AgentsResult<String> {
     let mut current = chat_id.to_owned();
     for _ in 0..=max_depth.max(0) + 1 {
         let Some(row) = store.get_subagent(&current).await? else {
@@ -41,7 +42,7 @@ pub(super) async fn root_of(
 
 /// Every subagent row below `root`, found by descending registry parent
 /// links (which also covers legacy rows that carry no `rootChatId`).
-async fn tree_rows(store: &SqliteStore, root: &str) -> HostResult<Vec<SubagentRecord>> {
+async fn tree_rows(store: &SqliteStore, root: &str) -> AgentsResult<Vec<SubagentRecord>> {
     let mut seen = HashSet::from([root.to_owned()]);
     let mut frontier = vec![root.to_owned()];
     let mut rows = Vec::new();
@@ -58,7 +59,7 @@ async fn tree_rows(store: &SqliteStore, root: &str) -> HostResult<Vec<SubagentRe
 
 /// The provider requests a child holds in reserve: its spawn-time limit, or
 /// the absolute ceiling when none was recorded.
-async fn reservation_of(store: &SqliteStore, child_chat_id: &str) -> HostResult<u64> {
+async fn reservation_of(store: &SqliteStore, child_chat_id: &str) -> AgentsResult<u64> {
     let reserved = store.get_chat(child_chat_id).await?.and_then(|chat| {
         chat.metadata["agentkit.subagent"]["limits"]["maxProviderRequests"].as_u64()
     });
@@ -75,7 +76,7 @@ async fn child_charge(
     store: &SqliteStore,
     row: &SubagentRecord,
     starting_turn: bool,
-) -> HostResult<u64> {
+) -> AgentsResult<u64> {
     let reservation = reservation_of(store, &row.child_chat_id).await?;
     let tasks = store.list_tasks(Some(row.child_chat_id.clone())).await?;
     let mut charged = 0u64;
@@ -108,7 +109,7 @@ pub(super) async fn tree_charge(
     store: &SqliteStore,
     root: &str,
     starting: Option<&str>,
-) -> HostResult<u64> {
+) -> AgentsResult<u64> {
     let mut charged = 0u64;
     for row in tree_rows(store, root).await? {
         let starting_turn = starting == Some(row.child_chat_id.as_str());
@@ -125,7 +126,7 @@ pub(super) async fn reserve_for_spawn(
     root: &str,
     limit: u64,
     requested: u64,
-) -> HostResult<u64> {
+) -> AgentsResult<u64> {
     let charged = tree_charge(store, root, None).await?;
     let remaining = limit.saturating_sub(charged);
     if remaining == 0 {
@@ -143,7 +144,7 @@ pub(super) async fn check_resume(
     child_chat_id: &str,
     limit: u64,
     max_depth: i64,
-) -> HostResult<()> {
+) -> AgentsResult<()> {
     let root = root_of(store, child_chat_id, max_depth).await?;
     if root == child_chat_id {
         // Overflow/cycle fallback: no tree to charge against.

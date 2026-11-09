@@ -31,25 +31,26 @@
 //!   references, duplicate strips them, and export/import never carries
 //!   them across a boundary.
 
-use crate::{HostError, HostResult, SharedRuntime, SystemRuntime};
+use crate::{AgentsError, AgentsResult};
 use agentkit_core::{ReasoningEffort, permission::CodingMode};
+use agentkit_host::{SharedRuntime, SystemRuntime};
 use agentkit_store::{
     AgentDefinition, AgentDeletionPreview, AgentExportEnvelope, AgentRecord, AgentRevision,
     AgentRevisionSource, CreateAgent, DuplicateAgent, SetAgentModel, SqliteStore, UpdateAgent,
 };
 
-fn invalid(message: impl std::fmt::Display) -> HostError {
-    HostError::Execution(format!("invalid_agent: {message}"))
+fn invalid(message: impl std::fmt::Display) -> AgentsError {
+    AgentsError::InvalidAgent(message.to_string())
 }
 
-fn not_found(agent_id: &str) -> HostError {
-    HostError::NotFound(format!("agent_not_found: {agent_id}"))
+fn not_found(agent_id: &str) -> AgentsError {
+    AgentsError::not_found(format!("agent_not_found: {agent_id}"))
 }
 
 /// Validate the semantic vocabulary the durable store keeps as bounded
 /// strings: the permission ceiling must be a core permission mode, the
 /// reasoning effort a core effort level, and a named model a real string.
-pub fn validate_agent_definition(definition: &AgentDefinition) -> HostResult<()> {
+pub fn validate_agent_definition(definition: &AgentDefinition) -> AgentsResult<()> {
     if definition.name.trim().is_empty() {
         return Err(invalid("name must not be blank"));
     }
@@ -110,15 +111,15 @@ impl AgentDefinitionService {
 
     /// Create a durable agent identity. The definition's vocabulary is
     /// validated here; the store enforces the structural bounds beneath.
-    pub async fn create(&self, mut input: CreateAgent) -> HostResult<AgentRecord> {
+    pub async fn create(&self, mut input: CreateAgent) -> AgentsResult<AgentRecord> {
         validate_agent_definition(&input.definition)?;
         input.now = self.runtime.now_ms();
         Ok(self.store.create_agent(input).await?)
     }
 
     /// Read a live agent; tombstones and unknown ids are
-    /// [`HostError::NotFound`] with the stable `agent_not_found` code.
-    pub async fn get(&self, agent_id: &str) -> HostResult<AgentRecord> {
+    /// [`AgentsError::Host`] with the stable `agent_not_found` code.
+    pub async fn get(&self, agent_id: &str) -> AgentsResult<AgentRecord> {
         self.store
             .get_agent(agent_id.to_owned())
             .await?
@@ -126,12 +127,12 @@ impl AgentDefinitionService {
     }
 
     /// List the live agents (active and archived) of one scope.
-    pub async fn list(&self, scope: &str) -> HostResult<Vec<AgentRecord>> {
+    pub async fn list(&self, scope: &str) -> AgentsResult<Vec<AgentRecord>> {
         Ok(self.store.list_agents(scope.to_owned()).await?)
     }
 
     /// The append-only configuration ledger of one agent, oldest first.
-    pub async fn revisions(&self, agent_id: &str) -> HostResult<Vec<AgentRevision>> {
+    pub async fn revisions(&self, agent_id: &str) -> AgentsResult<Vec<AgentRevision>> {
         Ok(self.store.list_agent_revisions(agent_id.to_owned()).await?)
     }
 
@@ -145,7 +146,7 @@ impl AgentDefinitionService {
         agent_id: &str,
         expected_revision: i64,
         definition: AgentDefinition,
-    ) -> HostResult<AgentRecord> {
+    ) -> AgentsResult<AgentRecord> {
         validate_agent_definition(&definition)?;
         let current = self.get(agent_id).await?;
         let source = if definition.model != current.definition.model
@@ -183,7 +184,7 @@ impl AgentDefinitionService {
         expected_revision: i64,
         model: Option<String>,
         reasoning_effort: Option<String>,
-    ) -> HostResult<AgentRecord> {
+    ) -> AgentsResult<AgentRecord> {
         if let Some(model) = &model
             && model.trim().is_empty()
         {
@@ -208,7 +209,7 @@ impl AgentDefinitionService {
     /// Archive an agent: [`Self::check_admission`] refuses new work from
     /// now on, while the row, its configuration, and its whole ledger
     /// stay durable. Idempotent.
-    pub async fn archive(&self, agent_id: &str) -> HostResult<AgentRecord> {
+    pub async fn archive(&self, agent_id: &str) -> AgentsResult<AgentRecord> {
         Ok(self
             .store
             .archive_agent(agent_id.to_owned(), self.runtime.now_ms())
@@ -217,7 +218,7 @@ impl AgentDefinitionService {
 
     /// Restore an archived agent to active, recording a `restore`
     /// revision so the lifecycle trajectory is auditable. Idempotent.
-    pub async fn restore(&self, agent_id: &str) -> HostResult<AgentRecord> {
+    pub async fn restore(&self, agent_id: &str) -> AgentsResult<AgentRecord> {
         Ok(self
             .store
             .restore_agent(agent_id.to_owned(), self.runtime.now_ms())
@@ -229,7 +230,7 @@ impl AgentDefinitionService {
     /// to pin the run against; an archived agent refuses with
     /// [`agentkit_store::StoreError::InvalidTransition`], an unknown or
     /// deleted one with [`agentkit_store::StoreError::NotFound`].
-    pub async fn check_admission(&self, agent_id: &str) -> HostResult<AgentRecord> {
+    pub async fn check_admission(&self, agent_id: &str) -> AgentsResult<AgentRecord> {
         Ok(self
             .store
             .check_agent_admission(agent_id.to_owned())
@@ -242,7 +243,7 @@ impl AgentDefinitionService {
     pub async fn deletion_preview(
         &self,
         agent_id: &str,
-    ) -> HostResult<Option<AgentDeletionPreview>> {
+    ) -> AgentsResult<Option<AgentDeletionPreview>> {
         Ok(self
             .store
             .preview_agent_deletion(agent_id.to_owned())
@@ -253,7 +254,7 @@ impl AgentDefinitionService {
     /// execution receipts refuse it (see
     /// [`Self::deletion_preview`]); nothing is erased — the reserved
     /// identity and the full configuration history stay durable.
-    pub async fn delete(&self, agent_id: &str) -> HostResult<AgentRecord> {
+    pub async fn delete(&self, agent_id: &str) -> AgentsResult<AgentRecord> {
         Ok(self
             .store
             .delete_agent(agent_id.to_owned(), self.runtime.now_ms())
@@ -270,7 +271,7 @@ impl AgentDefinitionService {
         &self,
         agent_id: &str,
         owner_id: Option<String>,
-    ) -> HostResult<AgentRecord> {
+    ) -> AgentsResult<AgentRecord> {
         Ok(self
             .store
             .duplicate_agent(DuplicateAgent {
@@ -284,7 +285,7 @@ impl AgentDefinitionService {
 
     /// Export a scope's live agents as the versioned, bounded envelope
     /// (secret references stripped; tombstones never exported).
-    pub async fn export(&self, scope: &str) -> HostResult<String> {
+    pub async fn export(&self, scope: &str) -> AgentsResult<String> {
         Ok(self.store.export_agents(scope.to_owned()).await?)
     }
 
@@ -297,7 +298,7 @@ impl AgentDefinitionService {
         &self,
         envelope: &str,
         expected_scope: &str,
-    ) -> HostResult<Vec<AgentRecord>> {
+    ) -> AgentsResult<Vec<AgentRecord>> {
         Ok(self
             .store
             .import_agents(envelope.to_owned(), expected_scope.to_owned())
@@ -306,7 +307,7 @@ impl AgentDefinitionService {
 
     /// The envelope this service's export produces, for callers that want
     /// the typed value rather than the JSON text.
-    pub fn parse_envelope(envelope: &str) -> HostResult<AgentExportEnvelope> {
+    pub fn parse_envelope(envelope: &str) -> AgentsResult<AgentExportEnvelope> {
         serde_json::from_str(envelope).map_err(|error| invalid(error.to_string()))
     }
 }

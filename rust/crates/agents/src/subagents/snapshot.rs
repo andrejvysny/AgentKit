@@ -3,6 +3,7 @@
 //! child, never widen it.
 
 use super::config::RoleSpec;
+use crate::SnapshotError;
 use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -61,21 +62,18 @@ impl RoleSnapshot {
     /// Parse the snapshot from a child's `agentkit.subagent` metadata.
     /// `Ok(None)` = legacy child (no snapshot); `Err` = present but
     /// malformed or tampered, which the guard must treat as deny-all.
-    pub fn from_metadata(meta: &Value) -> Result<Option<Self>, String> {
+    pub fn from_metadata(meta: &Value) -> Result<Option<Self>, SnapshotError> {
         let Some(raw) = meta.get("roleSnapshot") else {
             return Ok(None);
         };
         let snapshot: Self = serde_json::from_value(raw.clone())
-            .map_err(|error| format!("malformed role snapshot: {error}"))?;
+            .map_err(|error| SnapshotError::Malformed(error.to_string()))?;
         if snapshot.version != SNAPSHOT_VERSION {
-            return Err(format!(
-                "unsupported role snapshot version {}",
-                snapshot.version
-            ));
+            return Err(SnapshotError::UnsupportedVersion(snapshot.version));
         }
         match meta.get("roleDigest").and_then(Value::as_str) {
             Some(digest) if digest == snapshot.digest() => Ok(Some(snapshot)),
-            _ => Err("role snapshot digest mismatch".to_owned()),
+            _ => Err(SnapshotError::DigestMismatch),
         }
     }
 }

@@ -4,14 +4,16 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use agentkit_agents::{
+    AdvisorConfig, AdvisorContributor, AdvisorEngine, AdvisorEventSink, AdvisorReport,
+    AdvisorToolSource, AdvisorTools, AgentsError, AgentsResult, Watchdog, WatchdogRunHooks,
+};
 use agentkit_core::{ChatProvider, RunHooks};
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
 use agentkit_host::{
-    AdvisorConfig, AdvisorContributor, AdvisorEngine, AdvisorEventSink, AdvisorReport,
-    AdvisorToolSource, AdvisorTools, AgentSessionService, HostResult, ProviderRegistry,
-    SharedRuntime, TaskSettledObserver, Watchdog, WatchdogRunHooks,
+    AgentSessionService, HostResult, ProviderRegistry, SharedRuntime, TaskSettledObserver,
 };
 use agentkit_store::TaskRecord;
 use std::sync::Mutex as StdMutex;
@@ -178,11 +180,9 @@ impl AdvisorLane {
             .clone()
     }
 
-    pub async fn review(&self, chat_id: &str, focus: String) -> HostResult<AdvisorReport> {
-        let state = self.state().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::error::ADVISOR_NOT_CONFIGURED.into())
-        })?;
-        agentkit_host::explicit_review(
+    pub async fn review(&self, chat_id: &str, focus: String) -> AgentsResult<AdvisorReport> {
+        let state = self.state().ok_or(AgentsError::AdvisorNotConfigured)?;
+        agentkit_agents::explicit_review(
             &state.engine,
             chat_id,
             focus,
@@ -195,10 +195,8 @@ impl AdvisorLane {
         &self,
         chat_id: &str,
         limit: i64,
-    ) -> HostResult<Vec<agentkit_store::AdvisorFindingRecord>> {
-        let state = self.state().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::error::ADVISOR_NOT_CONFIGURED.into())
-        })?;
+    ) -> AgentsResult<Vec<agentkit_store::AdvisorFindingRecord>> {
+        let state = self.state().ok_or(AgentsError::AdvisorNotConfigured)?;
         let records = state.store.list_advisor_findings(chat_id, limit).await?;
         Ok(records)
     }

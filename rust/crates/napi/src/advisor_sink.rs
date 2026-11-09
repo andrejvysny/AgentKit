@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use agentkit_host::AdvisorEventSink;
+use agentkit_agents::AdvisorEventSink;
 
 /// The bridge forwards `advisor.finding` escalations to the JS host as
 /// ordinary service events (same channel, `kind` discriminator).

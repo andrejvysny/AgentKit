@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 agentkit-core = { workspace = true }
 agentkit-governance = { workspace = true }
+agentkit-agents = { workspace = true }
 agentkit-host = { workspace = true }
 agentkit-providers = { workspace = true }
 agentkit-store = { workspace = true }

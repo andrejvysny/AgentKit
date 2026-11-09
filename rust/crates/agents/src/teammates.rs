@@ -1,7 +1,7 @@
 //! Durable teammate admission and run ownership (AGENTKIT-88): the
 //! service boundary over the store's admission ledger, mailbox, and
 //! attempt fencing — on the EXISTING [`agentkit_store`] task engine and
-//! the host [`crate::AgentHost`] runner. No second queue, no second task
+//! the host [`agentkit_host::AgentHost`] runner. No second queue, no second task
 //! store.
 //!
 //! What this layer guarantees, on top of the store primitives:
@@ -26,7 +26,8 @@
 //!   store's lease check by attempt/lease generation; the service adds
 //!   no bypass.
 
-use crate::{HostError, HostResult, SharedRuntime};
+use crate::{AgentsError, AgentsResult};
+use agentkit_host::SharedRuntime;
 use agentkit_store::{
     AdmitTeammateTask, AdmittedTask, AgentDisplayState, AgentInputRecord, AgentInputStatus,
     AgentTaskPage, CreateAgentMailbox, PromoteMailbox, SqliteStore, TaskRecord, TaskStatus,
@@ -49,7 +50,7 @@ pub struct TeammateAdmission {
     pub depends_on: Vec<String>,
     pub parent_task_id: Option<String>,
     /// AGENTKIT-89: the sealed effective run profile from
-    /// [`crate::RunProfileService::resolve`]. It is pinned INSIDE the
+    /// [`agentkit_host::RunProfileService::resolve`]. It is pinned INSIDE the
     /// admission transaction — the admitted task's durable binding, not a
     /// second ledger. `None` admits without a profile (pre-89 shape).
     pub run_profile: Option<agentkit_store::PinnedRunProfile>,
@@ -57,7 +58,7 @@ pub struct TeammateAdmission {
 
 /// The host service boundary for persistent-agent admission. Cheap to
 /// clone: everything shared is the store handle and the injected
-/// runtime, exactly like [`crate::AgentDefinitionService`].
+/// runtime, exactly like [`agentkit_host::AgentDefinitionService`].
 #[derive(Clone)]
 pub struct TeammateService {
     store: SqliteStore,
@@ -83,15 +84,15 @@ impl TeammateService {
     /// runs before the gate so an orphaned run of an agent that was
     /// archived mid-flight is still classified; it is a store
     /// transaction that changes only provably-orphaned tasks.
-    pub async fn admit(&self, input: TeammateAdmission) -> HostResult<AdmittedTask> {
+    pub async fn admit(&self, input: TeammateAdmission) -> AgentsResult<AdmittedTask> {
         if input.admission_key.trim().is_empty() {
-            return Err(HostError::Execution(
-                "invalid_admission: admissionKey must be non-empty".into(),
+            return Err(AgentsError::InvalidAdmission(
+                "admissionKey must be non-empty".into(),
             ));
         }
         if input.kind.trim().is_empty() {
-            return Err(HostError::Execution(
-                "invalid_admission: kind must be non-empty".into(),
+            return Err(AgentsError::InvalidAdmission(
+                "kind must be non-empty".into(),
             ));
         }
         // "Reconcile unfinished runs before restarting admission":
@@ -129,7 +130,7 @@ impl TeammateService {
     /// cancellations. Hosts call this when resuming a persistent agent
     /// before letting workers claim again; [`Self::admit`] does it per
     /// admission as well.
-    pub async fn reconcile(&self, agent_id: &str) -> HostResult<Vec<TaskRecord>> {
+    pub async fn reconcile(&self, agent_id: &str) -> AgentsResult<Vec<TaskRecord>> {
         Ok(self
             .store
             .reconcile_agent_runs(agent_id.to_owned(), self.runtime.now_ms())
@@ -138,7 +139,7 @@ impl TeammateService {
 
     /// The agent's logical tasks, insertion-ordered. UNBOUNDED pure read;
     /// prefer [`Self::tasks_page`] for history.
-    pub async fn tasks(&self, agent_id: &str) -> HostResult<Vec<TaskRecord>> {
+    pub async fn tasks(&self, agent_id: &str) -> AgentsResult<Vec<TaskRecord>> {
         Ok(self.store.list_agent_tasks(agent_id.to_owned()).await?)
     }
 
@@ -150,7 +151,7 @@ impl TeammateService {
         agent_id: &str,
         before: Option<i64>,
         limit: usize,
-    ) -> HostResult<AgentTaskPage> {
+    ) -> AgentsResult<AgentTaskPage> {
         Ok(self
             .store
             .list_agent_tasks_page(agent_id.to_owned(), before, limit)
@@ -158,7 +159,7 @@ impl TeammateService {
     }
 
     /// The agent's unfinished tasks (not completed/failed/cancelled).
-    pub async fn unfinished_tasks(&self, agent_id: &str) -> HostResult<Vec<TaskRecord>> {
+    pub async fn unfinished_tasks(&self, agent_id: &str) -> AgentsResult<Vec<TaskRecord>> {
         Ok(self
             .store
             .list_agent_unfinished_tasks(agent_id.to_owned())
@@ -166,13 +167,13 @@ impl TeammateService {
     }
 
     /// Read one logical task by id (reconnect/history load path).
-    pub async fn task(&self, task_id: &str) -> HostResult<Option<TaskRecord>> {
+    pub async fn task(&self, task_id: &str) -> AgentsResult<Option<TaskRecord>> {
         Ok(self.store.get_task(task_id).await?)
     }
 
     /// The agent's display state, DERIVED from its task rows on every
     /// read — there is no truth column to drift.
-    pub async fn display_state(&self, agent_id: &str) -> HostResult<AgentDisplayState> {
+    pub async fn display_state(&self, agent_id: &str) -> AgentsResult<AgentDisplayState> {
         Ok(derive_agent_display_state(
             &self.unfinished_tasks(agent_id).await?,
         ))
@@ -181,7 +182,7 @@ impl TeammateService {
     /// Request cancellation of a logical task. A queued, parked, or
     /// backoff-parked task settles now; a running attempt observes the
     /// durable flag through the lease heartbeat (existing runner path).
-    pub async fn cancel(&self, task_id: &str) -> HostResult<TaskRecord> {
+    pub async fn cancel(&self, task_id: &str) -> AgentsResult<TaskRecord> {
         Ok(self
             .store
             .cancel_task(task_id, self.runtime.now_ms())
@@ -192,7 +193,7 @@ impl TeammateService {
     /// children: the attempt ends, the lease (and therefore the pool
     /// slot) is released, and the task keeps owning its agent lane.
     /// `false` means there was nothing to wait for — settle normally.
-    pub async fn wait_for_children(&self, fence: agentkit_store::LeaseFence) -> HostResult<bool> {
+    pub async fn wait_for_children(&self, fence: agentkit_store::LeaseFence) -> AgentsResult<bool> {
         Ok(self
             .store
             .wait_for_children(fence, self.runtime.now_ms())
@@ -201,7 +202,7 @@ impl TeammateService {
 
     /// Resolve a child wait: back to the queue for a fresh attempt on
     /// the SAME logical task.
-    pub async fn continue_after_children(&self, task_id: &str) -> HostResult<TaskRecord> {
+    pub async fn continue_after_children(&self, task_id: &str) -> AgentsResult<TaskRecord> {
         Ok(self
             .store
             .continue_after_children(task_id.to_owned(), self.runtime.now_ms())
@@ -215,7 +216,7 @@ impl TeammateService {
         &self,
         fence: agentkit_store::LeaseFence,
         reason: &str,
-    ) -> HostResult<TaskRecord> {
+    ) -> AgentsResult<TaskRecord> {
         Ok(self
             .store
             .mark_uncertain(fence, self.runtime.now_ms(), reason)
@@ -229,7 +230,7 @@ impl TeammateService {
         task_id: &str,
         to: TaskStatus,
         error: Option<String>,
-    ) -> HostResult<TaskRecord> {
+    ) -> AgentsResult<TaskRecord> {
         Ok(self
             .store
             .resolve_uncertain(task_id.to_owned(), to, error, self.runtime.now_ms())
@@ -242,7 +243,7 @@ impl TeammateService {
         &self,
         agent_id: &str,
         input: CreateAgentMailbox,
-    ) -> HostResult<(AgentInputRecord, bool)> {
+    ) -> AgentsResult<(AgentInputRecord, bool)> {
         Ok(self
             .store
             .enqueue_agent_mailbox(agent_id.to_owned(), input)
@@ -250,7 +251,7 @@ impl TeammateService {
     }
 
     /// The mailbox in durable FIFO order.
-    pub async fn pending_inputs(&self, agent_id: &str) -> HostResult<Vec<AgentInputRecord>> {
+    pub async fn pending_inputs(&self, agent_id: &str) -> AgentsResult<Vec<AgentInputRecord>> {
         Ok(self
             .store
             .list_agent_mailbox(agent_id.to_owned(), Some(vec![AgentInputStatus::Pending]))
@@ -266,7 +267,7 @@ impl TeammateService {
         agent_id: &str,
         kind: &str,
         priority: i32,
-    ) -> HostResult<Option<(AgentInputRecord, TaskRecord)>> {
+    ) -> AgentsResult<Option<(AgentInputRecord, TaskRecord)>> {
         Ok(self
             .store
             .promote_next_agent_mailbox(
@@ -281,7 +282,7 @@ impl TeammateService {
     }
 
     /// Cancel a still-pending mailbox input.
-    pub async fn cancel_input(&self, input_id: &str) -> HostResult<AgentInputRecord> {
+    pub async fn cancel_input(&self, input_id: &str) -> AgentsResult<AgentInputRecord> {
         Ok(self
             .store
             .cancel_agent_mailbox(input_id.to_owned(), self.runtime.now_ms())

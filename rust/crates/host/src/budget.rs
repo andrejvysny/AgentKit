@@ -52,6 +52,32 @@ pub struct RoleTaskOverrides {
     pub overall_timeout_ms: Option<u64>,
 }
 
+/// Per-role execution limits read from the child chat's durable metadata,
+/// consumed by the executor when the turn dispatches. Returns defaults for
+/// ordinary (non-subagent) sessions, so the executor path pays only one
+/// cheap metadata read it already performs.
+pub async fn task_overrides(
+    store: &agentkit_store::SqliteStore,
+    chat_id: &str,
+) -> HostResult<RoleTaskOverrides> {
+    let record = match store.get_chat(chat_id).await? {
+        Some(chat) => chat,
+        None => return Ok(RoleTaskOverrides::default()),
+    };
+    let limits = &record.metadata["agentkit.subagent"]["limits"];
+    Ok(RoleTaskOverrides {
+        max_tool_iterations: limits["maxToolIterations"]
+            .as_u64()
+            .map(|value| value.max(1) as u32),
+        max_provider_requests: limits["maxProviderRequests"]
+            .as_u64()
+            .map(|value| value.max(1)),
+        overall_timeout_ms: limits["overallTimeoutMs"]
+            .as_u64()
+            .filter(|value| *value >= 1000),
+    })
+}
+
 impl RoleTaskOverrides {
     /// Overlay the role's bounds onto the executor defaults: a role can
     /// only LOWER the provider-request and overall-time host ceilings;

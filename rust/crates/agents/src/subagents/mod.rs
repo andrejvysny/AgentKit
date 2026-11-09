@@ -34,7 +34,7 @@ pub use config::{
 pub use guard::{SubagentRoleGuard, WorkspaceLeaseRegistry};
 pub use service::{
     AwaitOutcome, AwaitResult, MessageReceipt, SpawnRequest, SpawnedChild, SubagentService,
-    SubagentView, child_identity, task_overrides,
+    SubagentView, child_identity,
 };
 pub use snapshot::{EffectiveRole, RoleSnapshot, effective_role};
-pub use tools::{SUBAGENT_TOOL_NAMES, SubagentContributor, is_mutating_subagent_tool};
+pub use tools::{SUBAGENT_TOOL_NAMES, SubagentContributor};

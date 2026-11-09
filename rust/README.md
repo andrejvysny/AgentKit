@@ -18,6 +18,7 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
 | `agentkit-host` | Durable execution, agent sessions with steering/human input/plan grants, native run handles and proposal application |
+| `agentkit-agents` | Agent definitions, teammate admission, subagent delegation and the advisor/watchdog over the host engine |
 | `agentkit-connections` | Application namespaces, immutable selection, consent, secret-store and network ports |
 | `agentkit-http` | Axum REST/SSE boundary, plus the desktop backend serving it from a local host |
 | `agentkit-client` | Native HTTP client, replay decoding and presentation state |

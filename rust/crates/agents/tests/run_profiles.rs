@@ -10,6 +10,7 @@
 //! their pinned meaning; revocation fences dispatch and surfaces in the
 //! explanation; and the explanation carries no secret material.
 
+use agentkit_agents::*;
 use agentkit_host::*;
 use agentkit_store::{
     AgentBudgets, AgentDefinition, ClaimInput, CreateAgent, PinnedRunProfile, SetAgentModel,

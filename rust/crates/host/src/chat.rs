@@ -381,7 +381,7 @@ impl TaskExecutor for ChatExecutor {
         // Subagent children carry per-role execution bounds on their chat
         // metadata; non-subagent sessions get defaults (no behavior change).
         let role_overrides = if session {
-            crate::subagents::task_overrides(&context.store, chat_id).await?
+            crate::budget::task_overrides(&context.store, chat_id).await?
         } else {
             crate::budget::RoleTaskOverrides::default()
         };

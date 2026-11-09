@@ -400,7 +400,7 @@ pub(super) async fn stage_registry(
         chat_id: chat_id.into(),
         // Subagent coordination tools are `effect: read` for permission
         // purposes but still mutate durable state: they need receipts.
-        is_mutating: Some(Arc::new(crate::subagents::is_mutating_subagent_tool)),
+        is_mutating: Some(Arc::new(crate::is_mutating_subagent_tool)),
         approvals: Arc::new(approvals),
         standing: options.standing.clone(),
     });

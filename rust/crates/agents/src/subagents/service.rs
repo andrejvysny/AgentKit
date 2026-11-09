@@ -2,9 +2,10 @@ use super::budget;
 use super::config::{RoleSpec, SubagentConfig};
 use super::guard::WorkspaceLeaseRegistry;
 use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
-use crate::{
+use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
+use agentkit_host::{
     AgentSendResult, AgentSessionService, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput,
-    HostError, HostResult, SendInput, SharedRuntime, SteerInput, WhenBusy, read_session_descriptor,
+    SendInput, SharedRuntime, SteerInput, WhenBusy, read_session_descriptor,
 };
 use agentkit_kernel::sha256_hex;
 use agentkit_store::{RegisterSubagent, SqliteStore, SubagentRecord, TaskRecord, TaskStatus};
@@ -142,8 +143,8 @@ impl Drop for LeaseRelease {
     }
 }
 
-fn session_error(error: crate::SessionError) -> HostError {
-    HostError::Execution(format!("{}: {}", error.code, error.message))
+fn session_error(error: agentkit_host::SessionError) -> AgentsError {
+    AgentsError::execution(format!("{}: {}", error.code, error.message))
 }
 
 pub(super) fn is_terminal_status(status: &str) -> bool {
@@ -214,17 +215,17 @@ impl SubagentService {
         request: &SpawnRequest,
         provider_id: Option<&str>,
         parent_provider: Option<&str>,
-    ) -> HostResult<()> {
+    ) -> AgentsResult<()> {
         let (Some(known), Some(provider_id)) = (&self.routable_providers, provider_id) else {
             return Ok(());
         };
         if !known.contains(provider_id) {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_provider_unavailable: {provider_id}"
             )));
         }
         if Some(provider_id) != parent_provider && request.model.is_none() && role.model.is_none() {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_model_required: role {} pins provider {provider_id} without a model",
                 role.id
             )));
@@ -251,11 +252,11 @@ impl SubagentService {
         exclusive: bool,
         child_chat_id: &str,
         ttl_ms: i64,
-    ) -> HostResult<()> {
+    ) -> AgentsResult<()> {
         self.leases
             .try_acquire(root, exclusive, child_chat_id, self.now_ms(), ttl_ms)
-            .map_err(|holder| {
-                HostError::Execution(format!(
+            .map_err(|LeaseHeld { holder }| {
+                AgentsError::execution(format!(
                     "workspace_busy: {} is exclusively leased to child {holder}; await or cancel it before spawning another writer",
                     root.unwrap_or("<workspace>")
                 ))
@@ -283,25 +284,25 @@ impl SubagentService {
     /// Create + dispatch one child session. Every limit is checked against
     /// DURABLE state, so a restarted process enforces the same fan-out
     /// bounds as the original one.
-    pub async fn spawn(&self, request: &SpawnRequest) -> HostResult<SpawnedChild> {
+    pub async fn spawn(&self, request: &SpawnRequest) -> AgentsResult<SpawnedChild> {
         let config = self.config();
         if !config.enabled {
-            return Err(HostError::Execution("subagents_disabled".into()));
+            return Err(AgentsError::execution("subagents_disabled".into()));
         }
         if request.prompt.trim().is_empty() {
-            return Err(HostError::Execution(
+            return Err(AgentsError::execution(
                 "subagent prompt must not be empty".into(),
             ));
         }
         let role = config.role(&request.role).cloned().ok_or_else(|| {
-            HostError::Execution(format!("unknown_subagent_role: {}", request.role))
+            AgentsError::execution(format!("unknown_subagent_role: {}", request.role))
         })?;
         // A host-pinned role model is a ceiling the model-authored request
         // cannot lift: the role may run on exactly that model.
         if let (Some(pinned), Some(requested)) = (role.model.as_deref(), request.model.as_deref())
             && pinned != requested
         {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "model_not_allowed: role {} is pinned to model {pinned}; requested {requested}",
                 role.id
             )));
@@ -312,16 +313,16 @@ impl SubagentService {
             .await?
             .filter(|task| task.scope_id == request.parent_chat_id)
             .ok_or_else(|| {
-                HostError::Execution("spawn requires the caller's own live turn task".into())
+                AgentsError::execution("spawn requires the caller's own live turn task".into())
             })?;
         if parent_task.status.is_terminal() {
-            return Err(HostError::Execution("parent turn already settled".into()));
+            return Err(AgentsError::execution("parent turn already settled".into()));
         }
         let limits = &config.limits;
         let parent_row = self.store.get_subagent(&request.parent_chat_id).await?;
         let depth = parent_row.as_ref().map_or(0, |row| row.depth);
         if depth + 1 > limits.max_depth {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_depth_exceeded: depth {depth} cannot spawn at max {}",
                 limits.max_depth
             )));
@@ -332,10 +333,10 @@ impl SubagentService {
             // could grant.
             let parent_role = match self.effective_role_of(row, &config).await? {
                 Ok(effective) => effective,
-                Err(reason) => return Err(HostError::Execution(reason)),
+                Err(reason) => return Err(AgentsError::execution(reason.to_string())),
             };
             if !parent_role.can_spawn {
-                return Err(HostError::Execution(format!(
+                return Err(AgentsError::execution(format!(
                     "role {} may not spawn children",
                     parent_role.id
                 )));
@@ -345,9 +346,9 @@ impl SubagentService {
             .store
             .get_chat(&request.parent_chat_id)
             .await?
-            .ok_or_else(|| HostError::Execution("parent session not found".into()))?;
+            .ok_or_else(|| AgentsError::execution("parent session not found".into()))?;
         let descriptor = read_session_descriptor(&parent_chat.metadata).ok_or_else(|| {
-            HostError::Execution(
+            AgentsError::execution(
                 "parent session carries no descriptor; only sessions delegate".into(),
             )
         })?;
@@ -372,7 +373,7 @@ impl SubagentService {
             .or_else(|| parent_model.map(str::to_owned));
         self.validate_child_provider(&role, request, provider_id.as_deref(), parent_provider)?;
         if !role.read_only && workspace.is_none() {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "workspace_required: role {} writes, but the parent session has no workspace",
                 role.id
             )));
@@ -410,7 +411,7 @@ impl SubagentService {
                 || existing.parent_task_id.as_deref() != Some(request.parent_task_id.as_str())
                 || existing.role != request.role
             {
-                return Err(HostError::Execution(format!(
+                return Err(AgentsError::execution(format!(
                     "spawn key {} already exists with a different identity",
                     request.spawn_key
                 )));
@@ -435,7 +436,7 @@ impl SubagentService {
                             self.now_ms(),
                         )
                         .await?;
-                    return Err(HostError::Execution(
+                    return Err(AgentsError::execution(
                         "parent turn already settled; queued child cancelled".into(),
                     ));
                 }
@@ -470,7 +471,7 @@ impl SubagentService {
                 self.dispatch_initial_turn(&child_chat_id, &role, request)
                     .await?;
                 let Some(reactualized) = self.store.get_subagent(&child_chat_id).await? else {
-                    return Err(HostError::Execution("subagent row vanished".into()));
+                    return Err(AgentsError::execution("subagent row vanished".into()));
                 };
                 let view = self.refresh(&reactualized).await?;
                 return Ok(SpawnedChild {
@@ -619,7 +620,7 @@ impl SubagentService {
             });
             if !ours {
                 self.leases.release(&child_chat_id);
-                return Err(HostError::Execution(format!(
+                return Err(AgentsError::execution(format!(
                     "child session id {child_chat_id} is already in use by a different spawn"
                 )));
             }
@@ -643,7 +644,7 @@ impl SubagentService {
                         .cloned()
                         .map(serde_json::from_value)
                         .transpose()
-                        .map_err(|_| HostError::Execution("invalid_reasoning_effort".into()))?,
+                        .map_err(|_| AgentsError::execution("invalid_reasoning_effort".into()))?,
                     content_selection: None,
                     workspace: workspace.clone(),
                     context: descriptor
@@ -689,7 +690,7 @@ impl SubagentService {
         if !registered {
             self.leases.release(&child_chat_id);
             self.check_fanout_caps(&request.parent_chat_id).await?;
-            return Err(HostError::Execution(
+            return Err(AgentsError::execution(
                 "subagent_concurrency_limit: fan-out cap reached during registration".into(),
             ));
         }
@@ -711,7 +712,7 @@ impl SubagentService {
                     self.now_ms(),
                 )
                 .await?;
-            return Err(HostError::Execution(
+            return Err(AgentsError::execution(
                 "parent turn already settled; child cancelled".into(),
             ));
         }
@@ -727,7 +728,7 @@ impl SubagentService {
             .store
             .get_subagent(&child_chat_id)
             .await?
-            .ok_or_else(|| HostError::Execution("subagent row vanished".into()))?;
+            .ok_or_else(|| AgentsError::execution("subagent row vanished".into()))?;
         let view = self.refresh(&record).await?;
         Ok(SpawnedChild {
             child_chat_id: view.child_chat_id.clone(),
@@ -750,7 +751,7 @@ impl SubagentService {
         child_chat_id: &str,
         role: &RoleSpec,
         request: &SpawnRequest,
-    ) -> HostResult<()> {
+    ) -> AgentsResult<()> {
         let content = compose_child_prompt(role, request);
         let input_id = format!(
             "subin:{}",
@@ -804,7 +805,7 @@ impl SubagentService {
 
     // -- queries ----------------------------------------------------------------
 
-    pub async fn list(&self, parent_chat_id: &str) -> HostResult<Vec<SubagentView>> {
+    pub async fn list(&self, parent_chat_id: &str) -> AgentsResult<Vec<SubagentView>> {
         let rows = self.store.list_subagents(parent_chat_id).await?;
         let mut views = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -820,7 +821,7 @@ impl SubagentService {
         &self,
         row: &SubagentRecord,
         config: &SubagentConfig,
-    ) -> HostResult<Result<EffectiveRole, String>> {
+    ) -> AgentsResult<Result<EffectiveRole, RoleDenial>> {
         let chat = self.store.get_chat(&row.child_chat_id).await?;
         let snapshot = match chat
             .as_ref()
@@ -829,18 +830,20 @@ impl SubagentService {
             .transpose()
         {
             Ok(snapshot) => snapshot.flatten(),
-            Err(reason) => return Ok(Err(reason)),
+            Err(reason) => return Ok(Err(reason.into())),
         };
         Ok(effective_role(snapshot.as_ref(), config.role(&row.role))
-            .ok_or_else(|| format!("subagent role {} is no longer configured", row.role)))
+            .ok_or_else(|| RoleDenial::RoleGone(row.role.clone())))
     }
 
-    pub async fn status(&self, child_chat_id: &str) -> HostResult<SubagentView> {
+    pub async fn status(&self, child_chat_id: &str) -> AgentsResult<SubagentView> {
         let row = self
             .store
             .get_subagent(child_chat_id)
             .await?
-            .ok_or_else(|| HostError::NotFound(format!("subagent_not_found: {child_chat_id}")))?;
+            .ok_or_else(|| {
+                AgentsError::not_found(format!("subagent_not_found: {child_chat_id}"))
+            })?;
         self.refresh(&row).await
     }
 
@@ -850,7 +853,7 @@ impl SubagentService {
         content: Value,
         mode: &str,
         message_key: &str,
-    ) -> HostResult<MessageReceipt> {
+    ) -> AgentsResult<MessageReceipt> {
         let row = self.require_row(child_chat_id).await?;
         // Lifecycle gate: re-project before dispatch. A terminal row is
         // frozen by the store contract, so a follow-up that "succeeded"
@@ -863,7 +866,7 @@ impl SubagentService {
         // interrupted turns only); new work goes to a new child.
         let view = self.refresh(&row).await?;
         if is_terminal_status(&view.status) {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_terminal: {child_chat_id} is {}; message is for active children \
                  only — resume restarts a failed or cancelled child, otherwise spawn a new one",
                 view.status
@@ -925,7 +928,7 @@ impl SubagentService {
         ids: Option<&[String]>,
         timeout_ms: Option<u64>,
         cancellation: &CancellationToken,
-    ) -> HostResult<AwaitOutcome> {
+    ) -> AgentsResult<AwaitOutcome> {
         let config = self.config();
         let poll = config.limits.await_poll_ms;
         let timeout = timeout_ms
@@ -939,7 +942,7 @@ impl SubagentService {
                     rows.push(self.require_row(id).await?);
                 }
                 if rows.iter().any(|row| row.parent_chat_id != parent_chat_id) {
-                    return Err(HostError::Execution(
+                    return Err(AgentsError::execution(
                         "a parent may only await its own children".into(),
                     ));
                 }
@@ -956,7 +959,7 @@ impl SubagentService {
         let mut views: Vec<SubagentView> = Vec::with_capacity(rows.len());
         loop {
             if cancellation.is_cancelled() {
-                return Err(HostError::Cancelled);
+                return Err(AgentsError::cancelled());
             }
             // Reload every row from the store each tick: refreshing stale
             // snapshots re-persists unchanged state (update churn) and
@@ -972,7 +975,7 @@ impl SubagentService {
                     .get_subagent(&row.child_chat_id)
                     .await?
                     .ok_or_else(|| {
-                        HostError::Execution(format!(
+                        AgentsError::execution(format!(
                             "subagent row vanished: {}",
                             row.child_chat_id
                         ))
@@ -1009,7 +1012,7 @@ impl SubagentService {
             }
             // Bound each nap so a parent cancellation is felt promptly.
             tokio::select! {
-                _ = cancellation.cancelled() => return Err(HostError::Cancelled),
+                _ = cancellation.cancelled() => return Err(AgentsError::cancelled()),
                 _ = tokio::time::sleep(std::time::Duration::from_millis(poll)) => {}
             }
         }
@@ -1019,7 +1022,7 @@ impl SubagentService {
     /// The store's durable cancel flag — not this call's success — is
     /// authoritative; the worker settles the task and `refresh` projects it
     /// onto the row.
-    pub async fn cancel(&self, child_chat_id: &str) -> HostResult<SubagentView> {
+    pub async fn cancel(&self, child_chat_id: &str) -> AgentsResult<SubagentView> {
         let row = self.require_row(child_chat_id).await?;
         // "Cancel this child" means its whole backlog: a durable queued
         // input left behind would be promoted by the runner's settle plan
@@ -1065,7 +1068,11 @@ impl SubagentService {
     /// Resume a child: continue an interrupted turn in place, or re-dispatch
     /// the assignment after a failed/cancelled one (a fresh turn, so the
     /// durable engine — not this module — owns the new attempt).
-    pub async fn resume(&self, child_chat_id: &str, resume_key: &str) -> HostResult<SubagentView> {
+    pub async fn resume(
+        &self,
+        child_chat_id: &str,
+        resume_key: &str,
+    ) -> AgentsResult<SubagentView> {
         self.resume_for_parent(child_chat_id, resume_key, None)
             .await
     }
@@ -1078,7 +1085,7 @@ impl SubagentService {
         child_chat_id: &str,
         resume_key: &str,
         parent_task_id: Option<&str>,
-    ) -> HostResult<SubagentView> {
+    ) -> AgentsResult<SubagentView> {
         // One resume at a time (and never beside a spawn): the row and turn
         // status are re-read AFTER the gate, so a concurrent resume that
         // already revived the child makes this one bail as not resumable.
@@ -1176,12 +1183,12 @@ impl SubagentService {
                 }
             }
             Some(status) => {
-                return Err(HostError::Execution(format!(
+                return Err(AgentsError::execution(format!(
                     "subagent turn is {status:?}; only interrupted, failed or cancelled turns resume"
                 )));
             }
             None => {
-                return Err(HostError::Execution(
+                return Err(AgentsError::execution(
                     "subagent has no turn to resume".into(),
                 ));
             }
@@ -1197,7 +1204,7 @@ impl SubagentService {
         child_chat_id: &str,
         task: &TaskRecord,
         parent_task_id: Option<&str>,
-    ) -> HostResult<()> {
+    ) -> AgentsResult<()> {
         self.store
             .set_subagent_turn(child_chat_id, &task.task_id)
             .await?;
@@ -1214,11 +1221,11 @@ impl SubagentService {
 
     /// The active-roster caps `spawn` enforces, against DURABLE state.
     /// Callers hold `spawn_gate`.
-    async fn check_fanout_caps(&self, parent_chat_id: &str) -> HostResult<()> {
+    async fn check_fanout_caps(&self, parent_chat_id: &str) -> AgentsResult<()> {
         let config = self.config();
         let limits = &config.limits;
         if self.store.count_active_subagents().await? >= limits.max_concurrency {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_concurrency_limit: {} active children (max {})",
                 limits.max_concurrency, limits.max_concurrency
             )));
@@ -1229,7 +1236,7 @@ impl SubagentService {
             .filter(|row| !is_terminal_status(&row.status))
             .count();
         if active_siblings as i64 >= limits.max_per_parent {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_parent_limit: {} active children for this parent (max {})",
                 active_siblings, limits.max_per_parent
             )));
@@ -1243,10 +1250,10 @@ impl SubagentService {
         &self,
         view: &SubagentView,
         parent_task_id: Option<&str>,
-    ) -> HostResult<()> {
+    ) -> AgentsResult<()> {
         let max_depth = self.config().limits.max_depth;
         if view.depth > max_depth {
-            return Err(HostError::Execution(format!(
+            return Err(AgentsError::execution(format!(
                 "subagent_depth_exceeded: depth {} exceeds max {max_depth}",
                 view.depth
             )));
@@ -1260,7 +1267,7 @@ impl SubagentService {
                     task.scope_id == view.parent_chat_id && !task.status.is_terminal()
                 });
             if !live {
-                return Err(HostError::Execution(
+                return Err(AgentsError::execution(
                     "resume requires the caller's own live turn task".into(),
                 ));
             }
@@ -1273,7 +1280,7 @@ impl SubagentService {
     /// unleased resume could mutate beside a fresh exclusive sibling. The
     /// returned guard releases a lease THIS call took if the resume then
     /// fails; `keep` disarms it on success.
-    async fn admit_resume_lease(&self, child_chat_id: &str) -> HostResult<LeaseRelease> {
+    async fn admit_resume_lease(&self, child_chat_id: &str) -> AgentsResult<LeaseRelease> {
         let mut release = LeaseRelease {
             leases: self.leases.clone(),
             child_chat_id: child_chat_id.to_owned(),
@@ -1312,7 +1319,7 @@ impl SubagentService {
     /// holds its workspace root again, so a restarted writer never runs
     /// unleased beside a fresh exclusive sibling. Idempotent; a root a
     /// foreign child already holds is left alone.
-    pub async fn restore_leases(&self) -> HostResult<usize> {
+    pub async fn restore_leases(&self) -> AgentsResult<usize> {
         let ttl = self.config().limits.lease_ttl_ms;
         let mut restored = 0usize;
         for row in self.store.list_active_subagents().await? {
@@ -1362,7 +1369,7 @@ impl SubagentService {
     /// (crash recovery) and from the host's settle observers; both are
     /// idempotent because cancellation is cooperative and the store's CAS
     /// transitions reject double settles.
-    pub async fn reap_orphans(&self) -> HostResult<usize> {
+    pub async fn reap_orphans(&self) -> AgentsResult<usize> {
         let config = self.config();
         self.leases.expire(self.now_ms());
         // Startup path: the lease table is memory-only, so re-derive it from
@@ -1393,7 +1400,7 @@ impl SubagentService {
 
     /// Observe one settled task: when a parent turn finishes, reap its
     /// still-running children (cooperative, durable).
-    pub async fn observe_settled(&self, task: &TaskRecord) -> HostResult<()> {
+    pub async fn observe_settled(&self, task: &TaskRecord) -> AgentsResult<()> {
         if !task.status.is_terminal() {
             return Ok(());
         }
@@ -1439,7 +1446,7 @@ impl SubagentService {
         Ok(())
     }
 
-    async fn cancel_row(&self, row: &SubagentRecord) -> HostResult<()> {
+    async fn cancel_row(&self, row: &SubagentRecord) -> AgentsResult<()> {
         // Drop the child's not-yet-dispatched inputs too: a promoted turn
         // after this cancel would rebind the row back to life.
         let _ = self.session.clear_queue(&row.child_chat_id).await;
@@ -1486,7 +1493,7 @@ impl SubagentService {
     /// The runner's settle plan promotes queued inputs into a fresh
     /// `chat.turn` task without telling the registry; this probe is how
     /// `refresh` finds that promoted turn so the row can follow it.
-    async fn live_child_turn(&self, child_chat_id: &str) -> HostResult<Option<TaskRecord>> {
+    async fn live_child_turn(&self, child_chat_id: &str) -> AgentsResult<Option<TaskRecord>> {
         let tasks = self
             .store
             .list_tasks(Some(child_chat_id.to_owned()))
@@ -1504,7 +1511,7 @@ impl SubagentService {
     /// Join the registry row with the authoritative task/session state,
     /// persisting the projection when it moved. The task store holds the
     /// truth; the row is a cache with durable memory.
-    pub async fn refresh(&self, row: &SubagentRecord) -> HostResult<SubagentView> {
+    pub async fn refresh(&self, row: &SubagentRecord) -> AgentsResult<SubagentView> {
         let mut row = row.clone();
         let mut task = match row.turn_task_id.as_deref() {
             Some(turn_id) => self.store.get_task(turn_id).await?,
@@ -1621,7 +1628,7 @@ impl SubagentService {
                         .map(str::to_owned)
                 });
                 if let Some(root) = root
-                    && let Err(holder) = self.leases.try_acquire(
+                    && let Err(LeaseHeld { holder }) = self.leases.try_acquire(
                         Some(&root),
                         true,
                         &row.child_chat_id,
@@ -1703,7 +1710,7 @@ impl SubagentService {
 
     /// The child's final assistant answer for the tracked turn: the durable
     /// assistant message written under the turn's run, not a transcription.
-    async fn final_answer(&self, row: &SubagentRecord) -> HostResult<Option<String>> {
+    async fn final_answer(&self, row: &SubagentRecord) -> AgentsResult<Option<String>> {
         let Some(turn_id) = row.turn_task_id.as_deref() else {
             return Ok(row.result.clone());
         };
@@ -1724,11 +1731,11 @@ impl SubagentService {
         Ok(answer.or_else(|| row.result.clone()))
     }
 
-    async fn require_row(&self, child_chat_id: &str) -> HostResult<SubagentRecord> {
+    async fn require_row(&self, child_chat_id: &str) -> AgentsResult<SubagentRecord> {
         self.store
             .get_subagent(child_chat_id)
             .await?
-            .ok_or_else(|| HostError::NotFound(format!("subagent_not_found: {child_chat_id}")))
+            .ok_or_else(|| AgentsError::not_found(format!("subagent_not_found: {child_chat_id}")))
     }
 }
 
@@ -1742,7 +1749,7 @@ fn await_result(view: &SubagentView) -> AwaitResult {
 }
 
 #[async_trait::async_trait]
-impl crate::DelegationGuidance for SubagentService {
+impl agentkit_host::DelegationGuidance for SubagentService {
     async fn guidance(&self, _chat_id: &str) -> Option<String> {
         let config = self.config();
         config
@@ -1753,34 +1760,11 @@ impl crate::DelegationGuidance for SubagentService {
 }
 
 #[async_trait::async_trait]
-impl crate::TaskSettledObserver for SubagentService {
-    async fn observe_settled(&self, task: &agentkit_store::TaskRecord) -> HostResult<()> {
-        self.observe_settled(task).await
+impl agentkit_host::TaskSettledObserver for SubagentService {
+    async fn observe_settled(
+        &self,
+        task: &agentkit_store::TaskRecord,
+    ) -> agentkit_host::HostResult<()> {
+        Ok(self.observe_settled(task).await?)
     }
-}
-
-/// Per-role execution limits read from the child chat's durable metadata,
-/// consumed by the executor when the turn dispatches. Returns defaults for
-/// ordinary (non-subagent) sessions, so the executor path pays only one
-/// cheap metadata read it already performs.
-pub async fn task_overrides(
-    store: &SqliteStore,
-    chat_id: &str,
-) -> HostResult<crate::budget::RoleTaskOverrides> {
-    let record = match store.get_chat(chat_id).await? {
-        Some(chat) => chat,
-        None => return Ok(crate::budget::RoleTaskOverrides::default()),
-    };
-    let limits = &record.metadata["agentkit.subagent"]["limits"];
-    Ok(crate::budget::RoleTaskOverrides {
-        max_tool_iterations: limits["maxToolIterations"]
-            .as_u64()
-            .map(|value| value.max(1) as u32),
-        max_provider_requests: limits["maxProviderRequests"]
-            .as_u64()
-            .map(|value| value.max(1)),
-        overall_timeout_ms: limits["overallTimeoutMs"]
-            .as_u64()
-            .filter(|value| *value >= 1000),
-    })
 }

@@ -313,7 +313,7 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        let config: agentkit_host::SubagentConfig = serde_json::from_str(&config_json)
+        let config: agentkit_agents::SubagentConfig = serde_json::from_str(&config_json)
             .map_err(|error| errors::invalid(format!("invalid subagent config: {error}")))?;
         if config
             .limits
@@ -359,7 +359,7 @@ impl SessionService {
             .subagent_lane()
             .list(&parent_chat_id)
             .await
-            .map_err(errors::host)?;
+            .map_err(errors::agents)?;
         serde_json::to_string(&views).map_err(|error| errors::internal(&error.to_string()))
     }
 
@@ -375,7 +375,7 @@ impl SessionService {
             .subagent_lane()
             .status(&child_chat_id)
             .await
-            .map_err(errors::host)?;
+            .map_err(errors::agents)?;
         serde_json::to_string(&view).map_err(|error| errors::internal(&error.to_string()))
     }
 
@@ -418,7 +418,7 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        let config: agentkit_host::AdvisorConfig = serde_json::from_str(&config_json)
+        let config: agentkit_agents::AdvisorConfig = serde_json::from_str(&config_json)
             .map_err(|error| errors::invalid(format!("invalid advisor config: {error}")))?;
         core.runtime
             .advisor_lane()
@@ -457,7 +457,7 @@ impl SessionService {
         let report = lane
             .review(&session_id, focus)
             .await
-            .map_err(errors::host)?;
+            .map_err(errors::agents)?;
         serde_json::to_string(&report).map_err(|error| errors::internal(&error.to_string()))
     }
 
@@ -477,7 +477,7 @@ impl SessionService {
             .advisor_lane()
             .findings(&session_id, limit)
             .await
-            .map_err(errors::host)?;
+            .map_err(errors::agents)?;
         serde_json::to_string(&records).map_err(|error| errors::internal(&error.to_string()))
     }
 
@@ -1525,7 +1525,7 @@ impl Default for ServiceOptions {
             provider: None,
             additional_providers: Vec::new(),
             account_backed_provider: false,
-            subagent_max_concurrency: agentkit_host::SubagentConfig::default()
+            subagent_max_concurrency: agentkit_agents::SubagentConfig::default()
                 .limits
                 .max_concurrency,
         }

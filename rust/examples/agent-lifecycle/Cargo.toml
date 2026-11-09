@@ -11,6 +11,7 @@ description = "Minimal consumer walkthrough of AgentKit persistent agent identit
 workspace = true
 
 [dependencies]
+agentkit-agents = { workspace = true }
 agentkit-host = { workspace = true }
 agentkit-store = { workspace = true }
 serde_json.workspace = true

@@ -854,7 +854,7 @@ mod tests {
 
     #[tokio::test]
     async fn advisor_read_tools_follow_the_reviewed_session_binding() {
-        use agentkit_host::AdvisorToolSource;
+        use agentkit_agents::AdvisorToolSource;
         let (lane, store) = bound_lane(false).await;
         let tools = crate::lanes::advisor::LaneAdvisorTools {
             coding: Arc::clone(&lane),

@@ -2,6 +2,7 @@
 //! chat turns through the registry, and subagent roles pinned to another
 //! provider (validated at spawn, preserved across a restart).
 
+use agentkit_agents::*;
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_host::*;
 use agentkit_store::{MessageInput, SqliteStore, SubmitTask, TaskStatus};

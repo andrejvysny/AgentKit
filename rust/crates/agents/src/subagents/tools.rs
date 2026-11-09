@@ -19,17 +19,6 @@ pub const SUBAGENT_TOOL_NAMES: [&str; 7] = [
 
 const CAPABILITY: &str = "orchestration";
 
-/// Tools that change durable child state. They keep `effect: "read"` so the
-/// permission modes still admit them, but must carry execution receipts: on
-/// an attempt replay the recorded result is served instead of re-running
-/// the spawn/message/cancel/resume.
-pub fn is_mutating_subagent_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "subagent_spawn" | "subagent_message" | "subagent_cancel" | "subagent_resume"
-    )
-}
-
 fn definition(
     name: &str,
     description: &str,
@@ -162,20 +151,20 @@ impl SubagentContributor {
 }
 
 #[async_trait]
-impl crate::ToolContributor for SubagentContributor {
+impl agentkit_host::ToolContributor for SubagentContributor {
     fn namespace(&self) -> &str {
         "subagent"
     }
     async fn contribute(
         &self,
-        _context: &crate::ToolContributionContext,
-    ) -> crate::GovernanceResult<Vec<crate::ContributedTool>> {
+        _context: &agentkit_host::ToolContributionContext,
+    ) -> agentkit_host::GovernanceResult<Vec<agentkit_host::ContributedTool>> {
         if !self.service.config().enabled {
             return Ok(vec![]);
         }
         let service = self.service.clone();
         Ok(vec![
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_spawn",
                 "Spawn a child session that runs one delegated assignment in its own context. \
@@ -240,7 +229,7 @@ impl crate::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_list",
                 "List your delegated children with live status (queued/running/completed/failed/\
@@ -260,7 +249,7 @@ impl crate::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_status",
                 "One child's live detail: status, final result, error, task status, waiting \
@@ -289,7 +278,7 @@ impl crate::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_message",
                 "Send a follow-up to one of your children: mode \"queue\" appends an input that \
@@ -339,7 +328,7 @@ impl crate::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_await",
                 "Wait for your children to settle and collect their results. Omit childIds to \
@@ -375,7 +364,7 @@ impl crate::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_cancel",
                 "Cooperatively cancel one of your children's live turn. Cancellation is \
@@ -413,7 +402,7 @@ impl crate::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            crate::ContributedTool::Read(tool(
+            agentkit_host::ContributedTool::Read(tool(
                 &service,
                 "subagent_resume",
                 "Resume one of your children: an interrupted turn continues in place; a failed \

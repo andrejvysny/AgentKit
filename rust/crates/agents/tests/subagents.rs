@@ -4,6 +4,7 @@
 //! with no mocks below the store: the host's own worker executes every
 //! child turn.
 
+use agentkit_agents::*;
 use agentkit_core::{
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, ToolCall, ToolDefinition,
     ToolLimits, ToolRegistry,
@@ -812,7 +813,7 @@ async fn resume_refuses_live_turns_and_unknown_children() {
     assert!(error.to_string().contains("subagent_not_found"));
     assert!(matches!(
         h.subagents.status("sub_missing").await,
-        Err(HostError::NotFound(message)) if message == "subagent_not_found: sub_missing"
+        Err(AgentsError::Host(HostError::NotFound(message))) if message == "subagent_not_found: sub_missing"
     ));
     h.hold(false);
     h.release();
@@ -1145,7 +1146,7 @@ async fn restricting_or_removing_a_role_applies_to_live_children() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unconfigured_custom_role_and_legacy_children_fail_closed_or_follow_config() {
     let mut cfg = config();
-    cfg.roles = agentkit_host::default_role_specs();
+    cfg.roles = agentkit_agents::default_role_specs();
     cfg.roles.insert(
         "custom".into(),
         RoleSpec {
@@ -2150,7 +2151,7 @@ async fn lease_keys_canonicalize_root_spellings() {
     let error = registry
         .try_acquire(Some(&h.workspace), true, "sub_b", now, 60_000)
         .expect_err("alias spelling must not preempt");
-    assert_eq!(error, "sub_a");
+    assert_eq!(error.holder, "sub_a");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

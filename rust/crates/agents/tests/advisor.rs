@@ -3,6 +3,7 @@
 //! critical escalation as a steer on the reviewed session, watchdog
 //! triggers with cooldown/window loop guards, and model/budget separation.
 
+use agentkit_agents::*;
 use agentkit_core::{
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, Tool, ToolCall,
     ToolContext, ToolDefinition, ToolLimits, ToolResult,
@@ -287,7 +288,7 @@ impl Harness {
         }
     }
 
-    async fn review(&self, chat: &str, focus: &str) -> HostResult<AdvisorReport> {
+    async fn review(&self, chat: &str, focus: &str) -> AgentsResult<AdvisorReport> {
         self.engine
             .review(
                 &ReviewRequest {
@@ -1075,7 +1076,7 @@ fn routed_engine(h: &Harness, config: AdvisorConfig, other: &Arc<Oracle>) -> Adv
     .with_providers(Arc::new(ProviderRegistry::new([default, alias])))
 }
 
-async fn explicit(engine: &AdvisorEngine) -> HostResult<AdvisorReport> {
+async fn explicit(engine: &AdvisorEngine) -> AgentsResult<AdvisorReport> {
     engine
         .review(
             &ReviewRequest {

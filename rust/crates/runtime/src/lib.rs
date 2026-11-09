@@ -12,7 +12,7 @@ mod workspace;
 
 pub use authority::{PlanConfiguration, effective_class};
 pub use builder::{AgentRuntimeBuilder, ExternalToolsPolicy};
-pub use error::{ADVISOR_NOT_CONFIGURED, RuntimeError, SUBAGENTS_NOT_CONFIGURED};
+pub use error::RuntimeError;
 pub use lanes::advisor::AdvisorLane;
 pub use lanes::coding::CodingLane;
 pub use lanes::lsp::LspLane;

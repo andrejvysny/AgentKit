@@ -1,13 +1,8 @@
 //! The runtime's error surface. The binding maps it onto its stable public
 //! codes; nothing here knows about any host language.
 
+use agentkit_agents::AgentsError;
 use agentkit_host::HostError;
-
-/// Sentinel texts the late-bound lanes raise through `HostError::Execution`
-/// when a subsystem was never configured; the binding turns them into stable
-/// public codes instead of an opaque `internal_error`.
-pub const SUBAGENTS_NOT_CONFIGURED: &str = "subagents not configured";
-pub const ADVISOR_NOT_CONFIGURED: &str = "advisor not configured";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -20,6 +15,10 @@ pub enum RuntimeError {
     Coded { code: String, message: String },
     #[error(transparent)]
     Host(#[from] HostError),
+    /// Agents-context failures, including the unconfigured-lane sentinels
+    /// the binding turns into stable public codes.
+    #[error(transparent)]
+    Agents(#[from] AgentsError),
 }
 
 impl RuntimeError {

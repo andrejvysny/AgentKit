@@ -5,7 +5,8 @@
 //! TS tests. Rust debug formatting never becomes observable behavior: internal
 //! failures collapse to `internal_error` with a redacted message.
 
-use agentkit_runtime::{ADVISOR_NOT_CONFIGURED, RuntimeError, SUBAGENTS_NOT_CONFIGURED};
+use agentkit_agents::AgentsError;
+use agentkit_runtime::RuntimeError;
 use napi::{Status, bindgen_prelude::Error};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -177,8 +178,7 @@ pub fn session(error: agentkit_host::SessionError) -> Error {
 }
 
 /// Map a host error. Store failures keep their store codes (`not_found`,
-/// `already_owned`, `lease_lost`, ...); the unconfigured-lane sentinels get
-/// stable codes; everything else collapses to a redacted `internal_error`
+/// `already_owned`, `lease_lost`, ...); everything else collapses to a redacted `internal_error`
 /// and leaves a native-log breadcrumb carrying only the variant name —
 /// never the Display text, which may embed arguments or secrets.
 pub fn host(error: agentkit_host::HostError) -> Error {
@@ -186,12 +186,6 @@ pub fn host(error: agentkit_host::HostError) -> Error {
     let text = error.to_string();
     let kind = match error {
         H::Store(inner) => return store(inner),
-        H::Execution(sentinel) if sentinel == SUBAGENTS_NOT_CONFIGURED => {
-            return stable("subagents_not_configured", sentinel, None);
-        }
-        H::Execution(sentinel) if sentinel == ADVISOR_NOT_CONFIGURED => {
-            return stable("advisor_not_configured", sentinel, None);
-        }
         H::NotFound(message) => return stable("not_found", message, None),
         H::Failure(_) => "failure",
         H::UnknownKind(_) => "unknown_kind",
@@ -201,6 +195,22 @@ pub fn host(error: agentkit_host::HostError) -> Error {
     };
     eprintln!("agentkit-napi: host error mapped to internal_error (kind: {kind})");
     stable("internal_error", text, None)
+}
+
+/// Map an agents-context error: the unconfigured-lane variants get stable
+/// codes, host failures map exactly as `host`, and every other variant keeps
+/// the redacted `internal_error` it had as a host execution failure.
+pub fn agents(error: AgentsError) -> Error {
+    match error {
+        AgentsError::Host(inner) => host(inner),
+        AgentsError::SubagentsNotConfigured => {
+            stable("subagents_not_configured", error.to_string(), None)
+        }
+        AgentsError::AdvisorNotConfigured => {
+            stable("advisor_not_configured", error.to_string(), None)
+        }
+        other => host(other.into()),
+    }
 }
 
 pub fn invalid(message: impl Into<String>) -> Error {
@@ -214,6 +224,7 @@ pub fn runtime(error: RuntimeError) -> Error {
         RuntimeError::InvalidInput(message) => invalid(message),
         RuntimeError::Coded { code, message } => stable(&code, message, None),
         RuntimeError::Host(error) => host(error),
+        RuntimeError::Agents(error) => agents(error),
     }
 }
 
@@ -351,14 +362,12 @@ mod tests {
             agentkit_store::StoreError::LeaseLost("x".into()),
         )));
         assert_eq!(mapped["code"], "lease_lost");
-        let mapped = payload(host(agentkit_host::HostError::Execution(
-            SUBAGENTS_NOT_CONFIGURED.into(),
-        )));
+        let mapped = payload(agents(AgentsError::SubagentsNotConfigured));
         assert_eq!(mapped["code"], "subagents_not_configured");
-        let mapped = payload(host(agentkit_host::HostError::Execution(
-            ADVISOR_NOT_CONFIGURED.into(),
-        )));
+        assert_eq!(mapped["message"], "subagents not configured");
+        let mapped = payload(agents(AgentsError::AdvisorNotConfigured));
         assert_eq!(mapped["code"], "advisor_not_configured");
+        assert_eq!(mapped["message"], "advisor not configured");
         let mapped = payload(host(agentkit_host::HostError::NotFound(
             "subagent_not_found: c1".into(),
         )));

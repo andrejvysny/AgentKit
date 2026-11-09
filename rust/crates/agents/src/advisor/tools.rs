@@ -44,18 +44,18 @@ impl AdvisorContributor {
 }
 
 #[async_trait]
-impl crate::ToolContributor for AdvisorContributor {
+impl agentkit_host::ToolContributor for AdvisorContributor {
     fn namespace(&self) -> &str {
         "advisor"
     }
     async fn contribute(
         &self,
-        _context: &crate::ToolContributionContext,
-    ) -> crate::GovernanceResult<Vec<crate::ContributedTool>> {
+        _context: &agentkit_host::ToolContributionContext,
+    ) -> agentkit_host::GovernanceResult<Vec<agentkit_host::ContributedTool>> {
         if !self.tools.config().enabled {
             return Ok(vec![]);
         }
-        Ok(vec![crate::ContributedTool::Read(
+        Ok(vec![agentkit_host::ContributedTool::Read(
             self.tools.clone().into_tool(),
         )])
     }
@@ -88,21 +88,22 @@ impl AdvisorTools {
     /// The `advisor_review` tool as a plain core tool (for static
     /// registries and tests).
     pub fn into_tool(self) -> Arc<dyn Tool> {
-        Arc::new(AdvisorReviewTool { tools: self })
+        Arc::new(AdvisorReviewTool {
+            definition: definition(),
+            tools: self,
+        })
     }
 }
 
 struct AdvisorReviewTool {
+    definition: ToolDefinition,
     tools: AdvisorTools,
 }
-
-static REVIEW_DEFINITION: std::sync::LazyLock<ToolDefinition> =
-    std::sync::LazyLock::new(definition);
 
 #[async_trait]
 impl Tool for AdvisorReviewTool {
     fn definition(&self) -> &ToolDefinition {
-        &REVIEW_DEFINITION
+        &self.definition
     }
 
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
