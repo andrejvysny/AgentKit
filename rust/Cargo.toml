@@ -49,6 +49,7 @@ agentkit-transport-http = { path = "crates/transport-http", version = "0.1.0" }
 agentkit-mcp = { path = "crates/mcp", version = "0.1.0" }
 agentkit-lsp = { path = "crates/lsp", version = "0.1.0" }
 agentkit-toolpacks-coding = { path = "crates/toolpacks-coding", version = "0.1.0" }
+agentkit-runtime = { path = "crates/runtime", version = "0.1.0" }
 agentkit-napi = { path = "crates/napi", version = "0.1.0" }
 agentkit-rust = { path = "crates/agentkit", version = "0.1.0" }
 

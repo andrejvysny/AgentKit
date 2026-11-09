@@ -93,7 +93,7 @@ impl CodingPermissionAuthority for BindingAuthority {
 /// declared-effect class (`Exec` > `Write` > `Read`). Unknown capabilities
 /// fall back to the effect alone; a tool can never downgrade itself by
 /// declaring a benign capability with a write effect, or the reverse.
-pub(crate) fn effective_class(capability: &str, effect: &str) -> ToolClass {
+pub fn effective_class(capability: &str, effect: &str) -> ToolClass {
     let by_effect = if effect == "read" {
         ToolClass::Read
     } else {
@@ -122,7 +122,7 @@ fn stricter(left: ToolClass, right: ToolClass) -> ToolClass {
 
 /// The plan-approvable JS tools and the mode the human's approval grants.
 #[derive(Clone)]
-pub(crate) struct PlanConfiguration {
+pub struct PlanConfiguration {
     pub tool_names: Vec<String>,
     pub granted_mode: CodingMode,
 }
@@ -251,3 +251,6 @@ fn plan_preview(args: Option<&Value>) -> Option<String> {
         None => plan.to_owned(),
     })
 }
+
+#[cfg(test)]
+mod tests;

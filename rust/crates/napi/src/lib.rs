@@ -12,14 +12,9 @@ use napi::bindgen_prelude::*;
 #[macro_use]
 extern crate napi_derive;
 
-mod advisor_lane;
-mod authority;
-#[cfg(test)]
-mod authority_tests;
-mod coding_lane;
+mod advisor_sink;
 mod errors;
 mod jsbridge;
-mod lsp_lane;
 mod profiles;
 pub use profiles::{list_native_profiles, resolve_native_profile};
 mod provider;
@@ -30,7 +25,6 @@ mod run_hooks;
 mod run_provider;
 mod run_retry;
 mod run_steering;
-mod subagent_lane;
 mod teammate_lane;
 pub use run_provider::{
     end_run_provider, is_run_callback_active, push_run_provider_event, reserve_run_provider_request,
@@ -38,7 +32,6 @@ pub use run_provider::{
 mod service;
 mod store;
 mod tool;
-mod workspace_binding;
 
 /// `cargo test` links this crate outside a Node process, so the three
 /// libnode symbols the napi rlib genuinely references are missing. These

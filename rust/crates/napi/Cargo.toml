@@ -23,9 +23,7 @@ agentkit-connections = { workspace = true }
 agentkit-mcp = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-transport-http = { workspace = true }
-agentkit-toolpacks-coding = { workspace = true }
-agentkit-lsp = { workspace = true }
-libc.workspace = true
+agentkit-runtime = { workspace = true }
 axum.workspace = true
 http.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }

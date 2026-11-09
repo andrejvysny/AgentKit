@@ -559,9 +559,9 @@ impl SessionService {
             ));
         }
         let mcp_configuration = agentkit_host::McpConfigRepository::new(
-            core.host.store().clone(),
+            core.runtime.host().store().clone(),
             &options.actor_id,
-            core.host.runtime().clone(),
+            core.runtime.host().runtime().clone(),
         )
         .map_err(|_| {
             errors::stable(
@@ -589,7 +589,7 @@ impl SessionService {
             )
         })?;
         let mut backend = DesktopBackend::open(
-            core.host.clone(),
+            core.runtime.host().clone(),
             Actor {
                 id: options.actor_id,
                 metadata: BTreeMap::new(),
@@ -600,10 +600,12 @@ impl SessionService {
         .await
         .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
         backend = backend.with_mcp_configuration(Arc::new(mcp_configuration));
+        if let Some(authority) = core.runtime.content_authority() {
+            backend = backend.with_content_authority(authority.clone());
+        }
         backend = backend
-            .with_content_authority(core.content_authority.clone())
-            .with_profiles(core.profiles.clone())
-            .with_provider_factory(core.native_provider_factory.clone());
+            .with_profiles(core.runtime.profiles().clone())
+            .with_provider_factory(core.runtime.native_provider_factory().clone());
         if let Some(profile_id) = &options.session_profile_id {
             backend = backend
                 .with_session_profile(profile_id)
@@ -619,7 +621,7 @@ impl SessionService {
             backend = backend
                 .with_native_provider_operations(
                     core.provider_ports.clone(),
-                    core.native_provider_factory.clone(),
+                    core.runtime.native_provider_factory().clone(),
                 )
                 .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
         }

@@ -203,16 +203,14 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-host",
- "agentkit-lsp",
  "agentkit-mcp",
+ "agentkit-runtime",
  "agentkit-store",
- "agentkit-toolpacks-coding",
  "agentkit-transport-http",
  "async-trait",
  "axum",
  "futures",
  "http",
- "libc",
  "napi",
  "napi-derive",
  "reqwest",
@@ -220,6 +218,23 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "agentkit-runtime"
+version = "0.1.0"
+dependencies = [
+ "agentkit-core",
+ "agentkit-host",
+ "agentkit-lsp",
+ "agentkit-store",
+ "agentkit-toolpacks-coding",
+ "async-trait",
+ "libc",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
  "uuid",
 ]
 

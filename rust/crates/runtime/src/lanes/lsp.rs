@@ -10,14 +10,14 @@ use std::sync::Arc;
 use agentkit_host::{ContributedTool, HostResult, ToolContributionContext, ToolContributor};
 use agentkit_lsp::{LspConfig, LspPool, lsp_tools};
 
-use crate::errors;
-use crate::workspace_binding::{canonical_lane_root, permits, session_binding};
+use crate::error::RuntimeError;
+use crate::workspace::{canonical_lane_root, permits, session_binding};
 
 /// One-shot registration: the pool and the workspace root are fixed for
 /// the service's life (servers are workspace-scoped; swapping the root
 /// under running turns would hand agents a different workspace than the
 /// coding lane writes).
-pub(crate) struct LspLane {
+pub struct LspLane {
     store: agentkit_store::SqliteStore,
     state: tokio::sync::Mutex<Option<Arc<State>>>,
 }
@@ -44,42 +44,44 @@ impl LspLane {
     /// restartWindowMs?}}`. Discovery reuses installed servers only
     /// (explicit config → env → PATH → node_modules); nothing is ever
     /// installed by this path.
-    pub(crate) async fn register(&self, options_json: &str) -> Result<(), napi::Error> {
+    pub async fn register(&self, options_json: &str) -> Result<(), RuntimeError> {
         if self.state.lock().await.is_some() {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "LSP tools are already registered on this service",
             ));
         }
         let value: serde_json::Value = serde_json::from_str(options_json)
-            .map_err(|error| errors::invalid(format!("invalid LSP options JSON: {error}")))?;
+            .map_err(|error| RuntimeError::invalid(format!("invalid LSP options JSON: {error}")))?;
         let root = value["workspaceRoot"]
             .as_str()
             .filter(|root| !root.is_empty())
-            .ok_or_else(|| errors::invalid("workspaceRoot is required"))?;
+            .ok_or_else(|| RuntimeError::invalid("workspaceRoot is required"))?;
         let workspace_root = PathBuf::from(root);
         if !workspace_root.is_absolute() {
-            return Err(errors::invalid("workspaceRoot must be absolute"));
+            return Err(RuntimeError::invalid("workspaceRoot must be absolute"));
         }
         let config = match value.get("config") {
             None | Some(serde_json::Value::Null) => LspConfig::default(),
             Some(serde_json::Value::Object(_)) => {
                 LspConfig::from_json(&value["config"].to_string()).map_err(|error| {
-                    errors::invalid(format!("{}: {}", error.code, error.message))
+                    RuntimeError::invalid(format!("{}: {}", error.code, error.message))
                 })?
             }
             Some(_) => {
-                return Err(errors::invalid("config must be an object when present"));
+                return Err(RuntimeError::invalid(
+                    "config must be an object when present",
+                ));
             }
         };
         // Fail registration when the root is unusable, not the first tool
         // call: the same canonicalization the tools will use.
         LspPool::canonical_root(&workspace_root)
-            .map_err(|error| errors::invalid(format!("{}: {}", error.code, error.message)))?;
+            .map_err(|error| RuntimeError::invalid(format!("{}: {}", error.code, error.message)))?;
         let strict = match value.get("requireSessionWorkspace") {
             None | Some(serde_json::Value::Null) => false,
             Some(serde_json::Value::Bool(flag)) => *flag,
             Some(_) => {
-                return Err(errors::invalid(
+                return Err(RuntimeError::invalid(
                     "requireSessionWorkspace must be a boolean when present",
                 ));
             }
@@ -95,7 +97,7 @@ impl LspLane {
         Ok(())
     }
 
-    pub(crate) async fn close(&self) {
+    pub async fn close(&self) {
         let state = self.state.lock().await.clone();
         if let Some(state) = state {
             state.pool.close().await;

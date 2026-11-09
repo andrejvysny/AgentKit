@@ -5,6 +5,7 @@
 //! TS tests. Rust debug formatting never becomes observable behavior: internal
 //! failures collapse to `internal_error` with a redacted message.
 
+use agentkit_runtime::{ADVISOR_NOT_CONFIGURED, RuntimeError, SUBAGENTS_NOT_CONFIGURED};
 use napi::{Status, bindgen_prelude::Error};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -175,12 +176,6 @@ pub fn session(error: agentkit_host::SessionError) -> Error {
     stable(&error.code, error.message, None)
 }
 
-/// Sentinel texts the late-bound lanes raise through `HostError::Execution`
-/// when a subsystem was never configured; `host` turns them into stable
-/// public codes instead of an opaque `internal_error`.
-pub(crate) const SUBAGENTS_NOT_CONFIGURED: &str = "subagents not configured";
-pub(crate) const ADVISOR_NOT_CONFIGURED: &str = "advisor not configured";
-
 /// Map a host error. Store failures keep their store codes (`not_found`,
 /// `already_owned`, `lease_lost`, ...); the unconfigured-lane sentinels get
 /// stable codes; everything else collapses to a redacted `internal_error`
@@ -210,6 +205,16 @@ pub fn host(error: agentkit_host::HostError) -> Error {
 
 pub fn invalid(message: impl Into<String>) -> Error {
     stable("invalid_input", message, None)
+}
+
+/// Map a runtime error: refusals keep the exact code and text the binding
+/// raised before the runtime was extracted.
+pub fn runtime(error: RuntimeError) -> Error {
+    match error {
+        RuntimeError::InvalidInput(message) => invalid(message),
+        RuntimeError::Coded { code, message } => stable(&code, message, None),
+        RuntimeError::Host(error) => host(error),
+    }
 }
 
 /// A provider-configuration refusal: the connection a service was told to
@@ -250,6 +255,34 @@ mod tests {
         assert_eq!(payload["code"], "answer_conflict");
         assert_eq!(payload["message"], "duplicate answer");
         assert!(payload.get("details").is_none());
+    }
+
+    #[test]
+    fn coded_runtime_errors_keep_the_old_pack_mapping() {
+        let known = runtime(RuntimeError::Coded {
+            code: "invalid_input".to_owned(),
+            message: "nope".to_owned(),
+        });
+        let payload: Value = serde_json::from_str(&known.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "invalid_input");
+        assert_eq!(payload["message"], "nope");
+        // A contract code crosses verbatim (workspace_busy is one).
+        let verbatim = runtime(RuntimeError::Coded {
+            code: "workspace_busy".to_owned(),
+            message: "leased".to_owned(),
+        });
+        let payload: Value = serde_json::from_str(&verbatim.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "workspace_busy");
+        // An unknown origin is redacted to internal_error but stays
+        // inspectable in details.origin.
+        let foreign = runtime(RuntimeError::Coded {
+            code: "not_in_the_contract".to_owned(),
+            message: "x".to_owned(),
+        });
+        let payload: Value = serde_json::from_str(&foreign.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "internal_error");
+        assert_eq!(payload["message"], GENERIC_MESSAGE);
+        assert_eq!(payload["details"]["origin"], "not_in_the_contract");
     }
 
     #[test]

@@ -124,7 +124,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let records = core
-            .service
+            .runtime
+            .service()
             .list_uncertain_executions(&session_id)
             .await
             .map_err(errors::session)?;
@@ -139,7 +140,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_resolve(&input_json)?;
         let record = core
-            .service
+            .runtime
+            .service()
             .resolve_uncertain_execution(
                 &input.scope_id,
                 &input.execution_id,
@@ -166,7 +168,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_resolve_for_chat(&input_json)?;
         let record = core
-            .service
+            .runtime
+            .service()
             .resolve_uncertain_execution_for_chat(
                 &input.scope_id,
                 &input.execution_id,

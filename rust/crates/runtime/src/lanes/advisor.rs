@@ -14,38 +14,14 @@ use agentkit_host::{
 use agentkit_store::TaskRecord;
 use std::sync::Mutex as StdMutex;
 
-use crate::errors;
-
-/// The bridge forwards `advisor.finding` escalations to the JS host as
-/// ordinary service events (same channel, `kind` discriminator).
-pub(crate) struct BridgeAdvisorSink {
-    bridge: Arc<crate::jsbridge::JsBridge>,
-}
-
-impl BridgeAdvisorSink {
-    pub(crate) fn new(bridge: Arc<crate::jsbridge::JsBridge>) -> Self {
-        Self { bridge }
-    }
-}
-
-impl AdvisorEventSink for BridgeAdvisorSink {
-    fn emit(&self, event: serde_json::Value) {
-        let status = self.bridge.deliver_message(event.to_string());
-        if status != napi::Status::Ok {
-            // An undeliverable ESCALATION must at least leave a trace: a
-            // critical finding vanishing into a full/closing JS queue is
-            // exactly the failure the event channel exists to prevent.
-            eprintln!("advisor escalation dropped ({status:?}): {}", event);
-        }
-    }
-}
+use crate::error::RuntimeError;
 
 /// The advisor's read-only tools: the coding pack's read side plus every
 /// LSP tool. Anything effect-bearing is excluded twice over — by this
 /// filter and by the advisor run's missing durable-execution authority.
 pub(crate) struct LaneAdvisorTools {
-    pub(crate) coding: Arc<crate::coding_lane::CodingLane>,
-    pub(crate) lsp: Arc<crate::lsp_lane::LspLane>,
+    pub(crate) coding: Arc<crate::lanes::coding::CodingLane>,
+    pub(crate) lsp: Arc<crate::lanes::lsp::LspLane>,
 }
 
 #[async_trait::async_trait]
@@ -69,7 +45,7 @@ struct AdvisorState {
 }
 
 /// The one mutable piece of the advisor lane.
-pub(crate) struct AdvisorLane {
+pub struct AdvisorLane {
     state: StdMutex<Option<Arc<AdvisorState>>>,
     config: Arc<Mutex<AdvisorConfig>>,
     /// The default provider id and the routable registry, set at bind so
@@ -90,7 +66,7 @@ impl AdvisorLane {
     /// an unknown pin is `invalid_input`, and a pin onto a non-default
     /// provider needs its own model (the session's model names the wrong
     /// provider's catalogue).
-    pub(crate) fn validate(&self, config: &AdvisorConfig) -> Result<(), napi::Error> {
+    pub fn validate(&self, config: &AdvisorConfig) -> Result<(), RuntimeError> {
         let routing = self.routing.lock().unwrap_or_else(PoisonError::into_inner);
         let Some((default_id, registry)) = routing.as_ref() else {
             return Ok(());
@@ -108,12 +84,12 @@ impl AdvisorLane {
                 continue;
             };
             if registry.get(id).is_none() {
-                return Err(errors::invalid(format!(
+                return Err(RuntimeError::invalid(format!(
                     "{key} \"{id}\" is not a configured provider"
                 )));
             }
             if id != default_id && model.as_deref().is_none_or(str::is_empty) {
-                return Err(errors::invalid(format!(
+                return Err(RuntimeError::invalid(format!(
                     "{key} \"{id}\" differs from the default provider; {model_key} is required"
                 )));
             }
@@ -131,10 +107,10 @@ impl AdvisorLane {
         tools: Arc<dyn AdvisorToolSource>,
         events: Option<Arc<dyn AdvisorEventSink>>,
         session: AgentSessionService,
-    ) -> Result<(), napi::Error> {
+    ) -> Result<(), RuntimeError> {
         let mut slot = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_some() {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "the advisor is already configured on this service",
             ));
         }
@@ -174,7 +150,7 @@ impl AdvisorLane {
         Ok(())
     }
 
-    pub(crate) fn configure(&self, config: AdvisorConfig) {
+    pub fn configure(&self, config: AdvisorConfig) {
         let config = config.effective();
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = config.clone();
         if let Some(state) = self.state() {
@@ -184,7 +160,7 @@ impl AdvisorLane {
         }
     }
 
-    pub(crate) fn view(&self) -> serde_json::Value {
+    pub fn view(&self) -> serde_json::Value {
         let config = self
             .config
             .lock()
@@ -200,9 +176,9 @@ impl AdvisorLane {
             .clone()
     }
 
-    pub(crate) async fn review(&self, chat_id: &str, focus: String) -> HostResult<AdvisorReport> {
+    pub async fn review(&self, chat_id: &str, focus: String) -> HostResult<AdvisorReport> {
         let state = self.state().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::errors::ADVISOR_NOT_CONFIGURED.into())
+            agentkit_host::HostError::Execution(crate::error::ADVISOR_NOT_CONFIGURED.into())
         })?;
         agentkit_host::explicit_review(
             &state.engine,
@@ -213,13 +189,13 @@ impl AdvisorLane {
         .await
     }
 
-    pub(crate) async fn findings(
+    pub async fn findings(
         &self,
         chat_id: &str,
         limit: i64,
     ) -> HostResult<Vec<agentkit_store::AdvisorFindingRecord>> {
         let state = self.state().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::errors::ADVISOR_NOT_CONFIGURED.into())
+            agentkit_host::HostError::Execution(crate::error::ADVISOR_NOT_CONFIGURED.into())
         })?;
         let records = state.store.list_advisor_findings(chat_id, limit).await?;
         Ok(records)

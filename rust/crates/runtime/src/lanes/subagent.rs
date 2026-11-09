@@ -14,10 +14,12 @@ use agentkit_host::{
 };
 use agentkit_store::TaskRecord;
 
+use crate::error::RuntimeError;
+
 /// The one mutable piece of the subagent lane. Shared by the contributor,
 /// the guard, the guidance source, the settled observer, and the native
 /// configuration/list/status surface.
-pub(crate) struct SubagentLane {
+pub struct SubagentLane {
     service: Mutex<Option<Arc<SubagentService>>>,
     config: Mutex<SubagentConfig>,
     /// Start-time `maxConcurrency`. The worker pool was sized from it, so a
@@ -39,10 +41,10 @@ impl SubagentLane {
     /// Bind the constructed service (after the host + session service
     /// exist). One-shot: re-binding under running turns would swap
     /// coordination state mid-flight.
-    pub(crate) fn bind(&self, service: SubagentService) -> Result<(), napi::Error> {
+    pub(crate) fn bind(&self, service: SubagentService) -> Result<(), RuntimeError> {
         let mut slot = self.service.lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_some() {
-            return Err(crate::errors::invalid(
+            return Err(RuntimeError::invalid(
                 "subagents are already configured on this service",
             ));
         }
@@ -58,7 +60,7 @@ impl SubagentLane {
 
     /// Hot configuration; applies whether or not binding already happened
     /// (a pre-bind configuration is remembered and applied at bind).
-    pub(crate) fn configure(&self, mut config: SubagentConfig) {
+    pub fn configure(&self, mut config: SubagentConfig) {
         if config.limits.max_concurrency > self.concurrency_ceiling {
             eprintln!(
                 "agentkit-napi: subagent maxConcurrency {} exceeds the service's start-time ceiling {}; clamped (set subagentMaxConcurrency in the service options)",
@@ -82,7 +84,7 @@ impl SubagentLane {
             .clone()
     }
 
-    pub(crate) fn view(&self) -> Option<serde_json::Value> {
+    pub fn view(&self) -> Option<serde_json::Value> {
         let service = self.service()?;
         let config = service.config();
         serde_json::to_value(serde_json::json!({
@@ -107,16 +109,16 @@ impl SubagentLane {
         }
     }
 
-    pub(crate) async fn list(&self, parent_chat_id: &str) -> HostResult<Vec<SubagentView>> {
+    pub async fn list(&self, parent_chat_id: &str) -> HostResult<Vec<SubagentView>> {
         let service = self.service().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::errors::SUBAGENTS_NOT_CONFIGURED.into())
+            agentkit_host::HostError::Execution(crate::error::SUBAGENTS_NOT_CONFIGURED.into())
         })?;
         service.list(parent_chat_id).await
     }
 
-    pub(crate) async fn status(&self, child_chat_id: &str) -> HostResult<SubagentView> {
+    pub async fn status(&self, child_chat_id: &str) -> HostResult<SubagentView> {
         let service = self.service().ok_or_else(|| {
-            agentkit_host::HostError::Execution(crate::errors::SUBAGENTS_NOT_CONFIGURED.into())
+            agentkit_host::HostError::Execution(crate::error::SUBAGENTS_NOT_CONFIGURED.into())
         })?;
         service.status(child_chat_id).await
     }

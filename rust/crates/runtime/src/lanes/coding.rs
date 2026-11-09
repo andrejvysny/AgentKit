@@ -39,8 +39,8 @@ use agentkit_toolpacks_coding::{
 };
 use serde_json::Value;
 
-use crate::errors;
-use crate::workspace_binding::{canonical_lane_root, permits, session_binding};
+use crate::error::RuntimeError;
+use crate::workspace::{canonical_lane_root, permits, session_binding};
 
 /// Everything the lane needs after registration. Built once by `register`;
 /// read by the contributor, the guard, and the standing resolver.
@@ -56,7 +56,7 @@ struct LaneState {
 
 /// The one mutable piece of the native coding lane. All three executor
 /// adapters share it; registration is one-shot.
-pub(crate) struct CodingLane {
+pub struct CodingLane {
     authority: Arc<dyn CodingPermissionAuthority>,
     store: agentkit_store::SqliteStore,
     state: tokio::sync::Mutex<Option<Arc<LaneState>>>,
@@ -104,7 +104,7 @@ impl CodingLane {
     /// Refuse all further executions (`service_closed`). Called before
     /// `dispose` so a still-draining run cannot start a command while the
     /// pack's scratch is being removed. Irreversible.
-    pub(crate) fn mark_disposed(&self) {
+    pub fn mark_disposed(&self) {
         self.disposed.store(true, Ordering::SeqCst);
     }
 
@@ -116,10 +116,10 @@ impl CodingLane {
     /// is refused — the descriptor set of a service is immutable once the
     /// worker can claim turns, and a silent re-registration would swap the
     /// guard under a running turn.
-    pub(crate) async fn register(&self, options_json: &str) -> Result<(), napi::Error> {
+    pub async fn register(&self, options_json: &str) -> Result<(), RuntimeError> {
         let input = parse_coding_options(options_json)?;
         if self.state.lock().await.is_some() {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "coding tools are already registered on this service",
             ));
         }
@@ -180,7 +180,7 @@ impl CodingLane {
             // Racing registration (the service serializes its callers, but
             // the lane keeps its own invariant): the first registration
             // stands, the loser changes nothing.
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "coding tools are already registered on this service",
             ));
         }
@@ -199,7 +199,7 @@ impl CodingLane {
     /// runtime never exits with marked children alive (ADR 0020). Never
     /// claims outcomes: whatever the receipt log cannot decide stays
     /// uncertain there, exactly what the crate's own `dispose` promises.
-    pub(crate) async fn dispose(&self) {
+    pub async fn dispose(&self) {
         self.mark_disposed();
         let state = self.state.lock().await;
         if let Some(state) = state.as_ref() {
@@ -379,11 +379,11 @@ impl WorkspaceResolver for LaneWorkspaceResolver {
 
 const CODING_MODES: [&str; 5] = ["read_only", "ask", "auto_edit", "full_auto", "plan"];
 
-fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
+fn parse_coding_options(text: &str) -> Result<CodingToolsInput, RuntimeError> {
     let value: Value = serde_json::from_str::<Value>(text)
         .ok()
         .filter(|value| value.is_object())
-        .ok_or_else(|| errors::invalid("the coding tools options must be a JSON object"))?;
+        .ok_or_else(|| RuntimeError::invalid("the coding tools options must be a JSON object"))?;
     let object = value.as_object().expect("checked above");
     for key in object.keys() {
         if !matches!(
@@ -403,7 +403,7 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
                 | "environment"
                 | "requireSessionWorkspace"
         ) {
-            return Err(errors::invalid(format!(
+            return Err(RuntimeError::invalid(format!(
                 "unknown coding tools option \"{key}\""
             )));
         }
@@ -412,14 +412,16 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
         .get("workspaceRoot")
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
-        .ok_or_else(|| errors::invalid("workspaceRoot is required and must be a non-empty string"))?
+        .ok_or_else(|| {
+            RuntimeError::invalid("workspaceRoot is required and must be a non-empty string")
+        })?
         .to_owned();
     let sandbox = match object.get("sandbox") {
         None | Some(Value::Null) => SandboxMode::Required,
         Some(Value::String(text)) if text == "required" => SandboxMode::Required,
         Some(Value::String(text)) if text == "off" => SandboxMode::Off,
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "sandbox must be \"required\" or \"off\" when present",
             ));
         }
@@ -434,11 +436,11 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
             .map(|item| {
                 item.as_str()
                     .map(str::to_owned)
-                    .ok_or_else(|| errors::invalid("testCommands entries must be strings"))
+                    .ok_or_else(|| RuntimeError::invalid("testCommands entries must be strings"))
             })
             .collect::<Result<Vec<_>, _>>()?,
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "testCommands must be an array when present",
             ));
         }
@@ -446,13 +448,13 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
     let configured_mode = match object.get("configuredMode") {
         None | Some(Value::Null) => CodingMode::Ask,
         Some(Value::String(text)) => CodingMode::parse(text.as_str()).ok_or_else(|| {
-            errors::invalid(format!(
+            RuntimeError::invalid(format!(
                 "unknown configuredMode \"{text}\" (expected one of: {})",
                 CODING_MODES.join(", ")
             ))
         })?,
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "configuredMode must be a string when present",
             ));
         }
@@ -460,17 +462,17 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
     let role = match object.get("role") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => Some(CodingRole::parse(text.as_str()).ok_or_else(|| {
-            errors::invalid(format!(
+            RuntimeError::invalid(format!(
                 "unknown role \"{text}\" (expected implementer, reviewer, or supervisor)"
             ))
         })?),
-        Some(_) => return Err(errors::invalid("role must be a string when present")),
+        Some(_) => return Err(RuntimeError::invalid("role must be a string when present")),
     };
     let plan_tool_names = match object.get("planToolNames") {
         None | Some(Value::Null) => vec!["submit_plan".to_owned()],
         Some(Value::Array(items)) => {
             if items.is_empty() {
-                return Err(errors::invalid("planToolNames must not be empty"));
+                return Err(RuntimeError::invalid("planToolNames must not be empty"));
             }
             let mut parsed: Vec<String> = Vec::with_capacity(items.len());
             for item in items {
@@ -478,7 +480,7 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
                     .as_str()
                     .filter(|text| !text.is_empty())
                     .ok_or_else(|| {
-                        errors::invalid("planToolNames entries must be non-empty strings")
+                        RuntimeError::invalid("planToolNames entries must be non-empty strings")
                     })?;
                 if !parsed.iter().any(|existing| existing == name) {
                     parsed.push(name.to_owned());
@@ -487,7 +489,7 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
             parsed
         }
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "planToolNames must be an array when present",
             ));
         }
@@ -496,7 +498,7 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
         None | Some(Value::Null) => workspace_root.clone(),
         Some(Value::String(text)) if !text.is_empty() => text.to_owned(),
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "identity must be a non-empty string when present",
             ));
         }
@@ -505,7 +507,7 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) if !text.is_empty() => Some(text.to_owned()),
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "coordinationDir must be a non-empty string when present",
             ));
         }
@@ -516,7 +518,9 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
             value
                 .as_u64()
                 .filter(|value| *value > 0 && *value <= u64::from(u32::MAX))
-                .ok_or_else(|| errors::invalid("coordinationWaitMs must be a positive integer"))?,
+                .ok_or_else(|| {
+                    RuntimeError::invalid("coordinationWaitMs must be a positive integer")
+                })?,
         ),
     };
     let environment = parse_environment(object.get("environment"))?;
@@ -546,42 +550,44 @@ const MAX_ENVIRONMENT_ENTRIES: usize = 1024;
 /// instead of failing at registration.
 fn parse_environment(
     value: Option<&Value>,
-) -> Result<Option<HashMap<String, String>>, napi::Error> {
+) -> Result<Option<HashMap<String, String>>, RuntimeError> {
     let object = match value {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Object(object)) => object,
         Some(_) => {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "environment must be an object of strings when present",
             ));
         }
     };
     if object.len() > MAX_ENVIRONMENT_ENTRIES {
-        return Err(errors::invalid(format!(
+        return Err(RuntimeError::invalid(format!(
             "environment has more than {MAX_ENVIRONMENT_ENTRIES} entries"
         )));
     }
     let mut parsed = HashMap::with_capacity(object.len());
     for (name, value) in object {
         if name.is_empty() || name.contains('=') || name.contains('\0') {
-            return Err(errors::invalid(
+            return Err(RuntimeError::invalid(
                 "environment names must be non-empty and contain no '=' or NUL",
             ));
         }
         let text = value
             .as_str()
             .filter(|text| !text.contains('\0'))
-            .ok_or_else(|| errors::invalid("environment values must be strings without NUL"))?;
+            .ok_or_else(|| {
+                RuntimeError::invalid("environment values must be strings without NUL")
+            })?;
         parsed.insert(name.clone(), text.to_owned());
     }
     Ok(Some(parsed))
 }
 
-fn optional_bool(object: &serde_json::Map<String, Value>, key: &str) -> Result<bool, napi::Error> {
+fn optional_bool(object: &serde_json::Map<String, Value>, key: &str) -> Result<bool, RuntimeError> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(false),
         Some(Value::Bool(value)) => Ok(*value),
-        Some(_) => Err(errors::invalid(format!(
+        Some(_) => Err(RuntimeError::invalid(format!(
             "{key} must be a boolean when present"
         ))),
     }
@@ -625,13 +631,16 @@ fn default_coordination_dir() -> String {
 /// A pack-configuration refusal is the caller's bad input, not an internal
 /// failure: `invalid_configuration` crosses as the contract's
 /// `invalid_input`; anything else keeps its origin in `details`.
-fn coding(error: CodingError) -> napi::Error {
+fn coding(error: CodingError) -> RuntimeError {
     let code = if error.code == "invalid_configuration" {
         "invalid_input"
     } else {
         error.code.as_str()
     };
-    errors::stable(code, error.message, None)
+    RuntimeError::Coded {
+        code: code.to_owned(),
+        message: error.message,
+    }
 }
 
 #[cfg(test)]
@@ -748,13 +757,20 @@ mod tests {
 
     #[test]
     fn configuration_refusals_cross_as_invalid_input() {
-        let error = coding(CodingError::new("invalid_configuration", "nope"));
-        assert!(error.to_string().contains("invalid_input"));
-        assert!(error.to_string().contains("nope"));
-        let foreign = coding(CodingError::new("workspace_busy", "leased"));
-        // An unknown origin is redacted to the contract's internal_error
-        // but stays inspectable in details.
-        assert!(foreign.to_string().contains("workspace_busy"));
+        let RuntimeError::Coded { code, message } =
+            coding(CodingError::new("invalid_configuration", "nope"))
+        else {
+            panic!("a pack refusal keeps its code");
+        };
+        assert_eq!(code, "invalid_input");
+        assert_eq!(message, "nope");
+        // An unknown origin keeps its code; the binding redacts it to the
+        // contract's internal_error with the origin in details.
+        let RuntimeError::Coded { code, .. } = coding(CodingError::new("workspace_busy", "leased"))
+        else {
+            panic!("a pack refusal keeps its code");
+        };
+        assert_eq!(code, "workspace_busy");
     }
 
     fn guard_context(chat_id: &str) -> ToolGuardContext {
@@ -788,7 +804,7 @@ mod tests {
     }
 
     async fn bound_lane(strict: bool) -> (Arc<CodingLane>, agentkit_store::SqliteStore) {
-        use crate::workspace_binding::tests::{add_session, open_store, scratch};
+        use crate::workspace::tests::{add_session, open_store, scratch};
         let store = open_store();
         let root = scratch("coding-lane");
         let other = scratch("coding-other");
@@ -840,9 +856,9 @@ mod tests {
     async fn advisor_read_tools_follow_the_reviewed_session_binding() {
         use agentkit_host::AdvisorToolSource;
         let (lane, store) = bound_lane(false).await;
-        let tools = crate::advisor_lane::LaneAdvisorTools {
+        let tools = crate::lanes::advisor::LaneAdvisorTools {
             coding: Arc::clone(&lane),
-            lsp: Arc::new(crate::lsp_lane::LspLane::new(store)),
+            lsp: Arc::new(crate::lanes::lsp::LspLane::new(store)),
         };
         assert!(tools.read_tools("b").await.is_empty());
         assert!(!tools.read_tools("a").await.is_empty());

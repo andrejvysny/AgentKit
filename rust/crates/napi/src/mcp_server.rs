@@ -52,9 +52,9 @@ use super::http_server::{
     CONNECTION_SHUTDOWN_GRACE, bind_listener, ensure_bound_loopback, ensure_loopback_bind,
     optional_sized, optional_text, optional_u64, url_host,
 };
-use crate::authority::effective_class;
 use crate::errors;
 use crate::tool::JsToolContributor;
+use agentkit_runtime::effective_class;
 
 /// Floor mirrored from the REST server's bearer policy: the crate's
 /// `BearerAuth` only refuses empty tokens, so the binding enforces the

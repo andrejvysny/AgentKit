@@ -11,37 +11,24 @@
 //! listeners are stopped so no orphan task keeps running against a dead
 //! host. Durable work is unaffected - it recovers on the next boot.
 
-use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use agentkit_core::ToolRegistry;
 use agentkit_core::permission::CodingMode;
-use agentkit_host::{
-    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ChatExecutor,
-    ChatExecutorOptions, CodingPermissionAuthority, HostOptions, HostResult, RunHandle, RunUpdate,
-    SharedRuntime, TaskExecutor, ToolContributor, ToolGuard, WorkerHandle,
-};
+use agentkit_host::{HostResult, RunHandle, RunUpdate};
+use agentkit_runtime::{AgentRuntime, CodingLane, ExternalToolsPolicy, PlanConfiguration};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::advisor_lane::{
-    AdvisorLane, AdvisorLaneContributor, BridgeAdvisorSink, LaneAdvisorTools,
-};
-use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};
-use crate::coding_lane::{
-    CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver,
-};
+use crate::advisor_sink::BridgeAdvisorSink;
 use crate::errors;
 use crate::jsbridge::JsBridge;
-use crate::lsp_lane::{LspLane, LspLaneContributor};
 use crate::provider::JsProvider;
-use crate::subagent_lane::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
 use crate::tool::JsToolContributor;
 
 #[path = "http_server.rs"]
@@ -54,30 +41,18 @@ mod mcp_server;
 mod receipts;
 
 const MAX_POLL_BATCH: i32 = 64;
-/// Workers for root sessions and their delegating parents; the subagent
-/// `maxConcurrency` is added on top at construction.
-const BASE_WORKERS: usize = 12;
 const DEFAULT_POLL_WAIT_MS: u64 = 25;
 const DEFAULT_CLOSE_TIMEOUT_MS: u64 = 5_000;
 const MAX_CLOSE_TIMEOUT_MS: u64 = 300_000;
 const MAX_SUBAGENT_POOL: i64 = 64;
 
 struct Core {
-    host: AgentHost,
-    content_authority: Arc<dyn agentkit_host::ContentAuthority>,
-    native_provider_factory: Arc<agentkit_host::http::NativeProviderFactory>,
+    runtime: AgentRuntime,
     provider_ports: Arc<crate::provider_connection::ports::BridgeProviderPorts>,
     provider_memory_secrets: Arc<agentkit_connections::MemorySecretStore>,
     mcp_config_runtime: Arc<dyn agentkit_host::McpConfigRuntime>,
     mcp_config_secrets: Arc<dyn agentkit_host::McpConfigSecrets>,
-    profiles: Arc<agentkit_host::ProfileRegistry>,
-    service: AgentSessionService,
     contributor: Arc<JsToolContributor>,
-    lane: Arc<CodingLane>,
-    subagent_lane: Arc<SubagentLane>,
-    advisor_lane: Arc<AdvisorLane>,
-    lsp_lane: Arc<LspLane>,
-    worker: Option<WorkerHandle>,
     subscriptions: Subscriptions,
     http: Option<http_server::HttpServer>,
     mcp: Option<mcp_server::McpServerHandle>,
@@ -184,27 +159,7 @@ impl SessionService {
     ) -> Result<Self> {
         let options = parse_service_options(options_json.as_deref())?;
         let bridge = Arc::new(JsBridge::new(on_event));
-        let runtime: SharedRuntime = std::sync::Arc::new(agentkit_host::SystemRuntime);
         let contributor = Arc::new(JsToolContributor::new(Arc::clone(&bridge)));
-        let authority = Arc::new(BindingAuthority::new());
-        let coding_authority = Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>;
-        let lane = Arc::new(CodingLane::new(
-            Arc::clone(&coding_authority),
-            store_handle.clone(),
-        ));
-        // The three late-bound lanes: the executor holds their adapters
-        // from construction; the configuration calls below fill them.
-        // Unconfigured lanes contribute nothing, judge nothing, and hook
-        // nothing — existing services behave exactly as before.
-        let subagent_lane = Arc::new(SubagentLane::new(options.subagent_max_concurrency));
-        let advisor_lane = Arc::new(AdvisorLane::new());
-        let lsp_lane = Arc::new(LspLane::new(store_handle.clone()));
-        let lanes_store = store_handle.clone();
-        let guard = JsToolGuard::new(
-            coding_authority,
-            options.configured_mode,
-            options.plan.clone(),
-        );
         // The same fence the callback bridge enforces: once `close()` has
         // begun, no new provider request may leave the process.
         let fence_bridge = Arc::clone(&bridge);
@@ -225,193 +180,52 @@ impl SessionService {
             ),
             Some(lane) => build_lane_provider(lane, Arc::clone(&fence)).await?,
         };
-        let mut routable = vec![Arc::clone(&provider)];
+        let mut additional: Vec<Arc<dyn agentkit_core::ChatProvider>> = Vec::new();
         for lane in &options.additional_providers {
-            routable.push(build_lane_provider(lane, Arc::clone(&fence)).await?);
+            additional.push(build_lane_provider(lane, Arc::clone(&fence)).await?);
         }
-        // Immutable for the service lifetime: a durable payload's providerId
-        // must resolve identically before and after a restart.
-        let registry = Arc::new(agentkit_host::ProviderRegistry::new(routable));
         let provider_ports = Arc::new(crate::provider_connection::ports::BridgeProviderPorts::new(
             bridge.clone(),
         ));
         let provider_memory_secrets = Arc::new(agentkit_connections::MemorySecretStore::default());
-        let native_provider_factory = Arc::new(
-            agentkit_host::http::NativeProviderFactory::default()
-                .with_static_provider_ids(registry.ids().map(str::to_owned).collect()),
-        );
         let content_authority: Arc<dyn agentkit_host::ContentAuthority> =
             Arc::new(crate::provider::JsContentAuthority(Arc::clone(&bridge)));
-        let profiles =
-            Arc::new(agentkit_host::ProfileRegistry::new(&options.profiles).map_err(errors::host)?);
-        let advisor_provider = Arc::clone(&provider);
-        let executor: Arc<dyn TaskExecutor> = Arc::new(
-            ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
-                ChatExecutorOptions {
-                    providers: Some(Arc::clone(&registry)),
-                    provider_factory: Some(native_provider_factory.clone()),
-                    content_authority: Some(content_authority.clone()),
-                    tool_contributors: vec![
-                        Arc::clone(&contributor) as Arc<dyn ToolContributor>,
-                        // The Rust coding toolpack, once registered, joins
-                        // the SAME lane: same snapshot, same durable
-                        // execution, same receipts.
-                        Arc::new(CodingLaneContributor::new(Arc::clone(&lane)))
-                            as Arc<dyn ToolContributor>,
-                        // Delegation, advisory, and code-intelligence
-                        // namespaces: late-bound lanes; each offers nothing
-                        // until its configuration call arrives.
-                        Arc::new(SubagentLaneContributor::new(Arc::clone(&subagent_lane)))
-                            as Arc<dyn ToolContributor>,
-                        Arc::new(AdvisorLaneContributor::new(Arc::clone(&advisor_lane)))
-                            as Arc<dyn ToolContributor>,
-                        Arc::new(LspLaneContributor::new(Arc::clone(&lsp_lane)))
-                            as Arc<dyn ToolContributor>,
-                    ],
-                    tool_guards: vec![
-                        Arc::new(guard) as Arc<dyn ToolGuard>,
-                        // Both coding-namespace guards of the crate's own
-                        // chain: the permission matrix and the high-risk
-                        // fresh-approval guard. Each judges only the
-                        // `coding` namespace; the JS namespace stays on the
-                        // JS guard — guards compose with AND.
-                        Arc::new(CodingLaneGuard::new(Arc::clone(&lane))) as Arc<dyn ToolGuard>,
-                        Arc::new(agentkit_toolpacks_coding::HighRiskCommandGuard)
-                            as Arc<dyn ToolGuard>,
-                        // Subagent namespace ceilings + workspace write
-                        // coordination; judges only subagent tools, and
-                        // read-only-role children only through the crate's
-                        // own guard. Passes everything while unconfigured.
-                        Arc::new(SubagentLaneGuard::new(Arc::clone(&subagent_lane)))
-                            as Arc<dyn ToolGuard>,
-                    ],
-                    // Exact-call remembering for native shell approvals:
-                    // the crate's fingerprint-v4 policy over the registered
-                    // lane's workspace. Unregistered resolves to nothing,
-                    // so every approvable call keeps asking.
-                    standing: Some(LaneWorkspaceResolver::standing_policy(Arc::clone(&lane))
-                        as Arc<dyn agentkit_host::StandingApprovalPolicy>),
-                    // Sessions whose descriptor carries a workspace get the
-                    // AGENTS.md/CLAUDE.md system block exactly as the
-                    // TypeScript authority injects it; descriptor-less
-                    // sessions stay untouched. Refusals (symlink, escape)
-                    // degrade to a run warning, never a lost turn.
-                    project_instructions: Some(Arc::new(agentkit_host::FileProjectInstructions)),
-                    // Delegation instructions enter every main-agent run
-                    // while subagents are configured+enabled; the watchdog
-                    // observes every run loop. Both are observational:
-                    // unconfigured they add nothing and never fail a turn.
-                    delegation_guidance: Some(
-                        Arc::clone(&subagent_lane) as Arc<dyn agentkit_host::DelegationGuidance>
-                    ),
-                    run_hooks: Some(Arc::clone(&advisor_lane) as Arc<dyn agentkit_core::RunHooks>),
-                    ..Default::default()
-                },
-            ),
-        );
-        let host = AgentHost::new(
-            store_handle.clone(),
-            HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
-            runtime.clone(),
-            HostOptions {
-                // Delegation safety: a parent turn holds its worker slot
-                // while `subagent_await` polls, so the pool must host the
-                // root sessions, their delegating parents, AND in-flight
-                // children — with the default subagent limits (8 children
-                // active, depth 2, 4 per parent) a pool sized only for the
-                // parents starves every child until the await times out.
-                // Idle workers park on the wake queue; overprovisioning is
-                // free. The child term is the START-TIME subagent
-                // `maxConcurrency`; `configureSubagents` clamps later raises
-                // to it, because the pool is fixed once the worker starts.
-                concurrency: BASE_WORKERS
-                    + usize::try_from(options.subagent_max_concurrency).unwrap_or(0),
-                // Orphan reaping on parent settlement (subagents) and
-                // turn-failure tracking (watchdog). Failures never unwind
-                // the settlement; the startup sweep is the same computation.
-                settled_observers: vec![
-                    Arc::clone(&subagent_lane) as Arc<dyn agentkit_host::TaskSettledObserver>,
-                    Arc::clone(&advisor_lane) as Arc<dyn agentkit_host::TaskSettledObserver>,
-                ],
-                ..Default::default()
-            },
-        )
-        .map_err(errors::host)?;
-        let service = AgentSessionService::new(AgentSessionServiceDeps {
-            store: store_handle,
-            runtime: runtime.clone(),
-            plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
-            wake: Some(host.wake_handle()),
-        })
-        .with_profiles(profiles.clone())
-        .with_defaults(
-            options
-                .provider
-                .as_ref()
-                .map(|provider| provider.provider_id.clone()),
-            options
-                .provider
-                .as_ref()
-                .map(|provider| provider.model.clone()),
-        )
-        .with_content_authority(content_authority.clone())
-        .with_provider_factory(native_provider_factory.clone())
-        .with_gate(host.admission_gate());
-        host.set_session_flush_planner(Arc::new(service.clone()))
-            .await;
-        // Bound before the worker exists: a run can never query an unbound
-        // authority and fall back to the configured mode by accident.
-        authority.bind(service.clone());
-        // Fill the late-bound lanes. Subagent coordination needs the
-        // session service (child turns are ordinary durable turns); the
-        // advisor needs the provider, store, clock, tool source, event
-        // bridge, and session service. Both are one-shot; configuration
-        // (`configureSubagents`/`configureAdvisor`) is hot afterwards.
-        subagent_lane.bind(
-            agentkit_host::SubagentService::new(
-                lanes_store.clone(),
-                service.clone(),
-                runtime.clone(),
-                agentkit_host::SubagentConfig::default(),
+        let runtime = AgentRuntime::builder(store_handle)
+            .default_provider(provider)
+            .additional_providers(additional)
+            .extra_contributors(vec![
+                Arc::clone(&contributor) as Arc<dyn agentkit_host::ToolContributor>
+            ])
+            .external_tools(ExternalToolsPolicy {
+                configured_mode: options.configured_mode,
+                plan: options.plan.clone(),
+            })
+            .content_authority(content_authority)
+            .profiles(options.profiles)
+            .subagent_max_concurrency(options.subagent_max_concurrency)
+            .plan(options.plan)
+            .session_defaults(
+                options
+                    .provider
+                    .as_ref()
+                    .map(|provider| provider.provider_id.clone()),
+                options
+                    .provider
+                    .as_ref()
+                    .map(|provider| provider.model.clone()),
             )
-            .with_routable_providers(registry.ids().map(str::to_owned).collect()),
-        )?;
-        advisor_lane.bind(
-            advisor_provider,
-            Arc::clone(&registry),
-            lanes_store,
-            runtime.clone(),
-            Arc::new(LaneAdvisorTools {
-                coding: Arc::clone(&lane),
-                lsp: Arc::clone(&lsp_lane),
-            }),
-            Some(Arc::new(BridgeAdvisorSink::new(Arc::clone(&bridge)))),
-            service.clone(),
-        )?;
-        // Crash-reconcile interrupted turns BEFORE the worker can claim work.
-        host.recover().await.map_err(errors::host)?;
-        // This process's previous life may have died mid-child: children
-        // whose parent already settled are reaped before any new turn can
-        // spawn under the same identities.
-        subagent_lane.reap_orphans().await.map_err(errors::host)?;
-        let worker = host.start_worker();
+            .advisor_sink(Arc::new(BridgeAdvisorSink::new(Arc::clone(&bridge))))
+            .build()
+            .await
+            .map_err(errors::runtime)?;
         let service = Self {
             core: Arc::new(Mutex::new(Some(Core {
-                host,
-                content_authority,
-                native_provider_factory,
+                runtime,
                 provider_ports,
                 provider_memory_secrets,
                 mcp_config_runtime: mcp_ports.0,
                 mcp_config_secrets: mcp_ports.1,
-                profiles,
-                service,
                 contributor,
-                lane,
-                subagent_lane,
-                advisor_lane,
-                lsp_lane,
-                worker: Some(worker),
                 subscriptions: Arc::new(std::sync::Mutex::new(Vec::new())),
                 http: None,
                 mcp: None,
@@ -475,7 +289,11 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.lane.register(&options_json).await
+        core.runtime
+            .coding_lane()
+            .register(&options_json)
+            .await
+            .map_err(errors::runtime)
     }
 
     /// Configure the subagent subsystem: `{enabled?, limits?:
@@ -506,7 +324,7 @@ impl SessionService {
                 "invalid subagent config: maxTreeProviderRequests must be an integer in 1..=1000000",
             ));
         }
-        core.subagent_lane.configure(config);
+        core.runtime.subagent_lane().configure(config);
         Ok(())
     }
 
@@ -518,7 +336,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(core
-            .subagent_lane
+            .runtime
+            .subagent_lane()
             .view()
             .map(|value| value.to_string())
             .unwrap_or_else(|| "null".into()))
@@ -536,7 +355,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let views = core
-            .subagent_lane
+            .runtime
+            .subagent_lane()
             .list(&parent_chat_id)
             .await
             .map_err(errors::host)?;
@@ -551,7 +371,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let view = core
-            .subagent_lane
+            .runtime
+            .subagent_lane()
             .status(&child_chat_id)
             .await
             .map_err(errors::host)?;
@@ -574,7 +395,11 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.lsp_lane.register(&options_json).await
+        core.runtime
+            .lsp_lane()
+            .register(&options_json)
+            .await
+            .map_err(errors::runtime)
     }
 
     /// Configure advisor + watchdog: `{enabled?, model?, providerId?,
@@ -595,8 +420,11 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let config: agentkit_host::AdvisorConfig = serde_json::from_str(&config_json)
             .map_err(|error| errors::invalid(format!("invalid advisor config: {error}")))?;
-        core.advisor_lane.validate(&config)?;
-        core.advisor_lane.configure(config);
+        core.runtime
+            .advisor_lane()
+            .validate(&config)
+            .map_err(errors::runtime)?;
+        core.runtime.advisor_lane().configure(config);
         Ok(())
     }
 
@@ -607,7 +435,7 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        Ok(core.advisor_lane.view().to_string())
+        Ok(core.runtime.advisor_lane().view().to_string())
     }
 
     /// Run one explicit advisory review of a session now (the `focus` is
@@ -622,7 +450,8 @@ impl SessionService {
             core_guard
                 .as_ref()
                 .ok_or_else(|| errors::closed("the session service is closed"))?
-                .advisor_lane
+                .runtime
+                .advisor_lane()
                 .clone()
         };
         let report = lane
@@ -644,7 +473,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let records = core
-            .advisor_lane
+            .runtime
+            .advisor_lane()
             .findings(&session_id, limit)
             .await
             .map_err(errors::host)?;
@@ -659,7 +489,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_create_session(&input_json)?;
         let state = core
-            .service
+            .runtime
+            .service()
             .create_session(&input)
             .await
             .map_err(errors::session)?;
@@ -674,7 +505,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_send_input(&input_json, WhenBusy::Reject)?;
         let result = core
-            .service
+            .runtime
+            .service()
             .send(&session_id, &input)
             .await
             .map_err(errors::session)?;
@@ -689,7 +521,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_follow_up(&input_json)?;
         let result = core
-            .service
+            .runtime
+            .service()
             .follow_up(&session_id, &input)
             .await
             .map_err(errors::session)?;
@@ -704,7 +537,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_steer(&input_json)?;
         let result = core
-            .service
+            .runtime
+            .service()
             .steer(&session_id, &input)
             .await
             .map_err(errors::session)?;
@@ -721,7 +555,8 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_steer(&input_json)?;
         let result = core
-            .service
+            .runtime
+            .service()
             .steer_live(&session_id, &input)
             .await
             .map_err(errors::session)?;
@@ -735,7 +570,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let state = core
-            .service
+            .runtime
+            .service()
             .get_state(&session_id)
             .await
             .map_err(errors::session)?;
@@ -749,7 +585,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let execution = core
-            .service
+            .runtime
+            .service()
             .get_execution(&session_id)
             .await
             .map_err(errors::session)?;
@@ -763,7 +600,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let turns = core
-            .service
+            .runtime
+            .service()
             .list_turns(&session_id)
             .await
             .map_err(errors::session)?;
@@ -780,7 +618,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let exported = core
-            .service
+            .runtime
+            .service()
             .export_session(&session_id)
             .await
             .map_err(errors::session)?;
@@ -794,7 +633,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let usage = core
-            .service
+            .runtime
+            .service()
             .get_usage(&session_id)
             .await
             .map_err(errors::session)?;
@@ -810,7 +650,12 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let input = parse_answer(&input_json)?;
-        let receipt = core.service.answer(&input).await.map_err(errors::session)?;
+        let receipt = core
+            .runtime
+            .service()
+            .answer(&input)
+            .await
+            .map_err(errors::session)?;
         Ok(receipt_json(&receipt))
     }
 
@@ -827,7 +672,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let receipt = core
-            .service
+            .runtime
+            .service()
             .approve(&request_id, &answer_id, note.as_deref(), remember)
             .await
             .map_err(errors::session)?;
@@ -846,7 +692,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let receipt = core
-            .service
+            .runtime
+            .service()
             .deny(&request_id, &answer_id, note.as_deref())
             .await
             .map_err(errors::session)?;
@@ -859,7 +706,8 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .cancel(&session_id, &turn_id)
             .await
             .map_err(errors::session)
@@ -871,7 +719,8 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .interrupt(&session_id, &turn_id)
             .await
             .map_err(errors::session)
@@ -883,7 +732,8 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .resume(&session_id, &turn_id)
             .await
             .map_err(errors::session)
@@ -896,7 +746,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let result = core
-            .service
+            .runtime
+            .service()
             .flush_queue(&session_id)
             .await
             .map_err(errors::session)?;
@@ -924,7 +775,7 @@ impl SessionService {
             }
             Some(_) => return Err(errors::invalid("afterSeq must be a non-negative integer")),
         };
-        let run: RunHandle = core.host.run_handle(&task_id);
+        let run: RunHandle = core.runtime.host().run_handle(&task_id);
         let receiver = run.subscribe(after);
         let subscription = Arc::new(Subscription {
             receiver: Mutex::new(Some(receiver)),
@@ -1089,8 +940,9 @@ async fn stop_servers(core: &mut Core, grace: Duration) {
 async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicBool) -> Result<()> {
     let mut first_error: Option<napi::Error> = None;
     cancel_all(&core.subscriptions);
-    if let Some(worker) = core.worker.take()
-        && let Err(error) = drain_worker(worker, &core.lane, close_timeout, uncertain).await
+    if let Some(worker) = core.runtime.take_worker()
+        && let Err(error) =
+            drain_worker(worker, core.runtime.coding_lane(), close_timeout, uncertain).await
     {
         first_error = Some(error);
     }
@@ -1099,10 +951,11 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     // start; anything a DEAD process left is the next boot's
     // startup sweep, not ours. Outcomes stay whatever the receipt
     // log decides - teardown never claims them.
-    core.lane.mark_disposed();
-    core.lane.dispose().await;
+    core.runtime.coding_lane().mark_disposed();
+    core.runtime.coding_lane().dispose().await;
     if let Err(error) =
-        agentkit_host::drain_native_command_completions(core.host.store(), close_timeout).await
+        agentkit_host::drain_native_command_completions(core.runtime.host().store(), close_timeout)
+            .await
     {
         uncertain.store(true, Ordering::SeqCst);
         if first_error.is_none() {
@@ -1112,7 +965,7 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     // Language servers get a clean shutdown (exit + kill fallback)
     // once no new dispatch can start; a dead process's leftovers
     // die with the process, not with us.
-    core.lsp_lane.close().await;
+    core.runtime.lsp_lane().close().await;
     drop(core);
     match first_error {
         Some(error) => Err(error),

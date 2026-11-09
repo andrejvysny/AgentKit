@@ -15,7 +15,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(core
-            .service
+            .runtime
+            .service()
             .set_execution_mode(&session_id, &mode)
             .await
             .map_err(errors::session)?
@@ -29,7 +30,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(Value::Array(
-            core.service
+            core.runtime
+                .service()
                 .list_approval_grants(&session_id)
                 .await
                 .map_err(errors::session)?,
@@ -48,7 +50,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(core
-            .service
+            .runtime
+            .service()
             .revoke_approval_grant(&session_id, &grant_id)
             .await
             .map_err(errors::session)?
@@ -61,7 +64,8 @@ impl SessionService {
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .compact(&session_id)
             .await
             .map_err(errors::session)
@@ -74,7 +78,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let state = core
-            .service
+            .runtime
+            .service()
             .fork(&session_id, &from_message_id)
             .await
             .map_err(errors::session)?;
@@ -100,7 +105,8 @@ impl SessionService {
             _ => return Err(errors::invalid("reasoningEffort must be a string or null")),
         };
         let state = core
-            .service
+            .runtime
+            .service()
             .set_model(&session_id, provider, model, effort)
             .await
             .map_err(errors::session)?;
@@ -113,7 +119,8 @@ impl SessionService {
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .cancel_queued_input(&session_id, &input_id)
             .await
             .map_err(errors::session)
@@ -126,7 +133,8 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let count = core
-            .service
+            .runtime
+            .service()
             .clear_queue(&session_id)
             .await
             .map_err(errors::session)?;
@@ -151,7 +159,8 @@ impl SessionService {
             _ => return Err(errors::invalid("workspaceTrusted must be a boolean")),
         };
         let state = core
-            .service
+            .runtime
+            .service()
             .configure(&session_id, skills, input.get("context").cloned(), trusted)
             .await
             .map_err(errors::session)?;
@@ -169,7 +178,7 @@ impl SessionService {
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        delete_chat(core.host.store(), &session_id).await
+        delete_chat(core.runtime.host().store(), &session_id).await
     }
 
     /// Hide the chat from the default listing; a named pass-through over the
@@ -180,7 +189,7 @@ impl SessionService {
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        set_chat_archived(core.host.store(), &session_id, true).await
+        set_chat_archived(core.runtime.host().store(), &session_id, true).await
     }
 
     /// The inverse of `archiveChat`: un-hide the chat, answering with the
@@ -191,7 +200,7 @@ impl SessionService {
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        set_chat_archived(core.host.store(), &session_id, false).await
+        set_chat_archived(core.runtime.host().store(), &session_id, false).await
     }
 }
 
