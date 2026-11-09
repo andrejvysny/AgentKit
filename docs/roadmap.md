@@ -9,6 +9,16 @@ implementation (in OpenPCB or OneMind — read-only source repos) whose
 semantics the phase should preserve, so that work does not start from a
 blank page or re-learn fixed bugs.
 
+## Now
+
+Active work is the ADR 0021 architecture cleanup
+([layered crate architecture](adr/0021-layered-crate-architecture.md)):
+splitting `agentkit-host` into layered crates and deleting the frozen
+TypeScript backend packages, and the Hybrid programme that builds on it. Both
+are tracked as work items in Plane, not in this file. The phases below are
+older and may predate the Rust engine; current structure is in
+[`architecture.md`](architecture.md).
+
 ## Done
 
 - **P1 — Generic task foundation + multimodal content** (2026-08-24).

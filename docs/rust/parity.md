@@ -387,7 +387,7 @@ Production backend paths — both examples, the client/react test lanes,
 session services, REST/SSE, MCP, storage, provider transports — run on
 Rust. The frozen TS backend libraries persist under the API-freeze
 constraint, exercised by their own suites. No app-shaped composition runs a
-TS backend engine: `scripts/check-composition-ownership.mjs` (CI: lint job)
+TS backend engine: `scripts/check-composition-ownership.mjs` (local gate: `bun run check:composition`; no hosted CI)
 rejects backend-implementation imports from `examples/*/src`, the desktop
 Node entries, and the qualification drivers, except an audited allowlist —
 the coding-agent CLI's `REASONING_EFFORTS` metadata for argument parsing
@@ -840,8 +840,8 @@ No stubs, no delegating shims.
    binding tests in `packages/native/tests/`, or new ports. The
    fingerprint differential survives as frozen fixtures:
    `rust/fixtures/coding-fingerprint/{fingerprint-material,tokenizer,
-   env-order}.json` asserted by `command_fingerprint::tests` (CI step in
-   `.github/workflows/rust.yml`), and the model-facing descriptor contract
+   env-order}.json` asserted by `command_fingerprint::tests` (run by the local Rust test
+   gate; hosted workflows were removed), and the model-facing descriptor contract
    as `packages/native/tests/fixtures/coding-descriptors.json` (frozen TS
    authority, asserted descriptor-by-descriptor by
    `packages/native/tests/coding-native.test.ts`). The bridge-cancellation

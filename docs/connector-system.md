@@ -31,7 +31,7 @@ negotiation supports **2026-07-28** and the older initialize handshake. The
 inbound HTTP tests exercise every revision in `MCP_COMPATIBILITY.verified`;
 outbound HTTP and stdio tests exercise 2026-07-28 and 2025-11-25 peers over real
 loopback sockets and child processes. Node 22 and Bun 1.4 are locally qualified;
-other runtime versions remain CI gates. Supported protocol constants alone are
+other runtime versions remain unqualified (gates are local, see `DEVELOPING.md`). Supported protocol constants alone are
 not evidence that every transport/revision pair has been exercised.
 
 Both inbound paths use application-generated actors independent of transport

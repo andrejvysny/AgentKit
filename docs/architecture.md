@@ -1,744 +1,272 @@
 # Architecture
 
-AgentKit is three layers plus a testing layer, a set of reference adapter
-packages implementing `host`'s ports, and a set of optional adapters beside
-`host` (an MCP client, an MCP server, an HTTP transport, and a client +
-React pair). Each layer only depends on the ones below it; the adapters
-depend on `host` and nothing depends on them.
+This document describes what runs today, then the target layering accepted in
+[ADR 0021](adr/0021-layered-crate-architecture.md). Behaviour that is not
+stated here is specified in the ADRs and in `docs/rust/`.
+
+## Overview
+
+The production backend runs entirely in Rust (`rust/crates/*`): durable task
+store, execution host, chat and agent sessions, governance, provider
+transports, MCP client and server, REST/SSE server, coding tool pack.
+TypeScript is the API surface around it:
+
+- `@agentkit/native` is a thin Node-API binding over the Rust crates. It holds
+  no backend logic.
+- `@agentkit/core` is the public chat/agent-loop API. `runChat()` and
+  `runAgentLoop()` execute on Rust only; the TypeScript loop engine is deleted.
+  `AGENTKIT_BACKEND` may be unset or `native`; any other value (including the
+  retired `ts`) fails closed with `invalid_input`.
+- `@agentkit/contracts` holds wire DTOs and JSON Schemas. `@agentkit/client`
+  and `@agentkit/react` consume the REST v1 + SSE contract.
+- `@agentkit/host`, `@agentkit/adapters-memory`, `@agentkit/adapters-sqlite`,
+  `@agentkit/runner-local`, `@agentkit/transport-http` and
+  `@agentkit/mcp-client` are frozen libraries slated for deletion (see
+  [TypeScript packages](#typescript-packages)). They are not on any
+  production path.
+
+Status of parity and qualification is tracked in
+[`docs/rust/parity.md`](rust/parity.md) and
+[`docs/rust/acceptance.md`](rust/acceptance.md); this file makes no
+release-readiness claim.
+
+## Runtime paths
 
 ```
-packages/adapters-memory       @agentkit/adapters-memory (reference adapter)
-  every host storage port over in-memory Maps; tests and local dev
-
-packages/adapters-sqlite       @agentkit/adapters-sqlite (reference adapter)
-  shared storage logic over bun:sqlite or the explicit Node/better-sqlite3 entry;
-  the durable store for a
-  single-process host (multiple handles over one file: supported, tested)
-
-packages/runner-local          @agentkit/runner-local (reference adapter)
-  the TaskRunner port for one process: claim, execute, heartbeat,
-  classified retry with backoff, dead-letter, recover
-
-packages/mcp-client            @agentkit/mcp-client (optional adapter)
-  bridges MCP servers' tools into a run as a ToolSetContributor
-
-packages/transport-http        @agentkit/transport-http (optional adapter)
-  fetch-standard REST v1 + SSE handler serving contracts' REST surface
-
-packages/client                @agentkit/client (optional adapter)
-  the other end of that surface: typed REST v1 + SSE client, auto-resuming
-  run streams, derived run phases; depends on contracts alone
-
-packages/react                 @agentkit/react (optional adapter)
-  headless React hooks over that client: optimistic submit, streamed
-  deltas, branch switching, proposals, providers; react is a peer
-        │
-        ▼  depends on
---------------------------------------------------------------
-packages/host          @agentkit/host
-  Durable orchestration: TaskStore + kind-dispatched
-  executors, TurnRunner as the chat.turn executor, port
-  catalog, proposal lifecycle, write policy.
-        │
-        ▼  depends on
---------------------------------------------------------------
-packages/core           @agentkit/core
-  Pure in-process loop: provider client, tool registry
-  + Ajv validation, runChat() and its invariants.
-        │
-        ▼  depends on
---------------------------------------------------------------
-packages/contracts      @agentkit/contracts
-  Wire DTOs + JSON Schemas (TypeBox). No behavior.
---------------------------------------------------------------
-
-packages/testing         @agentkit/testing
-  Mocks, fixtures, golden traces, store-conformance suite,
-  seeded concurrent-durability invariant suite.
-  Depends on contracts; core/host are peer deps (type-only
-  in the package itself, real in its own tests).
+In-process (Node/Bun)                 Out-of-process
+  app                                   app / browser
+   │ @agentkit/core, @agentkit/native     │ @agentkit/client (REST v1 + SSE)
+   ▼                                      ▼
+  agentkit-napi (cdylib)                agentkit-transport-http (axum)
+   │                                      │ Backend trait
+   ▼                                      ▼
+  agentkit-host ── agentkit-core ◀── agentkit-host (http feature)
+   │
+   ▼
+  agentkit-store (SQLite actor, leases, event log)
 ```
 
-Source: [`packages/contracts/src/index.ts`](../packages/contracts/src/index.ts),
-[`packages/core/src/index.ts`](../packages/core/src/index.ts),
-[`packages/host/src/index.ts`](../packages/host/src/index.ts),
-[`packages/testing/src/index.ts`](../packages/testing/src/index.ts).
-
-## The three layers
-
-### contracts — wire shapes
-
-`@agentkit/contracts` owns every DTO that crosses a process or a storage
-boundary: run events, tool definitions/calls/results, provider config,
-prompt shapes, source refs, context bindings. Each is declared once as a
-[TypeBox](https://github.com/sinclairzx81/typebox) schema (`<Name>Schema`)
-and its TypeScript type is derived via `Static<typeof <Name>Schema>`, so the
-compile-time type and the runtime JSON Schema cannot drift apart. A handful
-of documented divergences layer a hand-written type over the schema where a
-type parameter outruns what `Static<>` can express (`AiToolResult<T>`,
-`AiSourceRef<K>`, `AiContextBinding<K>`, `AiRunWarningEvent`, `AiRunEvent`) —
-see [`docs/contracts.md`](contracts.md).
-
-It also carries the REST v1 surface (`src/rest.ts`): the route table and the
-request/response DTOs an HTTP adapter serializes, as types and schemas
-only — the DTOs are projections of the host records with the orchestrator's
-internals removed (see
-[`docs/contracts.md`](contracts.md#rest-v1-surface)). `@agentkit/transport-http`
-is the adapter that serves them (see below); this package stays the shape,
-not the server.
-
-This package has zero runtime dependency beyond `@sinclair/typebox`. It has
-no notion of a run loop, a queue, or a database.
-
-### core — the pure loop
-
-`@agentkit/core` is an in-process, single-invocation chat loop with tool
-calling. Its three pieces:
-
-- **Provider client** (`providers/`) — `AiProviderClient` is the interface;
-  `OpenAiCompatibleClient` is the shipped implementation, talking to any
-  OpenAI-compatible `/chat/completions` endpoint over SSE
-  ([`packages/core/src/providers/openai-compatible.ts`](../packages/core/src/providers/openai-compatible.ts)).
-  `providers/presets.ts` ships defaults for five provider kinds (`openai`,
-  `openrouter`, `lmstudio`, `omlx`, `openai-compatible`); the vocabulary
-  itself (`AiProviderKind`) is an open string, so a host can register a
-  provider this package has never heard of. It also maps a message's
-  provider-neutral content parts onto the wire shape OpenAI-compatible
-  servers expect — native parts for `user`/`assistant`, flattened to text
-  (with a `multimodal_flattened` warning) for `system`/`tool` — see
-  [`docs/contracts.md`](contracts.md#message-content-parts).
-- **Tool registry** — `AiToolRegistry` (`tools/registry.ts`) compiles each
-  tool's `inputSchema` into an Ajv validator once, at registration, and
-  reuses it on every call. `tools/validation.ts` maps Ajv errors to
-  `{ path, message }`; `tools/limits.ts` resolves per-run output byte/item
-  budgets and does UTF-8-safe truncation.
-- **`runChat()`** — the loop itself
-  ([`packages/core/src/runs/run-loop.ts`](../packages/core/src/runs/run-loop.ts)).
-  An async generator: it yields `AiRunEvent`s and returns a `RunChatResult`
-  (`{ runId, terminal, appendedMessages, iterations }`). It does not mutate
-  its caller's `messages` array — it copies, appends, and hands back only
-  what it appended, so the same history can be retried or run twice.
-- **`runAgentLoop()`** — the ONE model/tool loop `runChat()` is a frozen
-  facade over ([ADR 0015](adr/0015-unified-agent-runtime.md)), in
-  [`packages/core/src/runs/agent-loop.ts`](../packages/core/src/runs/agent-loop.ts).
-  Each iteration is a model step (`model-step.ts`: one provider request,
-  returning a typed `ModelStepOutcome`) and, when the model asked for tools, a
-  tool batch (`tool-step.ts`, invoking through `executeToolSafely` in
-  `tool-exec.ts`). It takes everything `runChat()` does plus ordered
-  lifecycle **hooks** (`loop-hooks.ts`): observers at run start, step start,
-  model response, tool result and settlement, and a `beforeToolCall` gate
-  that can only DENY — never rewrite arguments or grant anything; host
-  `ToolGuard`s still run inside `execute`, after it. Without hooks the event
-  stream is byte-identical to `runChat()`'s. A source-level architecture test
-  ([`packages/testing/tests/architecture.test.ts`](../packages/testing/tests/architecture.test.ts))
-  allowlists every provider-call, tool-invocation and loop-driver site, so a
-  second loop cannot appear unreviewed.
-
-`@agentkit/core` has no storage, no queue, no HTTP framework. Nothing in it
-survives a process restart; that is `@agentkit/host`'s job.
-
-### host — durable orchestration
-
-`@agentkit/host` wraps `runChat()` in the machinery an embedding app needs
-to run it durably, across process restarts and retries:
-
-- **`TurnRunner`** ([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts))
-  — a `TaskWorker`, and (via the thin `ChatTurnExecutor` adapter) the
-  `TaskExecutor` for task kind `chat.turn`. It turns a submitted chat
-  message into a durable task, drives `runChat()`, appends every event to
-  the task's log, projects it into conversation state, and runs the
-  chat-only / empty-response recovery passes (`turn/retry.ts`). Before
-  handing history to a pass, `assembleMessages` reconciles any tool call a
-  prior crash left unanswered — `turn/history-reconcile.ts`'s
-  `reconcileOrphanToolCalls` synthesizes an in-memory `tool_result_missing`
-  failure for it, in-memory only, so the balanced-history invariant holds
-  across a restart the same way it holds within one run.
-- **The port catalog** ([`packages/host/src/ports/`](../packages/host/src/ports/))
-  — interfaces an embedding host implements: `TaskStore` (kind, payload,
-  leases, fencing, the event log), `ProposalStore`, `ConversationStore`,
-  `ProviderStore`, `SettingsStore`, `OutboxStore`, `TaskRunner`,
-  `WritePolicy`, `ProposalApplier`, and more. See [`docs/ports.md`](ports.md).
-- **Proposals** ([`packages/host/src/proposals/`](../packages/host/src/proposals/))
-  — the staged-write pipeline: `ProposalService` drives
-  `pending → approved → applying → applied|failed`, action-id idempotency
-  (`proposals/action-id.ts`), and `createProposalBuilderTool` — the wrapper
-  a host's write tools are built on.
-- **Policy** ([`packages/host/src/policy/session-write-policy.ts`](../packages/host/src/policy/session-write-policy.ts))
-  — `SessionWritePolicy`, an in-memory `WritePolicy` implementation whose
-  standing allowances live only for the process lifetime. Only the write tool
-  consults it (`createProposalBuilderTool`, on the proposal it just staged);
-  `TurnRunner` takes no policy dependency, so there is exactly one place the
-  auto-apply question is answered.
-- **Bootstrap** ([`packages/host/src/bootstrap.ts`](../packages/host/src/bootstrap.ts))
-  — `recoverOnBoot`: `TaskRunner.recover()` then
-  `ProposalService.reconcileInterrupted()`, in that order, before any worker
-  starts claiming.
-
-`@agentkit/host` depends on `@agentkit/core` and `@agentkit/contracts`; it
-implements no storage itself — every store is a port, implemented by the
-embedding host or by the reference adapter packages
-(`@agentkit/adapters-memory`, `@agentkit/adapters-sqlite`).
-
-### Optional adapters beside host
-
-Five packages depend on `@agentkit/host` (or, for `client`/`react`, on
-`@agentkit/contracts` alone) without `host` depending on any of them — the
-same relationship the reference adapters have, and a host is always free to
-skip any of them and write the equivalent itself:
-
-- **`@agentkit/mcp-client`** ([`packages/mcp-client/`](../packages/mcp-client))
-  — `McpClientManager` plus `createMcpToolSetContributor`, bridging Model
-  Context Protocol servers' tools into a run as an ordinary
-  `ToolSetContributor`. See [`packages/mcp-client/README.md`](../packages/mcp-client/README.md)
-  and [ADR 0004](adr/0004-mcp-client.md).
-- **`@agentkit/transport-http`** ([`packages/transport-http/`](../packages/transport-http))
-  — `createRestHandler`/`serveRest`, a fetch-standard, zero-dependency
-  adapter serving `packages/contracts/src/rest.ts`'s REST v1 surface (HTTP
-  + SSE) over any host that implements the port catalog below. See
-  [`packages/transport-http/README.md`](../packages/transport-http/README.md)
-  and [ADR 0005](adr/0005-http-transport.md).
-- **`@agentkit/native`** ([`packages/native/`](../packages/native)) —
-  the inverse direction from `mcp-client`: the Rust backend exposes a
-  host's `ToolCatalog` ([ADR 0011](adr/0011-tool-governance.md)) **as** an
-  MCP server over streamable HTTP via `startMcpServer`, so an external MCP
-  client (an IDE, another agent) can drive this host's tools. Constant-time
-  bearer auth, a DNS-rebinding Host/Origin guard, sessions keyed on a
-  server-minted id bound to the opening principal, write-tool filtering on
-  both `tools/list` and `tools/call` — all enforced engine-side
-  (`rust/crates/mcp`). See [ADR 0013](adr/0013-serving-surfaces.md) and
-  [`docs/rust/parity.md`](rust/parity.md).
-- **`@agentkit/client`** ([`packages/client/`](../packages/client)) —
-  `createAgentKitClient`, the calling end of that same surface: one typed
-  method per `REST_ROUTES` operation, `streamRun` as an async iterable that
-  resumes on `Last-Event-ID` after a dropped connection, `runPhase` as the
-  UI-facing derivation over status plus event log. It sits BESIDE
-  `transport-http` rather than below it — it depends on `@agentkit/contracts`
-  and nothing else, uses no Node built-in, and runs in a browser. See
-  [`packages/client/README.md`](../packages/client/README.md).
-- **`@agentkit/react`** ([`packages/react/`](../packages/react)) — headless
-  hooks over that client: `useChat` (optimistic pair, streamed deltas
-  applied by the same rule the host's own projector uses, then a
-  `listMessages` reconcile at the terminal event), `useRun`, `useBranches`,
-  `useProposals`, `useProviders`, and one provider component carrying the
-  client plus a dependency-free invalidation bus. It sits BESIDE `client`
-  for the same reason `client` sits beside `transport-http`: no component,
-  no styling, no query cache, `react` as a peer dependency only. See
-  [`packages/react/README.md`](../packages/react/README.md).
-
-## Event flow
-
-1. **Core stamps the base fields.** `createEventStamper()`
-   ([`packages/core/src/events.ts`](../packages/core/src/events.ts)) assigns
-   `contractVersion`, a fresh `eventId`, and the next `seq` to every event a
-   `runChat()` invocation yields — both loop-originated events and ones
-   re-yielded from the provider client. `seq` starts at `RunChatInput.firstSeq`
-   (default 0).
-2. **Host continues `seq` across retries.** One task id (its value is what
-   rides the wire as `AiRunEvent.runId`) can span several `runChat()` passes
-   (a chat-only retry, an empty-response retry — see `turn/retry.ts`).
-   Before each pass, `TurnRunner.runPass` reads `TaskStore.nextSeq(taskId)`
-   and passes it as `firstSeq`, so every pass continues the same unbroken
-   sequence instead of restarting at 0
-   ([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts)).
-3. **`TaskStore.appendEvents` is the enforcement point.** An implementation
-   MUST reject a stale `leaseToken` (`LeaseLostError`) and MUST reject a
-   non-monotonic `seq` (`SeqConflictError`); it MUST NOT re-stamp `seq` —
-   numbering belongs to whichever emitter owns the pass, not the store
-   ([`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts)).
-4. **The durable log is canonical.** `RunProjector.project` — what
-   `TurnRunner` and any [custom turn executor](#custom-turn-executors) both
-   drive ([`packages/host/src/turn/projection.ts`](../packages/host/src/turn/projection.ts))
-   — appends to the task's log *before* reflecting the event into
-   conversation state, so a projection failure can never erase what happened. Publishing to a live
-   transport (SSE, a websocket) is a separate, retryable step through the
-   `OutboxStore` port — it replays the log outward; it is not itself the
-   source of truth
-   ([`packages/host/src/ports/outbox-store.ts`](../packages/host/src/ports/outbox-store.ts)).
-5. **`createTaskEventWriter` numbers events outside a chat pass.** Non-chat
-   executors, and any host-originated event that is not part of a live
-   `runChat()` pass, stamp `seq`/`eventId`/`timestamp`/`contractVersion`/
-   `attemptId` through it and append under the lease
-   ([`packages/host/src/tasks/task-event-writer.ts`](../packages/host/src/tasks/task-event-writer.ts)).
-   It is explicitly barred from use **inside** a chat pass — there, core's
-   `createEventStamper` owns numbering, and two counters numbering against
-   the same log would interleave into one stream.
-
-## Task / attempt / lease model
-
-```
-  queued            ──▶ running
-  queued            ──▶ cancelled
-  queued            ──▶ failed        (dependency cascade only — see below)
-  queued / running  ──▶ interrupted  (manual recovery)
-  interrupted       ──▶ queued | cancelled
-
-  running           ──▶ waiting_approval
-  running           ──▶ completed | failed | cancelled
-
-  waiting_approval   ──▶ running
-  waiting_approval   ──▶ completed | failed | cancelled
-
-  completed / failed / cancelled   (terminal — no outgoing edges)
-```
-
-Source: `TASK_TRANSITIONS` in
-[`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts).
-Note there is **no `running → queued` edge** — a task that started never goes
-back to the queue. Note also that **nothing in this repository produces
-`waiting_approval`**: `TurnRunner` lets a staged write return `pending` to the
-model and completes the task. The state is reserved for hosts that park a
-task on a human decision and resume it afterwards; its transitions exist so
-such a host does not have to fork the table. `queued → failed` exists for
-exactly one caller — the dependency cascade in `claimNext` (see [Task
-dependencies and subagents](#task-dependencies-and-subagents) below) — a task
-that never started still has to be able to end `failed` when what it
-depended on can never complete.
-
-`AttemptStatus` is `running → completed | failed | abandoned | cancelled`.
-`abandoned` is specifically the crash outcome: a lease expired while the
-attempt was still `running`, so recovery ends it that way rather than
-guessing success or failure.
-
-**Recovery**, as implemented by the reference `SingleProcessTaskRunner`
-([`packages/runner-local/src/single-process-task-runner.ts`](../packages/runner-local/src/single-process-task-runner.ts)):
-
-1. `recover()` calls `TaskStore.expireStaleLeases(now)`.
-2. Each expired lease's attempt is ended `abandoned`.
-3. If the task's `attemptCount` has not hit `maxAttempts`, a **new attempt is
-   started on the same task** — same task id, fresh lease with a strictly
-   higher `fencingToken`, event `seq` picking up where the log left off.
-   Tasks never transition back to `queued`; a retry is a new attempt, not a
-   re-enqueue.
-4. Once `attemptCount >= maxAttempts`, the task is marked dead-lettered
-   (`TaskStore.markDeadLettered`) and finalized `failed` with a poison
-   reason — the queue stops feeding it work.
-
-Ownership and fencing: `Lease { taskId, attemptId, ownerId, leaseToken,
-fencingToken, expiresAt }`. `leaseToken` proves current ownership on every
-write; `fencingToken` is monotonic across *all* leases ever issued for a
-task, so a worker that paused and woke up believing it still owns the task
-is rejected by comparison even if it manages to re-acquire.
-
-**Fencing is enforced on the TERMINAL writes too**, not only on
-`appendEvents`/`updateProgress`: `transitionTask`, `endAttempt` and
-`markDeadLettered` take an optional `leaseToken`, and a store verifies it
-inside the same transaction as the write (`LeaseLostError` otherwise). Without
-it a zombie attempt — one whose lease expired mid-tool-call, with recovery
-already running attempt 2 — landed the task and ended its own attempt anyway,
-burying the live attempt's verdict; a runner cannot close that from outside,
-because its `renewLease` pre-check and the write it guards are separated by
-awaits. The option is optional so the paths that have no token by construction
-still work: recovery acts on a lease it has just deleted, and a cancel from an
-HTTP handler never had one. Conversation mutations now accept a `RunWriteFence`
-and validate the current, unexpired lease inside the mutation transaction.
-`TurnRunner` finalizes the message and attempt, then transitions the task, in
-one transaction. SQLite publication reads wait for commit or rollback, so a
-terminal task cannot expose a partially committed conversation.
-The generic `SingleProcessTaskRunner` fallback transitions the task before
-ending its attempt: an
-attempt row closed under a task still `running` with a live lease is exactly
-what recovery reads as a crash, and ending the attempt first left that state
-behind whenever the transition threw. It cannot be misread now anyway —
-`TaskStore.endAttempt` keeps an attempt's FIRST terminal status and writes
-nothing on a second call — but the order is what stops the pair from existing.
-A renewal is refused once the lease has expired, since the runner asks
-`renewLease` *as* its "may I still write?" probe.
-
-The durable event log remains the source for rebuilding projections. Stable
-event-backed message IDs make replay idempotent; replay never re-executes a
-domain operation. Memory preserves fencing and serialization but does not
-promise durable storage or rollback. See [execution lifecycle](execution-lifecycle.md).
-
-## Task kinds and executors
-
-A task's `kind` says what work it is and which code runs it — statuses,
-attempts, and leases above are kind-agnostic; dispatch is where a kind
-becomes an executable.
-
-- **`TaskExecutor` / `TaskExecutionContext`**
-  ([`packages/host/src/tasks/task-executor.ts`](../packages/host/src/tasks/task-executor.ts))
-  — the unit of work behind one kind: `{ kind, execute(ctx) }`, where `ctx`
-  carries the already-loaded `TaskRecord` plus `attemptId`/`leaseToken`/
-  `signal`. The record is handed down rather than an id so every executor
-  works from the one fetch-and-guard the dispatcher already did, instead of
-  each re-reading the row and risking a different answer to "is this still
-  mine to run?". `ctx.spawnChild?.(input)` — present only when the
-  dispatching worker was built with a `TaskService` — submits a child task
-  with `parentTaskId` preset to the executing task, so a fanning-out
-  executor cannot forge or omit its own lineage. See [Task dependencies and
-  subagents](#task-dependencies-and-subagents).
-- **`ExecutorRegistry`**
-  ([`packages/host/src/tasks/executor-registry.ts`](../packages/host/src/tasks/executor-registry.ts))
-  — the kind → `TaskExecutor` table one worker process dispatches through.
-  `register` throws on a duplicate kind at boot, rather than letting the
-  later import silently win; `kinds()` lists what is registered, for a
-  deployment that filters `ClaimNextInput.kinds` so a box only claims work
-  it can run.
-- **`createDispatchingWorker(registry, deps)`** — the `TaskWorker` a host
-  hands to `TaskRunner.startWorker`: it loads the task, performs the
-  `queued → running` guard for the direct-execute path, and routes to the
-  registered executor. **An unknown kind is a terminal failure
-  (`ExecutorNotFoundError`), never a dead-letter** — dead-letter stays
-  reserved for attempts that die without a clean terminal outcome, and a
-  kind nobody registered is a cleanly-diagnosed wiring mistake instead.
-- **`TaskService`**
-  ([`packages/host/src/tasks/task-service.ts`](../packages/host/src/tasks/task-service.ts))
-  — the generic submission path: `createTask(tx, input)` composes inside a
-  host transaction and never enqueues; `dispatch(task)` is the post-commit
-  poke; `submitTask(input)` does both and is idempotent per caller-supplied
-  `taskId`. **Dispatch happens strictly after the transaction commits** —
-  enqueuing from inside the transaction callback risks the claim loop
-  claiming a row that a rollback then deletes out from under it (the
-  `bun:sqlite` join-transaction hazard on `AssistantStore.transaction`, see
-  [`docs/ports.md`](ports.md#assistantstore-aggregate)). `cancelTask(taskId)`
-  is a breadth-first cascade over `parentTaskId` lineage: a still-`queued`
-  descendant is CAS-cancelled directly in the store, a `running`/
-  `waiting_approval` one is asked to stop via `taskRunner.requestCancel`
-  (cooperative — never forced terminal). See [Task dependencies and
-  subagents](#task-dependencies-and-subagents).
-- **`createTaskEventWriter`** — see item 5 of [Event flow](#event-flow)
-  above.
-- **`CHAT_TURN_TASK_KIND`**
-  ([`packages/host/src/tasks/kinds.ts`](../packages/host/src/tasks/kinds.ts))
-  — `"chat.turn"`, the kind `TurnRunner.submitMessage` creates and
-  `ChatTurnExecutor` runs. The `chat.*` and `agentkit.*` prefixes are
-  reserved for the framework; everything else belongs to the host.
-
-## Custom turn executors
-
-`chat.turn` is not the only way to answer a conversation. A host whose turn
-does not come from `runChat` at all — a chat delegated to a server that
-streams its own frames, a replay of a recorded run, a bridge to a provider
-SDK this package has no client for — registers **its own kind** and drives
-the **same projection**, so the conversation it leaves behind is the one
-`chat.turn` would have left rather than a second implementation of the same
-rules.
-
-Two additive seams, and nothing else changes:
-
-- **`SubmitMessageInput.kind` / `RegenerateMessageInput.kind`**
-  ([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts))
-  — the task kind the submit creates, defaulting to `CHAT_TURN_TASK_KIND`.
-  Everything else about the submit is identical: the same user message and
-  empty placeholder in the same single transaction, the same idempotency per
-  caller-supplied `taskId`, the same `parentMessageId` branch mechanics.
-  **An unknown kind is not validated here** — whether a kind has an executor
-  is a deployment fact, and a check at submit time would either refuse a kind
-  whose executor lives in another process or pass one nobody registered
-  anywhere. The dispatcher answers it at claim time with
-  `ExecutorNotFoundError` (terminal, never a dead-letter).
-- **`createRunProjector(deps)`**
-  ([`packages/host/src/turn/projection.ts`](../packages/host/src/turn/projection.ts))
-  — the event → conversation projection, extracted from `TurnRunner` whole.
-  `createState({ chatId, assistantMessageId, providerId? })` opens a run;
-  `project(ctx, state, event)` appends one **already-stamped** `AiRunEvent`
-  to the durable log and then reflects it — deltas onto the placeholder,
-  `run.message.completed` with tool calls into an internal assistant record,
-  tool results into `role: "tool"` records, `run.usage` into
-  `UsageAuthorizer.record`. Every message it writes is a **chain append** off
-  `state.lastMessageId` with `activate: false`, so a user switching branches
-  mid-run cannot migrate half the run's records onto a conversation that
-  never ran them. `reflect(ctx, state, event)` is the same projection without
-  the append, for a caller that put the event on the log itself.
-  `createRunEventFeed({ projector, ctx, state, tasks, clock, ids })` is the
-  drafts-in convenience: it stamps through `createTaskEventWriter` (so the
-  numbering has exactly one implementation) and reflects, one append per
-  event.
-
-Events arrive **stamped** because on the `chat.turn` path core's
-`createEventStamper` owns the numbering for a pass — it was handed a
-`firstSeq` and counts upward in memory — and a projector that re-numbered
-from `TaskStore.nextSeq` would interleave two counters into one log. The
-producer numbers; the projector appends verbatim. A host with no stamper of
-its own uses the feed instead, never both for one event.
-
-**What the host still owns**, deliberately: producing the events; finalizing
-the placeholder (`content` + `placeholder: false`) when the turn ends; and
-the task's terminal transition plus `endAttempt`. Those are decisions about
-the run, not about an event — an executor that wanted a different terminal
-(a delegated turn landing `waiting_approval`) would otherwise have to fight
-a projector that had already settled it.
-
-```ts
-class CloudChatExecutor implements TaskExecutor {
-  readonly kind = "assistant.cloud-chat";
-  constructor(private readonly projector: RunProjector, ...) {}
-
-  async execute(ctx: TaskExecutionContext): Promise<void> {
-    const { chatId, assistantMessageId } = ctx.task.payload as TurnPayload;
-    const state = this.projector.createState({ chatId, assistantMessageId });
-    const stamp = createEventStamper({
-      firstSeq: await store.tasks.nextSeq(ctx.task.taskId),
-      attemptId: ctx.attemptId,
-    });
-    for await (const frame of remote.stream(ctx.task, ctx.signal)) {
-      await this.projector.project(ctx, state, stamp(toRunEvent(frame)));
-    }
-    // The host's half: finalize the placeholder, settle the task.
-  }
-}
-```
-
-## Agent sessions
-
-A session is a chat that carries an `agentkit.session` descriptor (profile id and digest, plus the pinned
-provider and model). `AgentSessionService` drives it ([ADR 0016](adr/0016-durable-agent-sessions.md)).
-
-There is no second history store and no second scheduler. Each turn is still one `chat.turn` task. In session mode,
-`TurnRunner` gives the turn's main pass two seams from `runAgentLoop`:
-
-- **Steering.** Durable `steer` inputs are polled after each tool batch while another step remains. Each one is
-  placed exactly once: `run.input.applied`, then an internal user run record, then the input is receipted `applied`.
-- **Suspension.** A tool such as `request_user_input` may call `ctx.suspend(...)`. The run then ends with the
-  non-terminal `run.waiting`, and the task parks in `waiting_approval`, holding no lease. `answer` appends the
-  human's reply as that call's tool result and re-queues the task (`waiting_approval → queued`).
-  - A resumed attempt with an unanswered request parks again without calling the provider.
-  - An answer to a cancelled, expired or no-longer-waiting request is `answer_stale`.
-
-Follow-ups queued while a turn runs are converted into the next turn inside the finished turn's settlement
-transaction, one at a time, and only after a `completed` turn. After a failed or cancelled turn, `flushQueue` releases
-them.
-
-Later turns replay the full transcript ([ADR 0017](adr/0017-context-assembly-and-compaction.md)). Under the default
-`transcript` policy each earlier turn's run records (tool calls, results and steering) are replayed before its final
-answer, whether or not they sit on the active path; `context.policy: "final_answers"` opts back into answers only.
-The assembled history is fitted to the model's context window (descriptor override, stored model record, provider
-capability, then a 32768-token fallback with a warning): the oldest whole turns are dropped with a `context_trimmed`
-warning, and a request that cannot fit fails with `context_overflow` before any provider call. A descriptor `workspace`
-adds `AGENTS.md` / `CLAUDE.md` to the system prompt, and descriptor `skills` are re-selected every turn. Chats without a
-session descriptor assemble exactly as before.
-
-## Task dependencies and subagents
-
-`TaskRecord` carries two edges beyond `kind`/`payload`
-([`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts)),
-deliberately distinct:
-
-- **`parentTaskId` — lineage.** Set by `TaskExecutionContext.spawnChild`
-  (never by hand), never a dependency: a child runs the moment the queue can
-  claim it, whether or not its parent is still running. Answers "what did
-  this task set off?" (`TaskStore.listChildren`, one level) and drives
-  `TaskService.cancelTask`'s cascade.
-- **`dependsOn` — the claim gate.** Task ids that must reach `completed`
-  before this task may be claimed. Immutable after create; every id must
-  already exist when the dependent is written
-  (`UnknownDependencyError` otherwise), which is what makes the graph a DAG
-  **by construction** — an edge can only ever point backward in creation
-  order, so no write order can produce a cycle.
-
-`TaskStore.claimNext` enforces the gate — dependency state is queue
-semantics, not orchestration. `evaluateTaskDependencies`, exported beside
-`assertTaskTransition` for the same reason (every adapter must reach the
-same verdict from the same facts), reduces a task's dependency states to one
-of three outcomes: `ready` (claim it), `blocked` (skip, try again on a later
-claim), or `settle` — a dependency that failed or was dead-lettered settles
-the dependent `failed` (`error: "dependency_failed: <id>"`, via the
-`queued → failed` edge above), a cancelled one settles it `cancelled` (no
-`error` — a cancellation is not a failure). Settlement happens lazily, on
-the claim path: nothing is ever re-enqueued, there is no background reaper,
-and a chain of dependents resolves over successive claim calls.
-
-`TaskRecord.progress` is a mutable, overwritten snapshot
-(`TaskStore.updateProgress`, lease-gated like `appendEvents`) — deliberately
-**not** an event: only the latest value matters, and the durable log is not
-where a heartbeat percentage belongs.
-
-Full rationale, including the alternatives rejected (eager cascade, claim-time
-cycle detection, `dependsOn`-as-re-enqueue): [ADR
-0003](adr/0003-task-dependencies-and-subagents.md).
-
-## Conversation branching and fork
-
-A chat is a **tree**, not a list: `MessageRecord` carries `parentMessageId`,
-`depth`, `branchIndex`, and a per-message `active` flag that *is* the whole
-active-path representation — no materialized path, no walk to read "the
-conversation". `ConversationStore.appendMessage`'s optional
-`parentMessageId` turns a normal append into a new branch, created active
-and switched in with the same write; `activate: false` (with a parent) is the
-opposite — a **chain append** that inherits the parent's flag and moves
-nothing, which is how a run keeps every record of one turn on the branch that
-turn is running against even if the user switches away mid-generation;
-`activatePath` moves the active path atomically and answers with it; `forkChat`
-copies the active-path prefix up to a message into a brand-new chat,
-transactionally, stripping task linkage and re-ordering the copy into
-provider order (the fork loses `runId`, so it cannot repair that ordering
-later). A chat nobody has branched behaves exactly as it did before this
-existed. `TurnRunner`'s history assembly always reads the active path, so
-branching and forking are invisible to everything downstream of
-`assembleMessages`; branch execution stays serialized per chat (`scopeId` is
-unchanged by branching). Full
-mechanics, invariants, and the tree operations themselves:
-[`docs/ports.md`](ports.md#conversationstore) (authoritative) and [ADR
-0007](adr/0007-conversation-branching-fork.md).
-
-## At-least-once delivery, idempotent effects
-
-Nothing in this codebase claims exactly-once semantics. The stance is
-at-least-once delivery paired with idempotent effects, enforced at each
-layer that can duplicate work:
-
-- `TaskRunner.enqueue` is idempotent per `taskId`
-  ([`packages/host/src/ports/task-runner.ts`](../packages/host/src/ports/task-runner.ts)):
-  a redelivered enqueue for a task that already left `queued` is a no-op.
-- `TaskService.submitTask` is idempotent per caller-supplied `taskId`
-  ([`packages/host/src/tasks/task-service.ts`](../packages/host/src/tasks/task-service.ts)):
-  a duplicate submit under the same id and kind re-pokes the queue and
-  returns the existing task instead of creating a second one; a minted id
-  that collides is treated as a broken `IdGenerator`, not a redelivery, and
-  rethrows.
-- `ProposalStore.recordOutcome` is idempotent per `operationId`
-  ([`packages/host/src/ports/proposal-store.ts`](../packages/host/src/ports/proposal-store.ts)):
-  a second call with the same id returns the first recorded outcome and
-  never re-invokes the applier.
-- `ProposalStore.create` enforces `UNIQUE(scopeKey, actionId)` for
-  model-supplied idempotency keys, except among proposals that never wrote
-  anything (`rejected`/`invalidated` — `ACTION_ID_RELEASING_STATUSES`).
-- `ProposalService.reconcileInterrupted` resolves every proposal a crash
-  left in `applying` by asking the applier what actually happened
-  (`ProposalApplier.getOutcome`), rather than guessing; "we cannot prove it
-  landed" is treated as failure, because a retried write that silently
-  succeeded once is the one outcome nobody can undo
-  ([`packages/host/src/proposals/proposal-service.ts`](../packages/host/src/proposals/proposal-service.ts)).
-
-## A run is not one pass
-
-`TurnRunner` may drive `runChat()` several times under ONE task id, and each
-pass writes its own `run.started` … terminal pair onto the same log. The
-recovery passes are the chat-only retry (a provider that rejects a request with
-`tools` attached) and the empty-response retry (a turn that completed with no
-content and no tool calls); the correction harness adds one pass per round (see
-[ADR 0012](adr/0012-multi-pass-correction-harness.md)). Why this is a contract
-rule and not a client detail — every serving surface had independently assumed
-the first terminal event ended the run — is [ADR
-0014](adr/0014-hardening-tranche-2.md).
-
-**Every pass after the first is announced first**, with a
-`run.warning { code: "retry_pass", pass, reason }` event written immediately
-before it runs — `pass` is the 1-based number of the pass about to start,
-`reason` is `"chat_only" | "empty_response" | "correction"`. A consumer treats
-that event as "the run is live again": the terminal event it just saw belonged
-to the previous pass, and the text it has streamed so far must be DROPPED,
-mirroring the host's own reset of the stored placeholder. Without the boundary,
-a turn whose pass 1 failed and whose pass 2 completed reads as failed, and a UI
-concatenating deltas shows pass 1's half-sentence glued to pass 2's answer.
-
-Everything downstream is built on that rule: `transport-http` closes an SSE
-stream only when the TASK is terminal (not on the first terminal run event),
-`client` reports provider outcomes as `settling`, and `useChat`/`useRun` reset
-streamed text on the boundary. Clean EOF is reconciled against task status and
-a final event drain so verification and host failures remain visible.
-
-## A run is not one attempt, either
-
-A worker that dies mid-turn leaves the task `running` with a live placeholder;
-recovery ends the abandoned attempt and starts a new one IN PLACE — same task
-id, same event log, one more attempt. Two things make attempt 2 land correctly:
-
-- **It continues attempt 1's chain.** `runTurn` seeds
-  `RunProjectionState.lastMessageId` from
-  `ConversationStore.lastMessageOfRun(chatId, runId)` — the deepest record this
-  run has written — instead of from the placeholder. By attempt 2 the
-  placeholder already HAS an active child (attempt 1's internal assistant
-  record), and a chain append under a parent that already has an active child
-  lands `active: false`; seeding from the placeholder therefore wrote attempt
-  2's whole turn onto a dead branch, leaving the conversation replaying attempt
-  1's unanswered tool calls forever.
-- **Terminal writes are fenced.** Message mutation, attempt finalization and
-  terminal task transition share one transaction and the current lease. Task
-  status is written last. Expiry is sufficient to reject a worker, even before
-  a replacement owner acquires the lease.
-
-**An unexpected throw is bookkept in full.** `TurnRunner.executeTask` records a
-terminal `run.failed` (or `run.cancelled` when the run was aborted) on the
-durable log, replays committed partial output, then finalizes the placeholder,
-attempt and task under one fence. Bookkeeping is best-effort when storage or
-ownership is lost; a failed write never establishes a successful outcome.
-
-## One live turn per chat
-
-`submitMessage` and `regenerate` create their task with
-`CreateTaskInput.exclusiveScope`, so a submit into a chat that already holds an
-unfinished task is refused with `ChatBusyError` (`chat_busy`, HTTP 409) — by the
-STORE, in the same transaction that would have written the user message (why it
-is on by default: [ADR 0014](adr/0014-hardening-tranche-2.md)). A
-second concurrent turn does not work: its user message takes the active-leaf
-slot under the live run's internal records, and the live run's next chain append
-then lands off the path (the same rule as above). A redelivered `taskId` is
-still answered as a duplicate, not refused as busy, so idempotent callers are
-unaffected. Hosts that queue turns deliberately opt out with
-`TurnRunnerDeps.allowConcurrentSubmit`.
-
-## Host hooks run under deadlines
-
-`ContextProvider`, `AttachmentResolver`, `ToolSetContributor.contribute` and
-`VerificationHook` are all host code the framework awaits inside a leased
-attempt. Each runs under a deadline from `TurnRunnerDeps.hookTimeoutsMs`
-(defaults: verify 30 s, context 10 s, attachments 10 s, contribute 15 s; a
-non-positive value turns one off — [ADR
-0014](adr/0014-hardening-tranche-2.md)). A deadline is a RACE, not a cancellation —
-nothing can stop host code that is not watching a signal, so a late answer is
-discarded — and every one of them degrades rather than failing the turn:
-
-| Hook | On timeout | On the log |
+1. **In-process.** An application imports `@agentkit/core` and
+   `@agentkit/native` (or the `agentkit` umbrella subpaths). The binding
+   (`agentkit-napi`) opens a `SqliteStore`, builds an `AgentHost`, and exposes
+   handles, promises and pull-based durable-event subscriptions. Application
+   callbacks (providers, tools, authorization, verification) cross back into
+   JavaScript through the callback router; every `#[napi]` export is declared
+   with `catch_unwind`. The binding can also start the HTTP server
+   (`startHttpServer`) inside the same process.
+2. **Out-of-process.** `agentkit-transport-http` serves REST v1 and resumable
+   SSE over an authenticated `Backend`; `agentkit-host` implements that
+   `Backend` behind its `http` feature. `@agentkit/client` (TypeScript) and
+   `agentkit-client` (Rust) are the typed clients. The HTTP backend is a
+   single-actor desktop boundary; multi-tenant use needs an isolated `Backend`
+   supplied by the application (see [`rust/README.md`](../rust/README.md)).
+
+Both paths run the same Rust host over the same store. Rust embedders (the
+egui reference app) use the host directly.
+
+## Rust crates today
+
+All crates live in `rust/crates/`. "Depends on" lists workspace crates only
+(runtime dependencies, from the manifests).
+
+| Crate | Responsibility | Depends on |
 |---|---|---|
-| `context.*` | no bindings / no system prompt | `run.warning hook_timeout` |
-| `contribute` | that contributor's tools are missing; the others stage | `run.warning hook_timeout` |
-| `attachments.resolve` | the image part is dropped from the pass | `run.warning attachment_unresolved` |
-| `verify` (harness) | `"unavailable"`, harness stops | `run.verification` |
-| `verify` (single-shot) | the turn fails — unchanged semantics, now bounded | `run.failed` |
+| `agentkit-kernel` | SHA-256 hex and canonical JSON shared by contracts, store and host | none |
+| `agentkit-contracts` | Serde contracts, offline schema validation, REST route table, idempotency; generated DTOs | kernel |
+| `agentkit-core` | Provider protocols, streaming, bounded tool execution, budgets | contracts |
+| `agentkit-store` | SQLite actor: tasks, attempts, leases, event log, conversations, projections, recovery | contracts, kernel |
+| `agentkit-connections` | App-scoped connections, consent, secret-store and network ports | contracts |
+| `agentkit-host` | Durable execution (`AgentHost`, worker), chat (`ChatExecutor`), agent sessions (`AgentSessionService`), profiles, governance, subagents, advisor, teammates, proposals, MCP configuration, optional HTTP backend | store, core, contracts, kernel, connections, transport-http (optional) |
+| `agentkit-transport-http` | Axum REST/SSE boundary over a `Backend` trait | contracts |
+| `agentkit-client` | Native HTTP client, replay decoding, presentation state | contracts |
+| `agentkit-mcp` | MCP client and server transports on `rmcp` | contracts, core |
+| `agentkit-toolpacks-coding` | Confined coding tools: filesystem, read-only git, sandboxed commands | contracts, core, host |
+| `agentkit-lsp` | LSP client, language-server lifecycle, code-intelligence tools | contracts, core |
+| `agentkit-napi` | Node-API binding behind `@agentkit/native` | store, host (http), core, connections, mcp, contracts, transport-http, toolpacks-coding, lsp |
+| `agentkit-rust` (`crates/agentkit`) | Feature-selected integration facade; contracts only by default | contracts; others optional |
 
-## Streaming writes are coalesced
+`agentkit-host` is the large crate: ADR 0021 exists because it owns most
+application logic and reaches modules through its root. Run
+`bun run check:arch` for the current dependency-rule violations (the
+allowlist is `rust/scripts/arch-allowlist.json`).
 
-Every `run.message.delta` is appended to the durable log, in order, before
-anything else happens — that is unchanged and is what a consumer follows. The
-PLACEHOLDER behind it is a projection of that log, so its `updateMessage` is
-throttled to at most one per 32 deltas or 50 ms, always flushed before any
-non-delta event (`run.message.completed` and every terminal included) and
-discarded by a pass reset. A 2000-delta answer costs 63 row writes instead of
-2000 (`scripts/bench-projection.ts`: 201.8 ms → 5.2 ms on sqlite; [ADR
-0014](adr/0014-hardening-tranche-2.md)). What a crash
-can cost is under 50 ms of half-written text in a record the next attempt
-overwrites anyway.
+## Durable execution model
 
-## Loop invariants
+Execution is a durable queue in `agentkit-store`, driven by `AgentHost`.
+Terminology follows the Rust types (`TaskStatus`, `AttemptRecord`, `Lease`,
+`LeaseFence` in `rust/crates/store/src/models.rs`).
 
-`runChat()` preserves these across every code path, including cancellation
-and provider failure (source:
-[`packages/core/src/runs/run-loop.ts`](../packages/core/src/runs/run-loop.ts)):
+**Tasks and attempts.** A task has a `kind` and a `scope_id`; kind-dispatched
+executors run it (`ChatExecutor` is the chat executor). Each execution is an
+*attempt*. Attempt end statuses are `completed`, `failed`, `abandoned` and
+`cancelled`; `abandoned` is the crash outcome: the lease expired while the
+attempt was running, so recovery ends it that way rather than guessing success
+or failure. Attempts end with their first terminal status; a second call does
+not overwrite it.
 
-- **Balanced tool history.** The assistant message pushed to `messages`
-  lists *every* tool call the turn produced — including ones over the
-  `maxToolCallsPerIteration` cap — because a provider rejects an orphan
-  `tool_call_id` on the next turn. Every one of those ids then gets a
-  matching `role: "tool"` message, whether it ran, was skipped, or was
-  cancelled.
-- **All tool calls listed, including over-cap.** `skippedToolCalls` (the
-  slice past the cap) still gets a `run.tool.failed` event with
-  `errorCode: "tool_call_cap"` and a matching tool message — never silently
-  dropped.
-- **`balanceCancelled` on abort.** If cancellation arrives mid-iteration,
-  every tool call at or after the current one — capped and skipped alike —
-  is failed with `errorCode: "cancelled"` before `run.cancelled` is emitted,
-  so no `tool_call_id` is left unanswered in the replayed history.
-- **No abort check after a tool executes.** The run-loop's own comment:
-  a tool that has already run has real side effects, so its result MUST be
-  emitted and appended even if cancellation arrived while it was in flight —
-  discarding it would make a replay say "cancelled" while the world had
-  already changed.
-- **`partial` wins in the model-facing envelope.** `buildEnvelope()` maps a
-  tool result's `status` to `"partial"` when the tool reported it, even when
-  `ok` is `false` — a partial apply is not folded into a generic `"error"`,
-  because the model correcting its own work needs to know some of it landed.
-- **A provider-emitted `run.failed` ends the pass without `run.completed`.**
-  If the provider client already yielded `run.failed` during streaming, the
-  loop returns `finish("failed")` directly rather than double-emitting a
-  terminal event.
+**Task statuses.** `Queued`, `Running`, `Interrupted`, `WaitingApproval`,
+`WaitingChild`, `Uncertain` (non-terminal), and `Completed`, `Failed`,
+`Cancelled` (terminal; `TaskStatus::is_terminal`). `WaitingApproval` and
+`WaitingChild` are durable parks that hold no execution slot.
+`Uncertain` is an attempt ended without a decidable outcome; only an explicit
+`resolve_uncertain` settles it, so a late worker cannot restate finished work.
 
-## See also
+**Leases and fencing.** `Lease { task_id, attempt_id, owner_id, lease_token,
+fencing_token, expires_at }`. `lease_token` proves current ownership on every
+write. `fencing_token` comes from one store-wide counter, so it is monotonic
+across all leases ever issued: a worker that paused and woke believing it
+still owns the task is rejected by comparison. Fenced engine writes (event
+append, progress, conversation and session mutations, terminal task and
+attempt writes) carry a `LeaseFence` and are verified inside the same
+transaction as the write; a stale fence yields `StoreError::LeaseLost`.
+Expiry alone is sufficient to reject a worker, before any replacement owner
+acquires the lease.
 
-- [`docs/contracts.md`](contracts.md) — the event vocabulary, warning codes,
-  tool envelope, and TypeBox conventions.
-- [`docs/ports.md`](ports.md) — the full port catalog and the proposal
-  lifecycle diagram.
-- [`docs/non-goals.md`](non-goals.md) — what this repository deliberately
-  does not include yet.
+**Recovery.** `expire_stale_leases` collects expired leases and recovery ends
+their attempts `abandoned`, increments the task's poison count and applies the
+configured `RecoveryMode`:
+
+- cancel requested and the task is agent-bound: `Uncertain`
+  (`cancel_requested_outcome_unknown`); cancel requested otherwise: `Cancelled`;
+- `Manual` (the `HostOptions` default): `Interrupted`, requiring an explicit
+  `resume()`;
+- `Automatic`: back to `Queued` after the retry delay with a new attempt, or
+  dead-lettered (`failed`, `attempts_exhausted`) once `attempt_count` reaches
+  `max_attempts`.
+
+Call `recover()` before `start_worker()`; await the worker's `shutdown()`
+before releasing the database owner.
+
+**Event log.** Every run writes to a per-task durable event log with a
+monotonic sequence; the log is the source for rebuilding projections, and
+replay never re-executes a domain operation. Event persistence is awaited: a
+failed persistence prevents the next tool or provider operation.
+
+**One live turn per chat.** Chat submission creates its task with
+`exclusive_scope`; the store refuses a second unfinished task in the scope in
+the same transaction (`StoreError::ScopeBusy`), surfaced as `chat_busy` (HTTP 409). A redelivered task
+id is answered as a duplicate, not refused.
+
+**At-least-once delivery, idempotent effects.** No exactly-once claim is made.
+Task submission is idempotent per caller-supplied task id. `ProposalService`
+validates proposal identity and current authorization before returning a
+receipt, and reconciles ambiguous application outcomes without automatically
+reapplying them: "cannot prove it landed" is treated as failure. Completed
+tool effects need domain receipts; cancellation, timeouts and transport
+exceptions do not imply an external mutation was rolled back.
+
+**A run is not one pass.** One task can drive several passes (chat-only retry,
+empty-response retry, correction rounds, [ADR
+0012](adr/0012-multi-pass-correction-harness.md)), each with its own
+`run.started` … terminal pair on the same log. Every pass after the first is
+announced by `run.warning { code: "retry_pass", pass, reason }`; consumers
+drop text streamed so far at that boundary. Hence: the SSE stream ends only on
+the task's settlement (`agentkit.stream.settled`, sent after the task is
+terminal or interrupted and the final event drain), not on the first terminal
+run event; clients report provider outcomes as settling until then.
+
+**Subscriptions never cancel.** `RunHandle::subscribe()` follows committed
+events over a bounded channel. Closing a subscription or an SSE connection does
+not cancel execution; cancel is explicit (`RunHandle::cancel()`, the cancel
+route). An SSE resume with an unknown `Last-Event-ID` announces a full replay
+(`x-agentkit-stream-resync` header and an opening `agentkit.stream.resync`
+frame).
+
+Further detail: [`docs/execution-lifecycle.md`](execution-lifecycle.md),
+[ADR 0016](adr/0016-durable-agent-sessions.md),
+[ADR 0020](adr/0020-execution-ownership-and-recovery.md),
+[`docs/rust/native-admission.md`](rust/native-admission.md).
+
+## TypeScript packages
+
+| Package | Role |
+|---|---|
+| `@agentkit/native` | Live. Node-API binding wrappers (`src/`), committed napi loader and `index.d.ts` (`generated/`), per-platform addons `@agentkit/native-<platform>` |
+| `@agentkit/core` | Live. Public loop API over Rust (`runChat`, `runAgentLoop`), tool registry and content-part helpers |
+| `@agentkit/contracts` | Live. Wire DTOs, JSON Schemas (TypeBox), REST v1 route table; codegen input (below) |
+| `@agentkit/client` | Live. Typed REST v1 + SSE client, auto-resuming `streamRun`, derived run phases |
+| `@agentkit/react` | Live. Headless hooks over `@agentkit/client` |
+| `@agentkit/testing` | Live, dev. Mocks, fixtures, golden traces, conformance suites |
+| `agentkit` (`packages/agentkit`) | Live. Umbrella package with subpath exports |
+| `@agentkit/host` | Frozen. `TurnRunner`, `TaskService`, `ConversationService` remain exported; only static `REASONING_EFFORTS` metadata is imported in production |
+| `@agentkit/adapters-memory`, `@agentkit/adapters-sqlite` | Frozen. Production storage is Rust `SqliteStore` |
+| `@agentkit/runner-local` | Frozen. Queue, worker and lease engine live in Rust |
+| `@agentkit/transport-http` | Frozen. Production REST/SSE is the Rust server; the TS server remains the behavioural reference the Rust route table is proven against |
+| `@agentkit/mcp-client` | Frozen. Production MCP is the Rust client and server |
+
+Frozen packages persist under the API-freeze constraint and are exercised by
+their own suites. They are slated for deletion in the ADR 0021 migration (phase
+P6, tracked in Plane). `scripts/check-composition-ownership.mjs`
+(`bun run check:composition`) rejects backend-implementation imports from
+shipped compositions, with an audited allowlist. The package ledger is in
+[`docs/rust/parity.md`](rust/parity.md).
+
+## Contracts and codegen
+
+[`packages/contracts`](../packages/contracts/src) (TypeBox schemas and
+`src/rest.ts`) is the authoritative wire source today.
+`rust/crates/contracts/codegen/generate.mjs` (run with Bun from the repository
+root) reads it and writes the Rust DTOs under `rust/crates/contracts/src/generated/`
+and `schema_bundle.json`. The Rust crate validates offline against that
+bundle. The wire authority is contract `0.7.0`, REST `v1`.
+
+The Rust contract definitions will become authoritative and generate the
+TypeScript schemas (decided 2026-11-09; recorded in ADR 0022 when the flip
+lands, after the TypeScript backend is retired). Until then TypeBox stays the
+source of truth. See
+[`docs/contracts.md`](contracts.md) for the event vocabulary, warning codes and
+tool envelope.
+
+## Target architecture
+
+[ADR 0021](adr/0021-layered-crate-architecture.md) (accepted 2026-11-09)
+splits the workspace into six layers; dependencies point inward only:
+
+1. Foundation: `agentkit-kernel`, `agentkit-contracts`.
+2. Agent loop and governance: `agentkit-core`, `agentkit-governance`.
+3. Application contexts, each owning its repository traits:
+   `agentkit-engine` ← `agentkit-sessions` ← `agentkit-chat` ←
+   `agentkit-agents`; future Hybrid contexts depend on engine and sessions only.
+4. Driven adapters: `agentkit-store-sqlite`, `agentkit-store-legacy-import`,
+   `agentkit-providers`, `agentkit-toolpacks-coding`, `agentkit-lsp`,
+   `agentkit-mcp`, `agentkit-connections`, `agentkit-sys`.
+5. Composition: `agentkit-runtime` (`AgentRuntime::builder()`), the only crate
+   naming concrete adapters.
+6. Driving adapters: `agentkit-napi`, `agentkit-http`, `agentkit-client`, the
+   `agentkit` facade.
+
+`agentkit-testkit` (dev-only) provides fakes, in-memory repositories and
+repository conformance suites. `agentkit-host` is removed once its modules have
+moved, with no re-export shim. Rules R1–R10 (no `axum`/`napi`/`rusqlite` in
+layers 1–3, leftward-only context dependencies, no `pub use x::*`, enum error
+types, `catch_unwind` on napi exports, and so on) are enforced by
+`rust/scripts/check-arch.mjs` (`bun run check:arch`), cargo-deny
+(`rust/deny.toml`) and review. Only `agentkit-kernel` exists from this layout
+so far; the rest is migration work (phases P0–P8, tracked in Plane).
+
+## Quality gates
+
+There is no hosted CI; all gates run locally. See
+[`DEVELOPING.md`](../DEVELOPING.md#local-gates-no-hosted-ci) for
+`bun run qualify:local` and the individual checks.
+
+## Further reading
+
+- ADRs in [`docs/adr/`](adr): runtime and execution
+  [0015](adr/0015-unified-agent-runtime.md),
+  [0016](adr/0016-durable-agent-sessions.md),
+  [0017](adr/0017-context-assembly-and-compaction.md),
+  [0018](adr/0018-coding-tool-pack.md),
+  [0019](adr/0019-human-approval-plan-mode-and-side-effect-receipts.md),
+  [0020](adr/0020-execution-ownership-and-recovery.md),
+  [0021](adr/0021-layered-crate-architecture.md). Earlier ADRs (0001–0014) are
+  history; where they describe TypeScript implementations they are superseded
+  by the Rust engine.
+- [`docs/rust/`](rust): `parity.md`, `acceptance.md`, `native-admission.md`,
+  `native-binding-milestone.md`, `provider-authority.md`,
+  `numeric-event-cursors.md`.
+- [`docs/contracts.md`](contracts.md), [`docs/ports.md`](ports.md) (TypeScript
+  port catalog, frozen), [`docs/non-goals.md`](non-goals.md),
+  [`docs/roadmap.md`](roadmap.md).
+- [`rust/README.md`](../rust/README.md): embedding, connections and consent,
+  verification commands.

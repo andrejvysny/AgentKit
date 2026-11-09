@@ -13,6 +13,7 @@ remaining qualification requirements are in [the parity specification](../docs/r
 
 | Crate | Responsibility |
 | --- | --- |
+| `agentkit-kernel` | Foundation primitives: SHA-256 hex and canonical JSON |
 | `agentkit-contracts` | Portable Serde contracts, offline schema validation, routes and idempotency |
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
@@ -158,10 +159,10 @@ Architecture rules (ADR 0021) are checked from the monorepo root with
 `bun run check:arch`.
 
 Environment: the release-projection and MCP stdio-peer suites spawn a real
-`node` (Node 22 on the CI runners); the workflow qualification gates evaluate
-`needs` results with `jq` and need no runtime. The wasm check requires the
+`node` (Node 22 is the qualified version). There is no hosted CI: all gates run
+locally, see [`DEVELOPING.md`](../DEVELOPING.md#local-gates-no-hosted-ci). The wasm check requires the
 `wasm32-unknown-unknown` rustup target.
 
 Mocked provider tests, loopback HTTP tests, local native builds, live provider
-qualification, real keychain qualification and remote platform CI are separate
+qualification, real keychain qualification and remote platform runs are separate
 evidence. None implies another. No performance advantage is claimed.

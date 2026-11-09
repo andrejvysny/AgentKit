@@ -26,7 +26,7 @@ is implied. Publication and scope ownership require separate authorization.
 | `../../rust/crates/napi` | the binding itself (napi-rs 3.x, async tokio runtime) |
 | `src/` | TypeScript wrappers for the native store, session service, callbacks, and streaming bridge |
 | `../../rust/crates/napi/error-codes.json` | versioned error-code list embedded into the Rust crate and checked by tests |
-| `generated/` | the napi loader and `index.d.ts`; **committed verbatim** so `bun run typecheck` needs no Rust build and the native CI job can gate staleness with `git diff --exit-code` against a fresh `build:native` (biome is switched off for this directory — reformatting would break that byte-exact gate) |
+| `generated/` | the napi loader and `index.d.ts`; **committed verbatim** so `bun run typecheck` needs no Rust build and staleness can be gated locally with `git diff --exit-code` against a fresh `build:native` (biome is switched off for this directory — reformatting would break that byte-exact gate) |
 | `tests/` | vertical slice, contract, and gating tests |
 
 The compiled `agentkit-native.<platform>.node` is a build artifact and is
@@ -57,7 +57,7 @@ platform.
 Tests skip cleanly when the binary has not been built. In qualification
 runs they must not skip: set `AGENTKIT_REQUIRE_NATIVE=1` and a missing
 binary is a hard failure (the M2.1 A4 rule — a skipped required suite is
-never a pass). The native CI job builds the binary, sets the flag, and
+never a pass). The local native gate builds the binary, sets the flag, and
 `git diff --exit-code`s `generated/` so a stale committed loader fails the
 gate.
 
