@@ -15,7 +15,7 @@ workspace = true
 [features]
 default = []
 runtime = ["dep:agentkit-core", "dep:agentkit-connections"]
-durable = ["runtime", "dep:agentkit-host", "dep:agentkit-store"]
+durable = ["runtime", "dep:agentkit-host", "dep:agentkit-store", "dep:agentkit-providers"]
 client = ["dep:agentkit-client"]
 http = ["durable", "dep:agentkit-http"]
 mcp = ["dep:agentkit-mcp"]
@@ -28,6 +28,7 @@ agentkit-core = { workspace = true, optional = true }
 agentkit-connections = { workspace = true, optional = true }
 agentkit-host = { workspace = true, optional = true }
 agentkit-store = { workspace = true, optional = true }
+agentkit-providers = { workspace = true, optional = true }
 agentkit-client = { workspace = true, optional = true }
 agentkit-http = { workspace = true, optional = true }
 agentkit-mcp = { workspace = true, optional = true }

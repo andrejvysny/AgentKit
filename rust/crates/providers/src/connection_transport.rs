@@ -1,12 +1,10 @@
 //! Consent-bound bridge from native connections to the provider streaming port.
+use crate::TrustedTransport;
 use agentkit_connections::{
     Capability, ConnectionError, ConnectionNetwork, ConsentToken, NativeConnections, PlanInput,
     RequestFence, RequestPlan, ReqwestConnectionNetwork,
 };
-use agentkit_core::{
-    CoreError, DispatchGuard,
-    providers::{AuthKind, ConnectionIdentity, TrustedTransport},
-};
+use agentkit_core::{AuthKind, ConnectionIdentity, CoreError, DispatchGuard};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::{

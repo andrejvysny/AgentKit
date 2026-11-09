@@ -11,8 +11,8 @@ mod validation;
 
 pub use cors::{CorsConfig, CorsOrigins, DEFAULT_ALLOW_HEADERS};
 pub use desktop::{
-    DesktopBackend, McpConfigurationPort, NativeProviderFactory, NativeProviderOperations,
-    ProviderConsentPort, ProviderOperations, ToolCatalogPort, WritePolicyPort,
+    DesktopBackend, McpConfigurationPort, NativeProviderOperations, ProviderConsentPort,
+    ProviderOperations, ToolCatalogPort, WritePolicyPort,
 };
 pub use handler::{Config, router};
 pub use idempotency::{Idempotency, derive_task_id};

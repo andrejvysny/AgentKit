@@ -1,5 +1,5 @@
-use super::{responses_request::bounded, transport::classify};
-use crate::{CoreError, ProviderEvent, ToolCall, ToolDefinition};
+use crate::{responses_request::bounded, transport::classify};
+use agentkit_core::{CoreError, ProviderEvent, ToolCall, ToolDefinition};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 struct Item {

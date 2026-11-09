@@ -1,5 +1,7 @@
-use super::{ConnectionIdentity, content};
-use crate::{ChatMessage, ChatRequest, CoreError, ReasoningSummary, ToolCall};
+use crate::content;
+use agentkit_core::{
+    ChatMessage, ChatRequest, ConnectionIdentity, CoreError, ReasoningSummary, ToolCall,
+};
 use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -454,7 +456,7 @@ pub(crate) fn bounded(value: &Value) -> Result<String, CoreError> {
 #[cfg(test)]
 mod selected_content_tests {
     use super::*;
-    use crate::{ContinuationScope, ReasoningEffort};
+    use agentkit_core::{ContinuationScope, ReasoningEffort};
 
     #[test]
     fn content_binding_fences_same_run_and_changed_next_turn_replays_canonical_history() {
@@ -522,7 +524,7 @@ mod selected_content_tests {
             run_id: "run".into(),
             model: "model".into(),
             messages: vec![ChatMessage::text("user", "question")],
-            continuation_scope: Some(crate::ContinuationScope {
+            continuation_scope: Some(agentkit_core::ContinuationScope {
                 chat_id: "chat".into(),
                 branch_id: "branch".into(),
             }),

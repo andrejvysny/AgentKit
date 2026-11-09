@@ -15,7 +15,7 @@ use agentkit_host::{
     ProfileRegistry, ProviderRegistry, SharedRuntime, SystemRuntime, TaskExecutor, ToolContributor,
     ToolGuard, VerificationHook,
 };
-use agentkit_http::NativeProviderFactory;
+use agentkit_providers::NativeProviderFactory;
 use serde_json::Value;
 
 use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};

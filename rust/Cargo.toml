@@ -45,6 +45,7 @@ agentkit-connections = { path = "crates/connections", version = "0.1.0" }
 agentkit-host = { path = "crates/host", version = "0.1.0" }
 agentkit-store = { path = "crates/store", version = "0.1.0" }
 agentkit-client = { path = "crates/client", version = "0.1.0" }
+agentkit-providers = { path = "crates/providers", version = "0.1.0" }
 agentkit-http = { path = "crates/http", version = "0.1.0" }
 agentkit-mcp = { path = "crates/mcp", version = "0.1.0" }
 agentkit-lsp = { path = "crates/lsp", version = "0.1.0" }

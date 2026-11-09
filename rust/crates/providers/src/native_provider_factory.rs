@@ -1,25 +1,66 @@
-//! Late-bound native execution keeps HTTP connection writes and streaming on one authority.
-use super::{
-    ProviderConsentPort,
-    native_provider_operations::{Approval, approve, connection_problem},
+//! Late-bound native execution keeps connection writes and streaming on one authority.
+use crate::{
+    ChatCompletionsProvider, NativeConnectionTransport, ResponsesProvider, TrustedTransport,
+    disclosed_categories,
 };
-use crate::{Actor, Problem};
 use agentkit_connections::{
-    AppConnections, Capability, Connection, NativeConnections, PlanInput, RequestFence,
-    ReqwestConnectionNetwork, SharedSecretStore,
+    AppConnections, Capability, Connection, ConnectionError, ConsentToken, NativeConnections,
+    PlanInput, RequestFence, RequestPlan, ReqwestConnectionNetwork, SharedSecretStore,
 };
-use agentkit_core::{
-    ChatProvider, CoreError,
-    providers::{
-        AuthKind, ChatCompletionsProvider, ConnectionIdentity, ResponsesProvider, TrustedTransport,
-    },
-};
+use agentkit_core::{AuthKind, ChatProvider, ConnectionIdentity, CoreError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+
+/// Revokes its consent token on drop so an approval never outlives the request it covered.
+pub struct Approval {
+    native: NativeConnections,
+    pub token: ConsentToken,
+}
+
+impl Approval {
+    pub fn new(native: NativeConnections, token: ConsentToken) -> Self {
+        Self { native, token }
+    }
+}
+
+impl Drop for Approval {
+    fn drop(&mut self) {
+        let _ = self.native.revoke(&self.token);
+    }
+}
+
+/// Host-supplied consent. The host owns who is asking and how approval is obtained.
+#[async_trait]
+pub trait ProviderApprover: Send + Sync {
+    /// Approve this exact plan and mint its consent token, or fail.
+    async fn approve(
+        &self,
+        native: &NativeConnections,
+        plan: &RequestPlan,
+        cancel: CancellationToken,
+    ) -> Result<Approval, CoreError>;
+    fn as_any(&self) -> &dyn Any;
+    /// Whether both approvers consult the same consent handle.
+    fn same_consent(&self, other: &dyn ProviderApprover) -> bool;
+    /// Whether both approvers act for the same actor.
+    fn same_actor(&self, other: &dyn ProviderApprover) -> bool;
+}
+
+#[derive(Debug)]
+pub enum BindError {
+    /// The authority lock was poisoned.
+    Lock,
+    /// A different vault or consent handle was supplied after the first bind.
+    VaultOrConsentChanged,
+    /// The actor, app or connection export differs from the first bind.
+    AuthorityDiffers,
+    Connection(ConnectionError),
+}
 
 #[derive(Default)]
 pub struct NativeProviderFactory {
@@ -27,13 +68,12 @@ pub struct NativeProviderFactory {
     binding: RwLock<Option<Arc<NativeProviderBinding>>>,
 }
 
-pub(super) struct NativeProviderBinding {
+pub struct NativeProviderBinding {
     pub connections: AppConnections,
     pub native: NativeConnections,
     pub secrets: SharedSecretStore,
     network: Arc<ReqwestConnectionNetwork>,
-    consent: Arc<dyn ProviderConsentPort>,
-    actor: Actor,
+    approver: Arc<dyn ProviderApprover>,
 }
 
 impl NativeProviderFactory {
@@ -42,51 +82,41 @@ impl NativeProviderFactory {
         self
     }
 
-    pub(super) fn bind(
+    pub fn bind(
         &self,
         connections: AppConnections,
         secrets: SharedSecretStore,
-        consent: Arc<dyn ProviderConsentPort>,
-        actor: Actor,
-    ) -> Result<Arc<NativeProviderBinding>, Problem> {
-        let mut current = self
-            .binding
-            .write()
-            .map_err(|_| Problem::host("internal_error", "Provider authority lock failed."))?;
+        approver: Arc<dyn ProviderApprover>,
+    ) -> Result<Arc<NativeProviderBinding>, BindError> {
+        let mut current = self.binding.write().map_err(|_| BindError::Lock)?;
         if let Some(binding) = current.as_ref() {
-            if !Arc::ptr_eq(&binding.secrets, &secrets) || !Arc::ptr_eq(&binding.consent, &consent)
+            if !Arc::ptr_eq(&binding.secrets, &secrets)
+                || !binding.approver.same_consent(approver.as_ref())
             {
-                return Err(Problem::new(
-                    409,
-                    "revision_conflict",
-                    "Provider vault or consent changed. Create a new service or reuse the same port handles.",
-                ));
+                return Err(BindError::VaultOrConsentChanged);
             }
-            if binding.actor.id != actor.id
-                || binding.actor.metadata != actor.metadata
+            if !binding.approver.same_actor(approver.as_ref())
                 || binding.connections.app_id() != connections.app_id()
-                || binding.connections.export().map_err(connection_problem)?
-                    != connections.export().map_err(connection_problem)?
+                || binding
+                    .connections
+                    .export()
+                    .map_err(BindError::Connection)?
+                    != connections.export().map_err(BindError::Connection)?
             {
-                return Err(Problem::new(
-                    409,
-                    "revision_conflict",
-                    "Provider authority differs from the restored store.",
-                ));
+                return Err(BindError::AuthorityDiffers);
             }
             return Ok(binding.clone());
         }
         let network = Arc::new(
             ReqwestConnectionNetwork::new(Duration::from_secs(120), 4 * 1024 * 1024)
-                .map_err(connection_problem)?,
+                .map_err(BindError::Connection)?,
         );
         let binding = Arc::new(NativeProviderBinding {
             native: NativeConnections::new(connections.clone(), secrets.clone(), network.clone()),
             connections,
             secrets,
             network,
-            consent,
-            actor,
+            approver,
         });
         *current = Some(binding.clone());
         Ok(binding)
@@ -337,7 +367,7 @@ impl TrustedTransport for ApprovingTransport {
             destination.path().trim_end_matches('/'),
             expected
         ));
-        let mut disclosed_data = agentkit_host::disclosed_categories(&body);
+        let mut disclosed_data = disclosed_categories(&body);
         disclosed_data.insert("connection-authentication".into());
         let plan = self
             .binding
@@ -357,14 +387,14 @@ impl TrustedTransport for ApprovingTransport {
             .map_err(|_| CoreError::responses("connection_changed"))?;
         let approval = tokio::select! { biased;
             _=cancel.cancelled()=>return Err(CoreError::new("cancelled", "aborted")),
-            value=approve(&self.binding.native, self.binding.consent.as_ref(), &self.binding.actor, &plan, cancel.clone())=>value.map_err(|_| CoreError::responses("consent_required"))?,
+            value=self.binding.approver.approve(&self.binding.native, &plan, cancel.clone())=>value.map_err(|_| CoreError::responses("consent_required"))?,
         };
         let fence = self
             .binding
             .native
             .fence(&plan, &approval.token)
             .map_err(|_| CoreError::responses("connection_changed"))?;
-        let transport = agentkit_host::NativeConnectionTransport::new(
+        let transport = NativeConnectionTransport::new(
             self.binding.native.clone(),
             plan,
             approval.token.clone(),
@@ -378,66 +408,5 @@ impl TrustedTransport for ApprovingTransport {
         transport
             .request(identity, operation, Some(body), cancel)
             .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    struct Consent;
-    #[async_trait]
-    impl ProviderConsentPort for Consent {
-        async fn approve(
-            &self,
-            _: &Actor,
-            _: &agentkit_connections::RequestPlan,
-            _: CancellationToken,
-        ) -> Result<bool, Problem> {
-            Ok(false)
-        }
-    }
-    #[test]
-    fn rebind_requires_identical_vault_and_consent_handles() {
-        let factory = NativeProviderFactory::default();
-        let connections = agentkit_connections::ConnectionRepository::default()
-            .for_app(agentkit_connections::AppId::new("app").unwrap());
-        let secrets: SharedSecretStore =
-            Arc::new(agentkit_connections::MemorySecretStore::default());
-        let consent: Arc<dyn ProviderConsentPort> = Arc::new(Consent);
-        let actor = Actor {
-            id: "app".into(),
-            metadata: Default::default(),
-        };
-        factory
-            .bind(
-                connections.clone(),
-                secrets.clone(),
-                consent.clone(),
-                actor.clone(),
-            )
-            .unwrap();
-        factory
-            .bind(
-                connections.clone(),
-                secrets.clone(),
-                consent.clone(),
-                actor.clone(),
-            )
-            .unwrap();
-        let error = factory
-            .bind(
-                connections.clone(),
-                Arc::new(agentkit_connections::MemorySecretStore::default()),
-                consent,
-                actor.clone(),
-            )
-            .err()
-            .unwrap();
-        assert_eq!(error.status, 409);
-        let error = factory
-            .bind(connections, secrets, Arc::new(Consent), actor)
-            .err()
-            .unwrap();
-        assert_eq!(error.status, 409);
     }
 }

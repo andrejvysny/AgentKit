@@ -5,7 +5,8 @@
 //! transport failures (the `transport_error` the transports raise for a
 //! refused/DNS/TLS failure) are classified `network_error`.
 
-use agentkit_core::{providers::*, *};
+use agentkit_core::*;
+use agentkit_providers::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::Value;

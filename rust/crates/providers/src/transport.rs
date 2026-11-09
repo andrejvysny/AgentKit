@@ -1,21 +1,7 @@
-use crate::CoreError;
+use agentkit_core::{AuthKind, ConnectionIdentity, CoreError};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConnectionIdentity {
-    pub provider_id: String,
-    pub protocol: String,
-    pub connection_id: String,
-    pub generation: u64,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuthKind {
-    ApiKey,
-    ChatGptAccount,
-}
 /// Hosts resolve credentials for this immutable identity, never global selection.
 #[async_trait]
 pub trait TrustedTransport: Send + Sync {
@@ -36,7 +22,7 @@ pub trait TrustedTransport: Send + Sync {
         identity: &ConnectionIdentity,
         operation: &str,
         body: Option<Value>,
-        guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
+        guard: Option<std::sync::Arc<dyn agentkit_core::DispatchGuard>>,
         cancellation: CancellationToken,
     ) -> Result<reqwest::Response, CoreError> {
         if let Some(guard) = guard {
@@ -93,7 +79,7 @@ pub(crate) async fn dispatch_guarded(
     identity: &ConnectionIdentity,
     operation: &str,
     body: Option<Value>,
-    guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
+    guard: Option<std::sync::Arc<dyn agentkit_core::DispatchGuard>>,
     cancellation: CancellationToken,
 ) -> Result<reqwest::Response, CoreError> {
     match dispatch_status(transport, identity, operation, body, guard, cancellation).await? {
@@ -109,7 +95,7 @@ pub(crate) async fn dispatch_status(
     identity: &ConnectionIdentity,
     operation: &str,
     body: Option<Value>,
-    guard: Option<std::sync::Arc<dyn crate::DispatchGuard>>,
+    guard: Option<std::sync::Arc<dyn agentkit_core::DispatchGuard>>,
     cancellation: CancellationToken,
 ) -> Result<Result<reqwest::Response, (u16, Value)>, CoreError> {
     transport.check_authority().await?;

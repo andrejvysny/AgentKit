@@ -17,8 +17,11 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use agentkit_core::providers::{AuthKind, ConnectionIdentity, TrustedTransport};
-use agentkit_core::{CancellationToken, ChatProvider, ChatRequest, CoreError, ProviderStream};
+use agentkit_core::{
+    AuthKind, CancellationToken, ChatProvider, ChatRequest, ConnectionIdentity, CoreError,
+    ProviderStream,
+};
+use agentkit_providers::TrustedTransport;
 use async_trait::async_trait;
 use napi::bindgen_prelude::*;
 use serde_json::Value;

@@ -1,9 +1,8 @@
 //! Optional desktop HTTP boundary. One immutable actor owns one local store.
 mod chats;
 mod managed_content;
-mod native_provider_factory;
+mod native_provider_binding;
 mod native_provider_operations;
-pub use native_provider_factory::NativeProviderFactory;
 pub use native_provider_operations::{NativeProviderOperations, ProviderConsentPort};
 mod management;
 mod mcp_configuration;

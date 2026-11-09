@@ -1771,12 +1771,11 @@ async fn build_lane_provider(
     .await?;
     let preset: Arc<dyn agentkit_core::ChatProvider> = match lane.protocol {
         ProviderProtocol::ChatCompletions => Arc::new(
-            agentkit_core::providers::ChatCompletionsProvider::new(transport)
-                .map_err(errors::core)?,
+            agentkit_providers::ChatCompletionsProvider::new(transport).map_err(errors::core)?,
         ),
-        ProviderProtocol::Responses => Arc::new(
-            agentkit_core::providers::ResponsesProvider::new(transport).map_err(errors::core)?,
-        ),
+        ProviderProtocol::Responses => {
+            Arc::new(agentkit_providers::ResponsesProvider::new(transport).map_err(errors::core)?)
+        }
     };
     Ok(Arc::new(
         crate::provider_connection::ConfiguredProvider::new(

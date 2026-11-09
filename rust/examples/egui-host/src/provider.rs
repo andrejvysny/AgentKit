@@ -3,11 +3,8 @@ use crate::{
     demo::{DemoProvider, approve, connection_error},
 };
 use agentkit_connections::*;
-use agentkit_core::{
-    CancellationToken, ChatProvider, CoreError,
-    providers::{AuthKind, ChatCompletionsProvider, ConnectionIdentity, TrustedTransport},
-};
-use agentkit_host::NativeConnectionTransport;
+use agentkit_core::{AuthKind, CancellationToken, ChatProvider, ConnectionIdentity, CoreError};
+use agentkit_providers::{ChatCompletionsProvider, NativeConnectionTransport, TrustedTransport};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::{
@@ -143,7 +140,7 @@ impl UiTransport {
                 PlanInput {
                     capability: Capability::Chat,
                     model: Some(model),
-                    disclosed_data: agentkit_host::disclosed_categories(body),
+                    disclosed_data: agentkit_providers::disclosed_categories(body),
                     payload: serde_json::to_vec(body).map_err(|_| {
                         CoreError::new("invalid_request", "Invalid provider payload")
                     })?,

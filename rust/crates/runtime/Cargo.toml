@@ -14,8 +14,7 @@ workspace = true
 [dependencies]
 agentkit-core = { workspace = true }
 agentkit-host = { workspace = true }
-# Temporary layer-5 -> layer-6 edge: NativeProviderFactory moves to a providers crate in P2-B.
-agentkit-http = { workspace = true }
+agentkit-providers = { workspace = true }
 agentkit-store = { workspace = true }
 agentkit-lsp = { workspace = true }
 agentkit-toolpacks-coding = { workspace = true }
@@ -28,6 +27,7 @@ async-trait.workspace = true
 [dev-dependencies]
 uuid.workspace = true
 # http_fixture example (TypeScript client/react test server)
+agentkit-http = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-connections = { workspace = true, features = ["http"] }
 axum.workspace = true

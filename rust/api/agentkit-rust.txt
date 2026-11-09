@@ -6,5 +6,6 @@ pub use agentkit_rust::core
 pub use agentkit_rust::host
 pub use agentkit_rust::http
 pub use agentkit_rust::mcp
+pub use agentkit_rust::providers
 pub use agentkit_rust::store
 pub use agentkit_rust::toolpacks_coding

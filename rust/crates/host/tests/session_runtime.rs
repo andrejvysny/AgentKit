@@ -48,15 +48,15 @@ impl ChatProvider for Scripted {
     fn id(&self) -> &str {
         "test"
     }
-    fn connection_identity(&self) -> Option<agentkit_core::providers::ConnectionIdentity> {
-        self.responses.load(Ordering::SeqCst).then(|| {
-            agentkit_core::providers::ConnectionIdentity {
+    fn connection_identity(&self) -> Option<agentkit_core::ConnectionIdentity> {
+        self.responses
+            .load(Ordering::SeqCst)
+            .then(|| agentkit_core::ConnectionIdentity {
                 provider_id: "test".into(),
                 protocol: "responses".into(),
                 connection_id: "connection".into(),
                 generation: 1,
-            }
-        })
+            })
     }
     fn stream_chat(&self, input: ChatRequest, _: CancellationToken) -> ProviderStream {
         let first = self.tool_first && self.requests.lock().unwrap().is_empty();

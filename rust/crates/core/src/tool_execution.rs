@@ -241,7 +241,7 @@ fn outcome(
     }
 }
 
-pub(crate) fn dedupe(calls: &mut [ToolCall]) -> Vec<String> {
+pub fn dedupe(calls: &mut [ToolCall]) -> Vec<String> {
     let reserved: HashSet<String> = calls.iter().map(|call| call.id.clone()).collect();
     let mut used = HashSet::new();
     let mut duplicates = vec![];

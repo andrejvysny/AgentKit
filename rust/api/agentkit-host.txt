@@ -507,16 +507,6 @@ pub agentkit_host::MutationIdentity::execution_fence: core::option::Option<agent
 pub agentkit_host::MutationIdentity::fingerprint: alloc::string::String
 pub agentkit_host::MutationIdentity::operation_id: alloc::string::String
 pub agentkit_host::MutationIdentity::proposal_id: alloc::string::String
-pub struct agentkit_host::NativeConnectionTransport
-impl agentkit_host::NativeConnectionTransport
-pub fn agentkit_host::NativeConnectionTransport::new(agentkit_connections::execution::NativeConnections, agentkit_connections::execution::RequestPlan, agentkit_connections::execution::ConsentToken, alloc::rcs::arc::Arc<agentkit_connections::http::ReqwestConnectionNetwork>) -> core::result::Result<Self, agentkit_core::types::CoreError>
-pub fn agentkit_host::NativeConnectionTransport::with_request_guard(self, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::dispatch::DispatchGuard>>) -> Self
-impl agentkit_core::providers::transport::TrustedTransport for agentkit_host::NativeConnectionTransport
-pub fn agentkit_host::NativeConnectionTransport::auth_kind(&self) -> agentkit_core::providers::transport::AuthKind
-pub fn agentkit_host::NativeConnectionTransport::check_current(&self) -> core::result::Result<(), agentkit_core::types::CoreError>
-pub fn agentkit_host::NativeConnectionTransport::identity(&self) -> agentkit_core::providers::transport::ConnectionIdentity
-pub fn agentkit_host::NativeConnectionTransport::request<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::providers::transport::ConnectionIdentity, &'life2 str, core::option::Option<serde_json::value::Value>, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<reqwest::async_impl::response::Response, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_host::NativeConnectionTransport::request_guarded<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::providers::transport::ConnectionIdentity, &'life2 str, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::dispatch::DispatchGuard>>, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<reqwest::async_impl::response::Response, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_host::PermissionContext
 pub agentkit_host::PermissionContext::chat_id: core::option::Option<alloc::string::String>
 pub agentkit_host::PermissionContext::run_id: core::option::Option<alloc::string::String>
@@ -1112,7 +1102,6 @@ pub fn agentkit_host::classify_execution_error(&agentkit_host::HostError) -> age
 pub fn agentkit_host::compiled_content_digest(&[serde_json::value::Value]) -> core::option::Option<alloc::string::String>
 pub fn agentkit_host::default_delegation_guidance() -> &'static str
 pub fn agentkit_host::default_role_specs() -> alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_host::RoleSpec>
-pub fn agentkit_host::disclosed_categories(&serde_json::value::Value) -> alloc::collections::btree::set::BTreeSet<alloc::string::String>
 pub async fn agentkit_host::drain_native_command_completions(&agentkit_store::actor::SqliteStore, core::time::Duration) -> core::result::Result<(), agentkit_core::types::CoreError>
 pub fn agentkit_host::effective_role(core::option::Option<&agentkit_host::RoleSnapshot>, core::option::Option<&agentkit_host::RoleSpec>) -> core::option::Option<agentkit_host::EffectiveRole>
 pub fn agentkit_host::execution_context_sha256(&agentkit_host::DurableExecution, &agentkit_host::ToolContributionContext, &agentkit_core::types::ToolDefinition, core::option::Option<&serde_json::value::Value>) -> alloc::string::String

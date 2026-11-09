@@ -1,11 +1,15 @@
-use super::{
-    AuthKind, ConnectionIdentity, TrustedTransport,
+use crate::{
+    TrustedTransport,
     chat_completions::usage_data,
     responses_request::{build_responses_request_with_warnings, make_continuation},
     responses_state::{ResponsesResult, ResponsesState},
+    sse::SseDecoder,
     transport::{dispatch, dispatch_status, failure, read_json},
 };
-use crate::{ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, sse::SseDecoder};
+use agentkit_core::{
+    AuthKind, ChatProvider, ChatRequest, ConnectionIdentity, CoreError, ProviderEvent,
+    ProviderStream,
+};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};

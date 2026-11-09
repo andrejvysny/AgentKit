@@ -1,8 +1,9 @@
 //! Explicit host approval connects native discovery and probes to HTTP operations.
-use super::{DesktopBackend, NativeProviderFactory, ProviderOperations};
+use super::{DesktopBackend, ProviderOperations, native_provider_binding};
 use crate::{Actor, Problem};
-use agentkit_connections::{ConnectionError, ConsentToken, NativeConnections, RequestPlan};
+use agentkit_connections::{ConnectionError, NativeConnections, RequestPlan};
 use agentkit_contracts::{AiProviderModel, TestProviderResponse};
+use agentkit_providers::{Approval, NativeProviderFactory};
 use async_trait::async_trait;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -64,17 +65,6 @@ impl NativeProviderOperations {
     }
 }
 
-pub(super) struct Approval {
-    native: NativeConnections,
-    pub token: ConsentToken,
-}
-
-impl Drop for Approval {
-    fn drop(&mut self) {
-        let _ = self.native.revoke(&self.token);
-    }
-}
-
 pub(super) async fn approve(
     native: &NativeConnections,
     port: &dyn ProviderConsentPort,
@@ -96,10 +86,7 @@ pub(super) async fn approve(
         ));
     }
     let token = native.approve(plan).map_err(connection_problem)?;
-    Ok(Approval {
-        native: native.clone(),
-        token,
-    })
+    Ok(Approval::new(native.clone(), token))
 }
 
 impl NativeProviderOperations {
@@ -216,7 +203,8 @@ impl DesktopBackend {
             .secrets
             .clone()
             .unwrap_or_else(|| Arc::new(agentkit_connections::UnavailableSecretStore));
-        let binding = factory.bind(
+        let binding = native_provider_binding::bind(
+            &factory,
             self.connections.clone(),
             secrets,
             consent.clone(),

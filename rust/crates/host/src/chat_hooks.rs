@@ -193,7 +193,7 @@ impl ChatProvider for PreparedProvider {
     fn id(&self) -> &str {
         self.inner.id()
     }
-    fn connection_identity(&self) -> Option<agentkit_core::providers::ConnectionIdentity> {
+    fn connection_identity(&self) -> Option<agentkit_core::ConnectionIdentity> {
         self.inner.connection_identity()
     }
     fn tracks_transport_requests(&self) -> bool {

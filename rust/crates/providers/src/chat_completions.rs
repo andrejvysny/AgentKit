@@ -1,10 +1,11 @@
-use super::{
-    ConnectionIdentity, TrustedTransport, content,
+use crate::{
+    TrustedTransport, content,
+    sse::{SseDecoder, SseFrame},
     transport::{self, read_json},
 };
-use crate::{
-    ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, ToolCall,
-    sse::{SseDecoder, SseFrame},
+use agentkit_core::{
+    ChatProvider, ChatRequest, ConnectionIdentity, CoreError, ProviderEvent, ProviderStream,
+    ToolCall,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -225,7 +226,7 @@ impl ChatCompletionsProvider {
                 ))?;
             }
             let mut calls = state.assemble();
-            let duplicates = crate::tool_execution::dedupe(&mut calls);
+            let duplicates = agentkit_core::dedupe_tool_call_ids(&mut calls);
             if !duplicates.is_empty() {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {

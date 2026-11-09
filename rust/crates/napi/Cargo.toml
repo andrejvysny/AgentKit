@@ -23,6 +23,7 @@ agentkit-connections = { workspace = true }
 agentkit-mcp = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-http = { workspace = true }
+agentkit-providers = { workspace = true }
 agentkit-runtime = { workspace = true }
 axum.workspace = true
 http.workspace = true

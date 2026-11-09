@@ -1,5 +1,5 @@
 //! Strict UTF-8 SSE framing with bounded unterminated line and frame state.
-use crate::CoreError;
+use agentkit_core::CoreError;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SseFrame {
     pub event: Option<String>,

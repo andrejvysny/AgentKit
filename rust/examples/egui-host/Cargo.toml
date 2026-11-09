@@ -16,6 +16,7 @@ agentkit-host = { workspace = true }
 agentkit-connections = { workspace = true, features = ["http"] }
 agentkit-store = { workspace = true }
 agentkit-runtime = { workspace = true }
+agentkit-providers = { workspace = true }
 eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 async-trait.workspace = true
 async-stream.workspace = true

@@ -6,7 +6,7 @@ use agentkit_host::{
     AgentHost, AgentSessionService, ContentAuthority, ProfileRegistry, ProviderRegistry,
     WorkerHandle,
 };
-use agentkit_http::NativeProviderFactory;
+use agentkit_providers::NativeProviderFactory;
 
 use crate::builder::AgentRuntimeBuilder;
 use crate::lanes::advisor::AdvisorLane;
