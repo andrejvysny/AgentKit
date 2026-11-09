@@ -1,5 +1,5 @@
 /**
- * `NativeAssistantStore` — the `@agentkit/host` `AssistantStore` aggregate
+ * `NativeAssistantStore` — the `AssistantStore` (see `./ports.ts`) aggregate
  * served entirely by the Rust engine through the napi binding.
  *
  * Every sub-port method is a thin mapping: translate the port's parameters
@@ -77,7 +77,7 @@ import type {
   UpdateChatPatch,
   UpdateMessagePatch,
   UpdateProgressOptions,
-} from "@agentkit/host";
+} from "./ports.js";
 import type {
   AiProviderCapabilities,
   AiProviderConfig,
@@ -459,7 +459,7 @@ function projectSettings(value: unknown): AssistantSettings {
 }
 
 /** The port's `apply` mirror of `validateCreateAgentInput`
- * (`@agentkit/host`): the binding parses what it can, but the kind/policy
+ * (the agent-input port rules): the binding parses what it can, but the kind/policy
  * shape rules are the port's and must refuse with `invalid_input`. */
 function validateAgentInput(input: CreateAgentInput): void {
   const bad = (message: string): never => {

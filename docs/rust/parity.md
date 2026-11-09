@@ -197,6 +197,8 @@ the REST `connectionAction` answers 501 (`connect`/`test →
 not_implemented` is the binding's documented answer, never a silent
 success). Use the explicit native MCP callback/OAuth APIs described below; this generic action port is not their alias.
 
+Known gap (2026-11-09): the TS-only `ConnectionService` managed-connector acceptance harness (`examples/desktop-host`) was removed with the TS backend; native has no equivalent generic connection-action acceptance leg.
+
 MCP client dispatch authority (2026-11-01). The Rust MCP client no
 longer trusts the remote `readOnlyHint`: tool effect comes only from the
 host's `ServerConfig.readOnly` (additive, default false), arguments are

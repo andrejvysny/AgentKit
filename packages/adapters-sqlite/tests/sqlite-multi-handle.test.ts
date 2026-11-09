@@ -40,13 +40,13 @@ import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createRng } from "@agentkit/testing";
 import {
   checkTaskInvariants,
-  createRng,
-  runTaskSchedule,
   snapshotTaskInvariants,
   type ObservedLease,
-} from "@agentkit/testing";
+} from "./support/task-invariants.js";
+import { runTaskSchedule } from "./support/task-schedule-driver.js";
 import { CONTRACT_VERSION, type TaskEventEnvelope } from "@agentkit/contracts";
 import type { AssistantStore, ClaimedTask } from "@agentkit/host";
 import { SqliteAssistantStore } from "../src/index.js";

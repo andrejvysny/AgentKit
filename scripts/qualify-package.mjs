@@ -19,7 +19,7 @@ if (
   !/^[a-f0-9]{64}$/.test(options["source-digest"] ?? "")
 ) {
   throw new Error(
-    "Usage: node scripts/qualify-package.mjs --tarball PATH --source-digest SHA256 [--output DIR] [--sqlite EXACT_VERSION] [--electron EXACT_VERSION] [--responses true] [--migration-from FOUNDATION_TARBALL]",
+    "Usage: node scripts/qualify-package.mjs --tarball PATH --source-digest SHA256 [--output DIR] [--sqlite EXACT_VERSION] [--electron EXACT_VERSION] [--responses true]",
   );
 }
 const sqliteVersion = options.sqlite ?? "13.0.3";
@@ -42,18 +42,6 @@ const fixtureFiles = [
 ];
 if (options.responses)
   fixtureFiles.push(
-    [
-      "proposals-smoke.mjs",
-      join(root, "scripts", "qualification", "proposals-smoke.mjs"),
-    ],
-    [
-      "migration-seed.mjs",
-      join(root, "scripts", "qualification", "migration-seed.mjs"),
-    ],
-    [
-      "responses-smoke.mjs",
-      join(root, "scripts", "qualification", "responses-smoke.mjs"),
-    ],
     [
       "responses-openpcb-smoke.mjs",
       join(root, "scripts", "qualification", "responses-openpcb-smoke.mjs"),
@@ -202,27 +190,11 @@ function qualify(manager) {
   if (options.responses) {
     run(
       "node",
-      ["responses-smoke.mjs"],
-      directory,
-      `${manager}-responses-reopen`,
-    );
-    run(
-      "node",
       ["responses-openpcb-smoke.mjs"],
       directory,
       `${manager}-responses-openpcb-reopen`,
     );
   }
-  if (manager === "bun")
-    run(
-      "bun",
-      [
-        "-e",
-        `import { SqliteAssistantStore } from 'agentkit/adapters-sqlite'; const s = new SqliteAssistantStore(':memory:'); s.close(); console.log('Bun SQLite loaded');`,
-      ],
-      directory,
-      "bun-sqlite",
-    );
 }
 
 function qualifyNodeNative(directory, manager) {
@@ -249,43 +221,6 @@ function qualifyNodeNative(directory, manager) {
   )
     throw new Error("Unexpected Node native driver or reopen result");
   evidence[`${manager}NativeRuntime`] = reopened;
-  record();
-}
-
-function qualifyMigration() {
-  const previous = resolve(options["migration-from"]);
-  const previousDigest = createHash("sha256")
-    .update(readFileSync(previous))
-    .digest("hex");
-  const directory = prepareConsumer("migration", previous);
-  run(
-    "npm",
-    ["install", "--no-audit", "--no-fund"],
-    directory,
-    "migration-a-install",
-  );
-  const database = join(output, "foundation-to-responses.sqlite");
-  run("node", ["migration-seed.mjs", database], directory, "migration-a-seed");
-  run(
-    "node",
-    ["responses-smoke.mjs", database, `${database}.seed.json`],
-    join(output, "npm-consumer"),
-    "migration-b-responses-reopen",
-  );
-  if (
-    createHash("sha256").update(readFileSync(previous)).digest("hex") !==
-    previousDigest
-  )
-    throw new Error("Foundation artifact changed");
-  evidence.migration = {
-    artifact: previous,
-    sha256: previousDigest,
-    kind: "candidate-continuity",
-    from: 10,
-    to: 10,
-    populated: true,
-    reopened: true,
-  };
   record();
 }
 
@@ -442,11 +377,6 @@ if (
   );
 qualify("npm");
 qualify("bun");
-if (options["migration-from"]) {
-  if (!options.responses)
-    throw new Error("Migration qualification requires --responses true");
-  qualifyMigration();
-}
 if (options.electron) qualifyElectron(options.electron);
 if (createHash("sha256").update(readFileSync(tarball)).digest("hex") !== digest)
   throw new Error("Artifact changed during qualification");

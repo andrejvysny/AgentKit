@@ -14,7 +14,7 @@ import {
   deriveIdempotentTaskId,
   deriveRegenerateTaskId,
   turnFingerprint,
-} from "../packages/transport-http/src/idempotency.js";
+} from "./idempotency-vectors.js";
 import {
   GOLDEN_TRACE_NAMES,
   loadGoldenTrace,

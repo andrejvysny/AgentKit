@@ -10,7 +10,7 @@
  * listener — see `./rust-server.ts`.
  */
 import type { AiRunEvent } from "@agentkit/contracts";
-import type { TaskStore } from "@agentkit/host";
+import type { TaskStore } from "./test-types.js";
 import {
   createTestEventStamper,
   MockProviderClient,

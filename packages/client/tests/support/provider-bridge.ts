@@ -1,7 +1,7 @@
 import type {
   ToolSetContributor,
   ToolContributionContext,
-} from "@agentkit/host";
+} from "./test-types.js";
 import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
 

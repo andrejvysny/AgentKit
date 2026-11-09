@@ -19,7 +19,7 @@ import type {
 import {
   expectRejectsWithCode,
   type AssistantStoreConformanceTestApi,
-} from "./conformance-support.js";
+} from "../../../testing/src/conformance-support.js";
 
 export interface McpServerConfigStoreConformanceHarness {
   store: McpServerConfigStore;

@@ -18,7 +18,7 @@ export interface NativeClientServer<
 
 type NativeOptions = Omit<TestServerOptions, "provider"> & {
   provider?: AiProviderClient;
-  contributors?: import("@agentkit/host").ToolSetContributor[];
+  contributors?: import("./test-types.js").ToolSetContributor[];
 };
 export function startRustClientServer(
   options: TestServerOptions,

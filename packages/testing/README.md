@@ -2,10 +2,11 @@
 
 Shared test doubles, fixture builders, golden run-event traces, and the
 `AssistantStore` conformance suite — for anything that consumes
-`@agentkit/core` or implements `@agentkit/host`'s ports.
+`@agentkit/core` or implements the store ports (`@agentkit/native`'s
+`NativeAssistantStore` is the reference implementation).
 
-`@agentkit/contracts` is a real dependency; `@agentkit/core` and
-`@agentkit/host` are **peer dependencies only** (declared, and used in this
+`@agentkit/contracts` is a real dependency; `@agentkit/core` is a
+**peer dependency only** (declared, and used in this
 package's own tests, but never imported at runtime by `src/`). That keeps
 `@agentkit/core`'s tests free to import mocks from here without a circular
 runtime dependency between the two packages.
@@ -54,13 +55,10 @@ one back; `assertMatchesGolden(events, name)` compares a live run's events
 against the frozen trace, ignoring the fields that legitimately differ on
 every run (`timestamp`, `eventId` — stripped by `normalizeTrace`).
 
-Traces are **not** regenerated on test runs. Regenerate deliberately, when a
-scenario or the run-loop's event shape changes on purpose:
-
-```sh
-bun scripts/record-goldens.ts   # from the repo root
-bun test                        # then diff the resulting trace files before committing
-```
+Traces are **not** regenerated on test runs. The recording script
+(`scripts/record-goldens.ts`) was removed with the TypeScript backend; when a
+scenario or the event shape changes on purpose, edit the trace files by hand
+(or re-record from the Rust loop) and diff them before committing.
 
 A golden trace changing is a signal to look at, not something to
 rubber-stamp — `packages/testing/tests/golden.test.ts` checks structural
@@ -106,58 +104,9 @@ describeAssistantStoreConformance({
 `create()` builds one fresh, isolated store per test — never shared across
 `it()`s — and may return `capabilities: { atomicTransactions: false }` for
 an adapter whose `transaction()` cannot roll back, and a `close` callback
-for one that opens a real resource (a db connection, a temp file). Two
-adapters in this repository pass the suite:
-`@agentkit/adapters-memory`'s `MemoryAssistantStore` and
-`@agentkit/adapters-sqlite`'s `SqliteAssistantStore` — see their READMEs
-and [`docs/ports.md`](../../docs/ports.md) for what the suite checks per
-port.
-
-## TaskRunner conformance suite
-
-`describeTaskRunnerConformance(options)` is the same idea for the other half
-of the host's runtime: the five promises the `TaskRunner` port makes that a
-store cannot make for it — `enqueue` idempotency per task id, `recover()`
-abandoning an expired lease and either re-attempting or dead-lettering, lease
-RENEWAL keeping an attempt that outlives the TTL out of that recovery's way,
-`requestCancel` reaching a running worker's `AbortSignal`, and
-`startWorker`'s concurrency budget. Same injected-primitives shape as the
-store suite (`test: { describe, it, expect }`, no runner import here), and
-everything is observed THROUGH THE STORE, so a runner with a completely
-different internal design is still gradeable. `@agentkit/runner-local` runs
-it against both reference stores.
-
-`create()` takes an optional `TaskRunnerConformanceHarnessOptions` and MUST
-honour `heartbeatMs` when it is given: the renewal scenario asks for a short
-one, and every other scenario needs renewal effectively off (they step the
-clock past the lease TTL on purpose), so an adapter's default should be longer
-than any test's real lifetime. An adapter that ignores the option fails the
-renewal scenario rather than passing it silently.
-
-## Durability invariant suite
-
-A second, stronger bar beside store conformance ([ADR
-0006](../../docs/adr/0006-hardening-tranche.md)): where conformance says
-"this call does this thing", `task-invariants.ts` says something that must
-hold of a `TaskStore` regardless of *what concurrent activity got it
-there* — never two live claims for one task, exactly one current lease,
-fencing strictly monotonic, event `seq` gapless per task. Framework-neutral
-like `store-conformance.ts` (no `bun:test`, no `expect`):
-`checkTaskInvariants(view, options)` returns the violations it found
-(empty = clean) for the caller's runner to assert on, over a
-`snapshotTaskInvariants(...)`-built view. Two phases (`options.phase`):
-`in-flight` runs only what survives a torn read (concurrent workers still
-committing between the dozens of awaits a full view needs), `quiescent`
-(default) adds the cross-read pairings that are only exact once nothing is
-executing.
-
-`task-schedule-driver.ts`'s `runTaskSchedule(...)` is the seeded, replayable
-schedule that grades against those invariants instead of one hand-written
-scenario: a `mulberry32`-seeded RNG (`createRng`) and a logical clock
-(`createLogicalClock` — no wall-clock timers) drive N workers over M tasks
-with dependencies, cancels, lease expiry, and retries; a failing run prints
-its seed, and that seed reproduces the exact same schedule byte-for-byte —
-turning a flaky-looking failure into a repeatable one instead of a shrug.
+for one that opens a real resource (a db connection, a temp file).
+`@agentkit/native`'s `NativeAssistantStore` passes the suite — see
+[`docs/ports.md`](../../docs/ports.md) for what the suite checks per port.
 
 ## License
 

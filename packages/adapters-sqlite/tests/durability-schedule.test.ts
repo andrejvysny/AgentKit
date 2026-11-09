@@ -19,7 +19,8 @@
  * outside the port and what needs the adapter dump this directory supplies.
  */
 import { describe, expect, it } from "bun:test";
-import { checkTaskInvariants, runTaskSchedule } from "@agentkit/testing";
+import { checkTaskInvariants } from "./support/task-invariants.js";
+import { runTaskSchedule } from "./support/task-schedule-driver.js";
 import {
   createMemoryHarness,
   createSqliteHarness,

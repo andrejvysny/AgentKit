@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { describeSecretStoreConformance } from "@agentkit/testing";
+import { describeSecretStoreConformance } from "./support/secret-store-conformance.js";
 import { MemorySecretStore } from "../src/index.js";
 
 describeSecretStoreConformance({

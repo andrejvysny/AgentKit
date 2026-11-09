@@ -47,7 +47,6 @@
     "@agentkit/contracts": "workspace:*"
   },
   "devDependencies": {
-    "@agentkit/host": "workspace:*",
     "@agentkit/testing": "workspace:*",
     "@types/bun": "^1.3.5",
     "typescript": "^5.8.3"

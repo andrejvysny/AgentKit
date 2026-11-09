@@ -9,7 +9,10 @@
  * task-store peeks and proposal staging cross its private test-control
  * listener — see `./rust-server.ts`.
  */
-import type { ProposalService, ToolSetContributor } from "@agentkit/host";
+import type {
+  TestProposalService,
+  ToolSetContributor,
+} from "../../../client/tests/support/test-types.js";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
 import type { FetchLike } from "@agentkit/client";
 import {
@@ -35,7 +38,7 @@ export interface TestServer {
   store: TestTaskStore;
   provider: AiProviderClient;
   /** The staged-write pipeline the decision routes need. */
-  proposals: ProposalService;
+  proposals: TestProposalService;
   /** Where a write-only `apiKey` lands — proof it went there and nowhere else. */
   secrets: TestSecretStore;
   stop(): Promise<void>;

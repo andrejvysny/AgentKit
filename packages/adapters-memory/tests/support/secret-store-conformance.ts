@@ -9,7 +9,7 @@
 // ref are normal, not exceptional) — nothing in this file asserts on a
 // thrown `code`.
 import type { SecretStore } from "@agentkit/host";
-import type { AssistantStoreConformanceTestApi } from "./conformance-support.js";
+import type { AssistantStoreConformanceTestApi } from "../../../testing/src/conformance-support.js";
 
 export interface SecretStoreConformanceHarness {
   store: SecretStore;

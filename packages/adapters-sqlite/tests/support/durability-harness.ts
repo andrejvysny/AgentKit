@@ -35,7 +35,7 @@ import {
   createLogicalClock,
   type LogicalClock,
   type TaskScheduleTarget,
-} from "@agentkit/testing";
+} from "./task-schedule-driver.js";
 import { MemoryAssistantStore } from "@agentkit/adapters-memory";
 import { SqliteAssistantStore } from "../../src/index.js";
 

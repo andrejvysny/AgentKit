@@ -50,7 +50,7 @@ import {
   checkTaskInvariants,
   snapshotTaskInvariants,
   type ObservedLease,
-} from "@agentkit/testing";
+} from "./support/task-invariants.js";
 import {
   defaultIds,
   type AssistantStore,

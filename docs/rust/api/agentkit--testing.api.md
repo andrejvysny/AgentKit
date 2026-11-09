@@ -1061,15 +1061,6 @@ interface ChatRecord {
     updatedAt: string;
 }
 
-// @public
-export function checkTaskInvariants(view: TaskInvariantView, options?: CheckTaskInvariantsOptions): string[];
-
-// @public (undocumented)
-export interface CheckTaskInvariantsOptions {
-    label?: string;
-    phase?: TaskInvariantPhase;
-}
-
 // @public (undocumented)
 interface ClaimedTask {
     // (undocumented)
@@ -1253,9 +1244,6 @@ interface CreateChatInput {
 }
 
 // @public (undocumented)
-export function createLogicalClock(startIso?: string): LogicalClock;
-
-// @public (undocumented)
 interface CreateProposalInput {
     // (undocumented)
     actionId?: string;
@@ -1340,39 +1328,6 @@ export type DescribeContextSummaryStoreConformanceOptions = Pick<DescribeAssista
 };
 
 // @public (undocumented)
-export function describeMcpServerConfigStoreConformance(options: DescribeMcpServerConfigStoreConformanceOptions): void;
-
-// @public (undocumented)
-export interface DescribeMcpServerConfigStoreConformanceOptions {
-    create: () => Promise<McpServerConfigStoreConformanceHarness>;
-    name: string;
-    // (undocumented)
-    test: AssistantStoreConformanceTestApi;
-}
-
-// @public (undocumented)
-export function describeSecretStoreConformance(options: DescribeSecretStoreConformanceOptions): void;
-
-// @public (undocumented)
-export interface DescribeSecretStoreConformanceOptions {
-    create: () => Promise<SecretStoreConformanceHarness>;
-    name: string;
-    // (undocumented)
-    test: AssistantStoreConformanceTestApi;
-}
-
-// @public
-export function describeTaskRunnerConformance(options: DescribeTaskRunnerConformanceOptions): void;
-
-// @public (undocumented)
-export interface DescribeTaskRunnerConformanceOptions {
-    create: (options?: TaskRunnerConformanceHarnessOptions) => Promise<TaskRunnerConformanceHarness>;
-    name: string;
-    // (undocumented)
-    test: AssistantStoreConformanceTestApi;
-}
-
-// @public (undocumented)
 interface EndAttemptInput {
     // (undocumented)
     attemptId: string;
@@ -1381,16 +1336,6 @@ interface EndAttemptInput {
     leaseToken?: string;
     // (undocumented)
     status: Exclude<AttemptStatus, "running">;
-}
-
-// @public (undocumented)
-interface EnqueueInput {
-    availableAt?: string;
-    // (undocumented)
-    priority?: number;
-    scopeId: string;
-    // (undocumented)
-    taskId: string;
 }
 
 // @public
@@ -1439,22 +1384,6 @@ export interface HangingProviderOptions {
     kind?: AiProviderKind;
     // (undocumented)
     models?: readonly AiProviderModel[];
-}
-
-// @public
-interface IdGenerator {
-    // (undocumented)
-    attemptId(): string;
-    chatId(): string;
-    // (undocumented)
-    eventId(): string;
-    // (undocumented)
-    messageId(): string;
-    operationId(): string;
-    // (undocumented)
-    proposalId(): string;
-    // (undocumented)
-    taskId(): string;
 }
 
 // @public
@@ -1550,12 +1479,6 @@ interface ListProposalsOptions {
 export function loadGoldenTrace(name: GoldenTraceName): AiRunEvent[];
 
 // @public
-export interface LogicalClock extends Clock {
-    // (undocumented)
-    advance(ms: number): void;
-}
-
-// @public
 export function makeAssistantMessage(content: string, toolCalls?: AiToolCall[]): AiChatMessage;
 
 // @public
@@ -1569,95 +1492,6 @@ export function makeToolResult(overrides?: Partial<AiToolResult<unknown>>): AiTo
 
 // @public
 export function makeUserMessage(content: string): AiChatMessage;
-
-// @public
-export const MCP_CONFIG_CREATED_AT = "2024-01-01T00:00:00.000Z";
-
-// @public
-export const MCP_CONFIG_UPDATED_AT = "2024-01-02T00:00:00.000Z";
-
-// @public
-interface McpHttpTransportConfig {
-    headers?: Record<string, string>;
-    // (undocumented)
-    kind: "http";
-    // (undocumented)
-    url: string;
-}
-
-// @public
-interface McpResilienceOptions {
-    circuitOpenMs: number;
-    connectBackoffBaseMs: number;
-    // (undocumented)
-    connectBackoffMaxMs: number;
-    connectTimeoutMs: number;
-    maxConnectAttempts: number;
-    // (undocumented)
-    reconnectBackoffFactor: number;
-    reconnectMaxAttempts: number;
-    requestTimeoutMs: number;
-    retryTimeouts: boolean;
-}
-
-// @public
-interface McpServerConfig {
-    alias: string;
-    // (undocumented)
-    discovery?: {
-        maxPages?: number;
-        maxItems?: number;
-        maxBytes?: number;
-    };
-    enabled?: boolean;
-    // (undocumented)
-    resilience?: Partial<McpResilienceOptions>;
-    secretRefs?: Record<string, string>;
-    toolAliases?: Record<string, string>;
-    // (undocumented)
-    transport: McpTransportConfig;
-}
-
-// @public
-type McpServerConfigPatch = Partial<McpServerConfig>;
-
-// @public
-interface McpServerConfigRecord extends McpServerConfig {
-    createdAt: string;
-    // (undocumented)
-    id: string;
-    updatedAt: string;
-}
-
-// @public
-interface McpServerConfigStore {
-    create(record: McpServerConfigRecord): Promise<McpServerConfigRecord>;
-    delete(id: string): Promise<void>;
-    get(id: string): Promise<McpServerConfigRecord | null>;
-    list(): Promise<McpServerConfigRecord[]>;
-    update(id: string, patch: McpServerConfigPatch): Promise<McpServerConfigRecord>;
-}
-
-// @public (undocumented)
-export interface McpServerConfigStoreConformanceHarness {
-    close?: () => void;
-    // (undocumented)
-    store: McpServerConfigStore;
-}
-
-// @public
-interface McpStdioTransportConfig {
-    // (undocumented)
-    args?: string[];
-    // (undocumented)
-    command: string;
-    env?: Record<string, string>;
-    // (undocumented)
-    kind: "stdio";
-}
-
-// @public (undocumented)
-type McpTransportConfig = McpStdioTransportConfig | McpHttpTransportConfig;
 
 // @public
 interface MessageRecord {
@@ -1748,12 +1582,6 @@ export function normalizeTrace(events: readonly AiRunEvent[]): Array<Omit<AiRunE
 
 // @public
 export function nowIso(): string;
-
-// @public
-export interface ObservedLease extends Lease {
-    // (undocumented)
-    observedAt: number;
-}
 
 // @public (undocumented)
 interface OutboxAppendInput {
@@ -1945,33 +1773,10 @@ export interface Rng {
     pick<T>(items: readonly T[]): T;
 }
 
-// @public (undocumented)
-export function runTaskSchedule(options: TaskScheduleOptions): Promise<TaskScheduleResult>;
-
 // @public
 interface RunWriteFence {
     // (undocumented)
     leaseToken: string;
-    // (undocumented)
-    taskId: string;
-}
-
-// @public
-export interface ScheduleTaskSpec {
-    // (undocumented)
-    availableAt?: string;
-    // (undocumented)
-    dependsOn?: string[];
-    // (undocumented)
-    kind: string;
-    // (undocumented)
-    parentTaskId?: string;
-    // (undocumented)
-    payload: Record<string, unknown>;
-    // (undocumented)
-    priority?: number;
-    // (undocumented)
-    scopeId: string;
     // (undocumented)
     taskId: string;
 }
@@ -1982,40 +1787,11 @@ interface SearchMessagesOptions {
     limit?: number;
 }
 
-// @public
-interface SecretStore {
-    // (undocumented)
-    delete(ref: string): Promise<void>;
-    get(ref: string): Promise<string | null>;
-    listRefs(): Promise<string[]>;
-    // (undocumented)
-    set(ref: string, value: string): Promise<void>;
-}
-
-// @public (undocumented)
-export interface SecretStoreConformanceHarness {
-    close?: () => void;
-    // (undocumented)
-    store: SecretStore;
-}
-
 // @public (undocumented)
 interface SettingsStore {
     // (undocumented)
     getSettings(): Promise<AssistantSettings>;
     updateSettings(patch: Partial<AssistantSettings>): Promise<AssistantSettings>;
-}
-
-// @public
-export function snapshotTaskInvariants(source: TaskInvariantSnapshotSource): Promise<TaskInvariantView>;
-
-// @public (undocumented)
-interface StartWorkerOptions {
-    // (undocumented)
-    concurrency?: number;
-    kinds?: string[];
-    // (undocumented)
-    ownerId?: string;
 }
 
 // @public (undocumented)
@@ -2057,64 +1833,6 @@ excerpt: TOptional<TString>;
 metadata: TOptional<TRecord<TString, TUnknown>>;
 }>>>;
 }>;
-
-// @public
-interface TaskExecution {
-    // (undocumented)
-    attemptId: string;
-    leaseToken: string;
-    signal: AbortSignal;
-    // (undocumented)
-    taskId: string;
-}
-
-// @public
-interface TaskInterruptionReason {
-    // (undocumented)
-    code: string;
-    // (undocumented)
-    message: string;
-}
-
-// @public (undocumented)
-export type TaskInvariantPhase = "quiescent" | "in-flight";
-
-// @public
-export interface TaskInvariantReader {
-    // (undocumented)
-    getTask(taskId: string): Promise<TaskRecord | null>;
-    // (undocumented)
-    listChildren(taskId: string): Promise<TaskRecord[]>;
-    // (undocumented)
-    listEvents(taskId: string): Promise<TaskEventEnvelope[]>;
-}
-
-// @public (undocumented)
-export interface TaskInvariantSnapshotSource {
-    // (undocumented)
-    dumpAttempts?: (() => readonly AttemptRecord[]) | undefined;
-    // (undocumented)
-    dumpLiveLeases?: (() => readonly Lease[]) | undefined;
-    // (undocumented)
-    inFlightTaskIds?: ReadonlySet<string>;
-    // (undocumented)
-    observedLeases?: readonly ObservedLease[];
-    // (undocumented)
-    reader: TaskInvariantReader;
-    taskIds: readonly string[];
-}
-
-// @public
-export interface TaskInvariantView {
-    attempts: readonly AttemptRecord[];
-    attemptsAreComplete: boolean;
-    children: ReadonlyMap<string, readonly string[]>;
-    events: ReadonlyMap<string, readonly TaskEventEnvelope[]>;
-    inFlightTaskIds: ReadonlySet<string>;
-    liveLeases?: readonly Lease[];
-    observedLeases: readonly ObservedLease[];
-    tasks: readonly TaskRecord[];
-}
 
 // @public
 interface TaskPatch {
@@ -2163,104 +1881,6 @@ interface TaskRecord {
     taskId: string;
 }
 
-// @public (undocumented)
-interface TaskRunner {
-    enqueue(input: EnqueueInput): Promise<void>;
-    recover(): Promise<void>;
-    requestCancel(taskId: string): Promise<void>;
-    requestInterrupt?(taskId: string, reason?: TaskInterruptionReason): Promise<void>;
-    resume?(taskId: string): Promise<void>;
-    // (undocumented)
-    startWorker(worker: TaskWorker, opts?: StartWorkerOptions): Promise<WorkerHandle>;
-}
-
-// @public
-export interface TaskRunnerConformanceHarness {
-    attemptsFor(taskId: string): Promise<Array<{
-        attemptNumber: number;
-        status: string;
-    }>>;
-    clock: ConformanceClock;
-    close?: () => void;
-    leaseTtlMs: number;
-    maxAttempts: number;
-    runner: TaskRunner;
-    seedTask(input: {
-        taskId: string;
-        scopeId: string;
-    }): Promise<void>;
-    store: AssistantStore;
-}
-
-// @public
-export interface TaskRunnerConformanceHarnessOptions {
-    heartbeatMs?: number;
-}
-
-// @public (undocumented)
-export interface TaskScheduleOptions {
-    // (undocumented)
-    clock: LogicalClock;
-    // (undocumented)
-    ids: IdGenerator;
-    kind?: string;
-    leaseTtlMs: number;
-    maxAttempts?: number;
-    // (undocumented)
-    seed: number;
-    spotCheckEvery?: number;
-    steps?: number;
-    // (undocumented)
-    target: TaskScheduleTarget;
-    tasks?: number;
-    workers?: number;
-}
-
-// @public (undocumented)
-export interface TaskScheduleResult {
-    // (undocumented)
-    seed: number;
-    spotCheckViolations: readonly string[];
-    // (undocumented)
-    stats: TaskScheduleStats;
-    undrained: readonly string[];
-    view: TaskInvariantView;
-}
-
-// @public (undocumented)
-export interface TaskScheduleStats {
-    // (undocumented)
-    cancelled: number;
-    // (undocumented)
-    claimed: number;
-    // (undocumented)
-    completed: number;
-    // (undocumented)
-    crashes: number;
-    // (undocumented)
-    created: number;
-    // (undocumented)
-    deadLettered: number;
-    // (undocumented)
-    failed: number;
-    // (undocumented)
-    leaseLosses: number;
-    // (undocumented)
-    recovered: number;
-    // (undocumented)
-    retries: number;
-}
-
-// @public
-export interface TaskScheduleTarget {
-    cancelRequested(taskId: string): boolean;
-    cancelTask(taskId: string): Promise<void>;
-    dumpAttempts?(): readonly AttemptRecord[];
-    dumpLiveLeases?(): readonly Lease[];
-    handles: readonly AssistantStore[];
-    submitTask(spec: ScheduleTaskSpec): Promise<TaskRecord>;
-}
-
 // @public
 type TaskStatus = "queued" | "running" | "interrupted" | "waiting_approval" | "completed" | "failed" | "cancelled";
 
@@ -2291,12 +1911,6 @@ interface TaskStore {
     renewLease(leaseToken: string, ttlMs: number): Promise<Lease>;
     transitionTask(taskId: string, from: TaskStatus[], to: TaskStatus, patch?: TaskPatch, opts?: FencedWriteOptions): Promise<TaskRecord>;
     updateProgress(taskId: string, progress: Record<string, unknown>, opts: UpdateProgressOptions): Promise<TaskRecord>;
-}
-
-// @public (undocumented)
-interface TaskWorker {
-    // (undocumented)
-    execute(execution: TaskExecution): Promise<void>;
 }
 
 // @public
@@ -2390,11 +2004,6 @@ interface UpdateProgressOptions {
 
 // @public
 type WithoutBase<E> = E extends AiRunEvent ? Omit<E, "contractVersion" | "eventId" | "seq" | "attemptId"> : never;
-
-// @public (undocumented)
-interface WorkerHandle {
-    stop(): Promise<void>;
-}
 
 // @public
 type WritePolicyMode = "auto_readonly_confirm_writes" | "confirm_all_writes" | "auto_all";

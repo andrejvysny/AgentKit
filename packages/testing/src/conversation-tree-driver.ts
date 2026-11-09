@@ -23,14 +23,14 @@
 // two drivers cannot disagree about what "seed 7" means.
 //
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
-// every `@agentkit/host` import is `import type`, and error assertions match on
+// every `./ports.js` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
-import type { MessageRecord } from "@agentkit/host";
+import type { MessageRecord } from "./ports.js";
 import type {
   AssistantStoreConformanceHarness,
   AssistantStoreConformanceTestApi,
 } from "./conformance-support.js";
-import { createRng, type Rng } from "./task-schedule-driver.js";
+import { createRng, type Rng } from "./rng.js";
 
 export interface ConversationTreeInvariantOptions {
   create: () => Promise<AssistantStoreConformanceHarness>;

@@ -11,7 +11,7 @@ import { dirname } from "node:path";
 import type { AiProviderConfig } from "@agentkit/contracts";
 import { CONTRACT_VERSION, REST_API_VERSION } from "@agentkit/contracts";
 import type { AiProviderClient } from "@agentkit/core";
-import type { Clock, Logger } from "@agentkit/host";
+import type { Clock, Logger } from "./system-types.js";
 import {
   NativeSessionService,
   NativeStore,

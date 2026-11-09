@@ -5,7 +5,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { REASONING_EFFORTS, type SessionReasoningEffort } from "@agentkit/host";
+import { REASONING_EFFORTS, type SessionReasoningEffort } from "./reasoning.js";
 import type { CodingAgentApp, SessionListing } from "./app.js";
 
 export const MODES: readonly string[] = [

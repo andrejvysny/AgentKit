@@ -52,7 +52,6 @@
   },
   "devDependencies": {
     "@agentkit/core": "workspace:*",
-    "@agentkit/host": "workspace:*",
     "@agentkit/testing": "workspace:*",
     "@happy-dom/global-registrator": "^20.0.0",
     "@testing-library/react": "^16.3.0",

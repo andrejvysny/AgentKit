@@ -21,7 +21,7 @@ import {
   describeTaskRunnerConformance,
   type TaskRunnerConformanceHarness,
   type TaskRunnerConformanceHarnessOptions,
-} from "@agentkit/testing";
+} from "./support/task-runner-conformance.js";
 import { SingleProcessTaskRunner } from "../src/index.js";
 import { createTestClock } from "./support/task-runner-harness.js";
 

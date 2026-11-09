@@ -8,8 +8,8 @@
 // by `store-conformance.ts`, which is still the module a consumer imports.
 //
 // FRAMEWORK-NEUTRAL BY DESIGN, same as the suites: no `bun:test`, no runner
-// globals, and every `@agentkit/host` import is `import type`.
-import type { AssistantStore, Clock } from "@agentkit/host";
+// globals, and every `./ports.js` import is `import type`.
+import type { AssistantStore, Clock } from "./ports.js";
 
 /**
  * What `create()` hands back for one test: a fresh, isolated store plus

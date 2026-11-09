@@ -374,66 +374,10 @@ check(
   \`runChat without the binding must fail honestly, got: \${runOutcome}\`,
 );
 
-const host = await import("@agentkit/host");
-console.log("@agentkit/host");
-check(
-  host.isTaskTransitionAllowed("queued", "running") === true,
-  "task transition table answers",
-);
-
-const adaptersMemory = await import("@agentkit/adapters-memory");
-console.log("@agentkit/adapters-memory");
-const store = new adaptersMemory.MemoryAssistantStore();
-await store.tasks.createTask({ taskId: "pack-smoke", kind: "pack.smoke", scopeId: "pack-scope", payload: {} });
-const claim = await store.tasks.claimNext({ ownerId: "pack-smoke", now: new Date(), scopesBusy: [] });
-check(claim?.task.status === "running" && typeof claim?.lease.leaseToken === "string", "claimNext hands back a running task with a lease");
-
-const runnerLocal = await import("@agentkit/runner-local");
-console.log("@agentkit/runner-local");
-const runner = new runnerLocal.SingleProcessTaskRunner({ store, pollMs: 5 });
-await store.tasks.releaseLease(claim.lease.leaseToken);
-await store.tasks.endAttempt({ attemptId: claim.attempt.attemptId, status: "completed" });
-await store.tasks.transitionTask("pack-smoke", ["running"], "completed", { finishedAt: new Date().toISOString() });
-await store.tasks.createTask({ taskId: "pack-smoke-run", kind: "pack.smoke", scopeId: "pack-scope-2", payload: {} });
-const handle = await runner.startWorker({
-  async execute({ taskId, attemptId }) {
-    await store.tasks.transitionTask(taskId, ["running"], "completed", { finishedAt: new Date().toISOString() });
-    await store.tasks.endAttempt({ attemptId, status: "completed" });
-  },
-}, { concurrency: 1 });
-await runner.enqueue({ taskId: "pack-smoke-run", scopeId: "pack-scope-2" });
-let ran = null;
-for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
-  ran = await store.tasks.getTask("pack-smoke-run");
-  if (ran?.status === "completed") break;
-  await new Promise((resolve) => setTimeout(resolve, 5));
-}
-await handle.stop();
-check(ran?.status === "completed", \`the runner drove a queued task to "\${ran?.status}"\`);
-
 const testing = await import("@agentkit/testing");
 console.log("@agentkit/testing");
 const trace = testing.loadGoldenTrace("chat-only");
 check(Array.isArray(trace) && trace.length > 0, \`loadGoldenTrace("chat-only") returned \${trace?.length ?? 0} event(s)\`);
-
-const mcp = await import("@agentkit/mcp-client");
-console.log("@agentkit/mcp-client");
-const nullSecrets = { async get() { return null; }, async set() {}, async delete() {}, async listRefs() { return []; } };
-const manager = new mcp.McpClientManager({ secrets: nullSecrets }, [
-  { alias: "gh", transport: { kind: "stdio", command: "gh-mcp" } },
-]);
-check(manager.aliases().join(",") === "gh", "manager registers its configured alias");
-
-const transport = await import("@agentkit/transport-http");
-console.log("@agentkit/transport-http");
-const handler = transport.createRestHandler({
-  store: {},
-  turns: { async submitMessage() { throw new Error("unreachable"); } },
-  tasks: { async cancelTask() { throw new Error("unreachable"); } },
-  packages: { "@agentkit/transport-http": "pack-smoke" },
-});
-const versionResponse = await handler(new Request("http://x/v1/version"));
-check(versionResponse.status === 200, \`GET /v1/version answered \${versionResponse.status}\`);
 
 if (failures.length > 0) {
   console.error(\`\\n\${failures.length} check(s) failed\`);

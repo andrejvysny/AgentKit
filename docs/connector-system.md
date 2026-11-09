@@ -185,11 +185,9 @@ catalogs use `skill`.
 | Skill metadata | `GET /v1/skills` |
 
 The typed client follows the shared route table. Applications still own account
-selection, settings and approval presentation. The reusable
-[acceptance harness](../examples/desktop-host/src/managed-connector-acceptance.ts)
-uses the same production connection service. Follow the
-[live acceptance instructions](managed-connector-acceptance.md) for trusted
-identity probes, disposable targets, exact-action approval, and evidence capture.
+selection, settings and approval presentation. The TypeScript connection-service
+acceptance harness was removed with the TypeScript backend (see
+[`docs/rust/parity.md`](rust/parity.md)).
 Deterministic tests do not qualify live GitHub/Plane OAuth, account identity,
 revocation, or external writes. Those checks still require application credentials,
 registered OAuth callbacks, and explicitly designated disposable resources.

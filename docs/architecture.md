@@ -196,9 +196,9 @@ Further detail: [`docs/execution-lifecycle.md`](execution-lifecycle.md),
 
 Frozen packages persist under the API-freeze constraint and are exercised by
 their own suites. They are slated for deletion in the ADR 0021 migration (phase
-P6, tracked in Plane). `scripts/check-composition-ownership.mjs`
-(`bun run check:composition`) rejects backend-implementation imports from
-shipped compositions, with an audited allowlist. The package ledger is in
+P6, tracked in Plane). No live package, example or script imports them (the
+decoupling step removed the composition-ownership gate along with the last
+imports). The package ledger is in
 [`docs/rust/parity.md`](rust/parity.md).
 
 ## Contracts and codegen

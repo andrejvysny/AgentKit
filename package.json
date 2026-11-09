@@ -64,8 +64,6 @@
     "check:machete": "cd rust && cargo machete",
     "check:rust-api": "node rust/scripts/public-api.mjs",
     "update:rust-api": "node rust/scripts/public-api.mjs --update",
-    "check:composition": "node scripts/check-composition-ownership.mjs",
-    "check:parity": "node scripts/check-backend-parity.mjs",
     "check:native-umbrella": "node rust/scripts/check-native-umbrella.mjs",
     "update:api": "node scripts/check-public-api.mjs --update",
     "source:digest": "node scripts/source-digest.mjs",
@@ -73,7 +71,7 @@
     "test:coding-agent": "bun test examples/coding-agent",
     "start:coding-agent": "bun run examples/coding-agent/src/main.ts",
     "build:native": "bun run --cwd packages/native build",
-    "build:fixture": "cargo build --manifest-path rust/Cargo.toml -p agentkit-host --features http --example http_fixture --locked"
+    "build:fixture": "cargo build --manifest-path rust/Cargo.toml -p agentkit-runtime --example http_fixture --locked"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",

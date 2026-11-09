@@ -13,13 +13,13 @@
 import { describe, expect, it } from "bun:test";
 import { CONTRACT_VERSION, type TaskEventEnvelope } from "@agentkit/contracts";
 import type { AttemptRecord, Lease, TaskRecord } from "@agentkit/host";
+import { mulberry32 } from "@agentkit/testing";
 import {
   checkTaskInvariants,
-  mulberry32,
   snapshotTaskInvariants,
   type ObservedLease,
   type TaskInvariantView,
-} from "../src/index.js";
+} from "./support/task-invariants.js";
 
 const T0 = "2026-01-01T00:00:00.000Z";
 const T1 = "2026-01-01T00:00:01.000Z";

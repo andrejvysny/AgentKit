@@ -291,7 +291,7 @@ node rust/scripts/check-native-package.mjs
 # TypeScript workspace
 bun run lint && bun run typecheck
 bun run build && bun run build:umbrella && node rust/scripts/check-native-umbrella.mjs
-bun run check:api && bun run check:composition && bun run check:parity
+bun run check:api
 bun test --timeout 60000
 ```
 

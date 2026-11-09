@@ -28,7 +28,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { AiRunEvent } from "@agentkit/contracts";
-import { REASONING_EFFORTS, type SessionReasoningEffort } from "@agentkit/host";
+import { REASONING_EFFORTS, type SessionReasoningEffort } from "./reasoning.js";
 import { listNativeProfiles } from "@agentkit/native";
 import {
   CodingAgentApp,

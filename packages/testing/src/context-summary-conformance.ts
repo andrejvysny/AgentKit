@@ -1,6 +1,6 @@
 // Shared behavioral contract for the optional AssistantStore.summaries port
 // (ADR 0017 part 2). Framework-neutral like the other suites.
-import type { ContextSummaryRecord, ContextSummaryStore } from "@agentkit/host";
+import type { ContextSummaryRecord, ContextSummaryStore } from "./ports.js";
 import type { DescribeAssistantStoreConformanceOptions } from "./conformance-support.js";
 
 export type DescribeContextSummaryStoreConformanceOptions = Pick<

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   describeMcpServerConfigStoreConformance,
   MCP_CONFIG_UPDATED_AT,
-} from "@agentkit/testing";
+} from "../../mcp-client/tests/support/mcp-config-conformance.js";
 import { MemoryMcpServerConfigStore } from "../src/index.js";
 
 /** Pinned, so the suite can assert `update` stamps from the STORE's clock. */

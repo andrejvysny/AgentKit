@@ -24,7 +24,7 @@ import type { AssistantStore, TaskExecution, TaskRunner } from "@agentkit/host";
 import type {
   AssistantStoreConformanceTestApi,
   ConformanceClock,
-} from "./conformance-support.js";
+} from "../../../testing/src/conformance-support.js";
 
 /** What `create()` hands back for one test: a fresh runner, its store, and the knobs the suite has to know. */
 export interface TaskRunnerConformanceHarness {
