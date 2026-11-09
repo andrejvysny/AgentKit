@@ -101,7 +101,10 @@ impl DesktopBackend {
                     store
                         .list_connections()
                         .await
-                        .map_err(managed_store_error)?,
+                        .map_err(managed_store_error)?
+                        .into_iter()
+                        .map(connection_wire)
+                        .collect::<Vec<_>>(),
                 )?,
             )),
             "saveConnection" => {
@@ -145,19 +148,21 @@ impl DesktopBackend {
                 {
                     return Err(invalid_request("Invalid connection identity or revision."));
                 }
-                let record = json!({
+                let mut record = json!({
                     "id": input.params["connectionId"],
                     "connectorId": body["connectorId"],
                     "accountId": body["accountId"],
-                    "workspaceId": body.get("workspaceId").filter(|v| !v.is_null()),
                     "revision": body["revision"],
                     "config": body["config"],
                 });
+                if let Some(workspace) = body.get("workspaceId").filter(|v| !v.is_null()) {
+                    record["workspaceId"] = workspace.clone();
+                }
                 let saved = store
                     .save_connection(record, expected.flatten())
                     .await
                     .map_err(managed_store_error)?;
-                Ok(output(200, encoded(saved)?))
+                Ok(output(200, encoded(connection_wire(saved))?))
             }
             "deleteConnection" => {
                 store
@@ -181,6 +186,17 @@ impl DesktopBackend {
             )),
         }
     }
+}
+
+/// `ConnectionRecordSchema.workspaceId` is optional-but-not-nullable: drop a
+/// null (e.g. from rows saved before the key was omitted) rather than emit it.
+fn connection_wire(mut record: Value) -> Value {
+    if let Some(object) = record.as_object_mut()
+        && object.get("workspaceId").is_some_and(Value::is_null)
+    {
+        object.remove("workspaceId");
+    }
+    record
 }
 
 fn invalid_request(detail: impl Into<String>) -> Problem {

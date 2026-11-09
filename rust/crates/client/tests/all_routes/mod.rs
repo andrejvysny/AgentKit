@@ -479,6 +479,8 @@ async fn managed_content(f: &mut Fixture) {
     let connection = [("connectionId", "c1")];
     f.refused(Op::SaveConnection, request(&connection, None), 400)
         .await;
+    // The typed client cannot send a body for this route (the contract
+    // declares no request schema), so the response is validated by hand.
     let saved = f
         .raw(
             Op::SaveConnection,
@@ -497,10 +499,17 @@ async fn managed_content(f: &mut Fixture) {
         )
         .await;
     let saved = agentkit_contracts::parse_javascript_json(&saved).unwrap();
-    // ConnectionRecordSchema is not applied: the native record carries
-    // `workspaceId: null`, which that schema rejects (reported as a follow-up).
+    check(&saved, "ConnectionRecordSchema");
     assert_eq!(saved["revision"], 1);
-    let listed = f.call(Op::ListConnections, Call::default(), "*", 200).await;
+    assert!(saved.get("workspaceId").is_none(), "{saved}");
+    let listed = f
+        .call(
+            Op::ListConnections,
+            Call::default(),
+            "ConnectionRecordSchema[]",
+            200,
+        )
+        .await;
     assert_eq!(listed.as_array().unwrap().len(), 1);
     // The documented MCP-OAuth reduction: lifecycle actions are refused.
     f.refused(Op::ConnectionAction, request(&connection, None), 501)
