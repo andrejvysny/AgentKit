@@ -44,18 +44,18 @@ impl AdvisorContributor {
 }
 
 #[async_trait]
-impl agentkit_host::ToolContributor for AdvisorContributor {
+impl agentkit_governance::ToolContributor for AdvisorContributor {
     fn namespace(&self) -> &str {
         "advisor"
     }
     async fn contribute(
         &self,
-        _context: &agentkit_host::ToolContributionContext,
-    ) -> agentkit_host::GovernanceResult<Vec<agentkit_host::ContributedTool>> {
+        _context: &agentkit_governance::ToolContributionContext,
+    ) -> agentkit_governance::GovernanceResult<Vec<agentkit_governance::ContributedTool>> {
         if !self.tools.config().enabled {
             return Ok(vec![]);
         }
-        Ok(vec![agentkit_host::ContributedTool::Read(
+        Ok(vec![agentkit_governance::ContributedTool::Read(
             self.tools.clone().into_tool(),
         )])
     }

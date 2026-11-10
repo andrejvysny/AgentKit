@@ -1,8 +1,9 @@
 use agentkit_connections::*;
 use agentkit_core::{ChatRequest, ProviderEvent};
-use agentkit_host::{AgentHost, ChatProviderFactory, HostOptions, SystemRuntime};
+use agentkit_engine::SystemRuntime;
 use agentkit_http::{Actor, DesktopBackend, Problem, ProviderConsentPort};
 use agentkit_providers::NativeProviderFactory;
+use agentkit_sessions::{AgentHost, ChatProviderFactory, HostOptions};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use futures::StreamExt;

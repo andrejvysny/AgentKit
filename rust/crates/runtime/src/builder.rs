@@ -8,15 +8,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentkit_agents::AdvisorEventSink;
+use agentkit_chat::{ChatExecutor, ChatExecutorOptions, ProviderRegistry};
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook};
 use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
-use agentkit_host::{
-    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ChatExecutor,
-    ChatExecutorOptions, ContentAuthority, HostOptions, ProfileRegistry, ProviderRegistry,
-    SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
-};
 use agentkit_providers::NativeProviderFactory;
+use agentkit_sessions::{
+    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ContentAuthority,
+    HostOptions, ProfileRegistry,
+};
 use serde_json::Value;
 
 use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};
@@ -262,13 +263,13 @@ impl AgentRuntimeBuilder {
                     // TypeScript authority injects it; descriptor-less
                     // sessions stay untouched. Refusals (symlink, escape)
                     // degrade to a run warning, never a lost turn.
-                    project_instructions: Some(Arc::new(agentkit_host::FileProjectInstructions)),
+                    project_instructions: Some(Arc::new(agentkit_chat::FileProjectInstructions)),
                     // Delegation instructions enter every main-agent run
                     // while subagents are configured+enabled; the watchdog
                     // observes every run loop. Both are observational:
                     // unconfigured they add nothing and never fail a turn.
                     delegation_guidance: Some(
-                        Arc::clone(&subagent_lane) as Arc<dyn agentkit_host::DelegationGuidance>
+                        Arc::clone(&subagent_lane) as Arc<dyn agentkit_chat::DelegationGuidance>
                     ),
                     run_hooks: Some(Arc::clone(&advisor_lane) as Arc<dyn RunHooks>),
                     ..Default::default()
@@ -297,8 +298,8 @@ impl AgentRuntimeBuilder {
                 // turn-failure tracking (watchdog). Failures never unwind
                 // the settlement; the startup sweep is the same computation.
                 settled_observers: vec![
-                    Arc::clone(&subagent_lane) as Arc<dyn agentkit_host::TaskSettledObserver>,
-                    Arc::clone(&advisor_lane) as Arc<dyn agentkit_host::TaskSettledObserver>,
+                    Arc::clone(&subagent_lane) as Arc<dyn agentkit_engine::TaskSettledObserver>,
+                    Arc::clone(&advisor_lane) as Arc<dyn agentkit_engine::TaskSettledObserver>,
                 ],
                 ..Default::default()
             },

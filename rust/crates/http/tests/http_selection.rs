@@ -1,12 +1,11 @@
+use agentkit_chat::ChatExecutor;
 use agentkit_connections::{
     AppId, Capability, Connection, ConnectionConfig, ConnectionId, ConnectionRepository, Model,
 };
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
-use agentkit_host::{
-    AgentHost, ChatExecutor, ChatProviderFactory, HostError, HostOptions, HostResult,
-    SystemRuntime, TaskExecutor,
-};
+use agentkit_engine::{SystemRuntime, TaskExecutor};
 use agentkit_http::{Actor, Config, DesktopBackend};
+use agentkit_sessions::{AgentHost, ChatProviderFactory, HostError, HostOptions, HostResult};
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;
 use serde_json::{Value, json};

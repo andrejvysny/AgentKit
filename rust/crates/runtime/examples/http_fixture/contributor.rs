@@ -3,7 +3,7 @@ use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
-use agentkit_host::HostError;
+use agentkit_sessions::HostError;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;

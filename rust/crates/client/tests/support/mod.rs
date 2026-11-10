@@ -1,6 +1,7 @@
 //! In-process native AgentKit server for the client's service suites: the real
 //! `AgentRuntime` + `DesktopBackend` + axum on an ephemeral loopback port, with
 //! a scripted provider and recording ports. No TypeScript runtime is involved.
+use agentkit_chat::{Authorization, MutationIdentity, ProposalApplier, ProposalService};
 use agentkit_connections::{
     AppId, ConnectionRepository, MemorySecretStore, NativeConnections, UnavailableNetwork,
 };
@@ -9,14 +10,13 @@ use agentkit_contracts::{
     WriteAllowanceDto,
 };
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream};
-use agentkit_host::{
-    Authorization, HostResult, MutationIdentity, ProposalApplier, ProposalService, SystemRuntime,
-};
+use agentkit_engine::SystemRuntime;
 use agentkit_http::{
     Actor, Config, DesktopBackend, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort,
 };
 use agentkit_mcp::McpConfigRepository;
 use agentkit_runtime::AgentRuntime;
+use agentkit_sessions::HostResult;
 use agentkit_store::{MessageInput, ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
 use axum::{extract::Request, middleware::Next, response::Response};
@@ -250,7 +250,7 @@ async fn seed(store: &SqliteStore) -> HostResult<()> {
     store
         .submit(agentkit_store::SubmitTask {
             task_id: "resume-me".into(),
-            kind: agentkit_host::CHAT_TURN_TASK_KIND.into(),
+            kind: agentkit_sessions::CHAT_TURN_TASK_KIND.into(),
             scope_id: "resume-chat".into(),
             payload: json!({
                 "chatId": "resume-chat", "model": "m1",

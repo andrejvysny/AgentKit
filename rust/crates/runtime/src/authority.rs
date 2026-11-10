@@ -20,7 +20,7 @@ use agentkit_governance::{
     ApprovalAsk, CodingPermissionAuthority, GovernanceResult, PermissionContext, ToolGuard,
     ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_host::{
+use agentkit_sessions::{
     AgentSessionService, HostResult, PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent,
     SessionExecutionAuthority,
 };

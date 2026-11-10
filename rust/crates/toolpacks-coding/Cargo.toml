@@ -29,7 +29,9 @@ unicode-normalization = "=0.1.26"
 uuid.workspace = true
 
 [dev-dependencies]
-agentkit-host = { workspace = true }
+agentkit-chat = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-sessions = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 agentkit-store = { workspace = true }
 futures.workspace = true

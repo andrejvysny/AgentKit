@@ -1,8 +1,7 @@
 use super::service::SubagentService;
 use crate::{AgentsResult, LeaseHeld};
-use agentkit_host::{
-    GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict, read_session_descriptor,
-};
+use agentkit_governance::{GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
+use agentkit_sessions::read_session_descriptor;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

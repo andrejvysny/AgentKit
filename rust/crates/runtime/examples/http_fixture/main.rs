@@ -6,8 +6,8 @@ mod mcp_secrets;
 mod ports;
 mod provider;
 
+use agentkit_engine::SystemRuntime;
 use agentkit_governance::ToolContributor;
-use agentkit_host::SystemRuntime;
 use agentkit_http::DesktopBackend;
 use agentkit_runtime::AgentRuntime;
 use std::{collections::BTreeMap, sync::Arc};
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let native_ports = Arc::new(ports::FixturePorts {
         store: store.clone(),
     });
-    let proposals = Arc::new(agentkit_host::ProposalService::new(
+    let proposals = Arc::new(agentkit_chat::ProposalService::new(
         store.clone(),
         native_ports.clone(),
         native_ports.clone(),

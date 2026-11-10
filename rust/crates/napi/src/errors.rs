@@ -173,7 +173,7 @@ fn store_mapped(
     stable(code, message, None)
 }
 
-pub fn session(error: agentkit_host::SessionError) -> Error {
+pub fn session(error: agentkit_sessions::SessionError) -> Error {
     stable(&error.code, error.message, None)
 }
 
@@ -181,8 +181,8 @@ pub fn session(error: agentkit_host::SessionError) -> Error {
 /// `already_owned`, `lease_lost`, ...); everything else collapses to a redacted `internal_error`
 /// and leaves a native-log breadcrumb carrying only the variant name —
 /// never the Display text, which may embed arguments or secrets.
-pub fn host(error: agentkit_host::HostError) -> Error {
-    use agentkit_host::HostError as H;
+pub fn host(error: agentkit_sessions::HostError) -> Error {
+    use agentkit_sessions::HostError as H;
     let text = error.to_string();
     let kind = match error {
         H::Store(inner) => return store(inner),
@@ -302,7 +302,10 @@ mod tests {
         // stale refusal must reach JavaScript as `answer_stale` with the
         // TypeScript message text, never redacted to `internal_error`.
         let message = "Request req-1 can no longer be answered: it was cancelled.";
-        let error = session(agentkit_host::SessionError::new("answer_stale", message));
+        let error = session(agentkit_sessions::SessionError::new(
+            "answer_stale",
+            message,
+        ));
         let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
         assert_eq!(payload["code"], "answer_stale");
         assert_eq!(payload["message"], message);
@@ -354,11 +357,11 @@ mod tests {
     #[test]
     fn host_store_errors_keep_their_store_codes_and_unconfigured_lanes_are_stable() {
         let payload = |error: Error| -> Value { serde_json::from_str(&error.reason).unwrap() };
-        let mapped = payload(host(agentkit_host::HostError::Store(
+        let mapped = payload(host(agentkit_sessions::HostError::Store(
             agentkit_store::StoreError::NotFound("x".into()),
         )));
         assert_eq!(mapped["code"], "not_found");
-        let mapped = payload(host(agentkit_host::HostError::Store(
+        let mapped = payload(host(agentkit_sessions::HostError::Store(
             agentkit_store::StoreError::LeaseLost("x".into()),
         )));
         assert_eq!(mapped["code"], "lease_lost");
@@ -368,7 +371,7 @@ mod tests {
         let mapped = payload(agents(AgentsError::AdvisorNotConfigured));
         assert_eq!(mapped["code"], "advisor_not_configured");
         assert_eq!(mapped["message"], "advisor not configured");
-        let mapped = payload(host(agentkit_host::HostError::NotFound(
+        let mapped = payload(host(agentkit_sessions::HostError::NotFound(
             "subagent_not_found: c1".into(),
         )));
         assert_eq!(mapped["code"], "not_found");
@@ -379,7 +382,7 @@ mod tests {
     fn host_error_text_is_redacted_not_leaked() {
         // `host` hands the Display text of a HostError to `stable` with the
         // internal_error code; the redaction now keeps it native-only.
-        let error = host(agentkit_host::HostError::Execution(
+        let error = host(agentkit_sessions::HostError::Execution(
             "tcp connect to 10.0.0.7:8080 refused: token abc123".into(),
         ));
         let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");

@@ -28,7 +28,7 @@ pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_sessions::store_
 pub fn agentkit_runtime::AgentRuntime::lsp_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::LspLane>
 pub fn agentkit_runtime::AgentRuntime::native_provider_factory(&self) -> &alloc::rcs::arc::Arc<agentkit_providers::native_provider_factory::NativeProviderFactory>
 pub fn agentkit_runtime::AgentRuntime::profiles(&self) -> &alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>
-pub fn agentkit_runtime::AgentRuntime::providers(&self) -> &alloc::rcs::arc::Arc<agentkit_host::provider_registry::ProviderRegistry>
+pub fn agentkit_runtime::AgentRuntime::providers(&self) -> &alloc::rcs::arc::Arc<agentkit_chat::provider_registry::ProviderRegistry>
 pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_sessions::session::AgentSessionService
 pub fn agentkit_runtime::AgentRuntime::subagent_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::SubagentLane>
 pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_sessions::store_aliases::WorkerHandle>
@@ -69,8 +69,8 @@ pub fn agentkit_runtime::SubagentLane::configure(&self, agentkit_agents::subagen
 pub async fn agentkit_runtime::SubagentLane::list(&self, &str) -> agentkit_agents::errors::AgentsResult<alloc::vec::Vec<agentkit_agents::subagents::service::SubagentView>>
 pub async fn agentkit_runtime::SubagentLane::status(&self, &str) -> agentkit_agents::errors::AgentsResult<agentkit_agents::subagents::service::SubagentView>
 pub fn agentkit_runtime::SubagentLane::view(&self) -> core::option::Option<serde_json::value::Value>
+impl agentkit_chat::ports::DelegationGuidance for agentkit_runtime::SubagentLane
+pub fn agentkit_runtime::SubagentLane::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl agentkit_engine::ports::TaskSettledObserver for agentkit_runtime::SubagentLane
 pub fn agentkit_runtime::SubagentLane::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::model::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::ports::ObserverError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-impl agentkit_host::ports::DelegationGuidance for agentkit_runtime::SubagentLane
-pub fn agentkit_runtime::SubagentLane::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_runtime::effective_class(&str, &str) -> agentkit_core::permission::ToolClass

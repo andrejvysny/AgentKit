@@ -1,6 +1,6 @@
 use super::chats::string;
 use super::*;
-use agentkit_host::ChatHostExt;
+use agentkit_chat::ChatHostExt;
 use agentkit_store::{MessageInput, SubmitTask, TaskRecord, TaskStatus};
 use serde_json::json;
 
@@ -52,10 +52,10 @@ impl DesktopBackend {
     }
 
     async fn submit_turn(&self, input: &OperationRequest) -> Result<OperationResponse, Problem> {
-        if !self.host.supports(agentkit_host::CHAT_TURN_TASK_KIND) {
+        if !self.host.supports(agentkit_sessions::CHAT_TURN_TASK_KIND) {
             return Err(Problem::host(
                 "executor_not_found",
-                agentkit_host::CHAT_TURN_TASK_KIND,
+                agentkit_sessions::CHAT_TURN_TASK_KIND,
             ));
         }
         let store = self.host.store();
@@ -83,7 +83,7 @@ impl DesktopBackend {
         if let Some(existing) = store.get_task(&key.task_id).await.map_err(store_error)? {
             return replay(self.host.store(), existing, input).await;
         }
-        let descriptor = agentkit_host::read_session_descriptor(&chat.metadata);
+        let descriptor = agentkit_sessions::read_session_descriptor(&chat.metadata);
         if descriptor.is_none()
             && (self.session_profile.is_some()
                 || chat
@@ -98,14 +98,15 @@ impl DesktopBackend {
             ));
         }
         let session_config = if descriptor.is_some() {
-            let service =
-                agentkit_host::AgentSessionService::new(agentkit_host::AgentSessionServiceDeps {
+            let service = agentkit_sessions::AgentSessionService::new(
+                agentkit_sessions::AgentSessionServiceDeps {
                     store: store.clone(),
                     runtime: self.host.runtime().clone(),
                     plan_approval: None,
                     wake: None,
-                })
-                .with_profiles(self.profiles.clone());
+                },
+            )
+            .with_profiles(self.profiles.clone());
             let service = match &self.content_authority {
                 Some(authority) => service.with_content_authority(authority.clone()),
                 None => service,
@@ -249,7 +250,7 @@ impl DesktopBackend {
             .body
             .get("contentSelection")
             .map(|selection| {
-                let mut selected: agentkit_host::RunContentSelection =
+                let mut selected: agentkit_sessions::RunContentSelection =
                     serde_json::from_value(selection.clone()).map_err(|e| {
                         Problem::new(
                             400,
@@ -258,7 +259,7 @@ impl DesktopBackend {
                         )
                     })?;
                 if let Some(base) = session_config.get("contentSelection") {
-                    let base: agentkit_host::RunContentSelection =
+                    let base: agentkit_sessions::RunContentSelection =
                         serde_json::from_value(base.clone()).map_err(|e| {
                             Problem::host("invalid_content_selection", e.to_string())
                         })?;
@@ -274,7 +275,7 @@ impl DesktopBackend {
             .transpose()?;
         let content_snapshot = match &selection {
             Some(selection) => Some(
-                agentkit_host::freeze_run_content(
+                agentkit_sessions::freeze_run_content(
                     store,
                     selection.clone(),
                     chat_id,
@@ -295,7 +296,7 @@ impl DesktopBackend {
             .map_err(|_| Problem::new(400, "invalid_request", "Invalid reasoningEffort."))?;
         let mut task = SubmitTask {
             task_id: key.task_id.clone(),
-            kind: agentkit_host::CHAT_TURN_TASK_KIND.into(),
+            kind: agentkit_sessions::CHAT_TURN_TASK_KIND.into(),
             scope_id: chat_id.clone(),
             payload: json!({"chatId":chat_id,"model":model,"providerId":provider_id,
                 "userMessageId":user_id,"assistantMessageId":assistant_id,"httpRequest":input.body,

@@ -11,11 +11,13 @@ use agentkit_agents::{
     AgentsError, AgentsResult, SubagentConfig, SubagentContributor, SubagentRoleGuard,
     SubagentService, SubagentView,
 };
+use agentkit_chat::DelegationGuidance;
+use agentkit_engine::{ObserverError, TaskSettledObserver};
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor, ToolGuard,
     ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_host::{DelegationGuidance, HostError, ObserverError, TaskSettledObserver};
+use agentkit_sessions::HostError;
 use agentkit_store::TaskRecord;
 
 use crate::error::RuntimeError;

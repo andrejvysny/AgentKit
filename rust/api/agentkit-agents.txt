@@ -94,7 +94,7 @@ pub async fn agentkit_agents::AdvisorEngine::review_reserved(&self, &agentkit_ag
 pub fn agentkit_agents::AdvisorEngine::store(&self) -> &agentkit_store::actor::SqliteStore
 pub fn agentkit_agents::AdvisorEngine::sync_review_pool(&self, &agentkit_agents::AdvisorConfig)
 pub fn agentkit_agents::AdvisorEngine::with_model(self, core::option::Option<alloc::string::String>) -> Self
-pub fn agentkit_agents::AdvisorEngine::with_providers(self, alloc::rcs::arc::Arc<agentkit_host::provider_registry::ProviderRegistry>) -> Self
+pub fn agentkit_agents::AdvisorEngine::with_providers(self, alloc::rcs::arc::Arc<agentkit_chat::provider_registry::ProviderRegistry>) -> Self
 pub fn agentkit_agents::AdvisorEngine::with_shared_config(self, alloc::rcs::arc::Arc<std::sync::poison::mutex::Mutex<agentkit_agents::AdvisorConfig>>) -> Self
 pub struct agentkit_agents::AdvisorReport
 pub agentkit_agents::AdvisorReport::finding_ids: alloc::vec::Vec<alloc::string::String>
@@ -263,10 +263,10 @@ pub async fn agentkit_agents::SubagentService::spawn(&self, &agentkit_agents::Sp
 pub async fn agentkit_agents::SubagentService::status(&self, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub fn agentkit_agents::SubagentService::store(&self) -> &agentkit_store::actor::SqliteStore
 pub fn agentkit_agents::SubagentService::with_routable_providers(self, alloc::collections::btree::set::BTreeSet<alloc::string::String>) -> Self
+impl agentkit_chat::ports::DelegationGuidance for agentkit_agents::SubagentService
+pub fn agentkit_agents::SubagentService::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl agentkit_engine::ports::TaskSettledObserver for agentkit_agents::SubagentService
 pub fn agentkit_agents::SubagentService::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::model::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::ports::ObserverError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-impl agentkit_host::ports::DelegationGuidance for agentkit_agents::SubagentService
-pub fn agentkit_agents::SubagentService::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_agents::SubagentView
 pub agentkit_agents::SubagentView::child_chat_id: alloc::string::String
 pub agentkit_agents::SubagentView::created_at: i64

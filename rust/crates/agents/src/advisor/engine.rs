@@ -140,7 +140,7 @@ pub struct AdvisorEngine {
     config: Arc<Mutex<AdvisorConfig>>,
     tools: Arc<dyn AdvisorToolSource>,
     events: Option<Arc<dyn AdvisorEventSink>>,
-    session: agentkit_host::AgentSessionService,
+    session: agentkit_sessions::AgentSessionService,
     /// Resizable at `configure` time: the permit pool is swapped to honor a
     /// hot `maxReviewConcurrency` change ("applies to the next review").
     /// In-flight holders keep the old pool until they finish.
@@ -153,7 +153,7 @@ pub struct AdvisorEngine {
     model_override: Option<String>,
     /// Providers an advisor/watchdog `providerId` may name; absent = only
     /// the default provider is routable.
-    providers: Option<Arc<agentkit_host::ProviderRegistry>>,
+    providers: Option<Arc<agentkit_chat::ProviderRegistry>>,
 }
 
 /// The fixed inputs of one bounded advisor tool loop.
@@ -174,7 +174,7 @@ impl AdvisorEngine {
         config: AdvisorConfig,
         tools: Arc<dyn AdvisorToolSource>,
         events: Option<Arc<dyn AdvisorEventSink>>,
-        session: agentkit_host::AgentSessionService,
+        session: agentkit_sessions::AgentSessionService,
     ) -> Self {
         let config = config.effective();
         let reviews = Arc::new(tokio::sync::Semaphore::new(
@@ -195,7 +195,7 @@ impl AdvisorEngine {
         }
     }
 
-    pub fn with_providers(mut self, providers: Arc<agentkit_host::ProviderRegistry>) -> Self {
+    pub fn with_providers(mut self, providers: Arc<agentkit_chat::ProviderRegistry>) -> Self {
         self.providers = Some(providers);
         self
     }
@@ -251,7 +251,7 @@ impl AdvisorEngine {
         let Some(chat) = self.store.get_chat(chat_id).await? else {
             return Ok(None);
         };
-        Ok(agentkit_host::read_session_descriptor(&chat.metadata)
+        Ok(agentkit_sessions::read_session_descriptor(&chat.metadata)
             .and_then(|descriptor| descriptor["model"].as_str().map(str::to_owned))
             .filter(|model| !model.is_empty()))
     }
@@ -642,7 +642,7 @@ impl AdvisorEngine {
                 .session
                 .steer_live(
                     &request.chat_id,
-                    &agentkit_host::SteerInput {
+                    &agentkit_sessions::SteerInput {
                         content: Value::String(note),
                         input_id: Some(request_id),
                         turn_id: None,

@@ -20,7 +20,7 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-sessions` | Durable agent-session service (steering, human input, plan grants, receipts), agent/run profiles and run-content freezing |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
 | `agentkit-testkit` | Dev-only test fakes (`InMemoryTaskRepository`) and the `TaskRepository` conformance suite run against SQLite and in-memory; never a normal dependency |
-| `agentkit-host` | Chat execution, tool governance, proposal application and native run handles; re-exports the sessions API |
+| `agentkit-chat` | Chat execution, tool governance and proposal application |
 | `agentkit-agents` | Agent definitions, teammate admission, subagent delegation and the advisor/watchdog over the host engine |
 | `agentkit-connections` | Application namespaces, immutable selection, consent, secret-store and network ports |
 | `agentkit-http` | Axum REST/SSE boundary, plus the desktop backend serving it from a local host |

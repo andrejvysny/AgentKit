@@ -33,7 +33,7 @@
 
 use crate::{AgentsError, AgentsResult};
 use agentkit_core::{ReasoningEffort, permission::CodingMode};
-use agentkit_host::{SharedRuntime, SystemRuntime};
+use agentkit_engine::{SharedRuntime, SystemRuntime};
 use agentkit_store::{
     AgentDefinition, AgentDeletionPreview, AgentExportEnvelope, AgentRecord, AgentRevision,
     AgentRevisionSource, CreateAgent, DuplicateAgent, SetAgentModel, SqliteStore, UpdateAgent,

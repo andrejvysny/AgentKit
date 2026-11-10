@@ -193,12 +193,12 @@ async fn deliver(
 /// Connector grants come only from the host callback, never the user request.
 pub(crate) struct JsContentAuthority(pub Arc<JsBridge>);
 #[async_trait::async_trait]
-impl agentkit_host::ContentAuthority for JsContentAuthority {
+impl agentkit_sessions::ContentAuthority for JsContentAuthority {
     async fn authorized_connectors(
         &self,
         chat_id: &str,
         cancel: CancellationToken,
-    ) -> agentkit_host::HostResult<Vec<String>> {
+    ) -> agentkit_sessions::HostResult<Vec<String>> {
         let value = self
             .0
             .clone()
@@ -209,9 +209,9 @@ impl agentkit_host::ContentAuthority for JsContentAuthority {
                 &cancel,
             )
             .await
-            .map_err(agentkit_host::HostError::Execution)?;
+            .map_err(agentkit_sessions::HostError::Execution)?;
         serde_json::from_value(value).map_err(|e| {
-            agentkit_host::HostError::Execution(format!("invalid_content_authority: {e}"))
+            agentkit_sessions::HostError::Execution(format!("invalid_content_authority: {e}"))
         })
     }
     async fn authority_identity(
@@ -219,7 +219,7 @@ impl agentkit_host::ContentAuthority for JsContentAuthority {
         chat_id: &str,
         required_connectors: &[String],
         cancel: CancellationToken,
-    ) -> agentkit_host::HostResult<Value> {
-        self.0.clone().request(PendingKind::ContentAuthority, &uuid::Uuid::new_v4().to_string(), &json!({"operation":"identity","chatId":chat_id,"requiredConnectors":required_connectors}), &cancel).await.map_err(agentkit_host::HostError::Execution)
+    ) -> agentkit_sessions::HostResult<Value> {
+        self.0.clone().request(PendingKind::ContentAuthority, &uuid::Uuid::new_v4().to_string(), &json!({"operation":"identity","chatId":chat_id,"requiredConnectors":required_connectors}), &cancel).await.map_err(agentkit_sessions::HostError::Execution)
     }
 }

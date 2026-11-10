@@ -1,11 +1,14 @@
 pub mod agentkit_rust
+pub use agentkit_rust::chat
 pub use agentkit_rust::client
 pub use agentkit_rust::connections
 pub use agentkit_rust::contracts
 pub use agentkit_rust::core
-pub use agentkit_rust::host
+pub use agentkit_rust::engine
+pub use agentkit_rust::governance
 pub use agentkit_rust::http
 pub use agentkit_rust::mcp
 pub use agentkit_rust::providers
+pub use agentkit_rust::sessions
 pub use agentkit_rust::store
 pub use agentkit_rust::toolpacks_coding

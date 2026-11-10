@@ -10,7 +10,7 @@ use agentkit_governance::{
     CodingPermissionAuthority, GovernanceResult, PermissionContext, ToolContributionContext,
     ToolGuard, ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_host::{PlanApprovalPolicy, PlanGrantIntent};
+use agentkit_sessions::{PlanApprovalPolicy, PlanGrantIntent};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -193,7 +193,7 @@ async fn the_plan_policy_grants_a_leaving_mode_only() {
     };
     assert!(matches!(
         policy.authorize(&intent).await.unwrap(),
-        agentkit_host::PlanAuthorization::Allowed
+        agentkit_sessions::PlanAuthorization::Allowed
     ));
 }
 

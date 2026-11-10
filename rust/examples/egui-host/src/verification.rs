@@ -1,5 +1,6 @@
 use crate::bridge::VerificationView;
-use agentkit_host::{ExecutionContext, HostResult, VerificationHook, VerificationReport};
+use agentkit_engine::{VerificationHook, VerificationReport};
+use agentkit_sessions::{ExecutionContext, HostResult};
 use agentkit_store::{ProposalStatus, SqliteStore, TaskRecord};
 use async_trait::async_trait;
 

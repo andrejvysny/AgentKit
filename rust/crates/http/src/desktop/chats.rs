@@ -24,20 +24,21 @@ impl DesktopBackend {
                 .await
                 .map_err(store_error);
         };
-        let service =
-            agentkit_host::AgentSessionService::new(agentkit_host::AgentSessionServiceDeps {
+        let service = agentkit_sessions::AgentSessionService::new(
+            agentkit_sessions::AgentSessionServiceDeps {
                 store: self.host.store().clone(),
                 runtime: self.host.runtime().clone(),
                 plan_approval: None,
                 wake: None,
-            })
-            .with_profiles(self.profiles.clone());
+            },
+        )
+        .with_profiles(self.profiles.clone());
         let service = match &self.content_authority {
             Some(authority) => service.with_content_authority(authority.clone()),
             None => service,
         };
         service
-            .create_session_chat(&agentkit_host::CreateSessionInput {
+            .create_session_chat(&agentkit_sessions::CreateSessionInput {
                 profile_id: profile_id.clone(),
                 title,
                 metadata: Some(metadata),

@@ -1,5 +1,6 @@
-use agentkit_host::{AgentHost, HostOptions, SystemRuntime};
+use agentkit_engine::SystemRuntime;
 use agentkit_http::{Actor, Config, DesktopBackend};
+use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::SqliteStore;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
@@ -88,8 +89,11 @@ async fn validated_rest_session_creation_has_no_intermediate_rows() {
 
 struct NoopTurn;
 #[async_trait::async_trait]
-impl agentkit_host::TaskExecutor<agentkit_store::SqliteStore> for NoopTurn {
-    async fn execute(&self, _: agentkit_host::ExecutionContext) -> agentkit_host::HostResult<()> {
+impl agentkit_engine::TaskExecutor<agentkit_store::SqliteStore> for NoopTurn {
+    async fn execute(
+        &self,
+        _: agentkit_sessions::ExecutionContext,
+    ) -> agentkit_sessions::HostResult<()> {
         Ok(())
     }
 }
@@ -101,7 +105,8 @@ async fn generic_metadata_updates_cannot_remove_or_forge_the_session_profile() {
         store.clone(),
         std::collections::HashMap::from([(
             "chat.turn".into(),
-            Arc::new(NoopTurn) as Arc<dyn agentkit_host::TaskExecutor<agentkit_store::SqliteStore>>,
+            Arc::new(NoopTurn)
+                as Arc<dyn agentkit_engine::TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),
@@ -146,12 +151,14 @@ async fn generic_metadata_updates_cannot_remove_or_forge_the_session_profile() {
         original
     );
     let mut forged = original.clone();
-    let profile = agentkit_host::ProfileRegistry::default()
+    let profile = agentkit_sessions::ProfileRegistry::default()
         .resolve("coding")
         .unwrap();
     forged["profile"] = json!({"id":"coding","digest":profile.digest()});
     forged["profileSnapshot"] = serde_json::to_value(profile).unwrap();
-    assert!(agentkit_host::read_session_descriptor(&json!({"agentkit.session":forged})).is_some());
+    assert!(
+        agentkit_sessions::read_session_descriptor(&json!({"agentkit.session":forged})).is_some()
+    );
     let response = client
         .patch(&target)
         .bearer_auth(TOKEN)

@@ -1,6 +1,8 @@
+use agentkit_chat::{ChatExecutor, ChatHostExt, SubmitChat};
 use agentkit_core::*;
-use agentkit_host::{AgentHost, ChatExecutor, ChatHostExt, HostOptions, SubmitChat, TaskExecutor};
+use agentkit_engine::TaskExecutor;
 use agentkit_providers::*;
+use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;
 use axum::{Json, Router, extract::State, routing::post};
@@ -69,7 +71,7 @@ fn host(store: SqliteStore, url: &str, generation: u64) -> AgentHost {
     AgentHost::new(
         store,
         HashMap::from([("chat.turn".into(), executor)]),
-        Arc::new(agentkit_host::SystemRuntime),
+        Arc::new(agentkit_engine::SystemRuntime),
         HostOptions::default(),
     )
     .unwrap()
@@ -187,13 +189,13 @@ impl Tool for Echo {
 }
 struct VerifyOnce(std::sync::atomic::AtomicUsize);
 #[async_trait]
-impl agentkit_host::VerificationHook<agentkit_store::SqliteStore> for VerifyOnce {
+impl agentkit_engine::VerificationHook<agentkit_store::SqliteStore> for VerifyOnce {
     async fn verify(
         &self,
-        _: agentkit_host::ExecutionContext,
-    ) -> agentkit_host::HostResult<agentkit_host::VerificationReport> {
+        _: agentkit_sessions::ExecutionContext,
+    ) -> agentkit_sessions::HostResult<agentkit_engine::VerificationReport> {
         let first = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
-        Ok(agentkit_host::VerificationReport {
+        Ok(agentkit_engine::VerificationReport {
             status: if first {
                 "partial".into()
             } else {
@@ -229,9 +231,9 @@ async fn responses_correction_preserves_canonical_private_history_for_next_run()
     let provider = ResponsesProvider::new(Arc::new(Transport { url, identity })).unwrap();
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(Echo {definition:serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap()})).unwrap();
-    let options = agentkit_host::ChatExecutorOptions {
+    let options = agentkit_chat::ChatExecutorOptions {
         verification: Some(Arc::new(VerifyOnce(std::sync::atomic::AtomicUsize::new(0)))),
-        correction: Some(agentkit_host::CorrectionConfig::default()),
+        correction: Some(agentkit_chat::CorrectionConfig::default()),
         ..Default::default()
     };
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
@@ -239,7 +241,7 @@ async fn responses_correction_preserves_canonical_private_history_for_next_run()
     let host = AgentHost::new(
         store.clone(),
         HashMap::from([("chat.turn".into(), executor)]),
-        Arc::new(agentkit_host::SystemRuntime),
+        Arc::new(agentkit_engine::SystemRuntime),
         HostOptions::default(),
     )
     .unwrap();

@@ -41,7 +41,7 @@ pub(crate) async fn session_binding(
         Ok(None) => return SessionBinding::Unbound,
         Err(_) => return SessionBinding::Mismatch,
     };
-    let Some(root) = agentkit_host::read_session_descriptor(&chat.metadata)
+    let Some(root) = agentkit_sessions::read_session_descriptor(&chat.metadata)
         .and_then(|descriptor| descriptor.get("workspace").cloned())
         .and_then(|workspace| workspace.get("root")?.as_str().map(str::to_owned))
     else {

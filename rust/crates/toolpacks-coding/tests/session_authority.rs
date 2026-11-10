@@ -4,11 +4,12 @@
 //! per-call approval lets the real write tool touch the workspace — under a
 //! durable receipt, with the human approving the exact bytes.
 
+use agentkit_chat::{ChatExecutor, ChatExecutorOptions};
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
-use agentkit_host::{
-    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ChatExecutor,
-    ChatExecutorOptions, CreateSessionInput, HostResult, PlanApprovalPolicy,
-    SessionExecutionAuthority, SharedRuntime, SystemRuntime, TaskExecutor, WhenBusy,
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+use agentkit_sessions::{
+    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
+    CreateSessionInput, HostResult, PlanApprovalPolicy, SessionExecutionAuthority, WhenBusy,
 };
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, ExecutionReceiptStatus, SqliteStore,
@@ -184,7 +185,7 @@ async fn fixture_opts(
         store.clone(),
         HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
         runtime,
-        agentkit_host::HostOptions::default(),
+        agentkit_sessions::HostOptions::default(),
     )
     .unwrap();
     host.set_session_flush_planner(Arc::new(service.clone()))
@@ -238,7 +239,7 @@ async fn plan_mode_escalates_by_grant_and_the_approved_write_reaches_the_workspa
         .service
         .send(
             "s1",
-            &agentkit_host::SendInput {
+            &agentkit_sessions::SendInput {
                 content: json!("write a.txt with first"),
                 input_id: None,
                 when_busy: WhenBusy::Reject,
@@ -249,8 +250,8 @@ async fn plan_mode_escalates_by_grant_and_the_approved_write_reaches_the_workspa
         .await
         .unwrap();
     let turn_id = match sent {
-        agentkit_host::AgentSendResult::Turn { turn_id, .. } => turn_id,
-        agentkit_host::AgentSendResult::Queued { .. } => panic!(),
+        agentkit_sessions::AgentSendResult::Turn { turn_id, .. } => turn_id,
+        agentkit_sessions::AgentSendResult::Queued { .. } => panic!(),
     };
 
     // Attempt 1: the plan-mode write is a FINAL refusal (no request was
@@ -377,7 +378,7 @@ async fn start_turn(f: &Fixture, text: &str) -> String {
         .service
         .send(
             "s1",
-            &agentkit_host::SendInput {
+            &agentkit_sessions::SendInput {
                 content: json!(text),
                 input_id: None,
                 when_busy: WhenBusy::Reject,
@@ -388,8 +389,10 @@ async fn start_turn(f: &Fixture, text: &str) -> String {
         .await
         .unwrap();
     match sent {
-        agentkit_host::AgentSendResult::Turn { turn_id, .. } => turn_id,
-        agentkit_host::AgentSendResult::Queued { .. } => panic!("an idle session starts the turn"),
+        agentkit_sessions::AgentSendResult::Turn { turn_id, .. } => turn_id,
+        agentkit_sessions::AgentSendResult::Queued { .. } => {
+            panic!("an idle session starts the turn")
+        }
     }
 }
 

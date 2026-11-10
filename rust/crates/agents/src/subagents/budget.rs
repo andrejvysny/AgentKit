@@ -5,7 +5,7 @@
 
 use super::service::{SUBAGENT_PROVIDER_REQUESTS_CEILING, is_terminal_status};
 use crate::{AgentsError, AgentsResult};
-use agentkit_host::CHAT_TURN_TASK_KIND;
+use agentkit_sessions::CHAT_TURN_TASK_KIND;
 use agentkit_store::{SqliteStore, SubagentRecord};
 use std::collections::HashSet;
 

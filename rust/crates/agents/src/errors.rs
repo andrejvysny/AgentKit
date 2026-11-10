@@ -3,7 +3,7 @@
 //! message the host raised for the same condition before the extraction.
 
 use agentkit_core::CoreError;
-use agentkit_host::HostError;
+use agentkit_sessions::HostError;
 use agentkit_store::StoreError;
 
 #[derive(Debug, thiserror::Error)]

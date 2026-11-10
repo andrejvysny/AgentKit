@@ -17,8 +17,9 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use agentkit_core::permission::CodingMode;
-use agentkit_host::{HostResult, RunHandle, RunUpdate};
+use agentkit_engine::RunUpdate;
 use agentkit_runtime::{AgentRuntime, CodingLane, ExternalToolsPolicy, PlanConfiguration};
+use agentkit_sessions::{HostResult, RunHandle};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
@@ -188,7 +189,7 @@ impl SessionService {
             bridge.clone(),
         ));
         let provider_memory_secrets = Arc::new(agentkit_connections::MemorySecretStore::default());
-        let content_authority: Arc<dyn agentkit_host::ContentAuthority> =
+        let content_authority: Arc<dyn agentkit_sessions::ContentAuthority> =
             Arc::new(crate::provider::JsContentAuthority(Arc::clone(&bridge)));
         let runtime = AgentRuntime::builder(store_handle)
             .default_provider(provider)
@@ -954,7 +955,7 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     core.runtime.coding_lane().mark_disposed();
     core.runtime.coding_lane().dispose().await;
     if let Err(error) =
-        agentkit_host::drain_native_command_completions(core.runtime.host().store(), close_timeout)
+        agentkit_chat::drain_native_command_completions(core.runtime.host().store(), close_timeout)
             .await
     {
         uncertain.store(true, Ordering::SeqCst);
@@ -979,7 +980,7 @@ const HARD_STOP_WAIT: Duration = Duration::from_secs(5);
 /// Graceful drain, then a hard stop. `stop` + `join` instead of `shutdown`
 /// keeps the handle alive past the first deadline so it can be escalated.
 async fn drain_worker(
-    mut worker: agentkit_host::WorkerHandle,
+    mut worker: agentkit_sessions::WorkerHandle,
     lane: &CodingLane,
     close_timeout: Duration,
     uncertain: &AtomicBool,
@@ -1401,7 +1402,7 @@ fn drain_update(update: HostResult<RunUpdate>) -> Result<Drain> {
 // binding parses here so bad input fails with `invalid_input`, not a panic)
 // ---------------------------------------------------------------------------
 
-use agentkit_host::{
+use agentkit_sessions::{
     AgentSendResult, AnswerInput, CreateSessionInput, FollowUpInput, OnSettled, SendInput,
     SteerInput, WhenBusy,
 };
@@ -1545,7 +1546,7 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
             .ok_or_else(|| errors::invalid("profiles must be an array when present"))?;
         // Validated at construction by the host's own rules; a rejected
         // definition is a caller error (`invalid_input`), never an internal one.
-        agentkit_host::ProfileRegistry::new(&options.profiles)
+        agentkit_sessions::ProfileRegistry::new(&options.profiles)
             .map_err(|error| errors::invalid(format!("profiles: {error}")))?;
     }
     if let Some(value) = object.get("closeTimeoutMs") {
@@ -1863,9 +1864,10 @@ fn parse_create_session(text: &str) -> Result<CreateSessionInput> {
     let content_selection = match object.get("contentSelection") {
         None | Some(Value::Null) => None,
         Some(value) => Some(
-            serde_json::from_value::<agentkit_host::RunContentSelection>(value.clone()).map_err(
-                |error| errors::invalid(format!("contentSelection is invalid: {error}")),
-            )?,
+            serde_json::from_value::<agentkit_sessions::RunContentSelection>(value.clone())
+                .map_err(|error| {
+                    errors::invalid(format!("contentSelection is invalid: {error}"))
+                })?,
         ),
     };
     Ok(CreateSessionInput {
@@ -1938,7 +1940,7 @@ fn parse_answer(text: &str) -> Result<AnswerInput> {
     })
 }
 
-fn session_state_json(state: &agentkit_host::AgentSessionState) -> String {
+fn session_state_json(state: &agentkit_sessions::AgentSessionState) -> String {
     let pending: Vec<Value> = state
         .pending
         .iter()
@@ -2185,7 +2187,7 @@ mod tests {
         .unwrap()
         .profiles;
         let registry =
-            agentkit_host::ProfileRegistry::new(&declared).expect("the declared registry");
+            agentkit_sessions::ProfileRegistry::new(&declared).expect("the declared registry");
         let custom = registry.resolve("custom").expect("declared profile");
         assert_eq!(custom.limits.max_tool_iterations, Some(3));
         // `extends` inherits the parent's allow-list verbatim...

@@ -10,7 +10,7 @@
 //! for consumers integrating the host crate.
 
 use agentkit_agents::{AgentDefinitionService, AgentsError};
-use agentkit_host::HostError;
+use agentkit_sessions::HostError;
 use agentkit_store::{
     AgentDefinition, AgentLifecycle, AgentRevisionSource, AgentSkillSelection, ArgsHashProvenance,
     ClaimInput, CreateAgent, ExecutionReceiptAdmission, SqliteStore, SubmitTask,

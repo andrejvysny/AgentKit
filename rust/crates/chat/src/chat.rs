@@ -1,0 +1,832 @@
+use crate::*;
+use agentkit_core::{ChatProvider, ChatRequest, RunOptions, ToolRegistry};
+use agentkit_store::{MessageInput, SubmitTask};
+use async_trait::async_trait;
+
+mod correction;
+mod history;
+pub use correction::CorrectionConfig;
+mod compaction;
+mod compaction_prompts;
+mod compaction_request;
+mod compaction_runner;
+mod context_budget;
+mod elision;
+mod hooks;
+pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
+mod session_run;
+
+/// A fixed provider binding or an immutable task snapshot determines the account.
+pub struct ChatExecutor {
+    provider: Arc<dyn ChatProvider>,
+    tools: Arc<ToolRegistry>,
+    options: ChatExecutorOptions,
+}
+impl ChatExecutor {
+    pub fn new(provider: Arc<dyn ChatProvider>, tools: Arc<ToolRegistry>) -> Self {
+        Self {
+            provider,
+            tools,
+            options: ChatExecutorOptions::default(),
+        }
+    }
+    pub fn with_options(mut self, options: ChatExecutorOptions) -> Self {
+        self.options = options;
+        self
+    }
+    pub fn with_provider_factory(mut self, factory: Arc<dyn ChatProviderFactory>) -> Self {
+        self.options.provider_factory = Some(factory);
+        self
+    }
+    /// Whether this turn may be handed tools at all. Mirrors the TypeScript
+    /// turn-runner: the persisted settings document (`http`/`settings`)
+    /// carries `toolCalling` ("auto" | "on" | "off"; absent = "auto"), and
+    /// "auto" defers to the provider's recorded capabilities
+    /// (`providers.saveCapabilities` document) — staged unless that document
+    /// says `toolCalling: false` outright.
+    async fn stage_tools(&self, context: &ExecutionContext, provider_id: &str) -> HostResult<bool> {
+        let mode = context
+            .store
+            .get_setting("http", "settings")
+            .await?
+            .and_then(|settings| {
+                settings["toolCalling"]
+                    .as_str()
+                    .map(|value| value.to_owned())
+            })
+            .unwrap_or_default();
+        if mode == "off" {
+            return Ok(false);
+        }
+        if mode == "on" {
+            return Ok(true);
+        }
+        Ok(context
+            .store
+            .get_setting(agentkit_store::PROVIDER_CAPABILITIES_NAMESPACE, provider_id)
+            .await?
+            .and_then(|capabilities| capabilities["toolCalling"].as_bool())
+            .unwrap_or(true))
+    }
+    async fn provider(&self, context: &ExecutionContext) -> HostResult<Arc<dyn ChatProvider>> {
+        if let Some(factory) = &self.options.provider_factory
+            && context
+                .task
+                .payload
+                .get("providerSnapshot")
+                .is_some_and(|value| !value.is_null())
+        {
+            let snapshot = context
+                .task
+                .payload
+                .get("providerSnapshot")
+                .filter(|value| value.is_object())
+                .ok_or_else(|| HostError::Execution("provider_snapshot_required".into()))?;
+            if snapshot["model"].as_str() != Some(required(&context.task.payload, "model")?) {
+                return Err(HostError::Execution(
+                    "provider_snapshot_model_mismatch".into(),
+                ));
+            }
+            return hooks::bounded(
+                factory.resolve(snapshot, context.cancellation.clone()),
+                context.cancellation.clone(),
+                self.options.hook_timeouts.context_ms,
+                "provider.resolve",
+            )
+            .await;
+        }
+        match context.task.payload["providerId"].as_str() {
+            None => Ok(self.provider.clone()),
+            Some(id) if id == self.provider.id() => Ok(self.provider.clone()),
+            Some(id) => self
+                .options
+                .providers
+                .as_ref()
+                .and_then(|registry| registry.get(id))
+                .ok_or_else(|| HostError::Execution("provider_binding_mismatch".into())),
+        }
+    }
+}
+pub(crate) struct CoreRuntime(pub SharedRuntime);
+impl agentkit_core::Runtime for CoreRuntime {
+    fn timestamp(&self) -> String {
+        let timestamp = agentkit_store::ConversationTimestamp::from_epoch_millis(self.0.now_ms())
+            .expect("host clock must fit JavaScript Date range");
+        timestamp
+            .wire_text()
+            .expect("validated host clock")
+            .into_owned()
+    }
+    fn id(&self, prefix: &str) -> String {
+        format!("{prefix}{}", self.0.id())
+    }
+    fn now_ms(&self) -> u64 {
+        self.0.now_ms().max(0) as u64
+    }
+}
+
+#[async_trait]
+impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
+    fn handles_verification(&self) -> bool {
+        self.options.verification.is_some()
+    }
+    fn resolves_provider_snapshots(&self) -> bool {
+        self.options
+            .provider_factory
+            .as_ref()
+            .is_some_and(|factory| factory.available())
+    }
+    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+        context.check_cancelled()?;
+        let chat_id = required(&context.task.payload, "chatId")?;
+        let model = required(&context.task.payload, "model")?;
+        if chat_id != context.task.scope_id {
+            return Err(HostError::Execution("chat scope mismatch".into()));
+        }
+        let session = session_run::is_session_turn(&context, chat_id).await?;
+        let profile = agentkit_sessions::task_profile(&context.task.payload)?;
+        if session && profile.is_none() {
+            return Err(HostError::Execution("profile_snapshot_required".into()));
+        }
+        let mut options = self.options.clone();
+        if let Some(profile) = &profile {
+            if let Some(limit) = profile.limits.max_tool_iterations {
+                options.max_tool_iterations = options.max_tool_iterations.min(limit);
+            }
+            if let Some(limit) = profile.limits.max_tool_calls_per_iteration {
+                options.max_tool_calls_per_iteration =
+                    options.max_tool_calls_per_iteration.min(limit);
+            }
+            if let Some(limit) = profile.limits.history_limit {
+                options.history_limit = options.history_limit.min(limit);
+            }
+            if let Some(limit) = profile.limits.max_output_tokens {
+                options.max_output_tokens = Some(
+                    options
+                        .max_output_tokens
+                        .map_or(limit, |host| host.min(limit)),
+                );
+            }
+            if let Some(limit) = profile.limits.attempt_budget_ms {
+                options.execution_budgets.overall_ms = Some(
+                    options
+                        .execution_budgets
+                        .overall_ms
+                        .map_or(limit, |host| host.min(limit)),
+                );
+            }
+            if profile.resources.project_instructions == Some(false) {
+                options.project_instructions = None;
+            }
+        }
+        if let Some(value) = context.task.payload.get("maxOutputTokens") {
+            let limit = value
+                .as_u64()
+                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                .ok_or_else(|| HostError::Execution("invalid_max_output_tokens".into()))?;
+            options.max_output_tokens = Some(
+                options
+                    .max_output_tokens
+                    .map_or(limit, |host| host.min(limit)),
+            );
+        }
+        let selected_content =
+            agentkit_sessions::selected_messages(&context, options.content_authority.as_ref())
+                .await?;
+        let reasoning_effort = context
+            .task
+            .payload
+            .get("reasoningEffort")
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| HostError::Execution(format!("invalid_reasoning_effort: {e}")))?;
+        let loaded = context.store.messages(chat_id, true).await?;
+        // The active chain is what the continuation and the anchor see.
+        let records: Vec<_> = loaded
+            .iter()
+            .filter(|message| message.active)
+            .cloned()
+            .collect();
+        let anchor = context.task.payload["assistantMessageId"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                records
+                    .iter()
+                    .find(|message| {
+                        message.run_id.as_deref() == Some(&context.task.task_id)
+                            && message.metadata["placeholder"] == true
+                    })
+                    .map(|message| message.id.clone())
+            })
+            .ok_or_else(|| HostError::Execution("assistant placeholder required".into()))?;
+        let provider = self.provider(&context).await?;
+        let continuation = history::prepare_continuation(
+            &context,
+            &records,
+            provider.as_ref(),
+            chat_id,
+            model,
+            &anchor,
+        )
+        .await?;
+        let resolved = hooks::resolve_context(&options, &context, chat_id).await?;
+        // A session turn steers at tool boundaries and runs the exact calls
+        // its answered approvals authorized (ADR 0016 §3, ADR 0019 §2).
+        let (approvals, resume_calls) = if session {
+            // Steer-event reconciliation (ADR 0016 §3): the placement
+            // transaction is the unit of record and the
+            // `run.input.applied` event is its projection, so a crash
+            // between the two is healed here — BEFORE the loop's own
+            // `first_seq` is derived below, keeping the backfilled
+            // announcements strictly ahead of this attempt's sequence in
+            // the log. See `session_run::backfill_applied_steers`.
+            session_run::backfill_applied_steers(&context, chat_id).await?;
+            session_run::resolve_approved_calls(&context, chat_id, &anchor).await?
+        } else {
+            (std::collections::HashMap::new(), vec![])
+        };
+        // `AssistantSettings.toolCalling` gate (TS reference turn-runner.ts):
+        // "off" stages no tools at all; "auto" (the default) follows the
+        // provider's recorded capability — a provider saved as
+        // `toolCalling: false` gets no tools, because handing them over is
+        // the exact request shape that fails; "on" stages regardless of the
+        // probe. With no tools staged the wire carries no `tools` field and
+        // a provider-emitted call resolves as a `tool_missing` failure
+        // (frozen loop behavior) — the tool is never executed.
+        let stage_tools = self.stage_tools(&context, provider.id()).await?;
+        let registry = if stage_tools {
+            hooks::stage_registry(
+                &options,
+                &context,
+                chat_id,
+                self.tools.clone(),
+                &resolved.bindings,
+                approvals,
+            )
+            .await?
+        } else {
+            Arc::new(ToolRegistry::new())
+        };
+        let registry = match &profile {
+            Some(profile) => profile.filter_tools(&registry)?,
+            None => registry,
+        };
+        let base_prompt = profile
+            .as_ref()
+            .map(|profile| profile.instructions.clone())
+            .filter(|s| !s.is_empty());
+        let base_prompt = match (base_prompt, resolved.system_prompt.clone()) {
+            (Some(profile), Some(context)) => Some(format!("{profile}\n\n{context}")),
+            (profile, context) => profile.or(context),
+        };
+        // Project instructions (ADR 0017 part 1): the session workspace's
+        // AGENTS.md / CLAUDE.md text is appended to the resolved system
+        // prompt after context resolution and before provider dispatch,
+        // with every read refusal/truncation surfaced as a `run.warning`
+        // event (TS turn-runner parity).
+        let system_prompt = crate::project_instructions::augment_system_prompt(
+            &options,
+            &context,
+            chat_id,
+            base_prompt,
+        )
+        .await?;
+        // Autonomous-delegation channel: while subagents are enabled, every
+        // session turn (Chat and Coding alike) carries the guidance to
+        // delegate when beneficial. Consulted per turn so hot configuration
+        // takes effect without rebuilding the executor.
+        let system_prompt = match &options.delegation_guidance {
+            Some(guidance) => match guidance.guidance(chat_id).await {
+                Some(text) if !text.is_empty() => Some(match system_prompt {
+                    Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
+                    _ => text,
+                }),
+                _ => system_prompt,
+            },
+            None => system_prompt,
+        };
+        // Read the history AFTER the resume pass wrote its records: an
+        // approval-mismatch refusal appended moments ago must be visible to
+        // the model in this same attempt, not only after a restart.
+        let records = context.store.messages(chat_id, true).await?;
+        // What the provider-facing history is built from (ADR 0017 part 1):
+        // the session's anchored-history policy and its tool-result elision,
+        // both from the turn's staged context snapshot. A non-session chat
+        // assembles exactly as it always did.
+        let assembly = context_budget::resolve_context_assembly(&context, chat_id).await?;
+        let receipts = context
+            .store
+            .list_executions_by_chat(chat_id.to_owned())
+            .await
+            .map_err(|error| {
+                HostError::Execution(format!(
+                    "Cannot read durable execution receipts; mutations remain blocked. ({error})"
+                ))
+            })?;
+        let path_snapshot = serde_json::to_value(&records)
+            .map_err(|_| HostError::Execution("context snapshot failed".into()))?;
+        let receipt_snapshot = serde_json::to_value(&receipts)
+            .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
+        let mut entries = history::assemble_with_ids(
+            records,
+            usize::MAX,
+            &anchor,
+            system_prompt.clone(),
+            // Unanswered persisted calls reconcile against durable receipts,
+            // never against an assumed absence (ADR 0020). Receipts are read
+            // per chat: the calls being reconciled were recorded under the
+            // run that owned them, not the run replaying history.
+            &receipts,
+            &context.task.task_id,
+            assembly.policy,
+        );
+        let history_records = entries
+            .iter()
+            .filter(|(_, record_id)| record_id.is_some())
+            .count();
+        if history_records > options.history_limit {
+            return Err(HostError::Failure(ExecutionFailure {
+                code: Some("context_overflow".into()),
+                retryable: Some(false),
+                ..ExecutionFailure::new(
+                    "context_overflow: The complete transcript exceeds the configured historyLimit; no records were dropped.",
+                )
+            }));
+        }
+        // Frozen order (turn-runner.ts:1758): stale tool results are elided in
+        // the assembled view BEFORE summaries/compaction see them, so the
+        // summary is written over the same bytes the provider gets. The
+        // provider-continuation lane replays its durable branch untouched, so
+        // assembly stays exactly as the continuation recorded it.
+        if session
+            && continuation.is_none()
+            && let Some(options) = assembly.elision
+        {
+            elision::elide_stale_tool_results(&mut entries, &options);
+        }
+        let runtime: Arc<dyn agentkit_core::Runtime> =
+            Arc::new(CoreRuntime(context.runtime.clone()));
+        // Subagent children carry per-role execution bounds on their chat
+        // metadata; non-subagent sessions get defaults (no behavior change).
+        let role_overrides = if session {
+            crate::budget::task_overrides(&context.store, chat_id).await?
+        } else {
+            crate::budget::RoleTaskOverrides::default()
+        };
+        let mut execution_limits = role_overrides.apply(options.execution_budgets.clone());
+        if let Some(limit) = profile.as_ref().and_then(|p| p.limits.attempt_budget_ms) {
+            execution_limits.overall_ms = Some(
+                execution_limits
+                    .overall_ms
+                    .map_or(limit, |value| value.min(limit)),
+            );
+        }
+        let budget =
+            crate::restore_execution_budget(&context, execution_limits, runtime.clone()).await?;
+        let context_budget =
+            context_budget::ContextBudget::resolve(&context, chat_id, provider.id(), model).await?;
+        let prepared = Arc::new(hooks::PreparedProvider {
+            budget: context_budget.clone(),
+            inner: provider,
+            options: options.clone(),
+            context: context.clone(),
+            chat_id: chat_id.into(),
+        });
+        let compact_requested = session
+            && context.store.get_chat(chat_id).await?.is_some_and(|chat| {
+                chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
+            });
+        let messages = if session
+            && (options.auto_compaction || compact_requested)
+            && continuation.is_none()
+            && let Some(context_budget) = context_budget.clone()
+        {
+            compaction_runner::apply(compaction_runner::Input {
+                context: context.clone(),
+                chat_id: chat_id.into(),
+                model: model.into(),
+                provider: prepared.clone(),
+                request_budget: budget.clone(),
+                context_budget,
+                entries,
+                tools: registry.definitions(),
+                path_snapshot,
+                receipt_snapshot,
+                usage: options.usage.clone(),
+                usage_timeout_ms: options.hook_timeouts.usage_ms,
+            })
+            .await?
+            .into_iter()
+            .map(|(message, _)| message)
+            .collect()
+        } else {
+            if session && continuation.is_some() {
+                let manual = context.store.get_chat(chat_id).await?.is_some_and(|chat| {
+                    chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
+                });
+                let over = context_budget.as_ref().is_some_and(|budget| {
+                    let message_tokens: u64 = entries
+                        .iter()
+                        .map(|entry| context_budget::message_tokens(&entry.0))
+                        .sum();
+                    let tools = registry.definitions();
+                    let tool_tokens = if tools.is_empty() {
+                        0
+                    } else {
+                        serde_json::to_string(&tools)
+                            .unwrap_or_default()
+                            .encode_utf16()
+                            .count() as u64
+                    }
+                    .div_ceil(4);
+                    message_tokens.saturating_add(tool_tokens)
+                        > budget.window.saturating_sub(budget.reserve)
+                });
+                if manual || over {
+                    context.emit("run.warning", json!({"code":"compaction_failed","message":"Context compaction is unavailable for provider continuation; the continuation and request remain unchanged."})).await?;
+                }
+            }
+            entries.into_iter().map(|(message, _)| message).collect()
+        };
+        let sink = Arc::new(history::DurableEvents {
+            context: context.clone(),
+            chat_id: chat_id.into(),
+            anchor: anchor.clone(),
+            provider_id: prepared.id().into(),
+            fenced_tools: registry
+                .definitions()
+                .into_iter()
+                .filter(|definition| definition.effect == "write")
+                .map(|definition| definition.name)
+                .collect(),
+            canonical: continuation.is_some(),
+            display_metadata: context
+                .store
+                .get_message(&anchor)
+                .await?
+                .map(|message| message.metadata)
+                .unwrap_or(json!({})),
+            usage: options.usage.clone(),
+            usage_timeout_ms: options.hook_timeouts.usage_ms,
+            reasoning: Default::default(),
+        });
+        let mut request = ChatRequest {
+            model: model.into(),
+            messages,
+            selected_content,
+            content_binding_digest: context.task.payload["contentSnapshot"]["digest"]
+                .as_str()
+                .map(str::to_owned),
+            reasoning_effort,
+            max_output_tokens: options.max_output_tokens,
+            budget: Some(budget),
+            ..ChatRequest::default()
+        };
+        if let Some(session) = continuation {
+            request.continuation = session.state;
+            request.continuation_required = request.continuation.is_some();
+            request.continuation_scope = Some(session.scope);
+            request.continuation_store = Some(Arc::new(crate::continuation::DurableContinuation {
+                context: context.clone(),
+                chat_id: chat_id.into(),
+                anchor: anchor.clone(),
+            }));
+        }
+        let run_options = RunOptions {
+            request,
+            run_id: Some(context.task.task_id.clone()),
+            first_seq: context.store.next_seq(&context.task.task_id).await?,
+            attempt_id: Some(context.attempt_id.clone()),
+            chat_id: Some(chat_id.into()),
+            scope_id: Some(context.task.scope_id.clone()),
+            bindings: resolved.bindings,
+            max_tool_iterations: role_overrides
+                .max_tool_iterations
+                .map_or(options.max_tool_iterations, |value| {
+                    value.min(options.max_tool_iterations)
+                }),
+            max_tool_calls_per_iteration: options.max_tool_calls_per_iteration,
+            default_tool_timeout_ms: options.default_tool_timeout_ms,
+            cancellation: context.cancellation.clone(),
+            runtime,
+            event_sink: Some(sink.clone()),
+            dispatch_guard: Some(context.dispatch_guard()),
+            suspender: Some(Arc::new(ParkSink {
+                context: context.clone(),
+            })),
+            interruption: Some(context.interruption.clone()),
+            hooks: options.run_hooks.clone(),
+            steering: session.then(|| {
+                Arc::new(session_run::SessionSteering::new(context.clone(), chat_id))
+                    as Arc<dyn agentkit_core::SteeringSource>
+            }),
+            resume_calls,
+            ..RunOptions::default()
+        };
+        let session = correction::ChatSession {
+            answer_committed: false,
+            context: context.clone(),
+            options: options.clone(),
+            base: run_options,
+            provider: prepared,
+            registry,
+            sink,
+            anchor,
+            system_prompt,
+        };
+        session.execute().await
+    }
+}
+/// Parks the turn when a tool asked a human (ADR 0016 §2). The `run.waiting`
+/// event and the pending records are already durable (the event sink wrote
+/// them); this commits the park itself: status, attempt, lease, and the
+/// request record that the answer path will settle.
+struct ParkSink {
+    context: ExecutionContext,
+}
+
+#[async_trait]
+impl agentkit_core::SuspendSink for ParkSink {
+    async fn park(
+        &self,
+        request: &agentkit_core::HumanRequestSpec,
+        tool_call_id: &str,
+    ) -> Result<(), agentkit_core::CoreError> {
+        // The store releases the lease before this future publishes the
+        // suspension. Keep heartbeat renewal outside that transition so a
+        // successful park cannot look like stolen execution authority.
+        let mut suspension = self.context.suspension.lock().await;
+        let now = self.context.runtime.now_ms();
+        let parked = self
+            .context
+            .store
+            .park_turn(agentkit_store::ParkTurn {
+                fence: self.context.fence.clone(),
+                assistant_message: None,
+                events: vec![],
+                request: Some(agentkit_store::CreateAgentInput {
+                    input_id: request.request_id.clone(),
+                    session_id: self.context.task.scope_id.clone(),
+                    kind: agentkit_store::AgentInputKind::HumanRequest,
+                    content: request.content.clone(),
+                    content_hash: request.content_hash.clone(),
+                    target_task_id: Some(self.context.task.task_id.clone()),
+                    on_settled: None,
+                    attempt_id: Some(self.context.attempt_id.clone()),
+                    tool_call_id: Some(tool_call_id.to_owned()),
+                    expires_at: request.expires_at.clone(),
+                }),
+                now,
+            })
+            .await
+            .map_err(|error| agentkit_core::CoreError::new("park_failed", &error.to_string()))?;
+        // Idempotent replay: the deterministic request id parks once; a
+        // second park of the same call finds the task already parked.
+        let _ = parked;
+        *suspension = Some(request.clone());
+        Ok(())
+    }
+}
+
+fn required<'a>(value: &'a Value, key: &str) -> HostResult<&'a str> {
+    value[key]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| HostError::Execution(format!("{key} required")))
+}
+pub struct SubmitChat {
+    pub task_id: String,
+    pub chat_id: String,
+    pub model: String,
+    pub content: Value,
+    pub parent_message_id: Option<String>,
+}
+/// Chat-level operations on the generic engine host. The engine knows no chat
+/// task kind, so these live host-side as an extension trait.
+#[async_trait]
+pub trait ChatHostExt {
+    /// Persists the input, display placeholder, and queued work in one transaction.
+    async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle>;
+    /// Whether the registered chat-turn executor resolves provider snapshots.
+    fn resolves_provider_snapshots(&self) -> bool;
+}
+
+#[async_trait]
+impl ChatHostExt for AgentHost {
+    fn resolves_provider_snapshots(&self) -> bool {
+        self.executor_resolves_provider_snapshots(CHAT_TURN_TASK_KIND)
+    }
+
+    async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle> {
+        if !self.supports(CHAT_TURN_TASK_KIND) {
+            return Err(HostError::UnknownKind(CHAT_TURN_TASK_KIND.into()));
+        }
+        if self
+            .store()
+            .get_chat(&input.chat_id)
+            .await?
+            .is_some_and(|chat| {
+                chat.metadata
+                    .get(agentkit_store::SESSION_METADATA_KEY)
+                    .is_some()
+            })
+        {
+            return Err(HostError::Execution(
+                "session_submission_required: use AgentSessionService for session turns".into(),
+            ));
+        }
+        let user = format!("{}_user", input.task_id);
+        let assistant = format!("{}_assistant", input.task_id);
+        let task = SubmitTask {
+            task_id: input.task_id.clone(),
+            kind: CHAT_TURN_TASK_KIND.into(),
+            scope_id: input.chat_id.clone(),
+            payload: json!({"chatId":input.chat_id,"model":input.model,"content":input.content,"userMessageId":user,"assistantMessageId":assistant,"parentMessageId":input.parent_message_id}),
+            priority: 0,
+            now: self.runtime().now_ms(),
+            available_at: None,
+            depends_on: vec![],
+            parent_task_id: None,
+            exclusive_scope: true,
+        };
+        let messages = vec![
+            MessageInput {
+                id: Some(user.clone()),
+                chat_id: input.chat_id.clone(),
+                role: "user".into(),
+                content: input.content,
+                parent_message_id: input.parent_message_id,
+                ..MessageInput::default()
+            },
+            MessageInput {
+                id: Some(assistant),
+                chat_id: input.chat_id,
+                run_id: Some(input.task_id.clone()),
+                role: "assistant".into(),
+                parent_message_id: Some(user),
+                metadata: json!({"placeholder":true}),
+                ..MessageInput::default()
+            },
+        ];
+        self.store().submit_turn(task, messages).await?;
+        Ok(self.run_handle(&input.task_id))
+    }
+}
+
+#[cfg(test)]
+mod tool_gate_tests {
+    use super::*;
+    use agentkit_core::{ChatRequest, ProviderStream};
+    use agentkit_store::{ClaimInput, SqliteStore, SubmitTask};
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    struct Clock;
+    impl crate::Runtime for Clock {
+        fn now_ms(&self) -> i64 {
+            1000
+        }
+        fn id(&self) -> String {
+            "test".into()
+        }
+    }
+    struct Noop;
+    #[async_trait]
+    impl ChatProvider for Noop {
+        fn id(&self) -> &str {
+            "noop"
+        }
+        fn stream_chat(&self, _: ChatRequest, _: CancellationToken) -> ProviderStream {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    async fn executor_context(store: SqliteStore) -> ExecutionContext {
+        store
+            .submit(SubmitTask {
+                task_id: "run".into(),
+                kind: CHAT_TURN_TASK_KIND.into(),
+                scope_id: "chat".into(),
+                payload: json!({}),
+                priority: 0,
+                now: 1000,
+                available_at: None,
+                depends_on: vec![],
+                parent_task_id: None,
+                exclusive_scope: false,
+            })
+            .await
+            .unwrap();
+        let claimed = store
+            .claim(ClaimInput {
+                owner_id: "worker".into(),
+                now: 1000,
+                ttl_ms: 60_000,
+                kinds: vec![],
+                busy_scopes: vec![],
+                max_attempts: 3,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        ExecutionContext {
+            task: claimed.task,
+            attempt_id: claimed.lease.attempt_id.clone(),
+            cancellation: CancellationToken::new(),
+            interruption: CancellationToken::new(),
+            suspension: Arc::new(Mutex::new(None)),
+            store,
+            fence: claimed.lease.fence(),
+            runtime: Arc::new(Clock),
+            event_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_calling_setting_and_recorded_capabilities_gate_staging() {
+        let store = SqliteStore::memory(2).unwrap();
+        let context = executor_context(store.clone()).await;
+        let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+        // No settings document, no capability record: tools stage.
+        assert!(executor.stage_tools(&context, "p").await.unwrap());
+        // "auto" (absent) follows the recorded probe: `toolCalling: false`
+        // stages nothing — handing tools over is the exact request shape
+        // that fails a chat-only provider.
+        store
+            .save_provider_capabilities(
+                "p",
+                json!({"streaming": true, "toolCalling": false, "modelList": true}),
+            )
+            .await
+            .unwrap();
+        assert!(!executor.stage_tools(&context, "p").await.unwrap());
+        // "on" overrides a wrong probe — the whole reason the knob exists.
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "on"}))
+            .await
+            .unwrap();
+        assert!(executor.stage_tools(&context, "p").await.unwrap());
+        // "off" stages nothing for ANY provider, probe or no probe.
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "off"}))
+            .await
+            .unwrap();
+        assert!(!executor.stage_tools(&context, "other").await.unwrap());
+        // "auto" again: an unrecorded provider stages (absence never disables).
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "auto"}))
+            .await
+            .unwrap();
+        assert!(executor.stage_tools(&context, "other").await.unwrap());
+    }
+    #[tokio::test]
+    async fn session_tasks_without_frozen_profiles_fail_before_dispatch() {
+        let store = SqliteStore::memory(2).unwrap();
+        store.create_chat("chat",None,json!({"agentkit.session":{"version":1,"profile":{"id":"coding"},"createdAt":"2026-01-01T00:00:00.000Z"}}),1000).await.unwrap();
+        let mut context = executor_context(store).await;
+        context.task.payload = json!({"chatId":"chat","model":"model"});
+        let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+        assert!(
+            executor
+                .execute(context)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("profile_snapshot_required")
+        );
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    struct Clock(i64);
+    impl crate::Runtime for Clock {
+        fn now_ms(&self) -> i64 {
+            self.0
+        }
+        fn id(&self) -> String {
+            "test".into()
+        }
+    }
+    #[test]
+    fn core_runtime_formats_entire_javascript_date_range_without_chrono_panics() {
+        for (epoch, expected) in [
+            (-8_640_000_000_000_000, "-271821-04-20T00:00:00.000Z"),
+            (8_640_000_000_000_000, "+275760-09-13T00:00:00.000Z"),
+            (253_402_300_800_000, "+010000-01-01T00:00:00.000Z"),
+            (-1, "1969-12-31T23:59:59.999Z"),
+        ] {
+            let runtime = CoreRuntime(Arc::new(Clock(epoch)));
+            assert_eq!(agentkit_core::Runtime::timestamp(&runtime), expected);
+        }
+    }
+    #[test]
+    #[should_panic(expected = "host clock must fit JavaScript Date range")]
+    fn core_runtime_rejects_clock_outside_explicit_precondition() {
+        let runtime = CoreRuntime(Arc::new(Clock(8_640_000_000_000_001)));
+        agentkit_core::Runtime::timestamp(&runtime);
+    }
+}

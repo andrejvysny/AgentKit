@@ -1,8 +1,8 @@
 use crate::{bridge::*, proposals, provider, verification};
-use agentkit_host::{
-    AgentHost, ChatHostExt, HostResult, RunUpdate, Runtime, SubmitChat, SystemRuntime,
-};
+use agentkit_chat::{ChatHostExt, SubmitChat};
+use agentkit_engine::{RunUpdate, Runtime, SystemRuntime};
 use agentkit_runtime::AgentRuntime;
+use agentkit_sessions::{AgentHost, HostResult};
 use agentkit_store::SqliteStore;
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc};
@@ -28,7 +28,7 @@ async fn serve(
     ));
     refresh(&host, ui).await?;
     let worker = runtime.take_worker().ok_or_else(|| {
-        agentkit_host::HostError::Execution("runtime worker already taken".into())
+        agentkit_sessions::HostError::Execution("runtime worker already taken".into())
     })?;
     while let Some(command) = commands.recv().await {
         if let Err(error) = dispatch(&host, command, ui).await {
@@ -149,7 +149,7 @@ async fn create_runtime(path: PathBuf, ui: &UiSender, offline: bool) -> HostResu
     } else {
         provider::select(ui.clone())
     })
-    .map_err(|error| agentkit_host::HostError::Execution(error.to_string()))?;
+    .map_err(|error| agentkit_sessions::HostError::Execution(error.to_string()))?;
     pin_provider(&store, selection.binding).await?;
     ui.send(Update::Provider {
         models: selection.models,
@@ -163,7 +163,7 @@ async fn create_runtime(path: PathBuf, ui: &UiSender, offline: bool) -> HostResu
         .verification(verification)
         .build()
         .await
-        .map_err(|error| agentkit_host::HostError::Execution(error.to_string()))
+        .map_err(|error| agentkit_sessions::HostError::Execution(error.to_string()))
 }
 
 async fn pin_provider(store: &SqliteStore, binding: serde_json::Value) -> HostResult<()> {
@@ -177,7 +177,7 @@ async fn pin_provider(store: &SqliteStore, binding: serde_json::Value) -> HostRe
             .iter()
             .any(|task| !task.status.is_terminal())
     {
-        return Err(agentkit_host::HostError::Execution("Provider configuration changed while unfinished runs exist. Reopen with the original provider settings, then cancel or finish those runs before switching.".into()));
+        return Err(agentkit_sessions::HostError::Execution("Provider configuration changed while unfinished runs exist. Reopen with the original provider settings, then cancel or finish those runs before switching.".into()));
     }
     store
         .set_setting("egui-host", "provider-binding", binding)

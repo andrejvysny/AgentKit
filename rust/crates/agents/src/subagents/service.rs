@@ -3,11 +3,12 @@ use super::config::{RoleSpec, SubagentConfig};
 use super::guard::WorkspaceLeaseRegistry;
 use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
-use agentkit_host::{
-    AgentSendResult, AgentSessionService, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput,
-    SendInput, SharedRuntime, SteerInput, WhenBusy, read_session_descriptor,
-};
+use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
+use agentkit_sessions::{
+    AgentSendResult, AgentSessionService, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput,
+    SendInput, SteerInput, WhenBusy, read_session_descriptor,
+};
 use agentkit_store::{RegisterSubagent, SqliteStore, SubagentRecord, TaskRecord, TaskStatus};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -143,7 +144,7 @@ impl Drop for LeaseRelease {
     }
 }
 
-fn session_error(error: agentkit_host::SessionError) -> AgentsError {
+fn session_error(error: agentkit_sessions::SessionError) -> AgentsError {
     AgentsError::execution(format!("{}: {}", error.code, error.message))
 }
 
@@ -1749,7 +1750,7 @@ fn await_result(view: &SubagentView) -> AwaitResult {
 }
 
 #[async_trait::async_trait]
-impl agentkit_host::DelegationGuidance for SubagentService {
+impl agentkit_chat::DelegationGuidance for SubagentService {
     async fn guidance(&self, _chat_id: &str) -> Option<String> {
         let config = self.config();
         config
@@ -1760,14 +1761,14 @@ impl agentkit_host::DelegationGuidance for SubagentService {
 }
 
 #[async_trait::async_trait]
-impl agentkit_host::TaskSettledObserver for SubagentService {
+impl agentkit_engine::TaskSettledObserver for SubagentService {
     async fn observe_settled(
         &self,
         task: &agentkit_store::TaskRecord,
-    ) -> Result<(), agentkit_host::ObserverError> {
+    ) -> Result<(), agentkit_engine::ObserverError> {
         Ok(self
             .observe_settled(task)
             .await
-            .map_err(agentkit_host::HostError::from)?)
+            .map_err(agentkit_sessions::HostError::from)?)
     }
 }

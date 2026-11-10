@@ -17,7 +17,9 @@ agentkit-mcp = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-core = { workspace = true }
 agentkit-agents = { workspace = true }
-agentkit-host = { workspace = true }
+agentkit-chat = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-sessions = { workspace = true }
 agentkit-providers = { workspace = true }
 agentkit-store = { workspace = true }
 agentkit-connections = { workspace = true, features = ["http"] }

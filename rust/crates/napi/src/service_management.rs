@@ -1,7 +1,7 @@
 //! Session management methods exposed without duplicating host policy.
 use super::{SessionService, parse_object, session_state_json};
 use crate::errors;
-use agentkit_host::{Runtime, SystemRuntime};
+use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_store::SqliteStore;
 use napi::bindgen_prelude::*;
 use serde_json::Value;

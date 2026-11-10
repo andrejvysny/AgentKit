@@ -1,7 +1,7 @@
 //! Durable teammate admission and run ownership (AGENTKIT-88): the
 //! service boundary over the store's admission ledger, mailbox, and
 //! attempt fencing — on the EXISTING [`agentkit_store`] task engine and
-//! the host [`agentkit_host::AgentHost`] runner. No second queue, no second task
+//! the host [`agentkit_sessions::AgentHost`] runner. No second queue, no second task
 //! store.
 //!
 //! What this layer guarantees, on top of the store primitives:
@@ -27,7 +27,7 @@
 //!   no bypass.
 
 use crate::{AgentsError, AgentsResult};
-use agentkit_host::SharedRuntime;
+use agentkit_engine::SharedRuntime;
 use agentkit_store::{
     AdmitTeammateTask, AdmittedTask, AgentDisplayState, AgentInputRecord, AgentInputStatus,
     AgentTaskPage, CreateAgentMailbox, PromoteMailbox, SqliteStore, TaskRecord, TaskStatus,
@@ -50,7 +50,7 @@ pub struct TeammateAdmission {
     pub depends_on: Vec<String>,
     pub parent_task_id: Option<String>,
     /// AGENTKIT-89: the sealed effective run profile from
-    /// [`agentkit_host::RunProfileService::resolve`]. It is pinned INSIDE the
+    /// [`agentkit_sessions::RunProfileService::resolve`]. It is pinned INSIDE the
     /// admission transaction — the admitted task's durable binding, not a
     /// second ledger. `None` admits without a profile (pre-89 shape).
     pub run_profile: Option<agentkit_store::PinnedRunProfile>,
@@ -58,7 +58,7 @@ pub struct TeammateAdmission {
 
 /// The host service boundary for persistent-agent admission. Cheap to
 /// clone: everything shared is the store handle and the injected
-/// runtime, exactly like [`agentkit_host::AgentDefinitionService`].
+/// runtime, exactly like [`agentkit_chat::AgentDefinitionService`].
 #[derive(Clone)]
 pub struct TeammateService {
     store: SqliteStore,

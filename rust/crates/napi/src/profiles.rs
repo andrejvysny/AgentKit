@@ -2,16 +2,16 @@
 use napi::bindgen_prelude::*;
 use serde_json::Value;
 
-fn registry(overrides: Option<&str>) -> Result<agentkit_host::ProfileRegistry> {
+fn registry(overrides: Option<&str>) -> Result<agentkit_sessions::ProfileRegistry> {
     let values: Vec<Value> = overrides
         .map(serde_json::from_str)
         .transpose()
         .map_err(|_| crate::errors::invalid("Profile overrides must be a JSON array."))?
         .unwrap_or_default();
-    agentkit_host::ProfileRegistry::new(&values)
+    agentkit_sessions::ProfileRegistry::new(&values)
         .map_err(|error| crate::errors::invalid(error.to_string()))
 }
-fn resolved(profile: agentkit_host::AgentProfile) -> Result<Value> {
+fn resolved(profile: agentkit_sessions::AgentProfile) -> Result<Value> {
     let digest = profile.digest();
     let mut value = serde_json::to_value(profile)
         .map_err(|_| crate::errors::internal("Profile serialization failed."))?;

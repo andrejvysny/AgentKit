@@ -16,10 +16,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use agentkit_agents::{AgentDefinitionService, AgentsError, TeammateAdmission, TeammateService};
-use agentkit_host::{
+use agentkit_engine::{Runtime, SharedRuntime, SystemRuntime};
+use agentkit_sessions::{
     ApprovalGrantRef, ContextUnit, ContextUnitKind, ProjectSelection, RunProfileDefaults,
-    RunProfileService, Runtime, SelectedSource, SelectedSourceKind, SharedRuntime, SystemRuntime,
-    TaskProfileOverrides,
+    RunProfileService, SelectedSource, SelectedSourceKind, TaskProfileOverrides,
 };
 use agentkit_store::{AgentDefinition, CreateAgent, SqliteStore, redact_event};
 
@@ -468,7 +468,7 @@ impl NativeTeammates {
 /// lane's namespace codes; everything else maps exactly as the crate-wide
 /// host mapping.
 fn map_host(error: impl Into<AgentsError>) -> Error {
-    use agentkit_host::HostError as H;
+    use agentkit_sessions::HostError as H;
     use agentkit_store::StoreError as S;
     let error = match error.into() {
         AgentsError::Host(inner) => inner,

@@ -2,7 +2,7 @@
 //! codes; nothing here knows about any host language.
 
 use agentkit_agents::AgentsError;
-use agentkit_host::HostError;
+use agentkit_sessions::HostError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {

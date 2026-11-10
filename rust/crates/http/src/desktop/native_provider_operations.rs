@@ -23,7 +23,7 @@ pub trait ProviderConsentPort: Send + Sync {
 pub struct NativeProviderOperations {
     native: NativeConnections,
     consent: Arc<dyn ProviderConsentPort>,
-    runtime: agentkit_host::SharedRuntime,
+    runtime: agentkit_engine::SharedRuntime,
     timeout: Duration,
 }
 
@@ -31,7 +31,7 @@ impl NativeProviderOperations {
     pub fn new(
         native: NativeConnections,
         consent: Arc<dyn ProviderConsentPort>,
-        runtime: agentkit_host::SharedRuntime,
+        runtime: agentkit_engine::SharedRuntime,
     ) -> Self {
         Self {
             native,

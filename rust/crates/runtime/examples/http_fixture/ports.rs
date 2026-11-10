@@ -1,6 +1,7 @@
+use agentkit_chat::{Authorization, MutationIdentity, ProposalApplier};
 use agentkit_contracts::*;
-use agentkit_host::{Authorization, HostResult, MutationIdentity, ProposalApplier};
 use agentkit_http::{Actor, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort};
+use agentkit_sessions::HostResult;
 use agentkit_store::{ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
@@ -103,7 +104,7 @@ pub async fn seed(store: &SqliteStore) -> HostResult<()> {
         store
             .submit(agentkit_store::SubmitTask {
                 task_id: "resume-me".into(),
-                kind: agentkit_host::CHAT_TURN_TASK_KIND.into(),
+                kind: agentkit_sessions::CHAT_TURN_TASK_KIND.into(),
                 scope_id: "resume-chat".into(),
                 payload: json!({"chatId":"resume-chat","model":"m1"}),
                 priority: 0,
@@ -119,7 +120,7 @@ pub async fn seed(store: &SqliteStore) -> HostResult<()> {
                 owner_id: "crashed-fixture".into(),
                 now: 0,
                 ttl_ms: 3,
-                kinds: vec![agentkit_host::CHAT_TURN_TASK_KIND.into()],
+                kinds: vec![agentkit_sessions::CHAT_TURN_TASK_KIND.into()],
                 busy_scopes: vec![],
                 max_attempts: 3,
             })

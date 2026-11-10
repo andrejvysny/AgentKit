@@ -17,7 +17,7 @@ mod teammates;
 mod turns;
 
 use crate::{Actor, Backend, OperationRequest, OperationResponse, Problem};
-use agentkit_host::{AgentHost, HostError};
+use agentkit_sessions::{AgentHost, HostError};
 use agentkit_store::StoreError;
 use async_trait::async_trait;
 use axum::http::HeaderMap;
@@ -31,25 +31,25 @@ pub struct DesktopBackend {
     token: String,
     default_model: String,
     session_profile: Option<String>,
-    content_authority: Option<Arc<dyn agentkit_host::ContentAuthority>>,
-    profiles: Arc<agentkit_host::ProfileRegistry>,
+    content_authority: Option<Arc<dyn agentkit_sessions::ContentAuthority>>,
+    profiles: Arc<agentkit_sessions::ProfileRegistry>,
     pinned_provider_id: Option<String>,
     allow_insecure_http: bool,
     write_gate: Mutex<()>,
     connections: agentkit_connections::AppConnections,
     native_connections: Option<Arc<agentkit_connections::NativeConnections>>,
     secrets: Option<agentkit_connections::SharedSecretStore>,
-    proposals: Option<Arc<agentkit_host::ProposalService>>,
+    proposals: Option<Arc<agentkit_chat::ProposalService>>,
     write_policy: Option<Arc<dyn WritePolicyPort>>,
     mcp_configuration: Option<Arc<dyn McpConfigurationPort>>,
     tool_catalog: Option<Arc<dyn ToolCatalogPort>>,
     provider_operations: Option<Arc<dyn ProviderOperations>>,
-    provider_factory: Option<Arc<dyn agentkit_host::ChatProviderFactory>>,
+    provider_factory: Option<Arc<dyn agentkit_sessions::ChatProviderFactory>>,
     /// AGENTKIT-90: the host defaults the `RunProfileService` resolves
     /// against when an admission asks for a sealed effective profile.
     /// `None` is the service's documented default (native provider,
     /// `ask` ceiling, no ambient tools) — never a per-request value.
-    run_profile_defaults: Option<agentkit_host::RunProfileDefaults>,
+    run_profile_defaults: Option<agentkit_sessions::RunProfileDefaults>,
 }
 
 impl DesktopBackend {
@@ -76,7 +76,7 @@ impl DesktopBackend {
             default_model: default_model.into(),
             session_profile: None,
             content_authority: None,
-            profiles: Arc::new(agentkit_host::ProfileRegistry::default()),
+            profiles: Arc::new(agentkit_sessions::ProfileRegistry::default()),
             write_gate: Mutex::new(()),
             pinned_provider_id: None,
             allow_insecure_http: false,
@@ -174,14 +174,14 @@ impl DesktopBackend {
         self
     }
     /// Create REST chats as validated agent sessions with one durable insert.
-    pub fn with_profiles(mut self, profiles: Arc<agentkit_host::ProfileRegistry>) -> Self {
+    pub fn with_profiles(mut self, profiles: Arc<agentkit_sessions::ProfileRegistry>) -> Self {
         self.profiles = profiles;
         self
     }
 
     pub fn with_content_authority(
         mut self,
-        authority: Arc<dyn agentkit_host::ContentAuthority>,
+        authority: Arc<dyn agentkit_sessions::ContentAuthority>,
     ) -> Self {
         self.content_authority = Some(authority);
         self
@@ -190,7 +190,7 @@ impl DesktopBackend {
     /// The explicit factory validates selected provider identities before admission.
     pub fn with_provider_factory(
         mut self,
-        factory: Arc<dyn agentkit_host::ChatProviderFactory>,
+        factory: Arc<dyn agentkit_sessions::ChatProviderFactory>,
     ) -> Self {
         self.provider_factory = Some(factory);
         self
@@ -232,7 +232,7 @@ impl DesktopBackend {
         self.provider_operations = Some(port);
         self
     }
-    pub fn with_proposals(mut self, service: Arc<agentkit_host::ProposalService>) -> Self {
+    pub fn with_proposals(mut self, service: Arc<agentkit_chat::ProposalService>) -> Self {
         self.proposals = Some(service);
         self
     }
@@ -242,7 +242,7 @@ impl DesktopBackend {
     /// allowlist). Set once at wiring; a request can never choose these.
     pub fn with_run_profile_defaults(
         mut self,
-        defaults: agentkit_host::RunProfileDefaults,
+        defaults: agentkit_sessions::RunProfileDefaults,
     ) -> Self {
         self.run_profile_defaults = Some(defaults);
         self

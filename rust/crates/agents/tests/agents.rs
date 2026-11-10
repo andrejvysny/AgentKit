@@ -4,7 +4,9 @@
 //! `AgentDefinitionService`.
 
 use agentkit_agents::*;
-use agentkit_host::*;
+use agentkit_engine::Runtime;
+
+use agentkit_sessions::*;
 use agentkit_store::*;
 use serde_json::json;
 use std::sync::Arc;

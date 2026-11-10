@@ -27,7 +27,7 @@
 
 use super::*;
 use agentkit_agents::{AgentDefinitionService, AgentsError, TeammateAdmission, TeammateService};
-use agentkit_host::{
+use agentkit_sessions::{
     ContextUnit, ContextUnitKind, ProjectSelection, RunProfileService, SelectedSource,
     SelectedSourceKind, TaskProfileOverrides,
 };
@@ -387,8 +387,8 @@ impl DesktopBackend {
                     })?
                     .iter()
                     .map(
-                        |entry| -> Result<agentkit_host::ApprovalGrantRef, Problem> {
-                            Ok(agentkit_host::ApprovalGrantRef {
+                        |entry| -> Result<agentkit_sessions::ApprovalGrantRef, Problem> {
+                            Ok(agentkit_sessions::ApprovalGrantRef {
                                 session_id: string_field(entry, "sessionId")?,
                                 grant_id: string_field(entry, "grantId")?,
                                 digest: string_field(entry, "digest")?,

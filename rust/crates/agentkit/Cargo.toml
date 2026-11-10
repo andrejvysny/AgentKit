@@ -15,7 +15,7 @@ workspace = true
 [features]
 default = []
 runtime = ["dep:agentkit-core", "dep:agentkit-connections"]
-durable = ["runtime", "dep:agentkit-host", "dep:agentkit-store", "dep:agentkit-providers"]
+durable = ["runtime", "dep:agentkit-engine", "dep:agentkit-sessions", "dep:agentkit-chat", "dep:agentkit-governance", "dep:agentkit-store", "dep:agentkit-providers"]
 client = ["dep:agentkit-client"]
 http = ["durable", "dep:agentkit-http"]
 mcp = ["dep:agentkit-mcp"]
@@ -26,7 +26,10 @@ keychain = ["runtime", "agentkit-connections/os-keychain"]
 agentkit-contracts = { workspace = true }
 agentkit-core = { workspace = true, optional = true }
 agentkit-connections = { workspace = true, optional = true }
-agentkit-host = { workspace = true, optional = true }
+agentkit-engine = { workspace = true, optional = true }
+agentkit-sessions = { workspace = true, optional = true }
+agentkit-chat = { workspace = true, optional = true }
+agentkit-governance = { workspace = true, optional = true }
 agentkit-store = { workspace = true, optional = true }
 agentkit-providers = { workspace = true, optional = true }
 agentkit-client = { workspace = true, optional = true }

@@ -3,6 +3,8 @@
 //! The default surface contains only portable contracts. Native execution,
 //! persistence, HTTP, MCP and platform credential storage are explicit features.
 
+#[cfg(feature = "durable")]
+pub use agentkit_chat as chat;
 #[cfg(feature = "client")]
 pub use agentkit_client as client;
 #[cfg(feature = "runtime")]
@@ -11,13 +13,17 @@ pub use agentkit_contracts as contracts;
 #[cfg(feature = "runtime")]
 pub use agentkit_core as core;
 #[cfg(feature = "durable")]
-pub use agentkit_host as host;
+pub use agentkit_engine as engine;
+#[cfg(feature = "durable")]
+pub use agentkit_governance as governance;
 #[cfg(feature = "http")]
 pub use agentkit_http as http;
 #[cfg(feature = "mcp")]
 pub use agentkit_mcp as mcp;
 #[cfg(feature = "durable")]
 pub use agentkit_providers as providers;
+#[cfg(feature = "durable")]
+pub use agentkit_sessions as sessions;
 #[cfg(feature = "durable")]
 pub use agentkit_store as store;
 /// The confined coding tool pack (`coding` namespace contributor and guard).

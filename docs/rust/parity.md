@@ -119,9 +119,9 @@ per pass and emits one durable `run.warning
 and the binding wires the FS source unconditionally — sessions whose
 descriptor carries a workspace receive the injection; descriptor-less
 sessions stay untouched. Evidence: the port matrix
-(`rust/crates/host/tests/project_instructions.rs`), an end-to-end host
+(`rust/crates/chat/tests/project_instructions.rs`), an end-to-end host
 test proving the warning is durable and the symlinked target never
-reaches the provider (`rust/crates/host/tests/project_instructions_session.rs`),
+reaches the provider (`rust/crates/chat/tests/project_instructions_session.rs`),
 and two binding suites with wire-level capture through the mock provider
 (`packages/native/tests/project-instructions.test.ts`). The binding also
 gained `deleteChat`/`archiveChat`/`unarchiveChat` over the store engine

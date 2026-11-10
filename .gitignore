@@ -7,7 +7,7 @@ coverage/
 *.sqlite
 *.sqlite-*
 # Immutable cross-language fixtures (generated once from the TS authority).
-!rust/crates/host/tests/fixtures/ts_receipts/*.sqlite
+!rust/crates/chat/tests/fixtures/ts_receipts/*.sqlite
 package.json.publishconfig-backup
 
 # Generated analysis artifacts and session-local files

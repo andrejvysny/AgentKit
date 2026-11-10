@@ -3,8 +3,11 @@
 //! provider (validated at spawn, preserved across a restart).
 
 use agentkit_agents::*;
+use agentkit_chat::*;
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
-use agentkit_host::*;
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+
+use agentkit_sessions::*;
 use agentkit_store::{MessageInput, SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;

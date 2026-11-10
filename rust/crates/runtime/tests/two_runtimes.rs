@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream};
-use agentkit_host::CreateSessionInput;
 use agentkit_runtime::AgentRuntime;
+use agentkit_sessions::CreateSessionInput;
 use agentkit_store::SqliteStore;
 use tokio_util::sync::CancellationToken;
 

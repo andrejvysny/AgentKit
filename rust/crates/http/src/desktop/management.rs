@@ -285,11 +285,11 @@ fn redact_mcp(value: &mut Value) {
     }
 }
 
-fn proposal_error(error: agentkit_host::HostError) -> Problem {
+fn proposal_error(error: agentkit_sessions::HostError) -> Problem {
     match error {
-        agentkit_host::HostError::Store(agentkit_store::StoreError::InvalidTransition(detail)) => {
-            Problem::host("invalid_proposal_transition", detail)
-        }
+        agentkit_sessions::HostError::Store(agentkit_store::StoreError::InvalidTransition(
+            detail,
+        )) => Problem::host("invalid_proposal_transition", detail),
         _ => host_error(error),
     }
 }

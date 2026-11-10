@@ -151,20 +151,20 @@ impl SubagentContributor {
 }
 
 #[async_trait]
-impl agentkit_host::ToolContributor for SubagentContributor {
+impl agentkit_governance::ToolContributor for SubagentContributor {
     fn namespace(&self) -> &str {
         "subagent"
     }
     async fn contribute(
         &self,
-        _context: &agentkit_host::ToolContributionContext,
-    ) -> agentkit_host::GovernanceResult<Vec<agentkit_host::ContributedTool>> {
+        _context: &agentkit_governance::ToolContributionContext,
+    ) -> agentkit_governance::GovernanceResult<Vec<agentkit_governance::ContributedTool>> {
         if !self.service.config().enabled {
             return Ok(vec![]);
         }
         let service = self.service.clone();
         Ok(vec![
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_spawn",
                 "Spawn a child session that runs one delegated assignment in its own context. \
@@ -229,7 +229,7 @@ impl agentkit_host::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_list",
                 "List your delegated children with live status (queued/running/completed/failed/\
@@ -249,7 +249,7 @@ impl agentkit_host::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_status",
                 "One child's live detail: status, final result, error, task status, waiting \
@@ -278,7 +278,7 @@ impl agentkit_host::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_message",
                 "Send a follow-up to one of your children: mode \"queue\" appends an input that \
@@ -328,7 +328,7 @@ impl agentkit_host::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_await",
                 "Wait for your children to settle and collect their results. Omit childIds to \
@@ -364,7 +364,7 @@ impl agentkit_host::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_cancel",
                 "Cooperatively cancel one of your children's live turn. Cancellation is \
@@ -402,7 +402,7 @@ impl agentkit_host::ToolContributor for SubagentContributor {
                     })
                 },
             )),
-            agentkit_host::ContributedTool::Read(tool(
+            agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 "subagent_resume",
                 "Resume one of your children: an interrupted turn continues in place; a failed \

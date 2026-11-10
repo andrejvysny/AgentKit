@@ -15,7 +15,7 @@
 //! engine's run-scoped layers — the `ToolGuard` chain (the `BindingAuthority`
 //! and `JsToolGuard` pair, plan-mode blocking, durable ask/approve) and the
 //! exactly-once execution receipts — are bound to task-lease execution
-//! inside a turn (see `agentkit_host::governance` and
+//! inside a turn (see `agentkit_chat::governance` and
 //! `agentkit_core::ToolContext::dispatch_guard`: "standalone calls have no
 //! task lease"). Fabricating a run to borrow them would be host surgery,
 //! so the binding instead enforces what genuinely holds at this layer:

@@ -23,8 +23,9 @@
 //! `RunProfileService`) is ever called directly: all fifteen M1
 //! operations ride the routes.
 
-use agentkit_host::{AgentHost, HostOptions, Runtime, SystemRuntime};
+use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_http::{Actor, Config, DesktopBackend};
+use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::{AgentDefinition, ClaimInput, SqliteStore, TaskStatus};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};

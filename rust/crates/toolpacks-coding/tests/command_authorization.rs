@@ -1,9 +1,14 @@
 //! End-to-end host authorization with inert tools; no shell commands execute.
+use agentkit_chat::*;
 use agentkit_core::{
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, Tool, ToolContext,
     ToolDefinition, ToolRegistry, ToolResult,
 };
-use agentkit_host::*;
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+};
+use agentkit_sessions::*;
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, STANDING_APPROVALS_METADATA_KEY, SqliteStore,
 };

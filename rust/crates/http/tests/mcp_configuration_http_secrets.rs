@@ -1,5 +1,5 @@
 use agentkit_contracts::CreateMcpServerRequest;
-use agentkit_host::SystemRuntime;
+use agentkit_engine::SystemRuntime;
 use agentkit_http::{Actor, McpConfigurationPort};
 use agentkit_mcp::{McpConfigError, McpConfigRepository, McpConfigSecrets};
 use agentkit_store::SqliteStore;

@@ -22,7 +22,7 @@ name = "agentkit-agent-lifecycle"
 version = "0.1.0"
 dependencies = [
  "agentkit-agents",
- "agentkit-host",
+ "agentkit-sessions",
  "agentkit-store",
  "serde_json",
  "tokio",
@@ -32,10 +32,12 @@ dependencies = [
 name = "agentkit-agents"
 version = "0.1.0"
 dependencies = [
+ "agentkit-chat",
  "agentkit-core",
+ "agentkit-engine",
  "agentkit-governance",
- "agentkit-host",
  "agentkit-kernel",
+ "agentkit-sessions",
  "agentkit-store",
  "async-trait",
  "futures",
@@ -49,16 +51,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-chat"
+version = "0.1.0"
+dependencies = [
+ "agentkit-contracts",
+ "agentkit-core",
+ "agentkit-engine",
+ "agentkit-governance",
+ "agentkit-kernel",
+ "agentkit-mcp",
+ "agentkit-sessions",
+ "agentkit-store",
+ "async-trait",
+ "chrono",
+ "futures",
+ "libc",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "agentkit-client"
 version = "0.1.0"
 dependencies = [
+ "agentkit-chat",
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
- "agentkit-host",
+ "agentkit-engine",
  "agentkit-http",
  "agentkit-mcp",
  "agentkit-runtime",
+ "agentkit-sessions",
  "agentkit-store",
  "async-stream",
  "async-trait",
@@ -128,12 +160,14 @@ dependencies = [
 name = "agentkit-egui-host"
 version = "0.1.0"
 dependencies = [
+ "agentkit-chat",
  "agentkit-client",
  "agentkit-connections",
  "agentkit-core",
- "agentkit-host",
+ "agentkit-engine",
  "agentkit-providers",
  "agentkit-runtime",
+ "agentkit-sessions",
  "agentkit-store",
  "async-stream",
  "async-trait",
@@ -179,42 +213,20 @@ dependencies = [
 [[package]]
 name = "agentkit-host"
 version = "0.1.0"
-dependencies = [
- "agentkit-contracts",
- "agentkit-core",
- "agentkit-engine",
- "agentkit-governance",
- "agentkit-kernel",
- "agentkit-mcp",
- "agentkit-sessions",
- "agentkit-store",
- "async-trait",
- "chrono",
- "futures",
- "libc",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-util",
- "uuid",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "agentkit-http"
 version = "0.1.0"
 dependencies = [
  "agentkit-agents",
+ "agentkit-chat",
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
- "agentkit-host",
+ "agentkit-engine",
  "agentkit-mcp",
  "agentkit-providers",
+ "agentkit-sessions",
  "agentkit-store",
  "async-stream",
  "async-trait",
@@ -293,15 +305,17 @@ name = "agentkit-napi"
 version = "0.1.0"
 dependencies = [
  "agentkit-agents",
+ "agentkit-chat",
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-engine",
  "agentkit-governance",
- "agentkit-host",
  "agentkit-http",
  "agentkit-mcp",
  "agentkit-providers",
  "agentkit-runtime",
+ "agentkit-sessions",
  "agentkit-store",
  "async-trait",
  "axum",
@@ -324,8 +338,8 @@ dependencies = [
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
- "agentkit-host",
  "agentkit-kernel",
+ "agentkit-sessions",
  "async-stream",
  "async-trait",
  "chrono",
@@ -345,15 +359,17 @@ name = "agentkit-runtime"
 version = "0.1.0"
 dependencies = [
  "agentkit-agents",
+ "agentkit-chat",
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-engine",
  "agentkit-governance",
- "agentkit-host",
  "agentkit-http",
  "agentkit-lsp",
  "agentkit-mcp",
  "agentkit-providers",
+ "agentkit-sessions",
  "agentkit-store",
  "agentkit-toolpacks-coding",
  "async-trait",
@@ -376,14 +392,17 @@ dependencies = [
 name = "agentkit-rust"
 version = "0.1.0"
 dependencies = [
+ "agentkit-chat",
  "agentkit-client",
  "agentkit-connections",
  "agentkit-contracts",
  "agentkit-core",
- "agentkit-host",
+ "agentkit-engine",
+ "agentkit-governance",
  "agentkit-http",
  "agentkit-mcp",
  "agentkit-providers",
+ "agentkit-sessions",
  "agentkit-store",
  "agentkit-toolpacks-coding",
 ]
@@ -432,8 +451,9 @@ dependencies = [
 name = "agentkit-teammate-consumer"
 version = "0.1.0"
 dependencies = [
- "agentkit-host",
+ "agentkit-engine",
  "agentkit-http",
+ "agentkit-sessions",
  "agentkit-store",
  "axum",
  "reqwest",
@@ -457,11 +477,13 @@ dependencies = [
 name = "agentkit-toolpacks-coding"
 version = "0.1.0"
 dependencies = [
+ "agentkit-chat",
  "agentkit-contracts",
  "agentkit-core",
+ "agentkit-engine",
  "agentkit-governance",
- "agentkit-host",
  "agentkit-kernel",
+ "agentkit-sessions",
  "agentkit-store",
  "async-trait",
  "futures",

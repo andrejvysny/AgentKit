@@ -4,11 +4,14 @@
 //! triggers with cooldown/window loop guards, and model/budget separation.
 
 use agentkit_agents::*;
+use agentkit_chat::*;
 use agentkit_core::{
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, Tool, ToolCall,
     ToolContext, ToolDefinition, ToolLimits, ToolResult,
 };
-use agentkit_host::*;
+use agentkit_engine::{SharedRuntime, SystemRuntime};
+use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
+use agentkit_sessions::*;
 use agentkit_store::{SqliteStore, SubmitTask};
 use async_trait::async_trait;
 use serde_json::{Value, json};

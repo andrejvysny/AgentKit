@@ -8,13 +8,13 @@ use agentkit_agents::{
     AdvisorConfig, AdvisorContributor, AdvisorEngine, AdvisorEventSink, AdvisorReport,
     AdvisorToolSource, AdvisorTools, AgentsError, AgentsResult, Watchdog, WatchdogRunHooks,
 };
+use agentkit_chat::ProviderRegistry;
 use agentkit_core::{ChatProvider, RunHooks};
+use agentkit_engine::{ObserverError, SharedRuntime, TaskSettledObserver};
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
-use agentkit_host::{
-    AgentSessionService, ObserverError, ProviderRegistry, SharedRuntime, TaskSettledObserver,
-};
+use agentkit_sessions::AgentSessionService;
 use agentkit_store::TaskRecord;
 use std::sync::Mutex as StdMutex;
 
