@@ -470,7 +470,24 @@ impl BrokerBackend {
             Ok(Ok(result)) => {
                 let mut parts = Vec::new();
                 for part in &result.content {
-                    parts.push(ContentBlock::text(part.to_string()));
+                    // Authorities return MCP-shaped parts
+                    // `{"type":"text","text":"..."}`; forwarding the part's
+                    // JSON text would hand the model escaped JSON inside
+                    // JSON. Unwrap text parts (and bare strings); anything
+                    // else keeps the JSON-serialised fallback.
+                    let text = match part {
+                        Value::String(text) => text.clone(),
+                        Value::Object(object)
+                            if object.get("type").and_then(Value::as_str) == Some("text") =>
+                        {
+                            match object.get("text").and_then(Value::as_str) {
+                                Some(text) => text.to_owned(),
+                                None => part.to_string(),
+                            }
+                        }
+                        other => other.to_string(),
+                    };
+                    parts.push(ContentBlock::text(text));
                 }
                 if parts.is_empty() {
                     parts.push(ContentBlock::text("{}".to_owned()));
@@ -784,8 +801,17 @@ impl Backend for BrokerBackend {
     }
 
     fn revoke_actor(&self, _actor_id: &str) {
-        // One attempt, one principal: any revocation revokes the attempt.
-        self.revoke();
+        // Deliberately NOT an attempt-wide revocation. The mcp layer calls
+        // this whenever a per-request or per-session scope lease is dropped,
+        // and that happens on perfectly healthy paths: the real CLI's first
+        // request is a `server/discover` probe that is rejected (400), and a
+        // session may expire or be deleted. Revoking the attempt here would
+        // cancel the listener's shutdown token and make the CLI's follow-up
+        // `initialize` fail with ECONNREFUSED. Session-scoped revocation is
+        // already handled by the mcp layer (`ScopeLease::revoke` cancels that
+        // session's `scope.cancellation`, which `call_tool` checks).
+        // Attempt-wide revocation is driven by the host only: `revoke`,
+        // `AttemptBroker::shutdown` and `Drop`.
     }
 }
 
@@ -1065,7 +1091,7 @@ mod tests {
                     message: denial.message.clone(),
                 }),
                 None => Ok(BrokerExecuted {
-                    content: vec![json!({"note": "found"})],
+                    content: vec![json!({"type": "text", "text": "found it"})],
                     structured: Some(json!({"id": 1})),
                 }),
             }
@@ -1608,7 +1634,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(denial_of(&result), None);
-        assert!(result.content[0].as_text().unwrap().text.contains("found"));
+        // The authority's `{"type":"text","text":..}` part reaches the
+        // client as PLAIN text, not as escaped JSON (Fix D).
+        assert_eq!(result.content[0].as_text().unwrap().text, "found it");
         assert_eq!(result.structured_content, Some(json!({"id": 1})));
         assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
     }
@@ -1957,13 +1985,172 @@ mod tests {
         assert!(status.is_success(), "tools/call: {status} {body}");
         assert_ne!(body["result"]["isError"], Value::Bool(true), "{body}");
         assert!(
-            body["result"]["content"][0]["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("found")),
+            body["result"]["content"][0]["text"].as_str() == Some("found it"),
             "the scripted authority's execution must travel back: {body}"
         );
         assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
         broker.shutdown().await;
+    }
+
+    /// `tools/list` + `tools/call` on an initialized session; asserts the
+    /// call executed and returned the authority's plain text.
+    async fn list_and_call(client: &reqwest::Client, url: &str, token: &str, session: &str) {
+        let (status, _, body) = rpc(
+            client,
+            url,
+            token,
+            Some(session),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+        )
+        .await;
+        assert!(status.is_success(), "tools/list: {status} {body}");
+        assert!(
+            body["result"]["tools"]
+                .as_array()
+                .is_some_and(|t| !t.is_empty())
+        );
+        let (status, _, body) = rpc(
+            client,
+            url,
+            token,
+            Some(session),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"search_notes","arguments":{"q":"hello"}}}),
+        )
+        .await;
+        assert!(status.is_success(), "tools/call: {status} {body}");
+        assert_ne!(body["result"]["isError"], Value::Bool(true), "{body}");
+        assert_eq!(body["result"]["content"][0]["text"], "found it", "{body}");
+    }
+
+    /// Fix A (reproduced live): the real CLI's FIRST request is a
+    /// `server/discover` probe with no session. It is rejected (4xx) and its
+    /// per-request scope lease is dropped, which must NOT revoke the attempt
+    /// or close the listener: the follow-up `initialize` must still succeed.
+    #[tokio::test]
+    async fn rejected_discover_probe_does_not_kill_the_broker() {
+        let authority = authority(true);
+        let broker = AttemptBroker::start(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+        )
+        .await
+        .unwrap();
+        let spec = broker.spec();
+        let url = spec.http_url.clone().unwrap();
+        let token = spec.auth_token.clone().unwrap();
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .bearer_auth(&token)
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-method", "server/discover")
+            .header("mcp-protocol-version", "2026-07-28")
+            .json(&json!({"jsonrpc":"2.0","id":"server-discover-probe-1",
+                "method":"server/discover","params":{"_meta":{}}}))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "the pre-session probe is rejected: {}",
+            response.status()
+        );
+        let session = initialize(&client, &url, &token).await;
+        list_and_call(&client, &url, &token, &session).await;
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+        broker.shutdown().await;
+    }
+
+    /// Fix A: ending one session (HTTP DELETE) is session-scoped; a second,
+    /// new session on the same broker still initializes and calls tools.
+    #[tokio::test]
+    async fn ended_session_does_not_stop_a_new_session() {
+        let authority = authority(true);
+        let broker = AttemptBroker::start(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+        )
+        .await
+        .unwrap();
+        let spec = broker.spec();
+        let url = spec.http_url.clone().unwrap();
+        let token = spec.auth_token.clone().unwrap();
+        let client = reqwest::Client::new();
+        let first = initialize(&client, &url, &token).await;
+        let response = client
+            .delete(&url)
+            .bearer_auth(&token)
+            .header("mcp-protocol-version", "2025-11-25")
+            .header("mcp-session-id", &first)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "{}", response.status());
+        let second = initialize(&client, &url, &token).await;
+        assert_ne!(first, second);
+        list_and_call(&client, &url, &token, &second).await;
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+        broker.shutdown().await;
+    }
+
+    /// Fix A: the host-driven `revoke()` still stops everything over HTTP,
+    /// and `shutdown()` closes the listener.
+    #[tokio::test]
+    async fn host_revoke_and_shutdown_still_stop_everything() {
+        let authority = authority(true);
+        let broker = AttemptBroker::start(
+            "task-1",
+            "att-1",
+            "onemind",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+        )
+        .await
+        .unwrap();
+        let spec = broker.spec();
+        let url = spec.http_url.clone().unwrap();
+        let token = spec.auth_token.clone().unwrap();
+        let client = reqwest::Client::new();
+        let session = initialize(&client, &url, &token).await;
+        broker.backend().revoke();
+        // Host revocation also closes the listener (graceful shutdown), so
+        // the call is either refused in-band or fails at the transport; in
+        // no case does it reach the authority.
+        let attempt = client
+            .post(&url)
+            .bearer_auth(&token)
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2025-11-25")
+            .header("mcp-session-id", &session)
+            .json(
+                &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"search_notes","arguments":{"q":"hello"}}}),
+            )
+            .send()
+            .await;
+        if let Ok(response) = attempt {
+            let text = response.text().await.unwrap_or_default();
+            assert!(!text.contains("found it"), "revoked broker served: {text}");
+        }
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 0);
+        broker.shutdown().await;
+        let refused = client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&json!({}))
+            .send()
+            .await;
+        assert!(refused.is_err(), "the listener is closed after shutdown");
     }
 
     /// Review R4 F2 (assembly): with a TINY effect timeout, an approval

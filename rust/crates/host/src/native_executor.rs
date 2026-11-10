@@ -1221,6 +1221,10 @@ impl TaskExecutor for NativeAgentExecutor {
         let mut saw_event = false;
         let mut protocol_violation: Option<(String, String)> = None;
         let mut identity_mismatch: Option<String> = None;
+        // Fix B: an owned-MCP attempt whose vendor `init` does not report the
+        // broker's server as `connected` runs WITHOUT its tools; the model
+        // may then fabricate tool calls as plain text. Fail closed.
+        let mut mcp_bridge_failure: Option<String> = None;
         let mut transport_faults: Vec<TransportFault> = Vec::new();
         let mut timed_out: Option<FailureClass> = None;
         let mut interrupt_receipt = None;
@@ -1379,6 +1383,28 @@ impl TaskExecutor for NativeAgentExecutor {
                                         "fingerprint": plan.fingerprint,
                                     }),
                                 ));
+                                // Evidence is durable (above) before failing.
+                                if let (Some(broker), NativeEvent::Init { mcp_servers, .. }) =
+                                    (broker.as_ref(), &event)
+                                    && mcp_bridge_failure.is_none()
+                                {
+                                    let server = broker.spec().server_name;
+                                    let reported = mcp_servers
+                                        .iter()
+                                        .find(|entry| entry.name == server)
+                                        .map(|entry| entry.status.as_str());
+                                    if reported != Some("connected") {
+                                        mcp_bridge_failure = Some(format!(
+                                            "the owned MCP server '{server}' is not connected \
+                                             (vendor reported status: {}); the turn would run \
+                                             without its governed tools",
+                                            reported.unwrap_or("not reported")
+                                        ));
+                                        interrupt_receipt = Some(
+                                            child.interrupt(InterruptPolicy::Quarantine).await,
+                                        );
+                                    }
+                                }
                             }
                         }
                         Err(violation) => {
@@ -1436,6 +1462,10 @@ impl TaskExecutor for NativeAgentExecutor {
             },
         };
 
+        // Fix C: the CLI explains early deaths on stderr. Read the bounded,
+        // sanitised tail once the child is reaped.
+        let stderr_tail = agentkit_native::bounded_stderr_tail(&child.stderr_tail());
+
         // 13. Authoritative terminal outcome: the adapter decides (the only
         // component that saw the vendor's root result facts).
         if let Some(detail) = &identity_mismatch {
@@ -1454,6 +1484,12 @@ impl TaskExecutor for NativeAgentExecutor {
             NativeTerminalOutcome::Failed {
                 class: FailureClass::ProtocolViolation,
                 message: format!("{code}: {message}"),
+                partial_text: None,
+            }
+        } else if let Some(message) = &mcp_bridge_failure {
+            NativeTerminalOutcome::Failed {
+                class: FailureClass::McpBridgeUnavailable,
+                message: message.clone(),
                 partial_text: None,
             }
         } else if let Some(class) = timed_out {
@@ -1660,19 +1696,21 @@ impl TaskExecutor for NativeAgentExecutor {
                 if let Some(claim) = &continuation_claim {
                     claim.discharge(claim.accepted()).await;
                 }
-                self.emit(
-                    &context,
-                    "native.failed",
-                    json!({
-                        "class": class,
-                        "message": message,
-                        "partialText": partial_text,
-                        "transportFaults": transport_faults,
-                        "cleanupUncertain": cleanup_uncertain,
-                        "fingerprint": plan.fingerprint,
-                    }),
-                )
-                .await?;
+                // Only exit-derived outcomes (no root result decided) get
+                // the stderr suffix on the message returned to the runner.
+                let message = agentkit_native::with_stderr_suffix(class, message, &stderr_tail);
+                let mut payload = json!({
+                    "class": class,
+                    "message": message,
+                    "partialText": partial_text,
+                    "transportFaults": transport_faults,
+                    "cleanupUncertain": cleanup_uncertain,
+                    "fingerprint": plan.fingerprint,
+                });
+                if !stderr_tail.is_empty() {
+                    payload["stderrTail"] = json!(stderr_tail);
+                }
+                self.emit(&context, "native.failed", payload).await?;
                 let code = format!("native_{}", class_code(class));
                 // Retryable only when the class proves the failure happened
                 // before inference and the profile cannot have run an
@@ -1714,18 +1752,18 @@ impl TaskExecutor for NativeAgentExecutor {
                 if let Some(claim) = &continuation_claim {
                     claim.discharge(claim.accepted()).await;
                 }
-                self.emit(
-                    &context,
-                    "native.uncertain",
-                    json!({
-                        "class": class,
-                        "detail": detail,
-                        "partialText": partial_text,
-                        "cleanupUncertain": cleanup_uncertain,
-                        "fingerprint": plan.fingerprint,
-                    }),
-                )
-                .await?;
+                let detail = agentkit_native::with_stderr_suffix(class, detail, &stderr_tail);
+                let mut payload = json!({
+                    "class": class,
+                    "detail": detail,
+                    "partialText": partial_text,
+                    "cleanupUncertain": cleanup_uncertain,
+                    "fingerprint": plan.fingerprint,
+                });
+                if !stderr_tail.is_empty() {
+                    payload["stderrTail"] = json!(stderr_tail);
+                }
+                self.emit(&context, "native.uncertain", payload).await?;
                 Err(HostError::Failure(ExecutionFailure {
                     code: Some(format!("native_{}", class_code(class))),
                     retryable: Some(true),
@@ -2050,6 +2088,10 @@ mod tests {
         preassigned: Arc<Mutex<Option<String>>>,
         seen_mcp: Arc<Mutex<Option<Option<McpEndpointSpec>>>>,
         child_live: Arc<AtomicBool>,
+        /// Scripted stderr tail returned by the fake child.
+        stderr: Arc<Mutex<Vec<u8>>>,
+        /// Scripted exit code reported by the fake child's `wait`.
+        exit_code: Arc<std::sync::atomic::AtomicI32>,
     }
 
     impl Shared {
@@ -2104,6 +2146,19 @@ mod tests {
                     observed_effort: None,
                     observed_version: None,
                     capabilities: vec![],
+                    // Scripted as `"mcp": {"<server>": "<status>"}`.
+                    mcp_servers: value["mcp"]
+                        .as_object()
+                        .map(|servers| {
+                            servers
+                                .iter()
+                                .map(|(name, status)| agentkit_native::McpServerStatus {
+                                    name: name.clone(),
+                                    status: status.as_str().unwrap_or_default().to_string(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 }]),
                 "delta" => Ok(vec![NativeEvent::TextDelta {
                     text: value["t"].as_str().unwrap_or_default().to_string(),
@@ -2229,7 +2284,7 @@ mod tests {
             None
         }
         fn stderr_tail(&self) -> Vec<u8> {
-            vec![]
+            self.shared.stderr.lock().unwrap().clone()
         }
         async fn deliver_input(
             &mut self,
@@ -2257,7 +2312,7 @@ mod tests {
             ProcessExit {
                 pid: 4242,
                 generation: 7,
-                exit_code: Some(0),
+                exit_code: Some(self.shared.exit_code.load(Ordering::SeqCst)),
                 signal: None,
                 after_interrupt: !self.shared.interrupts.lock().unwrap().is_empty(),
             }
@@ -2588,6 +2643,29 @@ mod tests {
                         .map(|t| t.strip_prefix("task.").map_or(t, |rest| rest).to_string())
                 })
                 .collect()
+        }
+
+        /// Payload (`data`) of the first durable event whose type ends with
+        /// `suffix`.
+        async fn event_data(&self, task_id: &str, suffix: &str) -> Option<Value> {
+            self.store
+                .events(task_id, None, 4096)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|record| {
+                    record.event["type"]
+                        .as_str()
+                        .is_some_and(|t| t.ends_with(suffix))
+                })
+                .map(|record| record.event["data"].clone())
+        }
+
+        fn failure_message(err: &HostError) -> String {
+            match err {
+                HostError::Failure(failure) => failure.message.clone(),
+                other => panic!("expected an execution failure, got {other:?}"),
+            }
         }
 
         fn failure(err: HostError) -> (Option<String>, Option<bool>) {
@@ -3860,7 +3938,8 @@ mod tests {
         let h = harness();
         h.shared
             .set_outcome(Shared::completed("vendor-1", "tool answer"));
-        h.shared.queue(&[r#"{"e":"init","s":"vendor-1"}"#]);
+        h.shared
+            .queue(&[r#"{"e":"init","s":"vendor-1","mcp":{"onemind":"connected"}}"#]);
         h.submit(
             "t1",
             &payload(
@@ -3898,6 +3977,214 @@ mod tests {
             broker.backend().list_tools(&scope).await.is_err(),
             "settled attempts must not keep authenticating"
         );
+    }
+
+    // ----- Fix B: fail closed when the owned MCP server is not connected ---
+
+    /// Runs one OwnedMcpChat turn whose scripted init frame is `init_line`.
+    async fn run_owned_mcp(h: &Harness, init_line: &str) -> HostResult<()> {
+        h.shared.queue(&[init_line]);
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::OwnedMcpChat, false),
+                &fresh_input(),
+                Some(&broker_spec()),
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        h.executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+    }
+
+    async fn assert_bridge_failure(h: &Harness, err: HostError, reported: &str) {
+        let message = Harness::failure_message(&err);
+        let (code, _) = Harness::failure(err);
+        assert_eq!(code.as_deref(), Some("native_mcp_bridge_unavailable"));
+        assert!(
+            message.contains("onemind") && message.contains(reported),
+            "{message}"
+        );
+        let types = h.event_types("t1").await;
+        assert!(
+            types.iter().any(|t| t == "native.event"),
+            "evidence is durable: {types:?}"
+        );
+        assert!(types.iter().any(|t| t == "native.failed"), "{types:?}");
+        assert!(!types.iter().any(|t| t == "native.completed"), "{types:?}");
+        let failed = h.event_data("t1", "native.failed").await.unwrap();
+        assert_eq!(failed["class"], "mcp_bridge_unavailable");
+        assert_eq!(
+            *h.shared.interrupts.lock().unwrap(),
+            [InterruptPolicy::Quarantine]
+        );
+    }
+
+    #[tokio::test]
+    async fn owned_mcp_fails_closed_when_the_server_reports_failed() {
+        let h = harness();
+        // Even a scripted `Completed` must not win over the bridge failure.
+        h.shared
+            .set_outcome(Shared::completed("vendor-1", "fabricated"));
+        let err = run_owned_mcp(
+            &h,
+            r#"{"e":"init","s":"vendor-1","mcp":{"onemind":"failed"}}"#,
+        )
+        .await
+        .unwrap_err();
+        assert_bridge_failure(&h, err, "failed").await;
+    }
+
+    #[tokio::test]
+    async fn owned_mcp_fails_closed_when_the_server_is_not_reported() {
+        let h = harness();
+        h.shared
+            .set_outcome(Shared::completed("vendor-1", "fabricated"));
+        let err = run_owned_mcp(
+            &h,
+            r#"{"e":"init","s":"vendor-1","mcp":{"someone-else":"connected"}}"#,
+        )
+        .await
+        .unwrap_err();
+        assert_bridge_failure(&h, err, "not reported").await;
+    }
+
+    #[tokio::test]
+    async fn owned_mcp_completes_when_the_server_is_connected() {
+        let h = harness();
+        h.shared
+            .set_outcome(Shared::completed("vendor-1", "real answer"));
+        run_owned_mcp(
+            &h,
+            r#"{"e":"init","s":"vendor-1","mcp":{"onemind":"connected"}}"#,
+        )
+        .await
+        .expect("a connected bridge completes as before");
+        let types = h.event_types("t1").await;
+        assert!(types.iter().any(|t| t == "native.completed"), "{types:?}");
+        assert!(h.shared.interrupts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn plain_chat_without_mcp_servers_completes_as_before() {
+        let h = harness();
+        h.shared.queue(&[r#"{"e":"init","s":"vendor-1"}"#]);
+        h.shared.set_outcome(Shared::completed("vendor-1", "plain"));
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        h.executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .expect("plain chat is unaffected by the MCP gate");
+        assert!(h.shared.interrupts.lock().unwrap().is_empty());
+    }
+
+    // ----- Fix C: stderr surfaces in exit-derived failures ------------------
+
+    const INVALID_SESSION: &str = "Error: Invalid session ID. Must be a valid UUID.";
+
+    #[tokio::test]
+    async fn early_exit_failure_carries_the_stderr_tail() {
+        let h = harness();
+        h.shared.exit_code.store(1, Ordering::SeqCst);
+        *h.shared.stderr.lock().unwrap() =
+            format!("\x1b[31m{INVALID_SESSION}\x1b[0m\n").into_bytes();
+        h.shared.set_outcome(NativeTerminalOutcome::Failed {
+            class: FailureClass::ExitWithoutResult,
+            message: "vendor process exited without a root result (exit_code=Some(1), signal=None)"
+                .into(),
+            partial_text: None,
+        });
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        let err = h
+            .executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .unwrap_err();
+        let message = Harness::failure_message(&err);
+        assert!(message.contains("exit_code=Some(1)"), "{message}");
+        assert!(
+            message.contains(&format!("; stderr: [31m{INVALID_SESSION}[0m")),
+            "{message}"
+        );
+        let failed = h.event_data("t1", "native.failed").await.unwrap();
+        let tail = failed["stderrTail"].as_str().unwrap();
+        assert!(
+            tail.contains(INVALID_SESSION) && !tail.contains('\u{1b}'),
+            "{tail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn uncertain_exit_carries_the_stderr_tail_and_completed_does_not() {
+        let h = harness();
+        *h.shared.stderr.lock().unwrap() = INVALID_SESSION.as_bytes().to_vec();
+        // No scripted outcome: the fake adapter reports Uncertain/ExitWithoutResult.
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        let err = h
+            .executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .unwrap_err();
+        assert!(Harness::failure_message(&err).ends_with(&format!("; stderr: {INVALID_SESSION}")));
+        let uncertain = h.event_data("t1", "native.uncertain").await.unwrap();
+        assert_eq!(uncertain["stderrTail"], INVALID_SESSION);
+        assert!(
+            uncertain["detail"]
+                .as_str()
+                .unwrap()
+                .contains(INVALID_SESSION)
+        );
+
+        // A completed turn never gets the tail, even if stderr is noisy.
+        let h = harness();
+        *h.shared.stderr.lock().unwrap() = b"warning noise".to_vec();
+        h.shared.queue(&[r#"{"e":"init","s":"vendor-1"}"#]);
+        h.shared.set_outcome(Shared::completed("vendor-1", "ok"));
+        h.submit(
+            "t1",
+            &payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &fresh_input(),
+                None,
+            ),
+        )
+        .await;
+        let claimed = h.claim("t1").await;
+        h.executor()
+            .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+            .await
+            .unwrap();
+        let completed = h.event_data("t1", "native.completed").await.unwrap();
+        assert!(completed.get("stderrTail").is_none());
     }
 
     #[tokio::test]

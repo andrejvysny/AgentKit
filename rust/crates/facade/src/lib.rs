@@ -49,10 +49,11 @@ pub use agentkit_native::{
     AuthEvidence, AuthExpectation, AuthMode, CapabilitySnapshot, CapabilityState, ContentPolicy,
     ContextBlock, EXECUTION_TARGET_SCHEMA_VERSION, ExecutableEvidence, ExecutableLocator,
     FailureClass, FinishDisposition, FrameLine, InterruptPolicy, InterruptReceipt, LaunchPlan,
-    NativeBackend, NativeError, NativeEvent, NativeExecutionTarget, NativeProfile, NativeRefusal,
-    NativeResult, NativeTerminalOutcome, OwnedChildHandle, PermissionPromptPolicy, PolicyState,
-    PreflightReport, ProcessExit, ProcessSupervisor, ProtocolViolation, ResourceLimits,
-    StreamFrameAdapter, TransportFault, TurnInput, TurnResume, validate_execution_target,
+    McpServerStatus, NativeBackend, NativeError, NativeEvent, NativeExecutionTarget, NativeProfile,
+    NativeRefusal, NativeResult, NativeTerminalOutcome, OwnedChildHandle, PermissionPromptPolicy,
+    PolicyState, PreflightReport, ProcessExit, ProcessSupervisor, ProtocolViolation,
+    ResourceLimits, StreamFrameAdapter, TransportFault, TurnInput, TurnResume,
+    validate_execution_target,
 };
 /// Cancellation handle used by [`NativeChatOptions::cancellation`].
 pub use tokio_util::sync::CancellationToken;
@@ -438,6 +439,10 @@ impl NativeChat {
             },
         };
 
+        // The CLI explains early deaths on stderr; keep a bounded,
+        // sanitised tail for exit-derived failures (read after the reap).
+        let stderr_tail = agentkit_native::bounded_stderr_tail(&child.stderr_tail());
+
         // The facade owns the private per-run directory the host would
         // otherwise settle: best-effort bounded removal, residue is visible
         // through `cleanup_uncertain` below, never silently ignored.
@@ -491,6 +496,29 @@ impl NativeChat {
                 .iter()
                 .any(|fault| fault.code == "cleanup_uncertain")
             || !dir_removed;
+        // Only outcomes decided by the exit rows (no root result) get the
+        // stderr suffix; the rule lives next to the sanitiser in `native`.
+        let outcome = match outcome {
+            NativeTerminalOutcome::Failed {
+                class,
+                message,
+                partial_text,
+            } => NativeTerminalOutcome::Failed {
+                class,
+                message: agentkit_native::with_stderr_suffix(class, message, &stderr_tail),
+                partial_text,
+            },
+            NativeTerminalOutcome::Uncertain {
+                class,
+                detail,
+                partial_text,
+            } => NativeTerminalOutcome::Uncertain {
+                class,
+                detail: agentkit_native::with_stderr_suffix(class, detail, &stderr_tail),
+                partial_text,
+            },
+            other => other,
+        };
         Ok(match (outcome, cleanup_uncertain) {
             (
                 NativeTerminalOutcome::Failed {

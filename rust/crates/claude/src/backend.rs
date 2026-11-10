@@ -193,6 +193,12 @@ impl NativeBackend for ClaudeCodeBackend {
                 return Err(e);
             }
         };
+        // Stable cwd shared by every attempt (see `build_launch_plan`);
+        // created idempotently and NEVER removed by per-attempt cleanup.
+        if let Err(e) = ensure_private_dir(&plan.cwd, "cwd") {
+            let _ = std::fs::remove_dir_all(&per_run_dir);
+            return Err(e);
+        }
         if let Err(e) = stage_run_dir(&per_run_dir, input.system_prompt.as_deref(), mcp) {
             let _ = std::fs::remove_dir_all(&per_run_dir);
             return Err(e);
@@ -240,32 +246,33 @@ impl NativeBackend for ClaudeCodeBackend {
     }
 }
 
+/// Create a directory (0700), idempotently, tightening the leaf mode.
+fn ensure_private_dir(dir: &std::path::Path, field: &'static str) -> Result<(), NativeRefusal> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|e| {
+            NativeRefusal::new(field, format!("cannot create {}: {e}", dir.display()), true)
+        })?;
+    // recursive(true) can inherit umask for parents; tighten the leaf.
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+        NativeRefusal::new(
+            field,
+            format!("cannot tighten {}: {e}", dir.display()),
+            true,
+        )
+    })
+}
+
 /// Create the private run directory (0700) and stage its files (0600).
 fn stage_run_dir(
     per_run_dir: &std::path::Path,
     system_prompt: Option<&str>,
     mcp: Option<&McpEndpointSpec>,
 ) -> Result<(), NativeRefusal> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(per_run_dir)
-        .map_err(|e| {
-            NativeRefusal::new(
-                "per_run_dir",
-                format!("cannot create {}: {e}", per_run_dir.display()),
-                true,
-            )
-        })?;
-    // recursive(true) can inherit umask for parents; tighten the leaf.
-    std::fs::set_permissions(per_run_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
-        NativeRefusal::new(
-            "per_run_dir",
-            format!("cannot tighten {}: {e}", per_run_dir.display()),
-            true,
-        )
-    })?;
+    ensure_private_dir(per_run_dir, "per_run_dir")?;
     write_per_run_files(per_run_dir, system_prompt, mcp)
 }
 
@@ -517,15 +524,33 @@ mod tests {
                 .contains(&plan.per_run_dir.join("prompt.txt").display().to_string())
         );
         assert!(plan.native_session_id.is_some());
+        // Stable cwd: created 0700, sibling of the per-run dir, shared by
+        // attempts, and NOT removed with the per-run dir.
+        assert_eq!(plan.cwd, tmp.path().join("runs").join("cwd"));
+        assert_ne!(plan.cwd, plan.per_run_dir);
+        assert_eq!(
+            std::fs::metadata(&plan.cwd).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let plan2 = backend.plan_turn(&t, &input, None).unwrap();
+        assert_eq!(plan2.cwd, plan.cwd);
+        assert_ne!(plan2.per_run_dir, plan.per_run_dir);
+        std::fs::remove_dir_all(&plan.per_run_dir).unwrap();
+        assert!(plan.cwd.is_dir());
         assert_eq!(
             plan.argv.iter().filter(|a| **a == "--session-id").count(),
             1
         );
-        // Exactly one private run root under run_root.
-        let entries: Vec<_> = std::fs::read_dir(tmp.path().join("runs"))
+        // Under run_root: the stable `cwd` plus exactly one live private
+        // per-attempt dir (the first was removed above, plan2's remains).
+        let mut names: Vec<String> = std::fs::read_dir(tmp.path().join("runs"))
             .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(entries.len(), 1);
+        names.sort();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert_eq!(names[1], "cwd");
+        assert!(names[0].starts_with(crate::launch::PRIVATE_RUN_DIR_PREFIX));
     }
 
     #[test]

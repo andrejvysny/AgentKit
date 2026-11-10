@@ -58,7 +58,9 @@ pub struct LaunchPlan {
     /// Additive child-environment entries. Must never contain credential
     /// material; the official configuration namespace is preserved as-is.
     pub env: Vec<(String, String)>,
-    /// Controlled application working directory.
+    /// Controlled application working directory. Stable and shared across
+    /// attempts of one backend (vendor session stores key on it); never
+    /// removed by per-attempt cleanup.
     pub cwd: std::path::PathBuf,
     /// Private per-run directory owned by this attempt (config/settings/MCP
     /// files); removed on cleanup.
@@ -278,6 +280,51 @@ pub enum FinishDisposition {
 pub struct ProtocolViolation {
     pub code: String,
     pub message: String,
+}
+
+/// Maximum number of stderr bytes kept for failure diagnostics.
+pub const STDERR_TAIL_MAX_BYTES: usize = 2048;
+
+/// Turn a child's retained stderr bytes into bounded, display-safe text for
+/// failure messages and durable payloads: lossy UTF-8, only the LAST
+/// [`STDERR_TAIL_MAX_BYTES`] bytes (cut on a char boundary), ASCII control
+/// characters other than `\n`/`\t` stripped, trimmed. Empty when the child
+/// said nothing. Shared by the host executor and the standalone facade.
+#[must_use]
+pub fn bounded_stderr_tail(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut start = text.len().saturating_sub(STDERR_TAIL_MAX_BYTES);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..]
+        .chars()
+        .filter(|c| !c.is_ascii_control() || *c == '\n' || *c == '\t')
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// Append the child's stderr tail to an exit-derived failure message. Only
+/// `ExitWithoutResult`/`ProcessLost` qualify: those are the classes where no
+/// root result decided the outcome, so stderr is the only explanation. Any
+/// other class (and an empty tail) returns the message unchanged.
+#[must_use]
+pub fn with_stderr_suffix(
+    class: crate::events::FailureClass,
+    message: String,
+    stderr_tail: &str,
+) -> String {
+    use crate::events::FailureClass;
+    if stderr_tail.is_empty()
+        || !matches!(
+            class,
+            FailureClass::ExitWithoutResult | FailureClass::ProcessLost
+        )
+    {
+        return message;
+    }
+    format!("{message}; stderr: {stderr_tail}")
 }
 
 /// Handle to an owned child process. Implemented by the supervisor; used by
@@ -545,6 +592,25 @@ pub fn fingerprint(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stderr_tail_is_bounded_char_safe_and_sanitised() {
+        assert_eq!(super::bounded_stderr_tail(b""), "");
+        assert_eq!(super::bounded_stderr_tail(b"  \n"), "");
+        // Long input keeps only the tail, within the byte bound.
+        let long = format!("{}END", "x".repeat(10_000));
+        let tail = super::bounded_stderr_tail(long.as_bytes());
+        assert!(tail.len() <= super::STDERR_TAIL_MAX_BYTES);
+        assert!(tail.ends_with("END"));
+        // The cut lands inside a multi-byte char: no panic, no U+FFFD.
+        let wide = "é".repeat(3_000);
+        let tail = super::bounded_stderr_tail(wide.as_bytes());
+        assert!(tail.len() <= super::STDERR_TAIL_MAX_BYTES);
+        assert!(tail.chars().all(|c| c == 'é'));
+        // Control characters (ANSI escape, NUL, CR) are stripped; \n \t stay.
+        let tail = super::bounded_stderr_tail(b"\x1b[31mError:\x1b[0m bad\x00\r\n\tnext\n");
+        assert_eq!(tail, "[31mError:[0m bad\n\tnext");
+    }
+
     use super::*;
 
     #[test]

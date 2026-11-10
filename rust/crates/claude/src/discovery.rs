@@ -250,7 +250,9 @@ impl ClaudeLocator {
                 }
             }
         }
-        // Documented common install locations, in order. Only the executable
+        // Documented common install locations, in order: per-user installs,
+        // `/usr/local/bin`, then `/opt/homebrew/bin` (Homebrew on Apple
+        // Silicon; a macOS GUI app has a minimal PATH that omits it). Only the executable
         // file itself is stat'ed; no credential file is ever touched.
         let home = self
             .home_override
@@ -262,6 +264,7 @@ impl ClaudeLocator {
             fallbacks.push(home.join(".claude/local/claude"));
         }
         fallbacks.push(PathBuf::from("/usr/local/bin/claude"));
+        fallbacks.push(PathBuf::from("/opt/homebrew/bin/claude"));
         for candidate in fallbacks {
             if is_regular_executable(&candidate) {
                 return Ok(candidate);

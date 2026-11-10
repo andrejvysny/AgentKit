@@ -2,9 +2,25 @@
 //!
 //! Decodes official Claude Code `--output-format stream-json` NDJSON frames
 //! into [`NativeEvent`]s and owns the single authoritative terminal-outcome
-//! decision table (AGENTKIT-110/111/116). Correctness-affecting unknown
-//! shapes fail explicitly with [`ProtocolViolation`]; documented additive
-//! metadata is tolerated and ignored.
+//! decision table (AGENTKIT-110/111/116).
+//!
+//! Forward compatibility: the real CLI emits dozens of `system` subtypes
+//! and several top-level frame types this adapter does not model (e.g.
+//! `thinking_tokens`, `notification`, `session_state_changed`,
+//! `auth_status`, `keep_alive`), intermittently and at high rate. Unknown
+//! `system` subtypes, unknown top-level frame types, unknown assistant
+//! content block types and unknown `result` subtypes are therefore
+//! TOLERATED: they produce no events (never a user-visible warning), are
+//! counted in a bounded diagnostic record
+//! ([`ClaudeStreamAdapter::ignored_frames`]), and an unknown `result`
+//! subtype is a root result that [`classify_result`]/`terminal_core` map to
+//! `Failed` (never `Completed`). Genuinely correctness-affecting
+//! malformations still fail explicitly with [`ProtocolViolation`]:
+//! undecodable/malformed JSON, a frame without a string `type`, a `system`
+//! frame without string `subtype`, `init` without `session_id`, a `result`
+//! missing `subtype`/`session_id`/boolean `is_error`, a conflicting second
+//! root result, `tool_use` without `id`/`name`, `text` without string
+//! `text`, and malformed `stream_event` envelopes.
 //!
 //! Vendor frame shapes accepted here (official docs, qualified versions):
 //! * `{"type":"system","subtype":"init","session_id":S,"model":S,"tools":[..],
@@ -52,7 +68,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use agentkit_native::{
-    BillingInclusion, FailureClass, FinishDisposition, NativeEvent, NativeRefusal,
+    BillingInclusion, FailureClass, FinishDisposition, McpServerStatus, NativeEvent, NativeRefusal,
     NativeTerminalOutcome, NativeUsage, ProcessExit, ProtocolViolation, StreamFrameAdapter,
     TokenSet, UsageProvenance, VendorToolPhase,
 };
@@ -159,6 +175,16 @@ pub struct ClaudeStreamAdapter {
     /// discarded.
     redacted_thinking: Vec<Value>,
     redacted_thinking_dropped: usize,
+    /// Bounded diagnostic record of tolerated-but-unmodelled vendor shapes:
+    /// distinct `"system:<subtype>"` / `"frame:<type>"` / `"block:<type>"`
+    /// keys with occurrence counts, capped at [`MAX_IGNORED_KEYS`].
+    ignored: std::collections::BTreeMap<String, u64>,
+    /// Occurrences whose key did not fit under the distinct-key cap.
+    ignored_overflow: u64,
+    /// `tool_use_id -> tool name` from `Requested` observations, so a
+    /// `tool_result` (which carries no name) can be labelled. FIFO-bounded
+    /// at [`MAX_TOOL_NAMES`]; root and child scopes alike.
+    tool_names: std::collections::VecDeque<(String, String)>,
 }
 
 impl ClaudeStreamAdapter {
@@ -260,6 +286,40 @@ impl ClaudeStreamAdapter {
         self.root_result.clone()
     }
 
+    /// Tolerated-but-unmodelled vendor shapes seen so far: distinct
+    /// `"system:<subtype>"`, `"frame:<type>"` and `"block:<type>"` keys with
+    /// occurrence counts (at most [`MAX_IGNORED_KEYS`] distinct keys; see
+    /// [`Self::ignored_overflow`]). Diagnostics only — never user-visible.
+    pub fn ignored_frames(&self) -> &std::collections::BTreeMap<String, u64> {
+        &self.ignored
+    }
+
+    /// Occurrences of tolerated shapes whose distinct key was dropped
+    /// because the diagnostic record was full.
+    pub fn ignored_overflow(&self) -> u64 {
+        self.ignored_overflow
+    }
+
+    fn note_ignored(&mut self, key: String) {
+        if let Some(count) = self.ignored.get_mut(&key) {
+            *count += 1;
+        } else if self.ignored.len() < MAX_IGNORED_KEYS {
+            self.ignored.insert(key, 1);
+        } else {
+            self.ignored_overflow += 1;
+        }
+    }
+
+    fn remember_tool_name(&mut self, id: &str, name: &str) {
+        if self.tool_names.iter().any(|(known, _)| known == id) {
+            return;
+        }
+        if self.tool_names.len() >= MAX_TOOL_NAMES {
+            self.tool_names.pop_front();
+        }
+        self.tool_names.push_back((id.to_owned(), name.to_owned()));
+    }
+
     /// Opaque retained markers for withheld redacted-thinking blocks
     /// (review round-4 F9): the vendor's block payload kept verbatim as an
     /// opaque value. Never decoded into reasoning or user-visible text; no
@@ -358,10 +418,12 @@ impl ClaudeStreamAdapter {
             // Qualified additive metadata (ignored): plugin-install and
             // prompt-suggestion frames.
             Some("plugin_install") | Some("prompt_suggestion") => Ok(Vec::new()),
-            Some(other) => Err(violation(
-                "unknown_frame_type",
-                format!("unknown top-level frame type '{other}'"),
-            )),
+            // Any other top-level type (`auth_status`, `tool_use_summary`,
+            // `keep_alive`, ...) is tolerated and counted, never fatal.
+            Some(other) => {
+                self.note_ignored(format!("frame:{other}"));
+                Ok(Vec::new())
+            }
             None => Err(violation(
                 "missing_frame_type",
                 "frame has no string 'type' field",
@@ -419,10 +481,15 @@ impl ClaudeStreamAdapter {
             // turn does not depend on them (AGENTKIT-111 tolerance list).
             "hook_started" | "hook_progress" | "hook_response" | "plugin_install"
             | "tool_progress" => Ok(Vec::new()),
-            other => Err(violation(
-                "unknown_subtype",
-                format!("unknown system subtype '{other}'"),
-            )),
+            // Every other subtype (`thinking_tokens`, `notification`,
+            // `session_state_changed`, `turn_duration`, ...) is
+            // forward-compatible progress metadata: tolerated silently (no
+            // Warning: these can arrive many times per second) and
+            // counted for diagnostics.
+            other => {
+                self.note_ignored(format!("system:{other}"));
+                Ok(Vec::new())
+            }
         }
     }
 
@@ -447,6 +514,23 @@ impl ClaudeStreamAdapter {
                     .collect()
             })
             .unwrap_or_default();
+        // MCP server connection statuses, parsed tolerantly: malformed
+        // entries are skipped, absent means none reported.
+        let mcp_servers = frame
+            .get("mcp_servers")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        Some(McpServerStatus {
+                            name: item.get("name")?.as_str()?.to_owned(),
+                            status: item.get("status")?.as_str()?.to_owned(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         self.init_model = observed_model.clone();
         Ok(vec![NativeEvent::Init {
             session_id,
@@ -454,6 +538,7 @@ impl ClaudeStreamAdapter {
             observed_effort,
             observed_version,
             capabilities,
+            mcp_servers,
         }])
     }
 
@@ -504,12 +589,15 @@ impl ClaudeStreamAdapter {
                         })?
                         .to_owned();
                     let input = block.get("input").filter(|v| !v.is_null()).cloned();
+                    self.remember_tool_name(&id, &name);
                     events.push(NativeEvent::ToolObservation {
                         vendor_tool_use_id: id,
                         name,
                         phase: VendorToolPhase::Requested,
                         input,
                         parent_tool_use_id: parent.clone(),
+                        is_error: None,
+                        result: None,
                     });
                 }
                 "thinking" => {
@@ -533,11 +621,10 @@ impl ClaudeStreamAdapter {
                         self.record_redacted_thinking(block);
                     }
                 }
+                // Unknown block types are skipped (counted); siblings still
+                // process.
                 other => {
-                    return Err(violation(
-                        "unknown_content_block",
-                        format!("unknown assistant content block type '{other}'"),
-                    ));
+                    self.note_ignored(format!("block:{other}"));
                 }
             }
         }
@@ -570,17 +657,32 @@ impl ClaudeStreamAdapter {
                         "tool_result block without tool_use_id",
                     )
                 })?;
+                // The block carries no name; resolve it from the matching
+                // `tool_use` (unknown id keeps the empty string).
                 let name = block
                     .get("name")
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        self.tool_names
+                            .iter()
+                            .find(|(id, _)| id == tool_use_id)
+                            .map(|(_, name)| name.clone())
+                    })
+                    .unwrap_or_default();
+                // Absent `is_error` means the call succeeded.
+                let is_error = block
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 events.push(NativeEvent::ToolObservation {
                     vendor_tool_use_id: tool_use_id.to_owned(),
                     name,
                     phase: VendorToolPhase::Result,
                     input: None,
                     parent_tool_use_id: parent.clone(),
+                    is_error: Some(is_error),
+                    result: tool_result_text(block),
                 });
             }
         }
@@ -742,15 +844,9 @@ impl ClaudeStreamAdapter {
         let subtype = required_str(frame, "subtype")
             .ok_or_else(|| violation("result_missing_subtype", "result frame without subtype"))?
             .to_owned();
-        if !matches!(
-            subtype.as_str(),
-            "success" | "error_max_turns" | "error_during_execution" | "deferred"
-        ) {
-            return Err(violation(
-                "result_unknown_subtype",
-                format!("unknown result subtype '{subtype}'"),
-            ));
-        }
+        // Unknown result subtypes are accepted as root results when the
+        // frame is otherwise valid: `terminal_core` maps every non-`success`
+        // subtype to `Failed`, the safe direction.
         let session_id = required_str(frame, "session_id")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
@@ -932,6 +1028,45 @@ fn result_denials(frame: &Value) -> Vec<String> {
 /// into the bare subtype).
 const MAX_ERROR_DETAILS: usize = 8;
 const MAX_ERROR_DETAIL_CHARS: usize = 300;
+
+/// Cap on distinct tolerated-shape keys in the diagnostic record.
+const MAX_IGNORED_KEYS: usize = 32;
+/// Cap on remembered `tool_use_id -> name` pairs.
+const MAX_TOOL_NAMES: usize = 256;
+/// Cap on the textual tool result carried by a `ToolObservation`.
+const MAX_TOOL_RESULT_BYTES: usize = 16 * 1024;
+/// Appended when a tool result was clipped.
+const TOOL_RESULT_TRUNCATION_MARKER: &str = "\n[... tool result truncated ...]";
+
+/// Textual content of a `tool_result` block: a string `content` as is, or
+/// the `\n`-joined `text` of the `{"type":"text"}` parts of an array
+/// `content` (non-text parts skipped). Clipped to 16 KiB on a char
+/// boundary with a visible marker; `None` when there is no text.
+fn tool_result_text(block: &Value) -> Option<String> {
+    let text = match block.get("content")? {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect();
+            if texts.is_empty() {
+                return None;
+            }
+            texts.join("\n")
+        }
+        _ => return None,
+    };
+    if text.len() <= MAX_TOOL_RESULT_BYTES {
+        return Some(text);
+    }
+    let mut end = MAX_TOOL_RESULT_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}{TOOL_RESULT_TRUNCATION_MARKER}", &text[..end]))
+}
 
 /// Cap on retained redacted-thinking opaque markers per turn (review
 /// round-4 F9): the markers are durable evidence about withheld content,
@@ -1256,11 +1391,14 @@ fn exit_rows(
         .iter()
         .filter(|e| matches!(e, NativeEvent::PermissionDenied { .. }))
         .count();
-    // Graceful interrupt acknowledged by the vendor (SIGINT path or its
-    // 128+15 exit convention) leaves the turn unfinished, distinct from an
-    // outside SIGTERM without an interrupt request (AGENTKIT-116).
+    // A user Stop (host-requested interrupt) with no root result leaves the
+    // turn unfinished. Live, `claude -p` answers SIGINT with a clean exit 0
+    // and no result frame, so exit 0 / 130 / 143 or signal 2 / 15 / 9 after
+    // a requested interrupt are all `Interrupted`. Without a requested
+    // interrupt the same exits keep their rows below (AGENTKIT-116).
     if exit.after_interrupt
-        && (exit.signal == Some(2) || exit.signal == Some(15) || exit.exit_code == Some(143))
+        && (matches!(exit.exit_code, Some(0 | 130 | 143))
+            || matches!(exit.signal, Some(2 | 15 | 9)))
     {
         return NativeTerminalOutcome::Interrupted {
             partial_text: partial,
@@ -1325,6 +1463,10 @@ fn classify_result(ev: &ResultEvidence) -> FailureClass {
     } else if haystack.contains("credit")
         || haystack.contains("quota")
         || haystack.contains("rate limit")
+        || haystack.contains("usage limit")
+        || haystack.contains("limit reached")
+        || haystack.contains("out of extra usage")
+        || haystack.contains("hit your limit")
     {
         FailureClass::QuotaExhausted
     } else if haystack.contains("model")
@@ -1399,6 +1541,10 @@ mod tests {
                 observed_effort: None,
                 observed_version: Some("2.1.310".into()),
                 capabilities: vec![],
+                mcp_servers: vec![McpServerStatus {
+                    name: "agentkit".into(),
+                    status: "connected".into()
+                }],
             }]
         );
         let mut with_effort = ClaudeStreamAdapter::new();
@@ -1477,12 +1623,8 @@ mod tests {
         let mut adapter = ClaudeStreamAdapter::new();
         let cases: &[(&str, &str)] = &[
             ("{not json", "malformed_json"),
-            (r#"{"type":"watermelon"}"#, "unknown_frame_type"),
             (r#"{"no_type":1}"#, "missing_frame_type"),
-            (
-                r#"{"type":"system","subtype":"telepathy"}"#,
-                "unknown_subtype",
-            ),
+            (r#"{"type":"system"}"#, "system_missing_subtype"),
             (
                 r#"{"type":"system","subtype":"init","model":"m"}"#,
                 "init_missing_session_id",
@@ -1492,8 +1634,8 @@ mod tests {
                 "result_missing_session_id",
             ),
             (
-                r#"{"type":"result","subtype":"nope","is_error":false,"result":null,"session_id":"s"}"#,
-                "result_unknown_subtype",
+                r#"{"type":"result","is_error":false,"result":null,"session_id":"s"}"#,
+                "result_missing_subtype",
             ),
             (
                 r#"{"type":"result","subtype":"success","result":null,"session_id":"s"}"#,
@@ -1508,8 +1650,12 @@ mod tests {
                 "tool_use_missing_name",
             ),
             (
-                r#"{"type":"assistant","message":{"content":[{"type":"hologram"}]},"session_id":"s"}"#,
-                "unknown_content_block",
+                r#"{"type":"assistant","message":{"content":[{"type":"text"}]},"session_id":"s"}"#,
+                "text_block_missing_text",
+            ),
+            (
+                r#"{"type":"assistant","message":{"content":[{"no_type":1}]},"session_id":"s"}"#,
+                "block_missing_type",
             ),
             (
                 r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"x"}]},"session_id":"s"}"#,
@@ -1571,6 +1717,66 @@ mod tests {
         assert_eq!(err.code, "conflicting_root_result");
         // A blank keep-alive line is tolerated.
         assert!(push(&mut ClaudeStreamAdapter::new(), "   ").is_empty());
+    }
+
+    /// Forward compatibility: unknown system subtypes, top-level types,
+    /// assistant block types and result subtypes are tolerated silently and
+    /// only counted in the bounded diagnostic record.
+    #[test]
+    fn unknown_vendor_shapes_are_tolerated_and_recorded() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        for line in [
+            r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50}"#,
+            r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":90,"estimated_tokens_delta":40}"#,
+            r#"{"type":"system","subtype":"telepathy"}"#,
+            r#"{"type":"watermelon"}"#,
+            r#"{"type":"system","subtype":"model_refusal_fallback"}"#,
+        ] {
+            assert!(push(&mut adapter, line).is_empty(), "{line}");
+        }
+        // Unknown block skipped, siblings still processed.
+        let events = push(
+            &mut adapter,
+            r#"{"type":"assistant","message":{"content":[{"type":"hologram"},{"type":"text","text":"Hello"}]},"session_id":"sess-1","parent_tool_use_id":null}"#,
+        );
+        assert_eq!(
+            events,
+            vec![NativeEvent::MessageCompleted {
+                text: "Hello".into()
+            }]
+        );
+        let ignored = adapter.ignored_frames();
+        assert_eq!(ignored.get("system:thinking_tokens"), Some(&2));
+        assert_eq!(ignored.get("system:telepathy"), Some(&1));
+        assert_eq!(ignored.get("frame:watermelon"), Some(&1));
+        assert_eq!(ignored.get("system:model_refusal_fallback"), Some(&1));
+        assert_eq!(ignored.get("block:hologram"), Some(&1));
+        // Unknown result subtype: a root result mapped to Failed, and the
+        // root result stays the only terminal authority.
+        let events = push(
+            &mut adapter,
+            &result_line("error_something_new", true, Some("boom")),
+        );
+        assert!(!events.is_empty());
+        assert!(adapter.saw_root_result());
+        match adapter.terminal_outcome(&exit_with(Some(0), None, false)) {
+            NativeTerminalOutcome::Failed { message, .. } => assert!(message.contains("boom")),
+            other => panic!("unknown result subtype must fail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ignored_frame_record_is_bounded() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        for i in 0..(MAX_IGNORED_KEYS + 10) {
+            push(
+                &mut adapter,
+                &format!(r#"{{"type":"system","subtype":"novel_{i}"}}"#),
+            );
+        }
+        assert_eq!(adapter.ignored_frames().len(), MAX_IGNORED_KEYS);
+        assert_eq!(adapter.ignored_overflow(), 10);
     }
 
     #[test]
@@ -1642,6 +1848,28 @@ mod tests {
                 FailureClass::ModelNotEntitled,
             ),
             ("vendor exploded internally", FailureClass::Internal),
+            (
+                "Not logged in · Please run /login",
+                FailureClass::NotSignedIn,
+            ),
+            (
+                "Login expired · Please run /login",
+                FailureClass::AuthExpired,
+            ),
+            (
+                "OAuth token revoked · Please run /login",
+                FailureClass::NotSignedIn,
+            ),
+            ("Usage limit reached", FailureClass::QuotaExhausted),
+            ("You're out of extra usage", FailureClass::QuotaExhausted),
+            ("spend limit reached", FailureClass::QuotaExhausted),
+            ("You've hit your limit", FailureClass::QuotaExhausted),
+            ("Credit balance is too low", FailureClass::QuotaExhausted),
+            // Auth wording that merely mentions a limit is NOT quota.
+            (
+                "Login reached its time limit · Please run /login",
+                FailureClass::NotSignedIn,
+            ),
         ];
         for (text, expected) in cases {
             let mut adapter = ClaudeStreamAdapter::new();
@@ -1771,7 +1999,10 @@ mod tests {
                 phase,
                 input,
                 parent_tool_use_id,
+                is_error,
+                result,
             } => {
+                assert_eq!((is_error, result), (&None, &None));
                 assert_eq!(vendor_tool_use_id, "toolu_1");
                 assert_eq!(name, "Read");
                 assert_eq!(*phase, VendorToolPhase::Requested);
@@ -1781,14 +2012,83 @@ mod tests {
             other => panic!("ToolObservation expected, never a dispatchable request: {other:?}"),
         }
         let events = push(&mut adapter, TOOL_RESULT);
+        // The result resolves the tool name from the earlier tool_use and
+        // carries the (absent => false) error flag and its text.
         assert!(matches!(
             &events[0],
             NativeEvent::ToolObservation {
                 phase: VendorToolPhase::Result,
                 input: None,
+                name,
+                is_error: Some(false),
+                result: Some(text),
                 ..
-            }
+            } if name == "Read" && text == "data"
         ));
+    }
+
+    #[test]
+    fn tool_result_carries_error_flag_array_text_and_bounded_content() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        push(&mut adapter, INIT);
+        // Unknown id keeps the empty name; is_error true; string content.
+        let denied = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"{\"denied\":true}","is_error":true,"tool_use_id":"toolu_x"}]},"parent_tool_use_id":null,"session_id":"sess-1"}"#;
+        match &push(&mut adapter, denied)[0] {
+            NativeEvent::ToolObservation {
+                name,
+                is_error,
+                result,
+                ..
+            } => {
+                assert_eq!(name, "");
+                assert_eq!(*is_error, Some(true));
+                assert_eq!(result.as_deref(), Some("{\"denied\":true}"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Array content: text parts joined with \n, non-text skipped.
+        let arr = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_y","content":[{"type":"text","text":"a"},{"type":"image","source":{}},{"type":"text","text":"b"}]}]},"session_id":"sess-1"}"#;
+        match &push(&mut adapter, arr)[0] {
+            NativeEvent::ToolObservation { result, .. } => {
+                assert_eq!(result.as_deref(), Some("a\nb"))
+            }
+            other => panic!("{other:?}"),
+        }
+        // No textual content => None.
+        let none = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_z","content":[{"type":"image"}]}]},"session_id":"sess-1"}"#;
+        match &push(&mut adapter, none)[0] {
+            NativeEvent::ToolObservation { result, .. } => assert_eq!(*result, None),
+            other => panic!("{other:?}"),
+        }
+        // Oversized content is clipped on a char boundary with a marker.
+        let big = "é".repeat(MAX_TOOL_RESULT_BYTES);
+        let line = serde_json::json!({"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"toolu_big","content":big}]}})
+        .to_string();
+        match &push(&mut adapter, &line)[0] {
+            NativeEvent::ToolObservation { result, .. } => {
+                let text = result.as_deref().unwrap();
+                assert!(text.ends_with(TOOL_RESULT_TRUNCATION_MARKER));
+                assert!(text.len() <= MAX_TOOL_RESULT_BYTES + TOOL_RESULT_TRUNCATION_MARKER.len());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn init_mcp_servers_parse_tolerantly() {
+        let mut adapter = ClaudeStreamAdapter::new();
+        let line = r#"{"type":"system","subtype":"init","session_id":"s","mcp_servers":[{"name":"agentkit","status":"failed","source":"dynamic"},{"name":"nostatus"},7,{"status":"x"}]}"#;
+        match &push(&mut adapter, line)[0] {
+            NativeEvent::Init { mcp_servers, .. } => assert_eq!(
+                mcp_servers,
+                &vec![McpServerStatus {
+                    name: "agentkit".into(),
+                    status: "failed".into()
+                }]
+            ),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -1936,11 +2236,15 @@ mod tests {
             }
             other => panic!("the result frame stays authoritative, got {other:?}"),
         }
-        // Unknown subtypes stay strict next to the new accepted one.
-        let err = adapter
-            .push_line(r#"{"type":"system","subtype":"model_refusal_fallback"}"#.as_bytes())
-            .expect_err("undocumented subtype stays a violation");
-        assert_eq!(err.code, "unknown_subtype");
+        // `model_refusal_fallback` is undocumented: it now falls under the
+        // generic unknown-subtype tolerance (no event, no violation).
+        assert!(
+            push(
+                &mut adapter,
+                r#"{"type":"system","subtype":"model_refusal_fallback"}"#
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -2150,6 +2454,39 @@ mod tests {
         assert!(matches!(
             claude_terminal_outcome(&exit_with(Some(143), None, true), &observed, None),
             NativeTerminalOutcome::Interrupted { .. }
+        ));
+        // Live: `claude -p` answers a user Stop (SIGINT) with a clean
+        // exit 0 and no result frame; with a requested interrupt that is
+        // Interrupted, also for 130 and signal 9 / 15.
+        for exit in [
+            exit_with(Some(0), None, true),
+            exit_with(Some(130), None, true),
+            exit_with(None, Some(15), true),
+            exit_with(None, Some(9), true),
+        ] {
+            assert!(
+                matches!(
+                    claude_terminal_outcome(&exit, &observed, None),
+                    NativeTerminalOutcome::Interrupted { .. }
+                ),
+                "{exit:?}"
+            );
+        }
+        // Exit 0 WITHOUT an interrupt request stays Uncertain; an unreaped
+        // child (neither code nor signal) is not Interrupted either.
+        assert!(matches!(
+            claude_terminal_outcome(&exit_with(Some(0), None, false), &observed, None),
+            NativeTerminalOutcome::Uncertain { .. }
+        ));
+        assert!(!matches!(
+            claude_terminal_outcome(&exit_with(None, None, true), &observed, None),
+            NativeTerminalOutcome::Interrupted { .. }
+        ));
+        // A root result always wins over the exit rows.
+        let adapter = successful_adapter();
+        assert!(matches!(
+            adapter.terminal_outcome(&exit_with(Some(0), None, true)),
+            NativeTerminalOutcome::Completed { .. }
         ));
         // SIGTERM from outside, no interrupt request: uncertain, retryable family.
         match claude_terminal_outcome(&exit_with(Some(143), None, false), &observed, None) {
@@ -2368,12 +2705,15 @@ mod tests {
             NativeTerminalOutcome::Completed { text, .. } => assert_eq!(text, "Hello"),
             other => panic!("expected Completed, got {other:?}"),
         }
-        // Unknown subtypes stay violations (the `telepathy` case above
-        // covers the table; assert the boundary stays strict here too).
-        let err = adapter
-            .push_line(r#"{"type":"system","subtype":"compact_boundry"}"#.as_bytes())
-            .expect_err("typo subtype is unknown");
-        assert_eq!(err.code, "unknown_subtype");
+        // Unknown subtypes are tolerated (typo included), but never
+        // produce events.
+        assert!(
+            push(
+                &mut adapter,
+                r#"{"type":"system","subtype":"compact_boundry"}"#
+            )
+            .is_empty()
+        );
     }
 
     #[test]

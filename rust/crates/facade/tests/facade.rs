@@ -90,6 +90,7 @@ struct Shared {
     delivered: Mutex<Vec<u8>>,
     interrupts: Mutex<Vec<InterruptPolicy>>,
     spawn_calls: AtomicUsize,
+    stderr: Mutex<Vec<u8>>,
 }
 
 struct FakeChild {
@@ -118,7 +119,7 @@ impl OwnedChildHandle for FakeChild {
     }
 
     fn stderr_tail(&self) -> Vec<u8> {
-        Vec::new()
+        self.shared.stderr.lock().unwrap().clone()
     }
 
     async fn deliver_input(
@@ -270,9 +271,57 @@ async fn chat_turn_plain_chat_completes_via_adapter() {
         String::from_utf8_lossy(&delivered).contains("hello facade"),
         "stdin payload missing the admitted text"
     );
-    // The facade settles the private run directory it staged.
-    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    // The facade settles the private run directory it staged; only the
+    // stable shared `cwd` (never removed per attempt) remains.
+    let leftover: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(leftover, vec![std::ffi::OsString::from("cwd")]);
     assert_eq!(shared.spawn_calls.load(Ordering::SeqCst), 1);
+}
+
+/// Fix C: a CLI that dies before any frame explains itself on stderr; the
+/// facade surfaces that tail in the exit-derived failure.
+#[tokio::test]
+async fn early_exit_failure_carries_the_stderr_tail() {
+    ensure_fixture();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut supervisor = FakeSupervisor::new(vec![], false);
+    supervisor.exit.exit_code = Some(1);
+    *supervisor.shared.stderr.lock().unwrap() =
+        b"\x1b[31mError: Invalid session ID. Must be a valid UUID.\x1b[0m\n".to_vec();
+    let subject = chat(tmp.path(), supervisor);
+    let outcome = subject
+        .chat_turn(
+            &plain_target(NativeProfile::PlainChat),
+            &turn_input(
+                TurnResume::Fresh {
+                    seed_history: Vec::new(),
+                },
+                "hello",
+            ),
+        )
+        .await
+        .expect("turn settles");
+    let text = match outcome {
+        NativeTerminalOutcome::Failed {
+            class: agentkit_native::FailureClass::ExitWithoutResult,
+            message,
+            ..
+        } => message,
+        NativeTerminalOutcome::Uncertain {
+            class: agentkit_native::FailureClass::ExitWithoutResult,
+            detail,
+            ..
+        } => detail,
+        other => panic!("expected an exit-derived failure, got {other:?}"),
+    };
+    assert!(text.contains("exit_code=Some(1)"), "{text}");
+    assert!(
+        text.contains("; stderr: [31mError: Invalid session ID. Must be a valid UUID.[0m"),
+        "{text}"
+    );
 }
 
 #[tokio::test]

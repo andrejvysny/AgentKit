@@ -61,7 +61,9 @@ pub const BROKER_MCP_REQUEST_BUDGET_MS: i64 = 540_000;
 /// Build the frozen launch plan for one attempt.
 ///
 /// `per_run_dir` must already exist (created by the caller with 0700);
-/// [`write_per_run_files`] stages its files. The plan is deterministic for a
+/// [`write_per_run_files`] stages its files. The plan's `cwd` is the stable
+/// sibling `<per_run_dir.parent()>/cwd` shared by all attempts (the caller
+/// creates it; it is never removed by per-attempt cleanup). The plan is deterministic for a
 /// frozen (target, input, mcp) triple except the freshly assigned session id
 /// for `Fresh`, which is returned in `native_session_id` so the host records
 /// it before spawn (AGENTKIT-113 lineage).
@@ -149,7 +151,10 @@ pub fn build_launch_plan(
 
     let native_session_id = match &input.resume {
         TurnResume::Fresh { .. } => {
-            let id = Uuid::new_v4().simple().to_string();
+            // The CLI validates `--session-id` as a canonical hyphenated
+            // UUID (8-4-4-4-12); the 32-hex `simple()` form is rejected
+            // with "Invalid session ID" and exit 1.
+            let id = Uuid::new_v4().hyphenated().to_string();
             argv.push("--session-id".into());
             argv.push(id.clone());
             Some(id)
@@ -207,10 +212,21 @@ pub fn build_launch_plan(
 
     let fingerprint = config_identity(target, &argv, &env);
 
+    // The working directory is STABLE across attempts: the CLI keys its
+    // session transcript store (`~/.claude/projects/<encoded cwd>/`) by
+    // cwd, so a fresh random cwd per attempt would leak a project dir per
+    // session and break exact resume. It is the sibling `<run_root>/cwd`
+    // of the unique per-attempt dir (which stays private and is the only
+    // thing cleanup removes).
+    let cwd = per_run_dir
+        .parent()
+        .map(|root| root.join("cwd"))
+        .unwrap_or_else(|| per_run_dir.clone());
+
     Ok(LaunchPlan {
         argv,
         env,
-        cwd: per_run_dir.clone(),
+        cwd,
         per_run_dir,
         permission_policy,
         max_vendor_turns: Some(max_vendor_turns),
@@ -725,6 +741,14 @@ mod tests {
             Some(bound.as_str())
         );
         assert!(!fresh.argv.iter().any(|a| a == "--resume"));
+        // The real CLI accepts only a canonical hyphenated UUID.
+        assert_eq!(bound.len(), 36);
+        assert_eq!(bound, bound.to_lowercase());
+        assert_eq!(bound.matches('-').count(), 4, "8-4-4-4-12 hyphenated shape");
+        assert!(Uuid::parse_str(&bound).is_ok());
+        // Stable cwd is the sibling of the per-run dir, not the dir itself.
+        assert_eq!(fresh.cwd, PathBuf::from("/run/cwd"));
+        assert_eq!(fresh.per_run_dir, PathBuf::from("/run/x"));
 
         let exact = build_launch_plan(
             &target(NativeProfile::PlainChat, PLAIN_FLAGS),

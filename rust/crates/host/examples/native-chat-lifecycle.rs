@@ -192,6 +192,7 @@ impl StreamFrameAdapter for ScriptedAdapter {
                     observed_effort: None,
                     observed_version: Some("2.1.310".into()),
                     capabilities: vec![],
+                    mcp_servers: vec![],
                 }])
             }
             "delta" => {

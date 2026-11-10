@@ -35,8 +35,8 @@ pub use capability::{
 };
 pub use error::{NativeError, NativeRefusal, NativeResult};
 pub use events::{
-    BillingInclusion, FailureClass, NativeEvent, NativeTerminalOutcome, NativeUsage,
-    ProcessTerminalEvidence, TokenSet, UsageProvenance, VendorToolPhase,
+    BillingInclusion, FailureClass, McpServerStatus, NativeEvent, NativeTerminalOutcome,
+    NativeUsage, ProcessTerminalEvidence, TokenSet, UsageProvenance, VendorToolPhase,
 };
 pub use interaction::{
     AnswerDisposition, AnswerSubmission, Decision, InteractionKind, InteractionRejection,
@@ -46,8 +46,9 @@ pub use ports::{
     AuthEvidence, AuthMode, ContextBlock, ExecutableEvidence, ExecutableLocator, FinishDisposition,
     FrameLine, InterruptPolicy, InterruptReceipt, LaunchPlan, McpEndpointSpec, NativeBackend,
     OwnedChildHandle, PermissionPromptPolicy, PolicyState, PreflightReport, ProcessExit,
-    ProcessSupervisor, ProtocolViolation, ResourceLimits, StreamFrameAdapter, TransportFault,
-    TurnInput, TurnResume, collect_frames, fingerprint,
+    ProcessSupervisor, ProtocolViolation, ResourceLimits, STDERR_TAIL_MAX_BYTES,
+    StreamFrameAdapter, TransportFault, TurnInput, TurnResume, bounded_stderr_tail, collect_frames,
+    fingerprint, with_stderr_suffix,
 };
 pub use target::{
     AuthExpectation, CONTENT_POLICY_VERSION, CONTENT_SCHEMA_VERSION, ContentPolicy,

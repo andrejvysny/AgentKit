@@ -18,11 +18,30 @@ pub enum VendorToolPhase {
     Result,
 }
 
+/// One MCP server's connection status as reported by the vendor `init`
+/// frame (e.g. `connected`, `failed`). Evidence only: the host decides
+/// whether a non-connected required server fails the turn closed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServerStatus {
+    pub name: String,
+    pub status: String,
+}
+
 /// One normalized event decoded from the vendor stream. Drivers translate
 /// vendor shapes into this vocabulary; unknown vendor event shapes that
 /// affect correctness fail the frame adapter, they never map to `Warning`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+// `rename_all` on an enum renames VARIANTS only; `rename_all_fields` is what
+// makes struct-variant FIELDS camelCase (`vendorToolUseId`, `sessionId`, ...)
+// like every other contract type. Consumers read the durable `native.event`
+// payloads as raw camelCase JSON.
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum NativeEvent {
     /// Session initialization evidence: identity the vendor reports for the
     /// run (observed model/effort/session), distinct from what was requested.
@@ -36,6 +55,10 @@ pub enum NativeEvent {
         observed_version: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         capabilities: Vec<String>,
+        /// MCP server connection statuses the vendor reported at init.
+        /// Absent in older persisted events (defaults to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mcp_servers: Vec<McpServerStatus>,
     },
     /// Incremental assistant text.
     TextDelta { text: String },
@@ -55,6 +78,15 @@ pub enum NativeEvent {
         /// child/secondary streams keep a distinct identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_tool_use_id: Option<String>,
+        /// `Result` phase only: whether the vendor flagged the tool result
+        /// as an error (denied, failed). `None` on `Requested` and in
+        /// older persisted events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        /// `Result` phase only: bounded textual content of the tool result
+        /// (clipped with a visible marker); `None` when it had no text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
     },
     /// Usage provenance update (tokens/cost estimates); per-turn vs
     /// cumulative is kept explicit, unknown is not zero.
@@ -289,11 +321,160 @@ mod tests {
             phase: VendorToolPhase::Requested,
             input: Some(json!({"path": "x"})),
             parent_tool_use_id: None,
+            is_error: None,
+            result: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "toolObservation");
         let back: NativeEvent = serde_json::from_value(value).unwrap();
         assert_eq!(back, event);
+    }
+
+    #[test]
+    fn old_persisted_events_without_new_fields_still_deserialize() {
+        let init: NativeEvent =
+            serde_json::from_value(json!({"type": "init", "sessionId": "s"})).unwrap();
+        assert!(
+            matches!(init, NativeEvent::Init { ref mcp_servers, .. } if mcp_servers.is_empty())
+        );
+        let obs: NativeEvent = serde_json::from_value(json!({
+            "type": "toolObservation", "vendorToolUseId": "t", "name": "n",
+            "phase": "result"
+        }))
+        .unwrap();
+        assert!(matches!(
+            obs,
+            NativeEvent::ToolObservation {
+                is_error: None,
+                result: None,
+                ..
+            }
+        ));
+    }
+
+    /// Wire contract: every `NativeEvent` variant serializes with camelCase
+    /// keys (consumers read persisted payloads as raw JSON).
+    #[test]
+    fn every_event_variant_serializes_camel_case_keys() {
+        fn keys(event: &NativeEvent) -> Vec<String> {
+            let value = serde_json::to_value(event).unwrap();
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        }
+        fn sorted(list: &[&str]) -> Vec<String> {
+            let mut v: Vec<String> = list.iter().map(|s| (*s).to_owned()).collect();
+            v.sort();
+            v
+        }
+        let init = NativeEvent::Init {
+            session_id: "s".into(),
+            observed_model: Some("m".into()),
+            observed_effort: Some("e".into()),
+            observed_version: Some("v".into()),
+            capabilities: vec!["c".into()],
+            mcp_servers: vec![McpServerStatus {
+                name: "n".into(),
+                status: "connected".into(),
+            }],
+        };
+        assert_eq!(
+            keys(&init),
+            sorted(&[
+                "type",
+                "sessionId",
+                "observedModel",
+                "observedEffort",
+                "observedVersion",
+                "capabilities",
+                "mcpServers"
+            ])
+        );
+        assert_eq!(
+            keys(&NativeEvent::TextDelta { text: "t".into() }),
+            sorted(&["type", "text"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::MessageCompleted { text: "t".into() }),
+            sorted(&["type", "text"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::ReasoningDelta { text: "t".into() }),
+            sorted(&["type", "text"])
+        );
+        let tool = NativeEvent::ToolObservation {
+            vendor_tool_use_id: "t".into(),
+            name: "n".into(),
+            phase: VendorToolPhase::Result,
+            input: Some(json!({})),
+            parent_tool_use_id: Some("p".into()),
+            is_error: Some(false),
+            result: Some("r".into()),
+        };
+        assert_eq!(
+            keys(&tool),
+            sorted(&[
+                "type",
+                "vendorToolUseId",
+                "name",
+                "phase",
+                "input",
+                "parentToolUseId",
+                "isError",
+                "result"
+            ])
+        );
+        // `Usage` is a newtype variant: its payload type is camelCase already.
+        let usage = serde_json::to_value(NativeEvent::Usage(NativeUsage {
+            per_turn: Some(TokenSet::default()),
+            ..NativeUsage::default()
+        }))
+        .unwrap();
+        assert_eq!(usage["type"], "usage");
+        assert!(usage.get("perTurn").is_some(), "{usage}");
+        assert!(usage.get("estimateProvenance").is_some(), "{usage}");
+        assert_eq!(
+            keys(&NativeEvent::Warning {
+                code: "c".into(),
+                message: "m".into()
+            }),
+            sorted(&["type", "code", "message"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::Retry {
+                attempt: 1,
+                max_retries: 3,
+                error_class: Some(FailureClass::QuotaExhausted)
+            }),
+            sorted(&["type", "attempt", "maxRetries", "errorClass"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::PermissionDenied {
+                tool_name: "t".into()
+            }),
+            sorted(&["type", "toolName"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::RateLimit {
+                status: "allowed".into(),
+                resets_at: Some(1.0),
+                utilization: Some(0.5),
+                rate_limit_type: Some("five_hour".into())
+            }),
+            sorted(&["type", "status", "resetsAt", "utilization", "rateLimitType"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::Status {
+                status: Some("compacting".into())
+            }),
+            sorted(&["type", "status"])
+        );
+        assert_eq!(
+            keys(&NativeEvent::CompactBoundary {
+                trigger: Some("auto".into())
+            }),
+            sorted(&["type", "trigger"])
+        );
     }
 
     #[test]
