@@ -47,3 +47,7 @@ session staging) were reachable only through that type.
   suite is the only guard, so new port methods land with conformance cases.
 - A context's unit tests cannot use the SQLite adapter (dev-dependency cycle
   produces duplicate types); store-backed engine tests are integration tests.
+- The TypeScript-database importer stays inside the SQLite adapter behind the
+  `ts-import` feature instead of the separate `agentkit-store-legacy-import`
+  crate listed in ADR 0021: it writes through schema, transaction and receipt
+  internals that a separate crate could reach only by making them public.

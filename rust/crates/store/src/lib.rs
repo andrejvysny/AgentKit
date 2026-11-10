@@ -66,7 +66,10 @@ pub use tasks::{
 pub use teammates::*;
 pub use transaction::StoreTransaction;
 #[cfg(feature = "ts-import")]
-pub use ts_import::*;
+pub use ts_import::{
+    ASSISTANT_SETTINGS_KEY, ASSISTANT_SETTINGS_NAMESPACE, ImportOptions, ImportReport,
+    MCP_CONFIG_NAMESPACE, MCP_SERVERS_NAMESPACE, SETTINGS_KEY, SETTINGS_NAMESPACE,
+};
 pub use util::id;
 
 #[derive(Debug, thiserror::Error)]
