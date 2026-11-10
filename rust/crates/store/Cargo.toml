@@ -36,5 +36,6 @@ uuid = { workspace = true, features = ["v7"] }
 ts-import = []
 
 [dev-dependencies]
+agentkit-testkit = { workspace = true }
 rusqlite = { workspace = true, features = ["hooks"] }
 tempfile.workspace = true

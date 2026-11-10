@@ -152,6 +152,7 @@ dependencies = [
  "agentkit-governance",
  "agentkit-kernel",
  "agentkit-store",
+ "agentkit-testkit",
  "async-trait",
  "chrono",
  "serde",
@@ -390,6 +391,7 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-engine",
  "agentkit-kernel",
+ "agentkit-testkit",
  "async-trait",
  "chrono",
  "ring",
@@ -414,6 +416,17 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "agentkit-testkit"
+version = "0.1.0"
+dependencies = [
+ "agentkit-engine",
+ "async-trait",
+ "serde_json",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

@@ -28,5 +28,6 @@ uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
 agentkit-store = { workspace = true }
+agentkit-testkit = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["fs"] }
