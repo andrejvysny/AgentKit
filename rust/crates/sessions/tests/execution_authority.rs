@@ -9,9 +9,10 @@
 //! a hard error, because falling back there would silently replace a human
 //! decision with process defaults.
 
-use agentkit_host::{
+use agentkit_engine::SystemRuntime;
+use agentkit_sessions::{
     AgentSessionService, AgentSessionServiceDeps, CodingPermissionAuthority, CreateSessionInput,
-    PermissionContext, SessionExecutionAuthority, SystemRuntime,
+    PermissionContext, SessionExecutionAuthority,
 };
 use agentkit_store::{EXECUTION_METADATA_KEY, SqliteStore};
 use serde_json::json;

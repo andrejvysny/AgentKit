@@ -1,14 +1,14 @@
 pub mod agentkit_agents
 pub enum agentkit_agents::AgentsError
 pub agentkit_agents::AgentsError::AdvisorNotConfigured
-pub agentkit_agents::AgentsError::Host(agentkit_host::HostError)
+pub agentkit_agents::AgentsError::Host(agentkit_sessions::store_aliases::HostError)
 pub agentkit_agents::AgentsError::InvalidAdmission(alloc::string::String)
 pub agentkit_agents::AgentsError::InvalidAgent(alloc::string::String)
 pub agentkit_agents::AgentsError::SubagentsNotConfigured
 impl core::convert::From<agentkit_agents::AgentsError> for agentkit_governance::error::GovernanceError
 pub fn agentkit_governance::error::GovernanceError::from(agentkit_agents::AgentsError) -> Self
-impl core::convert::From<agentkit_agents::AgentsError> for agentkit_host::HostError
-pub fn agentkit_host::HostError::from(agentkit_agents::AgentsError) -> Self
+impl core::convert::From<agentkit_agents::AgentsError> for agentkit_sessions::store_aliases::HostError
+pub fn agentkit_sessions::store_aliases::HostError::from(agentkit_agents::AgentsError) -> Self
 impl core::convert::From<agentkit_core::types::CoreError> for agentkit_agents::AgentsError
 pub fn agentkit_agents::AgentsError::from(agentkit_core::types::CoreError) -> Self
 impl core::convert::From<agentkit_store::StoreError> for agentkit_agents::AgentsError
@@ -87,7 +87,7 @@ pub struct agentkit_agents::AdvisorEngine
 impl agentkit_agents::AdvisorEngine
 pub fn agentkit_agents::AdvisorEngine::config(&self) -> agentkit_agents::AdvisorConfig
 pub fn agentkit_agents::AdvisorEngine::configure(&self, agentkit_agents::AdvisorConfig)
-pub fn agentkit_agents::AdvisorEngine::new(alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, agentkit_store::actor::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_core::runtime::Runtime>, agentkit_agents::AdvisorConfig, alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorToolSource>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorEventSink>>, agentkit_host::session::AgentSessionService) -> Self
+pub fn agentkit_agents::AdvisorEngine::new(alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, agentkit_store::actor::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_core::runtime::Runtime>, agentkit_agents::AdvisorConfig, alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorToolSource>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorEventSink>>, agentkit_sessions::session::AgentSessionService) -> Self
 pub async fn agentkit_agents::AdvisorEngine::reserve(&self, &str, &agentkit_agents::ReviewOrigin) -> agentkit_agents::AgentsResult<agentkit_agents::ReviewReservation>
 pub async fn agentkit_agents::AdvisorEngine::review(&self, &agentkit_agents::ReviewRequest, agentkit_agents::ReviewOrigin, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_agents::AgentsResult<agentkit_agents::AdvisorReport>
 pub async fn agentkit_agents::AdvisorEngine::review_reserved(&self, &agentkit_agents::ReviewRequest, agentkit_agents::ReviewOrigin, tokio_util::sync::cancellation_token::CancellationToken, agentkit_agents::ReviewReservation) -> agentkit_agents::AgentsResult<agentkit_agents::AdvisorReport>
@@ -250,7 +250,7 @@ pub async fn agentkit_agents::SubagentService::effective_role_of(&self, &agentki
 pub fn agentkit_agents::SubagentService::leases(&self) -> &agentkit_agents::WorkspaceLeaseRegistry
 pub async fn agentkit_agents::SubagentService::list(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_agents::SubagentView>>
 pub async fn agentkit_agents::SubagentService::message(&self, &str, serde_json::value::Value, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::MessageReceipt>
-pub fn agentkit_agents::SubagentService::new(agentkit_store::actor::SqliteStore, agentkit_host::session::AgentSessionService, agentkit_engine::ports::SharedRuntime, agentkit_agents::SubagentConfig) -> Self
+pub fn agentkit_agents::SubagentService::new(agentkit_store::actor::SqliteStore, agentkit_sessions::session::AgentSessionService, agentkit_engine::ports::SharedRuntime, agentkit_agents::SubagentConfig) -> Self
 pub fn agentkit_agents::SubagentService::now_ms(&self) -> i64
 pub async fn agentkit_agents::SubagentService::observe_settled(&self, &agentkit_engine::model::TaskRecord) -> agentkit_agents::AgentsResult<()>
 pub async fn agentkit_agents::SubagentService::reap_orphans(&self) -> agentkit_agents::AgentsResult<usize>
@@ -258,7 +258,7 @@ pub async fn agentkit_agents::SubagentService::refresh(&self, &agentkit_store::s
 pub async fn agentkit_agents::SubagentService::restore_leases(&self) -> agentkit_agents::AgentsResult<usize>
 pub async fn agentkit_agents::SubagentService::resume(&self, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub async fn agentkit_agents::SubagentService::resume_for_parent(&self, &str, &str, core::option::Option<&str>) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
-pub fn agentkit_agents::SubagentService::session(&self) -> &agentkit_host::session::AgentSessionService
+pub fn agentkit_agents::SubagentService::session(&self) -> &agentkit_sessions::session::AgentSessionService
 pub async fn agentkit_agents::SubagentService::spawn(&self, &agentkit_agents::SpawnRequest) -> agentkit_agents::AgentsResult<agentkit_agents::SpawnedChild>
 pub async fn agentkit_agents::SubagentService::status(&self, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub fn agentkit_agents::SubagentService::store(&self) -> &agentkit_store::actor::SqliteStore

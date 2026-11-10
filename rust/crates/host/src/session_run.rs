@@ -6,9 +6,9 @@
 //! This is deliberately thin: state lives in the store, the service owns the
 //! lifecycle, and the executor only asks these two questions per attempt.
 
-use crate::session::{read_session_descriptor, session_turn_kind};
 use crate::*;
 use agentkit_core::{ChatMessage, SteeringItem, SteeringSource, ToolCall};
+use agentkit_sessions::{read_session_descriptor, session_turn_kind};
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputRecord, AgentInputStatus, AppendProjectedInputs,
     MessageInput, MessageRecord, is_approval_request,
@@ -405,7 +405,7 @@ pub(crate) async fn resolve_approved_calls(
                 && request
                     .applied_message_id
                     .as_deref()
-                    .is_some_and(|id| id.starts_with(crate::session::APPROVAL_MARKER))
+                    .is_some_and(|id| id.starts_with(agentkit_sessions::APPROVAL_MARKER))
         })
         .collect();
     if requests.is_empty() {

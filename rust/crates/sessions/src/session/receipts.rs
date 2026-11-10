@@ -139,7 +139,7 @@ impl AgentSessionService {
         note: Option<String>,
         resolved_by: Option<String>,
     ) -> SessionResult<ExecutionReceiptRecord> {
-        crate::governance::resolve_uncertain_execution(
+        crate::receipts::resolve_uncertain_execution(
             self.store(),
             chat_id,
             execution_id,

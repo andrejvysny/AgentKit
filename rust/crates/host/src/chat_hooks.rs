@@ -463,7 +463,7 @@ impl agentkit_core::DispatchGuard for ProviderRequestGuard {
             previous.check().await?;
         }
         self.context.check_dispatch().await.map_err(core_error)?;
-        crate::run_content::selected_messages(&self.context, self.authority.as_ref())
+        agentkit_sessions::selected_messages(&self.context, self.authority.as_ref())
             .await
             .map_err(core_error)?;
         self.context.check_dispatch().await.map_err(core_error)

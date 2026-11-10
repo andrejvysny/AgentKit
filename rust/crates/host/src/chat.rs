@@ -154,7 +154,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             return Err(HostError::Execution("chat scope mismatch".into()));
         }
         let session = session_run::is_session_turn(&context, chat_id).await?;
-        let profile = crate::profiles::task_profile(&context.task.payload)?;
+        let profile = agentkit_sessions::task_profile(&context.task.payload)?;
         if session && profile.is_none() {
             return Err(HostError::Execution("profile_snapshot_required".into()));
         }
@@ -201,7 +201,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             );
         }
         let selected_content =
-            crate::run_content::selected_messages(&context, options.content_authority.as_ref())
+            agentkit_sessions::selected_messages(&context, options.content_authority.as_ref())
                 .await?;
         let reasoning_effort = context
             .task

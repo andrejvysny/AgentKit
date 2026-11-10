@@ -23,7 +23,8 @@ pub use descriptor::{
 pub use execution_authority::SessionExecutionAuthority;
 pub use report::{FALLBACK_CONTEXT_WINDOW_TOKENS, list_turn_tasks, session_usage, summarize_turn};
 
-use crate::{HostResult, SharedRuntime};
+use crate::HostResult;
+use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
 use agentkit_store::{
     AgentInputKind, AgentInputPatch, AgentInputQuery, AgentInputRecord, AgentInputSettlePolicy,
@@ -265,7 +266,7 @@ pub struct AgentSessionServiceDeps {
     pub plan_approval: Option<Arc<dyn PlanApprovalPolicy>>,
     /// Best-effort queue poke (the TS `taskRunner.enqueue`); polling still
     /// covers every miss, so `None` only costs latency.
-    pub wake: Option<crate::WakeHandle>,
+    pub wake: Option<agentkit_engine::WakeHandle>,
 }
 
 #[derive(Clone)]
@@ -273,13 +274,13 @@ struct Deps {
     store: SqliteStore,
     runtime: SharedRuntime,
     plan_approval: Option<Arc<dyn PlanApprovalPolicy>>,
-    wake: Option<crate::WakeHandle>,
+    wake: Option<agentkit_engine::WakeHandle>,
     /// The host's executor registry, when this service fronts a host whose
     /// worker will run its turns. `None` (the constructor's default) leaves
     /// admission unfiltered — for wiring where no native worker consumes the
     /// queue at all. When set, every admission that would create a task
     /// refuses an unregistered kind BEFORE any row lands.
-    gate: Option<crate::AdmissionGate>,
+    gate: Option<agentkit_engine::AdmissionGate>,
     profiles: Arc<crate::ProfileRegistry>,
     provider_factory: Option<Arc<dyn crate::ChatProviderFactory>>,
     default_provider_id: Option<String>,
@@ -373,7 +374,7 @@ impl AgentSessionService {
     /// left to keep or drop). Late wiring is deliberate: the binding code
     /// builds the host and the service from the same store and links them
     /// here, exactly as it hands the host the service's flush planner.
-    pub fn with_gate(mut self, gate: crate::AdmissionGate) -> Self {
+    pub fn with_gate(mut self, gate: agentkit_engine::AdmissionGate) -> Self {
         let mut deps = self.deps.as_ref().clone();
         deps.gate = Some(gate);
         self.deps = Arc::new(deps);
@@ -2179,7 +2180,7 @@ pub const COMPACT_REQUESTED_KEY: &str = COMPACT_REQUESTED_METADATA_KEY;
 pub const APPROVAL_MARKER: &str = agentkit_store::APPROVE_MARKER;
 
 #[async_trait]
-impl crate::SessionFlushPlanner<agentkit_store::SqliteStore> for AgentSessionService {
+impl agentkit_engine::SessionFlushPlanner<agentkit_store::SqliteStore> for AgentSessionService {
     async fn settle_plan(
         &self,
         settling: &TaskRecord,

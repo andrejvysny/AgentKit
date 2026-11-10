@@ -272,7 +272,7 @@ fn resolve(
 }
 
 /// A task's immutable profile must match the descriptor identity captured at admission.
-pub(crate) fn task_profile(payload: &Value) -> HostResult<Option<AgentProfile>> {
+pub fn task_profile(payload: &Value) -> HostResult<Option<AgentProfile>> {
     let Some(snapshot) = payload.get("profileSnapshot") else {
         return Ok(None);
     };

@@ -135,7 +135,7 @@ pub async fn freeze_run_content(
     serde_json::to_value(snapshot).map_err(|e| HostError::Execution(e.to_string()))
 }
 
-pub(crate) async fn selected_messages(
+pub async fn selected_messages(
     context: &ExecutionContext,
     authority: Option<&Arc<dyn ContentAuthority>>,
 ) -> HostResult<Vec<ChatMessage>> {

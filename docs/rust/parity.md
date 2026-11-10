@@ -101,7 +101,7 @@ detail fields where the TypeScript `tokenCount` guard would fail with
 Host-facade hardening round (2026-11-01). The session engine now matches
 the TypeScript authority on `answer_stale` (replayed answers to settled
 requests settle `answer_stale` without touching turn state; ten cases
-pinned in `rust/crates/host/tests/answer_stale.rs`), and plain duplicate
+pinned in `rust/crates/sessions/tests/answer_stale.rs`), and plain duplicate
 store records surface as `input_conflict` on the session surface — the
 same code the binding's store mapping already used; the non-contract
 `duplicate` bucket is gone (`session/mod.rs` From-arm). Project
@@ -361,7 +361,7 @@ real compositions against the binding, not while reading code:
   refused with "guard error", even in `full_auto`. The guard now falls
   back to its configured mode for a non-session chat exactly as for a
   session with no execution state; malformed state on a real session
-  stays a hard error (`crates/host/tests/execution_authority.rs`,
+  stays a hard error (`crates/sessions/tests/execution_authority.rs`,
   `packages/native/tests/authority.test.ts`).
 - Host cancellation never reached JS callbacks. The bridge's
   `request()` cancellation branch removed the pending entry before the

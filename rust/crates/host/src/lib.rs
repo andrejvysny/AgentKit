@@ -3,18 +3,13 @@
 
 mod budget;
 mod chat;
-mod context_window;
 mod continuation;
 mod emulated_tool_call;
 mod governance;
 mod ports;
-mod profiles;
 mod project_instructions;
 mod proposals;
 mod provider_registry;
-mod run_content;
-mod run_profiles;
-mod session;
 
 pub use budget::{
     RoleTaskOverrides, parse_budget_limits, restore_execution_budget, task_overrides,
@@ -23,13 +18,9 @@ pub use chat::*;
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
 pub use governance::*;
 pub use ports::*;
-pub use profiles::*;
 pub use project_instructions::*;
 pub use proposals::*;
 pub use provider_registry::ProviderRegistry;
-pub use run_content::*;
-pub use run_profiles::*;
-pub use session::*;
 
 use agentkit_store::{SqliteStore, StoreError};
 use serde_json::{Value, json};
@@ -43,13 +34,19 @@ pub use agentkit_engine::{
     VerificationReport, WakeHandle, classify_execution_error,
 };
 
-/// The engine's host bound to the SQLite store, the only repository the
-/// product ships.
-pub type AgentHost = agentkit_engine::AgentHost<SqliteStore>;
-pub type ExecutionContext = agentkit_engine::ExecutionContext<SqliteStore>;
-pub type HostError = agentkit_engine::EngineError<StoreError>;
-pub type HostResult<T> = Result<T, HostError>;
-pub type HostOptions = agentkit_engine::HostOptions<SqliteStore>;
-pub type RunHandle = agentkit_engine::RunHandle<SqliteStore>;
-pub type VerificationInput = agentkit_engine::VerificationInput<SqliteStore>;
-pub type WorkerHandle = agentkit_engine::WorkerHandle<SqliteStore>;
+pub use agentkit_sessions::{
+    APPROVAL_MARKER, AgentHost, AgentLimits, AgentProfile, AgentResources, AgentSendResult,
+    AgentSessionService, AgentSessionServiceDeps, AgentSessionState, AnswerInput, ApprovalGrantRef,
+    CHAT_TURN_TASK_KIND, COMPACT_REQUESTED_KEY, CONTENT_UNSUPPORTED_MESSAGE, ChatProviderFactory,
+    CodingPermissionAuthority, ContentAuthority, ContextUnit, ContextUnitKind, CreateSessionInput,
+    ExecutionContext, FALLBACK_CONTEXT_WINDOW_TOKENS, FollowUpInput, FrozenRunContent, HostError,
+    HostOptions, HostProviderPin, HostResult, OnSettled, PermissionContext, PlanApprovalPolicy,
+    PlanAuthorization, PlanGrantIntent, ProfileRegistry, ProjectSelection, REASONING_EFFORTS,
+    RECEIPT_RUN_ACTIVE, RunContentSelection, RunHandle, RunProfileDefaults, RunProfileService,
+    SelectedSource, SelectedSourceKind, SendInput, SessionError, SessionExecutionAuthority,
+    SessionResult, SkillSelection, SteerInput, TURN_CONFIG_KEYS, TaskProfileOverrides,
+    TemplateSelection, TruncationPolicy, VerificationInput, WhenBusy, WorkerHandle,
+    compiled_content_digest, freeze_run_content, is_valid_session_turn_kind, list_turn_tasks,
+    read_session_descriptor, resolve_uncertain_execution, session_content_selection,
+    session_turn_kind, session_usage, summarize_turn, turn_config, validate_frozen_run_content,
+};

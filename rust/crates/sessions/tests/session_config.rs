@@ -1,9 +1,9 @@
 //! Session configuration validation, immutable staging, reasoning patches and admission gates.
 
-use agentkit_host::{
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+use agentkit_sessions::{
     AgentHost, AgentSendResult, AgentSessionService, AgentSessionServiceDeps, CreateSessionInput,
-    ExecutionContext, HostOptions, HostResult, SendInput, SharedRuntime, SystemRuntime,
-    TaskExecutor, WhenBusy,
+    ExecutionContext, HostOptions, HostResult, SendInput, WhenBusy,
 };
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;

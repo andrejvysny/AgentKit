@@ -186,6 +186,7 @@ dependencies = [
  "agentkit-governance",
  "agentkit-kernel",
  "agentkit-mcp",
+ "agentkit-sessions",
  "agentkit-store",
  "async-trait",
  "chrono",
@@ -385,6 +386,25 @@ dependencies = [
  "agentkit-providers",
  "agentkit-store",
  "agentkit-toolpacks-coding",
+]
+
+[[package]]
+name = "agentkit-sessions"
+version = "0.1.0"
+dependencies = [
+ "agentkit-core",
+ "agentkit-engine",
+ "agentkit-governance",
+ "agentkit-kernel",
+ "agentkit-store",
+ "agentkit-testkit",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

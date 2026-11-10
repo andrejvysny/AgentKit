@@ -8,7 +8,7 @@
 //! custom-kind grammar `^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$` accepts
 //! `project.1` and `project._worker`.
 
-use agentkit_host::{
+use agentkit_sessions::{
     CHAT_TURN_TASK_KIND, REASONING_EFFORTS, is_valid_session_turn_kind, read_session_descriptor,
     session_content_selection, session_turn_kind,
 };

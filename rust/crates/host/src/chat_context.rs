@@ -59,9 +59,12 @@ pub(crate) async fn effective_session_descriptor(
         }
         None => return Ok(None),
     };
-    crate::context_window::with_snapshot(descriptor, context.task.payload.get("sessionContext"))
-        .map(Some)
-        .ok_or_else(|| HostError::Execution("session_context_invalid".into()))
+    agentkit_sessions::context_window::with_snapshot(
+        descriptor,
+        context.task.payload.get("sessionContext"),
+    )
+    .map(Some)
+    .ok_or_else(|| HostError::Execution("session_context_invalid".into()))
 }
 
 /// What the provider-facing history is assembled from (ADR 0017 part 1):
@@ -110,27 +113,31 @@ impl ContextBudget {
         let descriptor = effective_session_descriptor(context, chat_id)
             .await?
             .unwrap_or_else(|| json!({}));
-        let (window, source) = if let Some(snapshot) =
-            context.task.payload.get("contextWindowTokens")
-        {
-            (
-                snapshot
-                    .as_u64()
-                    .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
-                    .ok_or_else(|| {
-                        HostError::Execution("invalid_context_window_snapshot".into())
-                    })?,
-                // A frozen per-turn override is part of the admitted descriptor authority.
-                "descriptor",
-            )
-        } else if descriptor["context"]["windowTokens"].as_u64().is_none()
-            && let Some(window) = frozen_provider_window(&context.task.payload, model)?
-        {
-            (window, "model")
-        } else {
-            crate::context_window::resolve(&context.store, &descriptor, Some(provider), Some(model))
+        let (window, source) =
+            if let Some(snapshot) = context.task.payload.get("contextWindowTokens") {
+                (
+                    snapshot
+                        .as_u64()
+                        .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                        .ok_or_else(|| {
+                            HostError::Execution("invalid_context_window_snapshot".into())
+                        })?,
+                    // A frozen per-turn override is part of the admitted descriptor authority.
+                    "descriptor",
+                )
+            } else if descriptor["context"]["windowTokens"].as_u64().is_none()
+                && let Some(window) = frozen_provider_window(&context.task.payload, model)?
+            {
+                (window, "model")
+            } else {
+                agentkit_sessions::context_window::resolve(
+                    &context.store,
+                    &descriptor,
+                    Some(provider),
+                    Some(model),
+                )
                 .await?
-        };
+            };
         let reserve = descriptor["context"]["reserveTokens"]
             .as_u64()
             .filter(|n| *n > 0)

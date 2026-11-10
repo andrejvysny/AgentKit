@@ -2,7 +2,7 @@
 use agentkit_store::{SqliteStore, StoreError};
 use serde_json::Value;
 
-pub(crate) async fn resolve(
+pub async fn resolve(
     store: &SqliteStore,
     descriptor: &Value,
     provider: Option<&str>,
@@ -39,7 +39,7 @@ fn positive(value: &Value) -> Option<u64> {
 }
 
 /// Reapply the turn's admitted context instead of live future settings.
-pub(crate) fn with_snapshot(mut descriptor: Value, snapshot: Option<&Value>) -> Option<Value> {
+pub fn with_snapshot(mut descriptor: Value, snapshot: Option<&Value>) -> Option<Value> {
     let Some(snapshot) = snapshot else {
         return Some(descriptor);
     };

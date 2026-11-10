@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::HostResult;
@@ -22,26 +21,6 @@ pub fn is_mutating_subagent_tool(name: &str) -> bool {
 #[async_trait]
 pub trait DelegationGuidance: Send + Sync {
     async fn guidance(&self, chat_id: &str) -> Option<String>;
-}
-
-#[async_trait]
-pub trait ChatProviderFactory: Send + Sync {
-    fn available(&self) -> bool {
-        true
-    }
-    async fn snapshot(
-        &self,
-        _provider_id: &str,
-        _model: &str,
-        _cancel: CancellationToken,
-    ) -> HostResult<Option<Value>> {
-        Ok(None)
-    }
-    async fn resolve(
-        &self,
-        snapshot: &Value,
-        cancel: CancellationToken,
-    ) -> HostResult<Arc<dyn agentkit_core::ChatProvider>>;
 }
 
 #[async_trait]

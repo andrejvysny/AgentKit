@@ -25,19 +25,19 @@ pub fn agentkit_http::CorsConfig::preflight(&self, &str, &[&str]) -> axum_core::
 pub struct agentkit_http::DesktopBackend
 impl agentkit_http::DesktopBackend
 pub fn agentkit_http::DesktopBackend::into_router(alloc::rcs::arc::Arc<Self>, agentkit_http::Config) -> axum::routing::Router
-pub fn agentkit_http::DesktopBackend::new(agentkit_host::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
-pub async fn agentkit_http::DesktopBackend::open(agentkit_host::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub fn agentkit_http::DesktopBackend::new(agentkit_sessions::store_aliases::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub async fn agentkit_http::DesktopBackend::open(agentkit_sessions::store_aliases::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
 pub fn agentkit_http::DesktopBackend::with_connections(self, agentkit_connections::repository::AppConnections, core::option::Option<alloc::rcs::arc::Arc<agentkit_connections::execution::NativeConnections>>, core::option::Option<agentkit_connections::secrets::SharedSecretStore>) -> Self
-pub fn agentkit_http::DesktopBackend::with_content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_host::run_content::ContentAuthority>) -> Self
+pub fn agentkit_http::DesktopBackend::with_content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>) -> Self
 pub fn agentkit_http::DesktopBackend::with_insecure_http(self, bool) -> Self
 pub fn agentkit_http::DesktopBackend::with_mcp_configuration(self, alloc::rcs::arc::Arc<dyn agentkit_http::McpConfigurationPort>) -> Self
 pub fn agentkit_http::DesktopBackend::with_pinned_provider(self, &str) -> Self
-pub fn agentkit_http::DesktopBackend::with_profiles(self, alloc::rcs::arc::Arc<agentkit_host::profiles::ProfileRegistry>) -> Self
+pub fn agentkit_http::DesktopBackend::with_profiles(self, alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>) -> Self
 pub fn agentkit_http::DesktopBackend::with_proposals(self, alloc::rcs::arc::Arc<agentkit_host::proposals::ProposalService>) -> Self
-pub fn agentkit_http::DesktopBackend::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_host::ports::ChatProviderFactory>) -> Self
+pub fn agentkit_http::DesktopBackend::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>) -> Self
 pub fn agentkit_http::DesktopBackend::with_provider_operations(self, alloc::rcs::arc::Arc<dyn agentkit_http::ProviderOperations>) -> Self
 pub fn agentkit_http::DesktopBackend::with_provider_secrets(self, agentkit_connections::secrets::SharedSecretStore) -> Self
-pub fn agentkit_http::DesktopBackend::with_run_profile_defaults(self, agentkit_host::run_profiles::RunProfileDefaults) -> Self
+pub fn agentkit_http::DesktopBackend::with_run_profile_defaults(self, agentkit_sessions::run_profiles::RunProfileDefaults) -> Self
 pub fn agentkit_http::DesktopBackend::with_session_profile(self, &str) -> core::result::Result<Self, agentkit_http::Problem>
 pub fn agentkit_http::DesktopBackend::with_tool_catalog(self, alloc::rcs::arc::Arc<dyn agentkit_http::ToolCatalogPort>) -> Self
 pub fn agentkit_http::DesktopBackend::with_write_policy(self, alloc::rcs::arc::Arc<dyn agentkit_http::WritePolicyPort>) -> Self

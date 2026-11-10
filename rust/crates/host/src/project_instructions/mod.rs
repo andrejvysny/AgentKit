@@ -179,6 +179,6 @@ async fn session_workspace(context: &ExecutionContext, chat_id: &str) -> HostRes
     let Some(chat) = context.store.get_chat(chat_id).await? else {
         return Ok(None);
     };
-    Ok(crate::session::read_session_descriptor(&chat.metadata)
+    Ok(agentkit_sessions::read_session_descriptor(&chat.metadata)
         .and_then(|descriptor| descriptor.get("workspace").cloned()))
 }

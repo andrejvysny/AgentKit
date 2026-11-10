@@ -4,7 +4,7 @@ pub agentkit_runtime::RuntimeError::Agents(agentkit_agents::errors::AgentsError)
 pub agentkit_runtime::RuntimeError::Coded
 pub agentkit_runtime::RuntimeError::Coded::code: alloc::string::String
 pub agentkit_runtime::RuntimeError::Coded::message: alloc::string::String
-pub agentkit_runtime::RuntimeError::Host(agentkit_host::HostError)
+pub agentkit_runtime::RuntimeError::Host(agentkit_sessions::store_aliases::HostError)
 pub agentkit_runtime::RuntimeError::InvalidInput(alloc::string::String)
 pub struct agentkit_runtime::AdvisorLane
 impl agentkit_runtime::AdvisorLane
@@ -23,22 +23,22 @@ impl agentkit_runtime::AgentRuntime
 pub fn agentkit_runtime::AgentRuntime::advisor_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::AdvisorLane>
 pub fn agentkit_runtime::AgentRuntime::builder(agentkit_store::actor::SqliteStore) -> agentkit_runtime::AgentRuntimeBuilder
 pub fn agentkit_runtime::AgentRuntime::coding_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::CodingLane>
-pub fn agentkit_runtime::AgentRuntime::content_authority(&self) -> core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_host::run_content::ContentAuthority>>
-pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_host::AgentHost
+pub fn agentkit_runtime::AgentRuntime::content_authority(&self) -> core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>>
+pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_sessions::store_aliases::AgentHost
 pub fn agentkit_runtime::AgentRuntime::lsp_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::LspLane>
 pub fn agentkit_runtime::AgentRuntime::native_provider_factory(&self) -> &alloc::rcs::arc::Arc<agentkit_providers::native_provider_factory::NativeProviderFactory>
-pub fn agentkit_runtime::AgentRuntime::profiles(&self) -> &alloc::rcs::arc::Arc<agentkit_host::profiles::ProfileRegistry>
+pub fn agentkit_runtime::AgentRuntime::profiles(&self) -> &alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>
 pub fn agentkit_runtime::AgentRuntime::providers(&self) -> &alloc::rcs::arc::Arc<agentkit_host::provider_registry::ProviderRegistry>
-pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_host::session::AgentSessionService
+pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_sessions::session::AgentSessionService
 pub fn agentkit_runtime::AgentRuntime::subagent_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::SubagentLane>
-pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_host::WorkerHandle>
+pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_sessions::store_aliases::WorkerHandle>
 pub struct agentkit_runtime::AgentRuntimeBuilder
 impl agentkit_runtime::AgentRuntimeBuilder
 pub fn agentkit_runtime::AgentRuntimeBuilder::additional_providers(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::advisor_sink(self, alloc::rcs::arc::Arc<dyn agentkit_agents::advisor::engine::AdvisorEventSink>) -> Self
 pub async fn agentkit_runtime::AgentRuntimeBuilder::build(self) -> core::result::Result<agentkit_runtime::AgentRuntime, agentkit_runtime::RuntimeError>
 pub fn agentkit_runtime::AgentRuntimeBuilder::clock(self, agentkit_engine::ports::SharedRuntime) -> Self
-pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_host::run_content::ContentAuthority>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::default_provider(self, alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::external_tools(self, agentkit_runtime::ExternalToolsPolicy) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::extra_contributors(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>) -> Self

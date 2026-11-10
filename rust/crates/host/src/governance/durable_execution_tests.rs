@@ -489,7 +489,7 @@ async fn static_fast_path_uncertain_receipt_resolves_then_the_retry_proceeds() {
     // The host-owned resolve route: explicit, audited, and the only thing
     // that ever unblocks the effect.
     let now = crate::Runtime::now_ms(&crate::SystemRuntime);
-    let record = crate::governance::resolve_uncertain_execution(
+    let record = agentkit_sessions::resolve_uncertain_execution(
         &store,
         "chat",
         &execution,
