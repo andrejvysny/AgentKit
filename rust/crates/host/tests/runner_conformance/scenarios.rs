@@ -26,7 +26,7 @@ pub struct Script {
     pub witness: Arc<Witness>,
 }
 #[async_trait]
-impl TaskExecutor for Script {
+impl TaskExecutor<agentkit_store::SqliteStore> for Script {
     async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
         if self.scenario == "verification" {
             return self.commit(&context).await;
@@ -103,7 +103,7 @@ pub struct Verify {
     pub witness: Arc<Witness>,
 }
 #[async_trait]
-impl VerificationHook for Verify {
+impl VerificationHook<agentkit_store::SqliteStore> for Verify {
     async fn verify(&self, context: ExecutionContext) -> HostResult<VerificationReport> {
         let task = self.store.get_task(&context.task.task_id).await?.unwrap();
         let events = self.store.events(&context.task.task_id, None, 100).await?;

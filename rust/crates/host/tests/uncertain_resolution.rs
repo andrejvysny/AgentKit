@@ -122,7 +122,7 @@ async fn fixture() -> Fixture {
             fail: fail.clone(),
         }))
         .unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),

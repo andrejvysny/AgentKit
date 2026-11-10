@@ -3,7 +3,6 @@
   "violations": [
     "R1 agentkit-host -> reqwest",
     "R1b agentkit-agents -> agentkit-store",
-    "R1b agentkit-engine -> agentkit-store",
     "R1b agentkit-host -> agentkit-store",
     "R2 agentkit-agents -> agentkit-host",
     "R5 agentkit-client src/lib.rs pub use presentation::*",
@@ -104,7 +103,6 @@
     "R5 agentkit-store src/lib.rs pub use execution_receipts::*",
     "R5 agentkit-store src/lib.rs pub use execution_resolution::*",
     "R5 agentkit-store src/lib.rs pub use managed_content::*",
-    "R5 agentkit-store src/lib.rs pub use models::*",
     "R5 agentkit-store src/lib.rs pub use proposals::*",
     "R5 agentkit-store src/lib.rs pub use provider_catalog::*",
     "R5 agentkit-store src/lib.rs pub use session_ops::*",

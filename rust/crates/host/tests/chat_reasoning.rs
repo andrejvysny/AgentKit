@@ -82,7 +82,8 @@ async fn run(path: &std::path::Path, steps: Vec<Vec<ProviderEvent>>) -> SqliteSt
     let provider = Arc::new(Provider {
         steps: Mutex::new(steps),
     });
-    let executor: Arc<dyn TaskExecutor> = Arc::new(ChatExecutor::new(provider, Arc::new(tools)));
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
+        Arc::new(ChatExecutor::new(provider, Arc::new(tools)));
     let host = AgentHost::new(
         store.clone(),
         HashMap::from([("chat.turn".into(), executor)]),

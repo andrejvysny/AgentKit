@@ -83,7 +83,7 @@ struct Verify {
     seen: Mutex<Vec<(String, usize, u32)>>,
 }
 #[async_trait]
-impl VerificationHook for Verify {
+impl VerificationHook<agentkit_store::SqliteStore> for Verify {
     async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
         panic!("typed pass verifier expected")
     }
@@ -116,7 +116,7 @@ async fn make(
     };
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(Echo {definition:serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap()})).unwrap();
-    let executor: Arc<dyn TaskExecutor> =
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
         Arc::new(ChatExecutor::new(Arc::new(provider), Arc::new(tools)).with_options(options));
     let host = AgentHost::new(
         store,
@@ -313,7 +313,7 @@ async fn correction_hard_cap_is_five_despite_larger_host_configuration() {
 }
 struct NullVerifier;
 #[async_trait]
-impl VerificationHook for NullVerifier {
+impl VerificationHook<agentkit_store::SqliteStore> for NullVerifier {
     async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
         panic!("optional verifier expected")
     }

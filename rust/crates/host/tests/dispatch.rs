@@ -73,7 +73,7 @@ struct RunTool {
     capture: Mutex<Option<tokio::sync::oneshot::Sender<ExecutionContext>>>,
 }
 #[async_trait]
-impl TaskExecutor for RunTool {
+impl TaskExecutor<agentkit_store::SqliteStore> for RunTool {
     async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
         let capture = self.capture.lock().unwrap().take();
         if let Some(capture) = capture {
@@ -135,7 +135,7 @@ async fn setup(expire: bool, supersede: bool) -> (AgentHost, Arc<Domain>, Arc<Ru
         fixture.store,
         std::collections::HashMap::from([(
             "test".into(),
-            executor.clone() as Arc<dyn TaskExecutor>,
+            executor.clone() as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         clock,
         HostOptions {

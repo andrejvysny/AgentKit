@@ -1,12 +1,13 @@
-use crate::{EngineError, EngineResult, SharedRuntime};
-use agentkit_store::{LeaseFence, SqliteStore, TaskRecord};
+use crate::{
+    EngineError, EngineResult, LeaseFence, SharedRuntime, SubmitTask, TaskRecord, TaskRepository,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
-pub struct ExecutionContext {
+pub struct ExecutionContext<R: TaskRepository> {
     pub task: TaskRecord,
     pub attempt_id: String,
     pub cancellation: CancellationToken,
@@ -17,40 +18,42 @@ pub struct ExecutionContext {
     /// skips settling because the park already ended the attempt. The mutex
     /// also serializes lease renewal with the durable park and publication.
     pub suspension: Arc<Mutex<Option<agentkit_core::HumanRequestSpec>>>,
-    pub store: SqliteStore,
+    pub store: R,
     pub fence: LeaseFence,
     pub runtime: SharedRuntime,
     pub event_gate: Arc<Mutex<()>>,
 }
 
-impl ExecutionContext {
-    pub async fn spawn_child(
-        &self,
-        mut input: agentkit_store::SubmitTask,
-    ) -> EngineResult<TaskRecord> {
+impl<R: TaskRepository> ExecutionContext<R> {
+    pub async fn spawn_child(&self, mut input: SubmitTask) -> EngineResult<TaskRecord, R::Error> {
         self.check_cancelled()?;
         input.parent_task_id = Some(self.task.task_id.clone());
-        Ok(self
-            .store
+        self.store
             .submit_child(self.fence.clone(), input, self.runtime.now_ms())
-            .await?)
+            .await
+            .map_err(EngineError::Store)
     }
 
-    pub async fn report_progress(&self, progress: Value) -> EngineResult<()> {
+    pub async fn report_progress(&self, progress: Value) -> EngineResult<(), R::Error> {
         self.check_cancelled()?;
         self.store
             .update_progress(self.fence.clone(), progress, self.runtime.now_ms())
-            .await?;
+            .await
+            .map_err(EngineError::Store)?;
         Ok(())
     }
 
     /// Completed external effects must be recorded even after cancellation.
     /// The store fence still rejects evidence from a replaced worker.
-    pub async fn emit(&self, event_type: &str, data: Value) -> EngineResult<()> {
+    pub async fn emit(&self, event_type: &str, data: Value) -> EngineResult<(), R::Error> {
         let _guard = self.event_gate.lock().await;
-        let seq = self.store.next_seq(&self.task.task_id).await?;
+        let seq = self
+            .store
+            .next_seq(&self.task.task_id)
+            .await
+            .map_err(EngineError::Store)?;
         let now = self.runtime.now_ms();
-        let timestamp = agentkit_store::ConversationTimestamp::from_epoch_millis(now)
+        let timestamp = agentkit_kernel::ConversationTimestamp::from_epoch_millis(now)
             .and_then(|value| value.wire_text().map(|text| text.into_owned()))
             .map_err(|_| EngineError::Execution("invalid runtime timestamp".into()))?;
         let event = json!({
@@ -60,11 +63,12 @@ impl ExecutionContext {
         });
         self.store
             .append_events(self.fence.clone(), vec![event], now)
-            .await?;
+            .await
+            .map_err(EngineError::Store)?;
         Ok(())
     }
 
-    pub fn check_cancelled(&self) -> EngineResult<()> {
+    pub fn check_cancelled(&self) -> EngineResult<(), R::Error> {
         if self.cancellation.is_cancelled() {
             return Err(EngineError::Cancelled);
         }
@@ -79,7 +83,7 @@ impl ExecutionContext {
     /// agent lane while waiting, and the pool slot returns immediately —
     /// waiting never spins. `false` means no child is unfinished: the
     /// caller proceeds to settle normally under the still-live lease.
-    pub async fn park_on_children(&self) -> EngineResult<bool> {
+    pub async fn park_on_children(&self) -> EngineResult<bool, R::Error> {
         // Same discipline as the approval park: hold the suspension guard
         // across the lease-releasing park so heartbeat renewal cannot see
         // a window where the lease is gone but the suspension is not yet
@@ -88,7 +92,8 @@ impl ExecutionContext {
         let parked = self
             .store
             .wait_for_children(self.fence.clone(), self.runtime.now_ms())
-            .await?;
+            .await
+            .map_err(EngineError::Store)?;
         if parked {
             *suspension = Some(agentkit_core::HumanRequestSpec {
                 request_id: format!("childwait:{}", self.task.task_id),

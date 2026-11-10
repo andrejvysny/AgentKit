@@ -4,7 +4,7 @@ pub agentkit_runtime::RuntimeError::Agents(agentkit_agents::errors::AgentsError)
 pub agentkit_runtime::RuntimeError::Coded
 pub agentkit_runtime::RuntimeError::Coded::code: alloc::string::String
 pub agentkit_runtime::RuntimeError::Coded::message: alloc::string::String
-pub agentkit_runtime::RuntimeError::Host(agentkit_engine::error::EngineError)
+pub agentkit_runtime::RuntimeError::Host(agentkit_host::HostError)
 pub agentkit_runtime::RuntimeError::InvalidInput(alloc::string::String)
 pub struct agentkit_runtime::AdvisorLane
 impl agentkit_runtime::AdvisorLane
@@ -17,21 +17,21 @@ impl agentkit_core::types::RunHooks for agentkit_runtime::AdvisorLane
 pub fn agentkit_runtime::AdvisorLane::call<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, usize, serde_json::value::Value, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<serde_json::value::Value, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_runtime::AdvisorLane::indexes(&self, &str) -> alloc::vec::Vec<usize>
 impl agentkit_engine::ports::TaskSettledObserver for agentkit_runtime::AdvisorLane
-pub fn agentkit_runtime::AdvisorLane::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_runtime::AdvisorLane::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::model::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::ports::ObserverError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_runtime::AgentRuntime
 impl agentkit_runtime::AgentRuntime
 pub fn agentkit_runtime::AgentRuntime::advisor_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::AdvisorLane>
 pub fn agentkit_runtime::AgentRuntime::builder(agentkit_store::actor::SqliteStore) -> agentkit_runtime::AgentRuntimeBuilder
 pub fn agentkit_runtime::AgentRuntime::coding_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::CodingLane>
 pub fn agentkit_runtime::AgentRuntime::content_authority(&self) -> core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_host::run_content::ContentAuthority>>
-pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_engine::runner::AgentHost
+pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_host::AgentHost
 pub fn agentkit_runtime::AgentRuntime::lsp_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::LspLane>
 pub fn agentkit_runtime::AgentRuntime::native_provider_factory(&self) -> &alloc::rcs::arc::Arc<agentkit_providers::native_provider_factory::NativeProviderFactory>
 pub fn agentkit_runtime::AgentRuntime::profiles(&self) -> &alloc::rcs::arc::Arc<agentkit_host::profiles::ProfileRegistry>
 pub fn agentkit_runtime::AgentRuntime::providers(&self) -> &alloc::rcs::arc::Arc<agentkit_host::provider_registry::ProviderRegistry>
 pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_host::session::AgentSessionService
 pub fn agentkit_runtime::AgentRuntime::subagent_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::SubagentLane>
-pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_engine::runner::WorkerHandle>
+pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_host::WorkerHandle>
 pub struct agentkit_runtime::AgentRuntimeBuilder
 impl agentkit_runtime::AgentRuntimeBuilder
 pub fn agentkit_runtime::AgentRuntimeBuilder::additional_providers(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>>) -> Self
@@ -47,7 +47,7 @@ pub fn agentkit_runtime::AgentRuntimeBuilder::plan(self, agentkit_runtime::PlanC
 pub fn agentkit_runtime::AgentRuntimeBuilder::profiles(self, alloc::vec::Vec<serde_json::value::Value>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::session_defaults(self, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::subagent_max_concurrency(self, i64) -> Self
-pub fn agentkit_runtime::AgentRuntimeBuilder::verification(self, alloc::rcs::arc::Arc<dyn agentkit_engine::ports::VerificationHook>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::verification(self, alloc::rcs::arc::Arc<dyn agentkit_engine::ports::VerificationHook<agentkit_store::actor::SqliteStore>>) -> Self
 pub struct agentkit_runtime::CodingLane
 impl agentkit_runtime::CodingLane
 pub async fn agentkit_runtime::CodingLane::dispose(&self)
@@ -70,7 +70,7 @@ pub async fn agentkit_runtime::SubagentLane::list(&self, &str) -> agentkit_agent
 pub async fn agentkit_runtime::SubagentLane::status(&self, &str) -> agentkit_agents::errors::AgentsResult<agentkit_agents::subagents::service::SubagentView>
 pub fn agentkit_runtime::SubagentLane::view(&self) -> core::option::Option<serde_json::value::Value>
 impl agentkit_engine::ports::TaskSettledObserver for agentkit_runtime::SubagentLane
-pub fn agentkit_runtime::SubagentLane::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::models::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_runtime::SubagentLane::observe_settled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::model::TaskRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::ports::ObserverError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl agentkit_host::ports::DelegationGuidance for agentkit_runtime::SubagentLane
 pub fn agentkit_runtime::SubagentLane::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_runtime::effective_class(&str, &str) -> agentkit_core::permission::ToolClass

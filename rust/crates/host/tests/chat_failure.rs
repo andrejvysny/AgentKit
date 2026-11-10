@@ -27,7 +27,7 @@ async fn failed_chat_keeps_provider_message_and_code_without_replaying() {
     let store = SqliteStore::memory(32).unwrap();
     store.create_chat("chat", None, json!({}), 0).await.unwrap();
     let provider = Arc::new(FailingProvider(AtomicUsize::new(0)));
-    let executor: Arc<dyn TaskExecutor> = Arc::new(ChatExecutor::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
         provider.clone(),
         Arc::new(ToolRegistry::new()),
     ));

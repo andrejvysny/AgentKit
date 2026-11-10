@@ -10,6 +10,12 @@ use std::{
     time::Duration,
 };
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct Clock(AtomicI64);
 
 impl Runtime for Clock {
@@ -24,7 +30,7 @@ impl Runtime for Clock {
 struct Idle;
 
 #[async_trait]
-impl TaskExecutor for Idle {
+impl TaskExecutor<agentkit_store::SqliteStore> for Idle {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
@@ -49,7 +55,10 @@ fn host(options: HostOptions) -> (AgentHost, Arc<Clock>) {
     let clock = Arc::new(Clock(AtomicI64::new(0)));
     let host = AgentHost::new(
         SqliteStore::memory(8).unwrap(),
-        HashMap::from([("test".into(), Arc::new(Idle) as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            Arc::new(Idle) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         clock.clone(),
         options,
     )

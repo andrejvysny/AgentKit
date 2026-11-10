@@ -103,7 +103,7 @@ fn make_host(
     tools: ToolRegistry,
     options: ChatExecutorOptions,
 ) -> AgentHost {
-    let executor: Arc<dyn TaskExecutor> =
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
         Arc::new(ChatExecutor::new(provider, Arc::new(tools)).with_options(options));
     AgentHost::new(
         store,

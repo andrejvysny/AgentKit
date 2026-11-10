@@ -8,12 +8,12 @@ mod context_summaries;
 mod conversations;
 mod data;
 mod deadline;
+mod engine_repository;
 mod execution_no_start;
 mod execution_receipts;
 mod execution_resolution;
 mod faults;
 mod managed_content;
-mod models;
 mod proposals;
 mod provider_catalog;
 mod provider_connections;
@@ -24,7 +24,6 @@ mod settings_commit;
 mod subagents;
 mod tasks;
 mod teammates;
-mod timestamp;
 mod transaction;
 #[cfg(feature = "ts-import")]
 mod ts_import;
@@ -33,6 +32,12 @@ mod util;
 pub use actor::{SqliteStore, StoreActorIdentity};
 pub use advisor::*;
 pub use agent_inputs::*;
+pub use agentkit_engine::{
+    AttemptRecord, ClaimInput, ClaimedTask, EventRecord, Lease, LeaseFence, MessageInput,
+    PinnedRunProfile, RecoveryMode, RetryTask, SettleTask, SubmitTask, TaskBinding, TaskRecord,
+    TaskStatus, TaskTransitionPatch,
+};
+pub use agentkit_kernel::{ConversationTimestamp, TimestampOutOfRange};
 pub use agents::*;
 pub use connector_crypto::ResealReport;
 pub use context_summaries::*;
@@ -41,7 +46,6 @@ pub use data::*;
 pub use execution_receipts::*;
 pub use execution_resolution::*;
 pub use managed_content::*;
-pub use models::*;
 pub use proposals::*;
 pub use provider_catalog::*;
 pub use provider_connections::{
@@ -60,7 +64,6 @@ pub use tasks::{
     derive_task_projection, redact_event,
 };
 pub use teammates::*;
-pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
 #[cfg(feature = "ts-import")]
 pub use ts_import::*;
@@ -116,6 +119,12 @@ pub enum StoreError {
     /// kept running.
     #[error("internal store error: {0}")]
     Internal(String),
+}
+
+impl From<TimestampOutOfRange> for StoreError {
+    fn from(error: TimestampOutOfRange) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

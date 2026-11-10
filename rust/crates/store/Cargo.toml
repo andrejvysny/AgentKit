@@ -14,7 +14,9 @@ workspace = true
 
 [dependencies]
 agentkit-contracts = { workspace = true }
+agentkit-engine = { workspace = true }
 agentkit-kernel = { workspace = true }
+async-trait.workspace = true
 chrono = { workspace = true, features = ["std"] }
 # AGENTKIT-72 at-rest sealing. `ring` is already in the workspace Cargo.lock
 # (the rustls stack behind the `http` feature); this edge adds no new crate to

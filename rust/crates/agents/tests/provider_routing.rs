@@ -59,7 +59,7 @@ fn host_over(
     default: &Arc<Fake>,
     registry: Option<Arc<ProviderRegistry>>,
 ) -> AgentHost {
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             default.clone() as Arc<dyn ChatProvider>,
             Arc::new(ToolRegistry::new()),

@@ -1,10 +1,10 @@
-use crate::{EngineResult, ExecutionContext};
+use crate::{EngineError, EngineResult, ExecutionContext, TaskRepository};
 use agentkit_core::{CoreError, DispatchFence, DispatchGuard};
 use async_trait::async_trait;
 use std::sync::Arc;
 
-impl ExecutionContext {
-    pub async fn check_dispatch(&self) -> EngineResult<()> {
+impl<R: TaskRepository> ExecutionContext<R> {
+    pub async fn check_dispatch(&self) -> EngineResult<(), R::Error> {
         self.check_cancelled()?;
         if let Err(error) = self
             .store
@@ -12,7 +12,7 @@ impl ExecutionContext {
             .await
         {
             self.cancellation.cancel();
-            return Err(error.into());
+            return Err(EngineError::Store(error));
         }
         self.check_cancelled()
     }
@@ -23,8 +23,8 @@ impl ExecutionContext {
     }
 }
 
-struct TaskDispatchGuard(ExecutionContext);
-impl std::fmt::Debug for TaskDispatchGuard {
+struct TaskDispatchGuard<R: TaskRepository>(ExecutionContext<R>);
+impl<R: TaskRepository> std::fmt::Debug for TaskDispatchGuard<R> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("TaskDispatchGuard")
@@ -33,7 +33,7 @@ impl std::fmt::Debug for TaskDispatchGuard {
     }
 }
 #[async_trait]
-impl DispatchGuard for TaskDispatchGuard {
+impl<R: TaskRepository> DispatchGuard for TaskDispatchGuard<R> {
     async fn check(&self) -> Result<(), CoreError> {
         self.0.check_dispatch().await.map_err(|_| {
             CoreError::new(

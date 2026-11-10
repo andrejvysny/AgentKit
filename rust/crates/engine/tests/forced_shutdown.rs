@@ -12,6 +12,12 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 /// Models a run loop: each "tool body" starts only if the run is not already
 /// cancelled, then waits for cancellation.
 struct ToolRunner {
@@ -20,7 +26,7 @@ struct ToolRunner {
 }
 
 #[async_trait]
-impl TaskExecutor for ToolRunner {
+impl TaskExecutor<agentkit_store::SqliteStore> for ToolRunner {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         context.check_cancelled()?;
         self.tools_started.fetch_add(1, Ordering::SeqCst);
@@ -69,7 +75,10 @@ fn host_with_lease(store: SqliteStore, executor: Arc<ToolRunner>, lease_ttl_ms: 
     };
     AgentHost::new(
         store,
-        HashMap::from([("test".into(), executor as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            executor as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         Arc::new(SystemRuntime),
         options,
     )

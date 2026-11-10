@@ -286,7 +286,7 @@ async fn fixture_with_runtime(
     let summary_barrier = Arc::new(SummaryBarrier::default());
     let responses = Arc::new(AtomicBool::new(false));
     let usage_records = Arc::new(Mutex::new(vec![]));
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
@@ -659,7 +659,7 @@ async fn fixture_slow(
         "inputSchema": {"type": "object"},
     }))
     .unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
@@ -868,7 +868,7 @@ async fn fixture_gated(
         "inputSchema": {"type": "object"},
     }))
     .unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
@@ -1858,12 +1858,12 @@ struct Racy {
 }
 
 #[async_trait]
-impl SessionFlushPlanner for Racy {
+impl SessionFlushPlanner<agentkit_store::SqliteStore> for Racy {
     async fn settle_plan(
         &self,
         settling: &agentkit_store::TaskRecord,
         completed: bool,
-    ) -> HostResult<agentkit_host::SettlePlan> {
+    ) -> HostResult<agentkit_store::SessionSettle> {
         let plan = self.inner.settle_plan(settling, completed).await?;
         if completed && self.armed.swap(false, Ordering::SeqCst) {
             match self.mode {
@@ -2579,12 +2579,12 @@ struct ChangingEveryPlan {
 }
 
 #[async_trait]
-impl SessionFlushPlanner for ChangingEveryPlan {
+impl SessionFlushPlanner<agentkit_store::SqliteStore> for ChangingEveryPlan {
     async fn settle_plan(
         &self,
         settling: &agentkit_store::TaskRecord,
         completed: bool,
-    ) -> HostResult<SettlePlan> {
+    ) -> HostResult<agentkit_store::SessionSettle> {
         let plan = self.service.settle_plan(settling, completed).await?;
         let calls = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         self.service
@@ -2663,7 +2663,7 @@ async fn continuous_config_changes_return_a_bounded_conflict_without_partial_set
 
 struct Maintenance;
 #[async_trait]
-impl TaskExecutor for Maintenance {
+impl TaskExecutor<agentkit_store::SqliteStore> for Maintenance {
     async fn execute(&self, _: ExecutionContext) -> HostResult<()> {
         Ok(())
     }
@@ -2679,7 +2679,7 @@ async fn a_different_task_kind_cannot_accept_a_session_follow_up() {
         f.store.clone(),
         HashMap::from([(
             "project.maintenance".to_owned(),
-            Arc::new(Maintenance) as Arc<dyn TaskExecutor>,
+            Arc::new(Maintenance) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),

@@ -352,7 +352,7 @@ async fn display_state_follows_the_task_projection() {
 struct ParentExecutor;
 
 #[async_trait]
-impl TaskExecutor for ParentExecutor {
+impl TaskExecutor<agentkit_store::SqliteStore> for ParentExecutor {
     async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
         if context.task.attempt_count == 1 {
             context
@@ -388,7 +388,7 @@ impl TaskExecutor for ParentExecutor {
 struct ChildExecutor;
 
 #[async_trait]
-impl TaskExecutor for ChildExecutor {
+impl TaskExecutor<agentkit_store::SqliteStore> for ChildExecutor {
     async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
         context.emit("run.child.done", json!({})).await?;
         Ok(())
@@ -423,11 +423,11 @@ async fn single_worker_parent_wait_releases_capacity_then_resumes_same_task() {
         HashMap::from([
             (
                 "teammate.turn".into(),
-                Arc::new(ParentExecutor) as Arc<dyn TaskExecutor>,
+                Arc::new(ParentExecutor) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
             ),
             (
                 "teammate.child".into(),
-                Arc::new(ChildExecutor) as Arc<dyn TaskExecutor>,
+                Arc::new(ChildExecutor) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
             ),
         ]),
         clock.clone(),
@@ -521,7 +521,7 @@ async fn the_runner_never_gives_one_agent_two_active_writers() {
     // A no-op executor; the point is the CLAIM filter, not the work.
     struct Quiet;
     #[async_trait]
-    impl TaskExecutor for Quiet {
+    impl TaskExecutor<agentkit_store::SqliteStore> for Quiet {
         async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
             Ok(())
         }
@@ -530,7 +530,7 @@ async fn the_runner_never_gives_one_agent_two_active_writers() {
         store.clone(),
         HashMap::from([(
             "teammate.turn".into(),
-            Arc::new(Quiet) as Arc<dyn TaskExecutor>,
+            Arc::new(Quiet) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         clock.clone(),
         HostOptions {

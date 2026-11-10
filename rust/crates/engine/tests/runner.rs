@@ -1,8 +1,23 @@
-use super::*;
-use crate::Runtime;
 use agentkit_core::HumanRequestSpec;
-use agentkit_store::{AgentInputKind, AnswerHumanRequest, CreateAgentInput, ParkTurn};
+use agentkit_engine::{
+    Runtime, SessionFlushPlanner, SubmitTask, TaskExecutor, TaskRecord, TaskStatus,
+    classify_execution_error,
+};
+use agentkit_store::{
+    AgentInputKind, AnswerHumanRequest, CreateAgentInput, ParkTurn, SessionSettle, SqliteStore,
+    StoreError,
+};
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::time::Duration;
+
+type AgentHost = agentkit_engine::AgentHost<SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<SqliteStore>;
+type EngineError = agentkit_engine::EngineError<StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<SqliteStore>;
 
 struct Clock(AtomicI64);
 impl Runtime for Clock {
@@ -19,7 +34,7 @@ impl Runtime for Clock {
 /// admission and the claim filter to accept it.
 struct Silent;
 #[async_trait::async_trait]
-impl TaskExecutor for Silent {
+impl TaskExecutor<SqliteStore> for Silent {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
@@ -27,7 +42,7 @@ impl TaskExecutor for Silent {
 
 struct Counter(Arc<AtomicUsize>);
 #[async_trait::async_trait]
-impl TaskExecutor for Counter {
+impl TaskExecutor<SqliteStore> for Counter {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -49,24 +64,71 @@ fn queued_task(id: &str, kind: &str) -> SubmitTask {
     }
 }
 
-async fn fixture() -> (AgentHost, ExecutionContext, Arc<Clock>) {
-    let store = SqliteStore::memory(16).unwrap();
-    let clock = Arc::new(Clock(AtomicI64::new(1_000)));
-    store
-        .create_chat("chat", None, json!({}), 1_000)
-        .await
-        .unwrap();
-    let host = AgentHost::new(
-        store.clone(),
-        HashMap::from([(
-            "chat.turn".to_owned(),
-            Arc::new(Silent) as Arc<dyn TaskExecutor>,
-        )]),
-        clock.clone(),
-        HostOptions::default(),
-    )
-    .unwrap();
-    host.submit(SubmitTask {
+/// The parking executor takes the suspension guard, commits a durable park
+/// (which deletes the lease) and keeps the guard through several heartbeat
+/// ticks before publishing the suspension: the exact park/heartbeat
+/// interleaving, recreated without relying on scheduler luck.
+struct Parker {
+    runs: AtomicUsize,
+    seen: std::sync::Mutex<Vec<(String, String)>>,
+    cancelled: std::sync::Mutex<Vec<bool>>,
+}
+#[async_trait::async_trait]
+impl TaskExecutor<SqliteStore> for Parker {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
+        self.seen.lock().unwrap().push((
+            context.fence.lease_token.clone(),
+            context.attempt_id.clone(),
+        ));
+        if self.runs.fetch_add(1, Ordering::SeqCst) > 0 {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            return Ok(());
+        }
+        let request = HumanRequestSpec {
+            request_id: "request".into(),
+            content: json!({"kind":"approval", "toolName":"write_file", "argsSha256":"a".repeat(64), "prompt":"write"}),
+            content_hash: "request-hash".into(),
+            expires_at: None,
+        };
+        let mut suspension = context.suspension.lock().await;
+        context
+            .store
+            .park_turn(ParkTurn {
+                fence: context.fence.clone(),
+                assistant_message: None,
+                events: vec![],
+                now: 1_000,
+                request: Some(CreateAgentInput {
+                    input_id: request.request_id.clone(),
+                    session_id: "chat".into(),
+                    kind: AgentInputKind::HumanRequest,
+                    content: request.content.clone(),
+                    content_hash: request.content_hash.clone(),
+                    target_task_id: Some("turn".into()),
+                    on_settled: None,
+                    attempt_id: Some(context.attempt_id.clone()),
+                    tool_call_id: Some("call".into()),
+                    expires_at: None,
+                }),
+            })
+            .await?;
+        // Several heartbeat ticks fire while the guard is held and the lease
+        // is already gone; none may report theft or wait on the guard.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *suspension = Some(request);
+        drop(suspension);
+        // A published suspension no longer owns a lease either.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        self.cancelled
+            .lock()
+            .unwrap()
+            .push(context.cancellation.is_cancelled());
+        Ok(())
+    }
+}
+
+fn turn_task() -> SubmitTask {
+    SubmitTask {
         task_id: "turn".into(),
         kind: "chat.turn".into(),
         scope_id: "chat".into(),
@@ -77,65 +139,55 @@ async fn fixture() -> (AgentHost, ExecutionContext, Arc<Clock>) {
         depends_on: vec![],
         parent_task_id: None,
         exclusive_scope: true,
-    })
-    .await
-    .unwrap();
-    let context = host.claim_context().await.unwrap().unwrap();
-    (host, context, clock)
+    }
 }
 
-/// Recreates the precise park/heartbeat interleaving without sleeps: the
-/// store has deleted the lease, but the parking executor has not published
-/// its suspension yet. Renewal must skip this transition rather than report
-/// a stolen lease, and must not wait on the mutex held by the executor that
-/// the same select loop needs to keep polling.
+fn short_lease() -> HostOptions {
+    // A 30 ms TTL heartbeats every 10 ms; the fake clock never moves on its
+    // own, so expiry is decided only by what the test does to it.
+    HostOptions {
+        lease_ttl_ms: 30,
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn heartbeat_during_committed_park_does_not_lose_the_worker_and_answer_resumes() {
-    let (host, context, clock) = fixture().await;
-    let request = HumanRequestSpec {
-        request_id: "request".into(),
-        content: json!({"kind":"approval", "toolName":"write_file", "argsSha256":"a".repeat(64), "prompt":"write"}),
-        content_hash: "request-hash".into(),
-        expires_at: None,
-    };
-    let mut suspension = context.suspension.lock().await;
-    host.store
-        .park_turn(ParkTurn {
-            fence: context.fence.clone(),
-            assistant_message: None,
-            events: vec![],
-            now: 1_000,
-            request: Some(CreateAgentInput {
-                input_id: request.request_id.clone(),
-                session_id: "chat".into(),
-                kind: AgentInputKind::HumanRequest,
-                content: request.content.clone(),
-                content_hash: request.content_hash.clone(),
-                target_task_id: Some("turn".into()),
-                on_settled: None,
-                attempt_id: Some(context.attempt_id.clone()),
-                tool_call_id: Some("call".into()),
-                expires_at: None,
-            }),
-        })
+    let store = SqliteStore::memory(16).unwrap();
+    let clock = Arc::new(Clock(AtomicI64::new(1_000)));
+    store
+        .create_chat("chat", None, json!({}), 1_000)
         .await
         .unwrap();
+    let parker = Arc::new(Parker {
+        runs: AtomicUsize::new(0),
+        seen: Default::default(),
+        cancelled: Default::default(),
+    });
+    let host = AgentHost::new(
+        store.clone(),
+        HashMap::from([(
+            "chat.turn".to_owned(),
+            parker.clone() as Arc<dyn TaskExecutor<SqliteStore>>,
+        )]),
+        clock.clone(),
+        short_lease(),
+    )
+    .unwrap();
+    host.submit(turn_task()).await.unwrap();
+    assert!(
+        host.run_once()
+            .await
+            .expect("a committed park is not lease theft"),
+        "the turn is claimed"
+    );
     assert_eq!(
-        host.store.get_task("turn").await.unwrap().unwrap().status,
+        store.get_task("turn").await.unwrap().unwrap().status,
         TaskStatus::WaitingApproval
     );
-    tokio::time::timeout(Duration::from_secs(5), host.heartbeat(&context))
-        .await
-        .expect("heartbeat must not block the parked executor")
-        .expect("a committed park is not lease theft");
-    assert!(!context.cancellation.is_cancelled());
-    *suspension = Some(request);
-    drop(suspension);
-    host.heartbeat(&context)
-        .await
-        .expect("a published suspension no longer owns a lease");
+    assert_eq!(*parker.cancelled.lock().unwrap(), vec![false]);
 
-    host.store
+    store
         .answer_human_request(AnswerHumanRequest {
             request_id: "request".into(),
             answer_id: "answer".into(),
@@ -150,14 +202,35 @@ async fn heartbeat_during_committed_park_does_not_lose_the_worker_and_answer_res
         .await
         .unwrap();
     clock.0.store(1_001, Ordering::SeqCst);
-    let resumed = host
-        .claim_context()
-        .await
-        .unwrap()
-        .expect("answer resumes the turn");
-    assert_ne!(resumed.fence.lease_token, context.fence.lease_token);
-    assert_ne!(resumed.attempt_id, context.attempt_id);
-    host.heartbeat(&resumed).await.unwrap();
+    assert!(host.run_once().await.unwrap(), "answer resumes the turn");
+    let seen = parker.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_ne!(seen[0].0, seen[1].0);
+    assert_ne!(seen[0].1, seen[1].1);
+}
+
+/// Runs until its lease is taken away, keeping the cancellation token so the
+/// test can observe that the old context was cancelled.
+struct Stall {
+    replace: bool,
+    clock: Arc<Clock>,
+    token: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
+}
+#[async_trait::async_trait]
+impl TaskExecutor<SqliteStore> for Stall {
+    async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
+        *self.token.lock().unwrap() = Some(context.cancellation.clone());
+        if self.replace {
+            context
+                .store
+                .acquire_lease("turn", "other-attempt", "other-worker", 1_000, 30_000)
+                .await?;
+        } else {
+            self.clock.0.store(31_000, Ordering::SeqCst);
+        }
+        context.cancellation.cancelled().await;
+        Ok(())
+    }
 }
 
 /// Coordination with an intentional park must not turn an actually expired
@@ -165,20 +238,33 @@ async fn heartbeat_during_committed_park_does_not_lose_the_worker_and_answer_res
 #[tokio::test]
 async fn heartbeat_still_refuses_expired_and_replaced_leases() {
     for replace in [false, true] {
-        let (host, context, clock) = fixture().await;
-        if replace {
-            host.store
-                .acquire_lease("turn", "other-attempt", "other-worker", 1_000, 30_000)
-                .await
-                .unwrap();
-        } else {
-            clock.0.store(31_000, Ordering::SeqCst);
-        }
+        let store = SqliteStore::memory(16).unwrap();
+        let clock = Arc::new(Clock(AtomicI64::new(1_000)));
+        store
+            .create_chat("chat", None, json!({}), 1_000)
+            .await
+            .unwrap();
+        let stall = Arc::new(Stall {
+            replace,
+            clock: clock.clone(),
+            token: Default::default(),
+        });
+        let host = AgentHost::new(
+            store.clone(),
+            HashMap::from([(
+                "chat.turn".to_owned(),
+                stall.clone() as Arc<dyn TaskExecutor<SqliteStore>>,
+            )]),
+            clock.clone(),
+            short_lease(),
+        )
+        .unwrap();
+        host.submit(turn_task()).await.unwrap();
         assert!(matches!(
-            host.heartbeat(&context).await,
+            host.run_once().await,
             Err(EngineError::Store(StoreError::LeaseLost(_)))
         ));
-        assert!(context.cancellation.is_cancelled());
+        assert!(stall.token.lock().unwrap().as_ref().unwrap().is_cancelled());
     }
 }
 
@@ -197,7 +283,7 @@ async fn runner_admission_refuses_unregistered_kind_before_landing_rows() {
         store.clone(),
         HashMap::from([(
             "runnable".to_owned(),
-            Arc::new(Silent) as Arc<dyn TaskExecutor>,
+            Arc::new(Silent) as Arc<dyn TaskExecutor<SqliteStore>>,
         )]),
         clock.clone(),
         HostOptions::default(),
@@ -256,7 +342,7 @@ async fn runner_claim_steps_over_unrunnable_kinds_without_starving_the_queue() {
         store.clone(),
         HashMap::from([(
             "runnable".to_owned(),
-            Arc::new(Counter(ran.clone())) as Arc<dyn TaskExecutor>,
+            Arc::new(Counter(ran.clone())) as Arc<dyn TaskExecutor<SqliteStore>>,
         )]),
         clock.clone(),
         HostOptions::default(),
@@ -288,13 +374,13 @@ async fn runner_claim_steps_over_unrunnable_kinds_without_starving_the_queue() {
 /// Settle plans that always collide with the descriptor fence for one task.
 struct ConflictFor(&'static str);
 #[async_trait::async_trait]
-impl SessionFlushPlanner for ConflictFor {
+impl SessionFlushPlanner<SqliteStore> for ConflictFor {
     async fn settle_plan(
         &self,
         settling: &TaskRecord,
         _completed: bool,
-    ) -> EngineResult<SettlePlan> {
-        Ok(SettlePlan {
+    ) -> EngineResult<SessionSettle> {
+        Ok(SessionSettle {
             // The chat carries no session descriptor, so any expectation
             // fails the store's atomic descriptor check.
             expected_descriptor: (settling.task_id == self.0).then(|| json!({"stale": true})),
@@ -315,7 +401,7 @@ async fn worker_survives_an_exhausted_settle_conflict_and_keeps_claiming() {
         store.clone(),
         HashMap::from([(
             "runnable".to_owned(),
-            Arc::new(Counter(ran.clone())) as Arc<dyn TaskExecutor>,
+            Arc::new(Counter(ran.clone())) as Arc<dyn TaskExecutor<SqliteStore>>,
         )]),
         clock,
         HostOptions {

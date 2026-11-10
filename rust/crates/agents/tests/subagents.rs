@@ -138,10 +138,11 @@ impl Harness {
             fail: AtomicBool::new(false),
             requests: Mutex::new(vec![]),
         });
-        let executor: Arc<dyn TaskExecutor> = Arc::new(ChatExecutor::new(
-            Arc::clone(&child) as Arc<dyn ChatProvider>,
-            Arc::new(ToolRegistry::new()),
-        ));
+        let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
+            Arc::new(ChatExecutor::new(
+                Arc::clone(&child) as Arc<dyn ChatProvider>,
+                Arc::new(ToolRegistry::new()),
+            ));
         let host = AgentHost::new(
             store.clone(),
             HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
@@ -1432,13 +1433,14 @@ async fn enabled_delegation_guidance_reaches_every_session_turn() {
         delegation_guidance: Some(Arc::new(subagents) as Arc<dyn DelegationGuidance>),
         ..Default::default()
     };
-    let executor: Arc<dyn TaskExecutor> = Arc::new(ChatExecutor::with_options(
-        ChatExecutor::new(
-            Arc::clone(&child) as Arc<dyn ChatProvider>,
-            Arc::new(ToolRegistry::new()),
-        ),
-        options,
-    ));
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
+        Arc::new(ChatExecutor::with_options(
+            ChatExecutor::new(
+                Arc::clone(&child) as Arc<dyn ChatProvider>,
+                Arc::new(ToolRegistry::new()),
+            ),
+            options,
+        ));
     let host = AgentHost::new(
         store.clone(),
         HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
@@ -1660,7 +1662,7 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
         runtime.clone(),
         config.clone(),
     );
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::clone(&provider) as Arc<dyn ChatProvider>,
             Arc::new(ToolRegistry::new()),

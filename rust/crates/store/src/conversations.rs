@@ -26,65 +26,6 @@ pub struct ChatRecord {
     pub updated_at: ConversationTimestamp,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageInput {
-    pub id: Option<String>,
-    pub chat_id: String,
-    pub run_id: Option<String>,
-    pub role: String,
-    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
-    pub content: Value,
-    pub parent_message_id: Option<String>,
-    pub tool_call_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "agentkit_contracts::deserialize_preserving"
-    )]
-    pub tool_calls: Option<Value>,
-    pub model_result_json: Option<String>,
-    #[serde(
-        default = "empty_metadata",
-        deserialize_with = "agentkit_contracts::deserialize_preserving"
-    )]
-    pub metadata: Value,
-    #[serde(default = "activate_default")]
-    pub activate: bool,
-    /// The TypeScript port distinguishes an absent `parentMessageId` (append to
-    /// the active leaf) from an explicit `null` (create another root). JSON
-    /// erases that difference, so the binding sets this flag for the explicit
-    /// root case and `append` then ignores the active leaf.
-    #[serde(default)]
-    pub explicit_root: bool,
-}
-
-fn empty_metadata() -> Value {
-    Value::Object(Default::default())
-}
-
-fn activate_default() -> bool {
-    true
-}
-
-impl Default for MessageInput {
-    fn default() -> Self {
-        Self {
-            id: None,
-            chat_id: String::new(),
-            run_id: None,
-            role: "user".into(),
-            content: Value::String(String::new()),
-            parent_message_id: None,
-            tool_call_id: None,
-            tool_calls: None,
-            model_result_json: None,
-            metadata: serde_json::json!({}),
-            activate: true,
-            explicit_root: false,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRecord {

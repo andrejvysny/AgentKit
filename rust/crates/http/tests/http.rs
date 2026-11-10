@@ -31,7 +31,7 @@ impl ChatProvider for Provider {
 }
 fn host() -> (AgentHost, Arc<Mutex<Vec<ChatRequest>>>) {
     let prompts = Arc::new(Mutex::new(Vec::new()));
-    let executor: Arc<dyn TaskExecutor> = Arc::new(ChatExecutor::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
         Arc::new(Provider {
             prompts: prompts.clone(),
         }),

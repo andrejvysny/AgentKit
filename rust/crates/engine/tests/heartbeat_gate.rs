@@ -1,6 +1,4 @@
-use agentkit_engine::{
-    AgentHost, EngineResult, ExecutionContext, HostOptions, SystemRuntime, TaskExecutor,
-};
+use agentkit_engine::{SystemRuntime, TaskExecutor};
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
@@ -13,13 +11,19 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc};
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct BlockedExecution {
     started: mpsc::UnboundedSender<()>,
     queued: mpsc::UnboundedSender<()>,
     go: Arc<Semaphore>,
 }
 #[async_trait]
-impl TaskExecutor for BlockedExecution {
+impl TaskExecutor<agentkit_store::SqliteStore> for BlockedExecution {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.started.send(()).unwrap();
         self.go.acquire().await.unwrap().forget();
@@ -45,7 +49,7 @@ async fn heartbeat_does_not_pause_execution_waiting_for_store_gate() {
     let (started, mut started_rx) = mpsc::unbounded_channel();
     let (queued, mut queued_rx) = mpsc::unbounded_channel();
     let go = Arc::new(Semaphore::new(0));
-    let executor: Arc<dyn TaskExecutor> = Arc::new(BlockedExecution {
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(BlockedExecution {
         started,
         queued,
         go: go.clone(),

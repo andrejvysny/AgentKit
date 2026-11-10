@@ -2179,13 +2179,13 @@ pub const COMPACT_REQUESTED_KEY: &str = COMPACT_REQUESTED_METADATA_KEY;
 pub const APPROVAL_MARKER: &str = agentkit_store::APPROVE_MARKER;
 
 #[async_trait]
-impl crate::SessionFlushPlanner for AgentSessionService {
+impl crate::SessionFlushPlanner<agentkit_store::SqliteStore> for AgentSessionService {
     async fn settle_plan(
         &self,
         settling: &TaskRecord,
         completed: bool,
-    ) -> crate::HostResult<crate::SettlePlan> {
-        let none = || crate::SettlePlan {
+    ) -> crate::HostResult<agentkit_store::SessionSettle> {
+        let none = || agentkit_store::SessionSettle {
             expected_descriptor: None,
             staging: None,
             convert: vec![],
@@ -2232,7 +2232,7 @@ impl crate::SessionFlushPlanner for AgentSessionService {
             )
             .await
             .unwrap_or_default();
-        Ok(crate::SettlePlan {
+        Ok(agentkit_store::SessionSettle {
             expected_descriptor: Some(chat.metadata[SESSION_METADATA_KEY].clone()),
             staging,
             convert: candidates

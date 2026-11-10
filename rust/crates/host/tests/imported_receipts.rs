@@ -168,7 +168,7 @@ impl ChatProvider for Scripted {
 fn host_with(store: SqliteStore, provider: Arc<dyn ChatProvider>, tool: Arc<Mutate>) -> AgentHost {
     let mut tools = ToolRegistry::new();
     tools.register(tool).unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(provider, Arc::new(tools)).with_options(ChatExecutorOptions::default()),
     );
     AgentHost::new(

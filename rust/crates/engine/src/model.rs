@@ -22,7 +22,7 @@ pub enum TaskStatus {
     /// AGENTKIT-88: an attempt ended without a decidable outcome (its
     /// lease expired while running and reconciliation had not classified
     /// the result). Non-terminal, lane-owning, unclaimable: only an
-    /// explicit [`crate::SqliteStore::resolve_uncertain`] settles it, so
+    /// explicit `SqliteStore::resolve_uncertain` settles it, so
     /// a late or duplicated worker can never restate finished work.
     Uncertain,
     Completed,
@@ -130,7 +130,7 @@ pub struct PinnedRunProfile {
     /// sha256 over the canonical (key-sorted) serialization of
     /// `profile`; every reader recomputes it and fails closed.
     pub digest: String,
-    /// The resolved profile document (grammar: [`crate::run_profile_digest`]
+    /// The resolved profile document (grammar: `run_profile_digest`
     /// module docs). Stored verbatim so the pinned meaning survives any
     /// later edit to the services that resolved it.
     #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
@@ -216,7 +216,7 @@ pub struct SettleTask {
     pub status: TaskStatus,
     pub error: Option<String>,
     pub events: Vec<Value>,
-    pub messages: Vec<crate::MessageInput>,
+    pub messages: Vec<MessageInput>,
 }
 
 /// Fields a `transition_task` may write alongside the status change,
@@ -259,4 +259,63 @@ pub struct AttemptRecord {
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageInput {
+    pub id: Option<String>,
+    pub chat_id: String,
+    pub run_id: Option<String>,
+    pub role: String,
+    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
+    pub content: Value,
+    pub parent_message_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "agentkit_contracts::deserialize_preserving"
+    )]
+    pub tool_calls: Option<Value>,
+    pub model_result_json: Option<String>,
+    #[serde(
+        default = "empty_metadata",
+        deserialize_with = "agentkit_contracts::deserialize_preserving"
+    )]
+    pub metadata: Value,
+    #[serde(default = "activate_default")]
+    pub activate: bool,
+    /// The TypeScript port distinguishes an absent `parentMessageId` (append to
+    /// the active leaf) from an explicit `null` (create another root). JSON
+    /// erases that difference, so the binding sets this flag for the explicit
+    /// root case and `append` then ignores the active leaf.
+    #[serde(default)]
+    pub explicit_root: bool,
+}
+
+fn empty_metadata() -> Value {
+    Value::Object(Default::default())
+}
+
+fn activate_default() -> bool {
+    true
+}
+
+impl Default for MessageInput {
+    fn default() -> Self {
+        Self {
+            id: None,
+            chat_id: String::new(),
+            run_id: None,
+            role: "user".into(),
+            content: Value::String(String::new()),
+            parent_message_id: None,
+            tool_call_id: None,
+            tool_calls: None,
+            model_result_json: None,
+            metadata: serde_json::json!({}),
+            activate: true,
+            explicit_root: false,
+        }
+    }
 }

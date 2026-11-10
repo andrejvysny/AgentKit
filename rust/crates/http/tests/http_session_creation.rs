@@ -88,7 +88,7 @@ async fn validated_rest_session_creation_has_no_intermediate_rows() {
 
 struct NoopTurn;
 #[async_trait::async_trait]
-impl agentkit_host::TaskExecutor for NoopTurn {
+impl agentkit_host::TaskExecutor<agentkit_store::SqliteStore> for NoopTurn {
     async fn execute(&self, _: agentkit_host::ExecutionContext) -> agentkit_host::HostResult<()> {
         Ok(())
     }
@@ -101,7 +101,7 @@ async fn generic_metadata_updates_cannot_remove_or_forge_the_session_profile() {
         store.clone(),
         std::collections::HashMap::from([(
             "chat.turn".into(),
-            Arc::new(NoopTurn) as Arc<dyn agentkit_host::TaskExecutor>,
+            Arc::new(NoopTurn) as Arc<dyn agentkit_host::TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),

@@ -1,5 +1,37 @@
 use super::*;
 
+/// The repository fault type is irrelevant to classification of non-store
+/// errors; this one never occurs.
+#[derive(Debug, thiserror::Error)]
+#[error("unused")]
+struct NoFault;
+
+impl RepositoryFault for NoFault {
+    fn is_transient(&self) -> bool {
+        false
+    }
+    fn is_duplicate(&self) -> bool {
+        false
+    }
+    fn is_lease_lost(&self) -> bool {
+        false
+    }
+    fn is_invalid_transition(&self) -> bool {
+        false
+    }
+    fn is_not_found(&self) -> bool {
+        false
+    }
+    fn invalid_input(&self) -> Option<&str> {
+        None
+    }
+    fn session_conflict(&self) -> Option<&str> {
+        None
+    }
+}
+
+type EngineError = super::EngineError<NoFault>;
+
 fn failure(
     code: Option<&str>,
     retryable: Option<bool>,
@@ -116,29 +148,29 @@ fn backoff_is_exponential_capped_jittered_and_overflow_safe() {
         (6, 30000),
         (u32::MAX, 30000),
     ] {
-        assert_eq!(exact.delay_ms(attempt, 0.5).unwrap(), delay);
+        assert_eq!(exact.delay_ms::<NoFault>(attempt, 0.5).unwrap(), delay);
     }
     let jitter = RetryBackoff::default();
-    assert_eq!(jitter.delay_ms(1, 0.0).unwrap(), 800);
-    assert_eq!(jitter.delay_ms(1, 1.0).unwrap(), 1200);
-    assert_eq!(jitter.delay_ms(1, 1.0 / 3.0).unwrap(), 934);
-    assert_eq!(jitter.delay_ms(99, 1.0).unwrap(), 36000);
+    assert_eq!(jitter.delay_ms::<NoFault>(1, 0.0).unwrap(), 800);
+    assert_eq!(jitter.delay_ms::<NoFault>(1, 1.0).unwrap(), 1200);
+    assert_eq!(jitter.delay_ms::<NoFault>(1, 1.0 / 3.0).unwrap(), 934);
+    assert_eq!(jitter.delay_ms::<NoFault>(99, 1.0).unwrap(), 36000);
     assert_eq!(
         RetryBackoff {
             base_ms: 0,
             ..Default::default()
         }
-        .delay_ms(u32::MAX, 0.5)
+        .delay_ms::<NoFault>(u32::MAX, 0.5)
         .unwrap(),
         0
     );
-    assert!(jitter.delay_ms(1, f64::NAN).is_err());
+    assert!(jitter.delay_ms::<NoFault>(1, f64::NAN).is_err());
     assert!(
         RetryBackoff {
             jitter_ratio: 2.0,
             ..Default::default()
         }
-        .delay_ms(1, 0.5)
+        .delay_ms::<NoFault>(1, 0.5)
         .is_err()
     );
 }

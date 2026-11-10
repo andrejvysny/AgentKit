@@ -5,10 +5,16 @@ use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Notify;
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct Completed;
 
 #[async_trait]
-impl TaskExecutor for Completed {
+impl TaskExecutor<agentkit_store::SqliteStore> for Completed {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         context.emit("run.completed", json!({"iterations":1})).await
     }
@@ -17,7 +23,7 @@ impl TaskExecutor for Completed {
 struct Verify;
 
 #[async_trait]
-impl VerificationHook for Verify {
+impl VerificationHook<agentkit_store::SqliteStore> for Verify {
     async fn verify(&self, context: ExecutionContext) -> EngineResult<VerificationReport> {
         assert_eq!(context.task.status, TaskStatus::Running);
         Ok(VerificationReport {
@@ -42,9 +48,10 @@ fn task(id: &str) -> SubmitTask {
     }
 }
 
-fn host(executor: Arc<dyn TaskExecutor>, verify: bool) -> AgentHost {
+fn host(executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>, verify: bool) -> AgentHost {
     let options = HostOptions {
-        verification: verify.then(|| Arc::new(Verify) as Arc<dyn VerificationHook>),
+        verification: verify
+            .then(|| Arc::new(Verify) as Arc<dyn VerificationHook<agentkit_store::SqliteStore>>),
         ..HostOptions::default()
     };
     AgentHost::new(
@@ -92,7 +99,7 @@ struct ExternalEffect {
 }
 
 #[async_trait]
-impl TaskExecutor for ExternalEffect {
+impl TaskExecutor<agentkit_store::SqliteStore> for ExternalEffect {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.committed.notify_one();
         self.release.notified().await;

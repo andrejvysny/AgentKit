@@ -15,19 +15,23 @@
 //! one parent spawns each scenario through `--exact` with private env.
 //! ---------------------------------------------------------------------------
 
-use agentkit_engine::{
-    AgentHost, EngineResult, ExecutionContext, HostOptions, SystemRuntime, TaskExecutor,
-};
+use agentkit_engine::{SystemRuntime, TaskExecutor};
 use agentkit_store::{SqliteStore, SubmitTask, TaskStatus};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct Trivial;
 
 #[async_trait]
-impl TaskExecutor for Trivial {
+impl TaskExecutor<agentkit_store::SqliteStore> for Trivial {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
@@ -98,7 +102,10 @@ async fn child_settle_refusal() {
     let store = SqliteStore::open(&db, 8).unwrap();
     let host = AgentHost::new(
         store.clone(),
-        HashMap::from([("test".into(), Arc::new(Trivial) as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            Arc::new(Trivial) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),
     )

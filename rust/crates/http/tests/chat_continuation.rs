@@ -62,7 +62,7 @@ fn host(store: SqliteStore, url: &str, generation: u64) -> AgentHost {
         identity,
     }))
     .unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(ChatExecutor::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
         Arc::new(provider),
         Arc::new(ToolRegistry::new()),
     ));
@@ -187,7 +187,7 @@ impl Tool for Echo {
 }
 struct VerifyOnce(std::sync::atomic::AtomicUsize);
 #[async_trait]
-impl agentkit_host::VerificationHook for VerifyOnce {
+impl agentkit_host::VerificationHook<agentkit_store::SqliteStore> for VerifyOnce {
     async fn verify(
         &self,
         _: agentkit_host::ExecutionContext,
@@ -234,7 +234,7 @@ async fn responses_correction_preserves_canonical_private_history_for_next_run()
         correction: Some(agentkit_host::CorrectionConfig::default()),
         ..Default::default()
     };
-    let executor: Arc<dyn TaskExecutor> =
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
         Arc::new(ChatExecutor::new(Arc::new(provider), Arc::new(registry)).with_options(options));
     let host = AgentHost::new(
         store.clone(),

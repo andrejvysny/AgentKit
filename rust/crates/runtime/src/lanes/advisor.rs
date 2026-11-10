@@ -13,7 +13,7 @@ use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
 use agentkit_host::{
-    AgentSessionService, HostResult, ProviderRegistry, SharedRuntime, TaskSettledObserver,
+    AgentSessionService, ObserverError, ProviderRegistry, SharedRuntime, TaskSettledObserver,
 };
 use agentkit_store::TaskRecord;
 use std::sync::Mutex as StdMutex;
@@ -276,7 +276,7 @@ impl RunHooks for AdvisorLane {
 /// Settled-observer adapter: watchdog turn-failure tracking.
 #[async_trait::async_trait]
 impl TaskSettledObserver for AdvisorLane {
-    async fn observe_settled(&self, task: &TaskRecord) -> HostResult<()> {
+    async fn observe_settled(&self, task: &TaskRecord) -> Result<(), ObserverError> {
         match self.state() {
             Some(state) => {
                 let result = state.watchdog.observe_settled(task).await;

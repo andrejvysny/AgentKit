@@ -517,7 +517,7 @@ async fn running_turn_keeps_its_snapshot_later_turns_see_the_patch() {
 struct CountingTurn(Arc<AtomicUsize>);
 
 #[async_trait]
-impl TaskExecutor for CountingTurn {
+impl TaskExecutor<agentkit_store::SqliteStore> for CountingTurn {
     async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -525,12 +525,13 @@ impl TaskExecutor for CountingTurn {
 }
 
 fn host_for(store: &SqliteStore, runtime: &SharedRuntime, kinds: &[&str]) -> AgentHost {
-    let executors: HashMap<String, Arc<dyn TaskExecutor>> = kinds
+    let executors: HashMap<String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>> = kinds
         .iter()
         .map(|kind| {
             (
                 (*kind).to_owned(),
-                Arc::new(CountingTurn(Arc::new(AtomicUsize::new(0)))) as Arc<dyn TaskExecutor>,
+                Arc::new(CountingTurn(Arc::new(AtomicUsize::new(0))))
+                    as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
             )
         })
         .collect();
@@ -615,7 +616,8 @@ async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
         store.clone(),
         HashMap::from([(
             "chat.turn".to_owned(),
-            Arc::new(CountingTurn(turns.clone())) as Arc<dyn TaskExecutor>,
+            Arc::new(CountingTurn(turns.clone()))
+                as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         runtime,
         HostOptions::default(),

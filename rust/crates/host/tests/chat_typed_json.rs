@@ -74,7 +74,7 @@ async fn context_bindings_keep_private_number_object_keys_through_live_tool_call
     let bindings = Arc::new(Mutex::new(vec![]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(Echo { bindings: bindings.clone(), definition: serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap() })).unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(Arc::new(Provider), Arc::new(tools)).with_options(ChatExecutorOptions {
             context: Some(Arc::new(Context)),
             ..Default::default()

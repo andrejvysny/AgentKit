@@ -6,6 +6,8 @@
 
 mod canonical;
 mod hash;
+mod timestamp;
 
 pub use canonical::{canonical_json, canonical_sha256};
 pub use hash::sha256_hex;
+pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};

@@ -91,7 +91,7 @@ async fn selection_freezes_full_snapshot_and_factory_rejects_mutated_generation(
     let id = ConnectionId::new("selected").unwrap();
     let original = connections.create(id.clone(), configuration()).unwrap();
     let observed = Arc::new(Mutex::new(vec![]));
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(Arc::new(Provider), Arc::new(ToolRegistry::new())).with_provider_factory(
             Arc::new(Factory {
                 connections: connections.clone(),

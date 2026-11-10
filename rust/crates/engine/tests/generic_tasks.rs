@@ -13,6 +13,12 @@ use std::{
 };
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 #[path = "generic_tasks/lineage.rs"]
 mod lineage;
 
@@ -37,7 +43,7 @@ struct Fanout {
 }
 
 #[async_trait]
-impl TaskExecutor for Fanout {
+impl TaskExecutor<agentkit_store::SqliteStore> for Fanout {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.captured.send(context.clone()).unwrap();
         if let Some(gate) = &self.gate {
@@ -72,7 +78,7 @@ struct Leaves {
 }
 
 #[async_trait]
-impl TaskExecutor for Leaves {
+impl TaskExecutor<agentkit_store::SqliteStore> for Leaves {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.trace.lock().await.push(context.task.task_id.clone());
         context.report_progress(json!({"done":0,"total":1})).await?;
@@ -104,7 +110,7 @@ struct Join {
 }
 
 #[async_trait]
-impl TaskExecutor for Join {
+impl TaskExecutor<agentkit_store::SqliteStore> for Join {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         for dependency in &context.task.depends_on {
@@ -136,31 +142,32 @@ fn environment(store: SqliteStore, parent_gate: Option<Arc<Semaphore>>) -> Envir
     let leaf_gate = Arc::new(Semaphore::new(0));
     let trace = Arc::new(Mutex::new(Vec::new()));
     let join_calls = Arc::new(AtomicUsize::new(0));
-    let executors: HashMap<String, Arc<dyn TaskExecutor>> = HashMap::from([
-        (
-            "demo.fanout".into(),
-            Arc::new(Fanout {
-                captured,
-                gate: parent_gate,
-            }) as Arc<dyn TaskExecutor>,
-        ),
-        (
-            "demo.leaf".into(),
-            Arc::new(Leaves {
-                started,
-                gate: leaf_gate.clone(),
-                trace: trace.clone(),
-            }) as Arc<dyn TaskExecutor>,
-        ),
-        (
-            "demo.join".into(),
-            Arc::new(Join {
-                store: store.clone(),
-                trace: trace.clone(),
-                calls: join_calls.clone(),
-            }) as Arc<dyn TaskExecutor>,
-        ),
-    ]);
+    let executors: HashMap<String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>> =
+        HashMap::from([
+            (
+                "demo.fanout".into(),
+                Arc::new(Fanout {
+                    captured,
+                    gate: parent_gate,
+                }) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+            ),
+            (
+                "demo.leaf".into(),
+                Arc::new(Leaves {
+                    started,
+                    gate: leaf_gate.clone(),
+                    trace: trace.clone(),
+                }) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+            ),
+            (
+                "demo.join".into(),
+                Arc::new(Join {
+                    store: store.clone(),
+                    trace: trace.clone(),
+                    calls: join_calls.clone(),
+                }) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+            ),
+        ]);
     let host = AgentHost::new(
         store,
         executors,

@@ -1,14 +1,19 @@
-use agentkit_engine::{
-    AgentHost, EngineResult, ExecutionContext, HostOptions, RunUpdate, SystemRuntime, TaskExecutor,
-};
+use agentkit_engine::{RunUpdate, SystemRuntime, TaskExecutor};
 use agentkit_store::{SqliteStore, SubmitTask};
 use async_trait::async_trait;
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+type RunHandle = agentkit_engine::RunHandle<agentkit_store::SqliteStore>;
+
 struct FractionalEvents;
 #[async_trait]
-impl TaskExecutor for FractionalEvents {
+impl TaskExecutor<agentkit_store::SqliteStore> for FractionalEvents {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
@@ -30,13 +35,13 @@ async fn append_events(store: &SqliteStore) {
     store.append_events(lease.fence(), events, 1).await.unwrap();
 }
 
-async fn completed_run() -> agentkit_engine::RunHandle {
+async fn completed_run() -> RunHandle {
     let store = SqliteStore::memory(16).unwrap();
     let host = AgentHost::new(
         store.clone(),
         HashMap::from([(
             "custom".into(),
-            Arc::new(FractionalEvents) as Arc<dyn TaskExecutor>,
+            Arc::new(FractionalEvents) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),

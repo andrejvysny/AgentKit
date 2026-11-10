@@ -77,7 +77,7 @@ impl LocalVerifier {
 }
 
 #[async_trait]
-impl VerificationHook for LocalVerifier {
+impl VerificationHook<agentkit_store::SqliteStore> for LocalVerifier {
     async fn verify(&self, context: ExecutionContext) -> HostResult<VerificationReport> {
         let chat_id = context.task.payload["chatId"].as_str().unwrap_or("");
         self.inspect(chat_id, &context.task.task_id).await

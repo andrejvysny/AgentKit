@@ -1,4 +1,4 @@
-use crate::{EngineResult, ExecutionContext};
+use crate::{EngineResult, ExecutionContext, TaskRecord, TaskRepository};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -23,15 +23,19 @@ impl Runtime for SystemRuntime {
 }
 
 #[async_trait]
-pub trait TaskExecutor: Send + Sync {
+pub trait TaskExecutor<R: TaskRepository>: Send + Sync {
     fn handles_verification(&self) -> bool {
         false
     }
     fn resolves_provider_snapshots(&self) -> bool {
         false
     }
-    async fn execute(&self, context: ExecutionContext) -> EngineResult<()>;
+    async fn execute(&self, context: ExecutionContext<R>) -> EngineResult<(), R::Error>;
 }
+
+/// Failure of a best-effort settled observation. Observers never see the
+/// repository, so their error is not tied to its error type.
+pub type ObserverError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Best-effort observer of a durably settled task, run by the runner after
 /// the settlement committed. Observers must be idempotent and must never
@@ -40,7 +44,7 @@ pub trait TaskExecutor: Send + Sync {
 /// observation merely late, never wrong).
 #[async_trait]
 pub trait TaskSettledObserver: Send + Sync {
-    async fn observe_settled(&self, task: &agentkit_store::TaskRecord) -> EngineResult<()>;
+    async fn observe_settled(&self, task: &TaskRecord) -> Result<(), ObserverError>;
 }
 
 #[derive(Clone, Debug)]
@@ -49,23 +53,29 @@ pub struct VerificationReport {
     pub deficiencies: Vec<String>,
 }
 
-pub struct VerificationInput {
-    pub context: ExecutionContext,
+pub struct VerificationInput<R: TaskRepository> {
+    pub context: ExecutionContext<R>,
     pub final_content: String,
     pub tool_call_count: usize,
     pub pass: u32,
 }
 
 #[async_trait]
-pub trait VerificationHook: Send + Sync {
-    async fn verify(&self, context: ExecutionContext) -> EngineResult<VerificationReport>;
-    async fn verify_pass(&self, input: VerificationInput) -> EngineResult<VerificationReport> {
+pub trait VerificationHook<R: TaskRepository>: Send + Sync {
+    async fn verify(
+        &self,
+        context: ExecutionContext<R>,
+    ) -> EngineResult<VerificationReport, R::Error>;
+    async fn verify_pass(
+        &self,
+        input: VerificationInput<R>,
+    ) -> EngineResult<VerificationReport, R::Error> {
         self.verify(input.context).await
     }
     async fn verify_optional(
         &self,
-        input: VerificationInput,
-    ) -> EngineResult<Option<VerificationReport>> {
+        input: VerificationInput<R>,
+    ) -> EngineResult<Option<VerificationReport>, R::Error> {
         self.verify_pass(input).await.map(Some)
     }
 }

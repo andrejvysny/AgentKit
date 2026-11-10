@@ -96,7 +96,7 @@ struct Mutate {
 
 struct CountingVerifier(Arc<AtomicUsize>);
 #[async_trait]
-impl VerificationHook for CountingVerifier {
+impl VerificationHook<agentkit_store::SqliteStore> for CountingVerifier {
     async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(VerificationReport {
@@ -287,7 +287,7 @@ async fn fixture_with_options(
         "inputSchema": {"type": "object"},
     }))
     .unwrap();
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),

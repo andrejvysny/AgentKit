@@ -150,9 +150,11 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-core",
  "agentkit-governance",
+ "agentkit-kernel",
  "agentkit-store",
  "async-trait",
  "chrono",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -235,8 +237,10 @@ name = "agentkit-kernel"
 version = "0.1.0"
 dependencies = [
  "ryu-js",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -384,7 +388,9 @@ name = "agentkit-store"
 version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
+ "agentkit-engine",
  "agentkit-kernel",
+ "async-trait",
  "chrono",
  "ring",
  "rusqlite",

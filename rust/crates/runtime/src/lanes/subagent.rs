@@ -15,7 +15,7 @@ use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor, ToolGuard,
     ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_host::{DelegationGuidance, HostResult, TaskSettledObserver};
+use agentkit_host::{DelegationGuidance, HostError, ObserverError, TaskSettledObserver};
 use agentkit_store::TaskRecord;
 
 use crate::error::RuntimeError;
@@ -205,9 +205,12 @@ impl DelegationGuidance for SubagentLane {
 /// Settled-observer adapter: orphan reaping on parent settlement.
 #[async_trait::async_trait]
 impl TaskSettledObserver for SubagentLane {
-    async fn observe_settled(&self, task: &TaskRecord) -> HostResult<()> {
+    async fn observe_settled(&self, task: &TaskRecord) -> Result<(), ObserverError> {
         match self.service() {
-            Some(service) => Ok(service.observe_settled(task).await?),
+            Some(service) => Ok(service
+                .observe_settled(task)
+                .await
+                .map_err(HostError::from)?),
             None => Ok(()),
         }
     }

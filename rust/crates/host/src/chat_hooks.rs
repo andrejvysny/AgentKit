@@ -17,7 +17,7 @@ pub struct ChatExecutorOptions {
     /// Extra providers a durable payload's `providerId` may route to besides
     /// the executor's default; absent keeps the single-provider binding.
     pub providers: Option<Arc<crate::ProviderRegistry>>,
-    pub verification: Option<Arc<dyn VerificationHook>>,
+    pub verification: Option<Arc<dyn VerificationHook<agentkit_store::SqliteStore>>>,
     pub correction: Option<super::correction::CorrectionConfig>,
     pub tool_contributors: Vec<Arc<dyn ToolContributor>>,
     pub tool_guards: Vec<Arc<dyn ToolGuard>>,

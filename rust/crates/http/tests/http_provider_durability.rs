@@ -57,7 +57,7 @@ impl SecretStore for Secrets {
 
 struct Executor;
 #[async_trait]
-impl TaskExecutor for Executor {
+impl TaskExecutor<agentkit_store::SqliteStore> for Executor {
     fn resolves_provider_snapshots(&self) -> bool {
         true
     }
@@ -109,7 +109,7 @@ async fn fixture(path: &Path, secrets: Arc<Secrets>) -> Fixture {
         SqliteStore::open(path, 64).unwrap(),
         HashMap::from([(
             "chat.turn".into(),
-            Arc::new(Executor) as Arc<dyn TaskExecutor>,
+            Arc::new(Executor) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),

@@ -13,12 +13,6 @@ pub enum ConversationTimestamp {
 #[error("timestamp is outside JavaScript Date range")]
 pub struct TimestampOutOfRange;
 
-impl From<TimestampOutOfRange> for crate::StoreError {
-    fn from(error: TimestampOutOfRange) -> Self {
-        Self::InvalidInput(error.to_string())
-    }
-}
-
 impl ConversationTimestamp {
     pub fn from_epoch_millis(milliseconds: i64) -> Result<Self, TimestampOutOfRange> {
         validate_epoch(milliseconds)?;

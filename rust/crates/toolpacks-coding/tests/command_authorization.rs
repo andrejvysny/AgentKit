@@ -156,7 +156,7 @@ async fn fixture_inner(
         authority: None,
         plan_tool_names: None,
     });
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Provider {
                 command: command.into(),

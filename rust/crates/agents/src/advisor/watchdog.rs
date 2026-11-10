@@ -2,7 +2,7 @@ use super::config::{AdvisorConfig, ReviewRequest};
 use super::engine::{AdvisorEngine, ReviewOrigin, is_advisor_chat_id};
 use crate::{AgentsError, AgentsResult};
 use agentkit_core::{RunHooks, ToolCall};
-use agentkit_host::{CHAT_TURN_TASK_KIND, HostResult, SharedRuntime, TaskSettledObserver};
+use agentkit_host::{CHAT_TURN_TASK_KIND, ObserverError, SharedRuntime, TaskSettledObserver};
 use agentkit_store::{SqliteStore, TaskRecord, TaskStatus};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -548,7 +548,7 @@ impl RunHooks for WatchdogRunHooks {
 /// and release per-run memory.
 #[async_trait::async_trait]
 impl TaskSettledObserver for Watchdog {
-    async fn observe_settled(&self, task: &TaskRecord) -> HostResult<()> {
+    async fn observe_settled(&self, task: &TaskRecord) -> Result<(), ObserverError> {
         self.observe_turn_settled(task);
         self.forget_run(&task.task_id);
         Ok(())

@@ -72,13 +72,16 @@ impl Environment {
                 Arc::new(super::scenarios::Verify {
                     store: store.clone(),
                     witness: witness.clone(),
-                }) as Arc<dyn VerificationHook>
+                }) as Arc<dyn VerificationHook<agentkit_store::SqliteStore>>
             }),
             ..Default::default()
         };
         let host = AgentHost::new(
             store,
-            HashMap::from([("fault".into(), Arc::new(executor) as Arc<dyn TaskExecutor>)]),
+            HashMap::from([(
+                "fault".into(),
+                Arc::new(executor) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+            )]),
             clock.clone(),
             options,
         )

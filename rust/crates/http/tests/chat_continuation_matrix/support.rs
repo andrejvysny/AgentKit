@@ -70,7 +70,7 @@ impl Fixture {
         };
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(Write { count: self.tools.clone(), definition: serde_json::from_value(json!({"name":"write","version":"1","effect":"write","capability":"test","description":"Write","inputSchema":{"type":"object"}})).unwrap() })).unwrap();
-        let executor: Arc<dyn TaskExecutor> =
+        let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
             Arc::new(ChatExecutor::new(provider, Arc::new(registry)));
         AgentHost::new(
             store,

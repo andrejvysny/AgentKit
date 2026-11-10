@@ -1764,7 +1764,10 @@ impl agentkit_host::TaskSettledObserver for SubagentService {
     async fn observe_settled(
         &self,
         task: &agentkit_store::TaskRecord,
-    ) -> agentkit_host::HostResult<()> {
-        Ok(self.observe_settled(task).await?)
+    ) -> Result<(), agentkit_host::ObserverError> {
+        Ok(self
+            .observe_settled(task)
+            .await
+            .map_err(agentkit_host::HostError::from)?)
     }
 }

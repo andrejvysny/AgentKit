@@ -171,7 +171,7 @@ async fn fixture_opts(
         authority: Some(Arc::new(SessionExecutionAuthority::new(service.clone()))),
         plan_tool_names: None,
     });
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
             ChatExecutorOptions {
                 tool_contributors: vec![pack],

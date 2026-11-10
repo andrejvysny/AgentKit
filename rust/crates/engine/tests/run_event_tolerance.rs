@@ -1,14 +1,18 @@
-use agentkit_engine::{
-    AgentHost, EngineResult, ExecutionContext, HostOptions, RunUpdate, SystemRuntime, TaskExecutor,
-};
+use agentkit_engine::{RunUpdate, SystemRuntime, TaskExecutor};
 use agentkit_store::{SqliteStore, SubmitTask};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct Idle;
 #[async_trait]
-impl TaskExecutor for Idle {
+impl TaskExecutor<agentkit_store::SqliteStore> for Idle {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         Ok(())
     }
@@ -26,7 +30,10 @@ async fn replay_delivers_progress_and_unknown_run_events_in_order() {
     let store = SqliteStore::memory(16).unwrap();
     let host = AgentHost::new(
         store.clone(),
-        HashMap::from([("custom".into(), Arc::new(Idle) as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "custom".into(),
+            Arc::new(Idle) as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),
     )

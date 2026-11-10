@@ -136,7 +136,7 @@ impl agentkit_core::Runtime for CoreRuntime {
 }
 
 #[async_trait]
-impl TaskExecutor for ChatExecutor {
+impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
     fn handles_verification(&self) -> bool {
         self.options.verification.is_some()
     }

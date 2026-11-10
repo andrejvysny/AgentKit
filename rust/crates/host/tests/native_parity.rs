@@ -68,7 +68,7 @@ fn host(
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     authority: Arc<dyn ContentAuthority>,
 ) -> AgentHost {
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(Arc::new(Provider(requests)), Arc::new(tools())).with_options(
             ChatExecutorOptions {
                 content_authority: Some(authority),
@@ -416,7 +416,7 @@ async fn connector_revocation_during_usage_authorization_prevents_final_dispatch
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
     });
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(Arc::new(Provider(requests.clone())), Arc::new(tools())).with_options(
             ChatExecutorOptions {
                 content_authority: Some(authority.clone()),

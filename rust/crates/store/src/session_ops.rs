@@ -8,19 +8,19 @@
 //! descriptor, the execution grant, and the standing approvals, so every
 //! mutation of those keys is a read-modify-write inside one transaction.
 
+use crate::ConversationTimestamp;
 use crate::agent_inputs::{
     AgentInputPatch, AgentInputQuery, AgentInputRecord, AgentInputStatus, CreateAgentInput,
     get_input, insert_input, list_inputs, parse_iso_millis, transition_input,
 };
-use crate::conversations::{MessageInput, MessageRecord, save_message};
+use crate::conversations::{MessageRecord, save_message};
 use crate::tasks::{
     append as append_task_events, end_attempt, lifecycle_event, save, validate_projection,
 };
-use crate::timestamp::ConversationTimestamp;
 use crate::util::{json, required};
 use crate::{
-    ChatRecord, Lease, LeaseFence, Result, SqliteStore, StoreError, SubmitTask, TaskRecord,
-    TaskStatus,
+    ChatRecord, Lease, LeaseFence, MessageInput, Result, SqliteStore, StoreError, SubmitTask,
+    TaskRecord, TaskStatus,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -1360,6 +1360,7 @@ pub struct TurnStaging {
 /// the queue itself and stages anything the snapshot could not have named
 /// (see `settle_session_inputs`), so no interleaving can leave a promotable
 /// input pending behind a terminal turn.
+#[derive(Clone)]
 pub struct SessionSettle {
     pub convert: Vec<StagedCandidate>,
     /// The exact persisted descriptor used by the session planner. The

@@ -55,7 +55,7 @@ pub struct AgentRuntimeBuilder {
     default_model: Option<String>,
     advisor_sink: Option<Arc<dyn AdvisorEventSink>>,
     lease_ttl_ms: i64,
-    verification: Option<Arc<dyn VerificationHook>>,
+    verification: Option<Arc<dyn VerificationHook<agentkit_store::SqliteStore>>>,
 }
 
 impl AgentRuntimeBuilder {
@@ -155,7 +155,10 @@ impl AgentRuntimeBuilder {
     }
 
     /// Post-run verification hook run by the host after a turn settles.
-    pub fn verification(mut self, hook: Arc<dyn VerificationHook>) -> Self {
+    pub fn verification(
+        mut self,
+        hook: Arc<dyn VerificationHook<agentkit_store::SqliteStore>>,
+    ) -> Self {
         self.verification = Some(hook);
         self
     }
@@ -240,7 +243,7 @@ impl AgentRuntimeBuilder {
             // unconfigured.
             Arc::new(SubagentLaneGuard::new(Arc::clone(&subagent_lane))) as Arc<dyn ToolGuard>,
         ]);
-        let executor: Arc<dyn TaskExecutor> = Arc::new(
+        let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
                     providers: Some(Arc::clone(&registry)),

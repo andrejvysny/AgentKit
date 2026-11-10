@@ -11,6 +11,12 @@ use std::{
     },
 };
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct Clock(AtomicI64);
 impl Runtime for Clock {
     fn now_ms(&self) -> i64 {
@@ -40,7 +46,7 @@ struct Script {
 }
 
 #[async_trait]
-impl TaskExecutor for Script {
+impl TaskExecutor<agentkit_store::SqliteStore> for Script {
     async fn execute(&self, _context: ExecutionContext) -> EngineResult<()> {
         if self.calls.fetch_add(1, Ordering::SeqCst) >= self.failures {
             return Ok(());
@@ -93,7 +99,10 @@ fn task(id: &str, scope: &str) -> SubmitTask {
 fn build_host(store: SqliteStore, executor: Arc<Script>, clock: Arc<Clock>) -> AgentHost {
     AgentHost::new(
         store,
-        HashMap::from([("test".into(), executor as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            executor as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         clock,
         HostOptions {
             lease_ttl_ms: 100,
@@ -286,7 +295,10 @@ async fn killed_runner_reopens_with_classified_retry_intent_and_original_deadlin
     let executor = script(0, FailureStyle::Safe);
     let automatic = AgentHost::new(
         store.clone(),
-        HashMap::from([("test".into(), executor as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            executor as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         clock.clone(),
         HostOptions {
             recovery: agentkit_store::RecoveryMode::Automatic,
@@ -373,7 +385,10 @@ async fn injected_runtime_randomness_determines_persisted_jitter_deadline() {
     let executor = script(1, FailureStyle::Safe);
     let host = AgentHost::new(
         store.clone(),
-        HashMap::from([("test".into(), executor as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            executor as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         clock.clone(),
         HostOptions::default(),
     )

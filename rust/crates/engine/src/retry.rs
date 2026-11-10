@@ -2,7 +2,7 @@
 //! explicit replay-safety gate: a socket or HTTP failure cannot prove a domain
 //! write did not commit. Unknown outcomes remain terminal even when transient.
 //! SafeToRetry requires evidence that an effect did not land or is idempotent.
-use crate::{EngineError, EngineResult};
+use crate::{EngineError, EngineResult, RepositoryFault};
 
 /// A transient failure does not by itself prove that replaying an effect is safe.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,7 +87,9 @@ fn host_code(code: &str) -> Option<ExecutionErrorKind> {
 }
 
 /// Matches the TypeScript classifier; scheduling additionally requires explicit replay safety.
-pub fn classify_execution_error(error: &EngineError) -> ExecutionErrorClassification {
+pub fn classify_execution_error<E: RepositoryFault>(
+    error: &EngineError<E>,
+) -> ExecutionErrorClassification {
     use ExecutionErrorKind::*;
     if matches!(error, EngineError::Cancelled) {
         return classification(Cancelled, "aborted");
@@ -127,33 +129,41 @@ pub fn classify_execution_error(error: &EngineError) -> ExecutionErrorClassifica
     classify_message(&failure.message, failure.code.as_deref())
 }
 
-fn classify_host_error(error: &EngineError) -> Option<ExecutionErrorClassification> {
-    use agentkit_store::StoreError;
+fn classify_host_error<E: RepositoryFault>(
+    error: &EngineError<E>,
+) -> Option<ExecutionErrorClassification> {
     let code = match error {
         EngineError::UnknownKind(_) => "executor_not_found",
         EngineError::NoExecutorForKind(_) => "no_executor_for_kind",
-        EngineError::Store(StoreError::LeaseLost(_)) => "lease_lost",
-        EngineError::Store(StoreError::InvalidTransition(_)) => "invalid_task_transition",
-        EngineError::Store(StoreError::NotFound(_)) => "not_found",
-        EngineError::Store(StoreError::Duplicate(_)) => "duplicate_task",
-        EngineError::Store(StoreError::InvalidInput(message))
-            if message.starts_with("unknown dependency:") =>
-        {
-            "unknown_dependency"
-        }
-        EngineError::Store(StoreError::InvalidInput(message))
-            if message.starts_with("event seq must be") =>
-        {
-            "seq_conflict"
-        }
-        EngineError::Store(StoreError::InvalidInput(message))
-            if message == "invalid_fork_point" =>
-        {
-            "invalid_fork_point"
-        }
+        EngineError::Store(fault) => store_fault_code(fault)?,
         _ => return None,
     };
     host_code(code).map(|kind| classification(kind, code))
+}
+
+fn store_fault_code(fault: &impl RepositoryFault) -> Option<&'static str> {
+    if fault.is_lease_lost() {
+        return Some("lease_lost");
+    }
+    if fault.is_invalid_transition() {
+        return Some("invalid_task_transition");
+    }
+    if fault.is_not_found() {
+        return Some("not_found");
+    }
+    if fault.is_duplicate() {
+        return Some("duplicate_task");
+    }
+    let message = fault.invalid_input()?;
+    if message.starts_with("unknown dependency:") {
+        Some("unknown_dependency")
+    } else if message.starts_with("event seq must be") {
+        Some("seq_conflict")
+    } else if message == "invalid_fork_point" {
+        Some("invalid_fork_point")
+    } else {
+        None
+    }
 }
 
 fn classify_message(message: &str, code: Option<&str>) -> ExecutionErrorClassification {
@@ -223,7 +233,7 @@ fn classify_message(message: &str, code: Option<&str>) -> ExecutionErrorClassifi
     classification(Terminal, "unclassified")
 }
 
-pub(crate) fn retry_is_safe(error: &EngineError) -> bool {
+pub(crate) fn retry_is_safe<E: RepositoryFault>(error: &EngineError<E>) -> bool {
     matches!(error,EngineError::Failure(failure) if failure.retry_safety==RetrySafety::SafeToRetry)
 }
 
@@ -245,7 +255,7 @@ impl Default for RetryBackoff {
 }
 
 impl RetryBackoff {
-    pub(crate) fn validate(&self) -> EngineResult<()> {
+    pub(crate) fn validate<E: std::error::Error>(&self) -> EngineResult<(), E> {
         if self.base_ms > i64::MAX as u64
             || self.max_ms > i64::MAX as u64 / 2
             || !self.jitter_ratio.is_finite()
@@ -256,7 +266,11 @@ impl RetryBackoff {
         Ok(())
     }
 
-    pub fn delay_ms(&self, attempt_count: u32, random_unit: f64) -> EngineResult<i64> {
+    pub fn delay_ms<E: std::error::Error>(
+        &self,
+        attempt_count: u32,
+        random_unit: f64,
+    ) -> EngineResult<i64, E> {
         self.validate()?;
         if !random_unit.is_finite() || !(0.0..=1.0).contains(&random_unit) {
             return Err(EngineError::Execution("invalid retry jitter sample".into()));

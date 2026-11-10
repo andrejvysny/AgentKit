@@ -1,11 +1,10 @@
-use crate::{AgentHost, EngineError, EngineResult};
-use agentkit_store::{EventRecord, TaskRecord};
+use crate::{AgentHost, EngineError, EngineResult, EventRecord, TaskRecord, TaskRepository};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
-pub struct RunHandle {
-    pub(crate) host: AgentHost,
+pub struct RunHandle<R: TaskRepository> {
+    pub(crate) host: AgentHost<R>,
     pub task_id: String,
 }
 
@@ -15,27 +14,34 @@ pub enum RunUpdate {
     Settled(Box<TaskRecord>),
 }
 
-impl RunHandle {
-    pub async fn status(&self) -> EngineResult<Option<TaskRecord>> {
-        Ok(self.host.store.get_task(&self.task_id).await?)
+impl<R: TaskRepository> RunHandle<R> {
+    pub async fn status(&self) -> EngineResult<Option<TaskRecord>, R::Error> {
+        self.host
+            .store
+            .get_task(&self.task_id)
+            .await
+            .map_err(EngineError::Store)
     }
 
-    pub async fn cancel(&self) -> EngineResult<()> {
+    pub async fn cancel(&self) -> EngineResult<(), R::Error> {
         self.host.cancel(&self.task_id).await
     }
 
-    pub async fn resume(&self) -> EngineResult<TaskRecord> {
+    pub async fn resume(&self) -> EngineResult<TaskRecord, R::Error> {
         self.host.resume(&self.task_id).await
     }
 
-    pub fn subscribe(&self, after_seq: Option<u64>) -> mpsc::Receiver<EngineResult<RunUpdate>> {
+    pub fn subscribe(
+        &self,
+        after_seq: Option<u64>,
+    ) -> mpsc::Receiver<EngineResult<RunUpdate, R::Error>> {
         self.subscribe_after_number(after_seq.map(|value| value as f64))
     }
 
     pub fn subscribe_after_number(
         &self,
         after_seq: Option<f64>,
-    ) -> mpsc::Receiver<EngineResult<RunUpdate>> {
+    ) -> mpsc::Receiver<EngineResult<RunUpdate, R::Error>> {
         let (sender, receiver) = mpsc::channel(64);
         let handle = self.clone();
         tokio::spawn(async move {
@@ -49,8 +55,8 @@ impl RunHandle {
     async fn follow(
         &self,
         mut cursor: Option<f64>,
-        sender: &mpsc::Sender<EngineResult<RunUpdate>>,
-    ) -> EngineResult<()> {
+        sender: &mpsc::Sender<EngineResult<RunUpdate, R::Error>>,
+    ) -> EngineResult<(), R::Error> {
         loop {
             if sender.is_closed() {
                 return Ok(());
@@ -63,7 +69,8 @@ impl RunHandle {
                 .host
                 .store
                 .events_after_number(&self.task_id, cursor, 64)
-                .await?;
+                .await
+                .map_err(EngineError::Store)?;
             let empty = events.is_empty();
             for event in events {
                 cursor = Some(event.seq);

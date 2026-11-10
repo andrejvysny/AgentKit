@@ -1,13 +1,11 @@
-use agentkit_store::StoreError;
-
 use crate::ExecutionFailure;
 
 #[derive(Debug, thiserror::Error)]
-pub enum EngineError {
+pub enum EngineError<E: std::error::Error> {
     #[error(transparent)]
     Failure(#[from] ExecutionFailure),
     #[error(transparent)]
-    Store(#[from] StoreError),
+    Store(E),
     #[error("task executor not registered: {0}")]
     UnknownKind(String),
     /// A task admission named a kind this host registered no executor for.
@@ -28,7 +26,7 @@ pub enum EngineError {
     NotFound(String),
 }
 
-impl From<agentkit_governance::GovernanceError> for EngineError {
+impl<E: std::error::Error> From<agentkit_governance::GovernanceError> for EngineError<E> {
     fn from(error: agentkit_governance::GovernanceError) -> Self {
         match error {
             agentkit_governance::GovernanceError::Execution(message) => Self::Execution(message),
@@ -36,8 +34,8 @@ impl From<agentkit_governance::GovernanceError> for EngineError {
     }
 }
 
-impl From<EngineError> for agentkit_governance::GovernanceError {
-    fn from(error: EngineError) -> Self {
+impl<E: std::error::Error> From<EngineError<E>> for agentkit_governance::GovernanceError {
+    fn from(error: EngineError<E>) -> Self {
         match error {
             EngineError::Execution(message) => Self::Execution(message),
             other => Self::Execution(other.to_string()),
@@ -45,4 +43,4 @@ impl From<EngineError> for agentkit_governance::GovernanceError {
     }
 }
 
-pub type EngineResult<T> = Result<T, EngineError>;
+pub type EngineResult<T, E> = Result<T, EngineError<E>>;

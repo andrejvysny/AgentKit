@@ -12,6 +12,12 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc};
 
+type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+type EngineError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+type EngineResult<T> = Result<T, EngineError>;
+type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+
 struct Blocking {
     started: mpsc::UnboundedSender<String>,
     permits: Arc<Semaphore>,
@@ -20,7 +26,7 @@ struct Blocking {
 }
 
 #[async_trait]
-impl TaskExecutor for Blocking {
+impl TaskExecutor<agentkit_store::SqliteStore> for Blocking {
     async fn execute(&self, context: ExecutionContext) -> EngineResult<()> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.maximum.fetch_max(active, Ordering::SeqCst);
@@ -56,7 +62,10 @@ fn setup() -> (AgentHost, Arc<Blocking>, mpsc::UnboundedReceiver<String>) {
     });
     let host = AgentHost::new(
         SqliteStore::memory(8).unwrap(),
-        HashMap::from([("test".into(), executor.clone() as Arc<dyn TaskExecutor>)]),
+        HashMap::from([(
+            "test".into(),
+            executor.clone() as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+        )]),
         Arc::new(SystemRuntime),
         HostOptions::default(),
     )
