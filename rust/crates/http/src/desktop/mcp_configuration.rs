@@ -1,7 +1,7 @@
 use super::McpConfigurationPort;
 use crate::{Actor, Problem};
 use agentkit_contracts::{CreateMcpServerRequest, McpServerDto, UpdateMcpServerRequest};
-use agentkit_host::{McpConfigError, McpConfigRepository};
+use agentkit_mcp::{McpConfigError, McpConfigRepository};
 use async_trait::async_trait;
 
 fn problem(error: McpConfigError) -> Problem {

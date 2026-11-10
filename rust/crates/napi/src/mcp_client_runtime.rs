@@ -1,7 +1,7 @@
 use super::*;
 use crate::jsbridge::{JsBridge, PendingKind};
 use agentkit_contracts::McpServerDto;
-use agentkit_host::{McpConfigError, McpConfigLease, McpConfigRuntime, McpConfigSecrets};
+use agentkit_mcp::{McpConfigError, McpConfigLease, McpConfigRuntime, McpConfigSecrets};
 use napi::threadsafe_function::ThreadsafeFunction;
 use std::{
     collections::BTreeSet,

@@ -13,6 +13,7 @@ readme = "../../../README.md"
 workspace = true
 
 [dependencies]
+agentkit-mcp = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-core = { workspace = true }
 agentkit-agents = { workspace = true }
@@ -33,7 +34,6 @@ tokio-util = { workspace = true, features = ["rt"] }
 url.workspace = true
 
 [dev-dependencies]
-agentkit-mcp = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled"] }
 tempfile.workspace = true
 tower = { workspace = true, features = ["util"] }

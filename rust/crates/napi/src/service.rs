@@ -50,8 +50,8 @@ struct Core {
     runtime: AgentRuntime,
     provider_ports: Arc<crate::provider_connection::ports::BridgeProviderPorts>,
     provider_memory_secrets: Arc<agentkit_connections::MemorySecretStore>,
-    mcp_config_runtime: Arc<dyn agentkit_host::McpConfigRuntime>,
-    mcp_config_secrets: Arc<dyn agentkit_host::McpConfigSecrets>,
+    mcp_config_runtime: Arc<dyn agentkit_mcp::McpConfigRuntime>,
+    mcp_config_secrets: Arc<dyn agentkit_mcp::McpConfigSecrets>,
     contributor: Arc<JsToolContributor>,
     subscriptions: Subscriptions,
     http: Option<http_server::HttpServer>,
@@ -153,8 +153,8 @@ impl SessionService {
         on_event: ThreadsafeFunction<String>,
         options_json: Option<String>,
         mcp_ports: (
-            Arc<dyn agentkit_host::McpConfigRuntime>,
-            Arc<dyn agentkit_host::McpConfigSecrets>,
+            Arc<dyn agentkit_mcp::McpConfigRuntime>,
+            Arc<dyn agentkit_mcp::McpConfigSecrets>,
         ),
     ) -> Result<Self> {
         let options = parse_service_options(options_json.as_deref())?;

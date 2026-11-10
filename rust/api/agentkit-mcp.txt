@@ -25,6 +25,14 @@ pub agentkit_mcp::McpClientError::SecretMissing
 pub agentkit_mcp::McpClientError::Timeout
 impl agentkit_mcp::McpClientError
 pub fn agentkit_mcp::McpClientError::code(&self) -> &'static str
+pub enum agentkit_mcp::McpConfigError
+pub agentkit_mcp::McpConfigError::Conflict
+pub agentkit_mcp::McpConfigError::DuplicateAlias
+pub agentkit_mcp::McpConfigError::Invalid
+pub agentkit_mcp::McpConfigError::NotFound
+pub agentkit_mcp::McpConfigError::Runtime
+pub agentkit_mcp::McpConfigError::SecretStore
+pub agentkit_mcp::McpConfigError::Store(agentkit_store::StoreError)
 pub enum agentkit_mcp::TransportConfig
 pub agentkit_mcp::TransportConfig::Http
 pub agentkit_mcp::TransportConfig::Http::headers: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
@@ -123,6 +131,16 @@ pub fn agentkit_mcp::McpClientManager::revoke_alias(&self, &str)
 pub fn agentkit_mcp::McpClientManager::with_ports(alloc::vec::Vec<agentkit_mcp::ServerConfig>, alloc::rcs::arc::Arc<dyn agentkit_mcp::McpSecretResolver>, alloc::rcs::arc::Arc<dyn agentkit_mcp::McpConnector>, alloc::rcs::arc::Arc<dyn agentkit_mcp::ManagerClock>) -> core::result::Result<Self, agentkit_mcp::McpClientError>
 impl core::ops::drop::Drop for agentkit_mcp::McpClientManager
 pub fn agentkit_mcp::McpClientManager::drop(&mut self)
+pub struct agentkit_mcp::McpConfigRepository
+impl agentkit_mcp::McpConfigRepository
+pub fn agentkit_mcp::McpConfigRepository::app_id(&self) -> &str
+pub async fn agentkit_mcp::McpConfigRepository::create(&self, agentkit_contracts::dto::create_mcp_server_request::CreateMcpServerRequest) -> core::result::Result<agentkit_contracts::dto::mcp_server_dto::McpServerDto, agentkit_mcp::McpConfigError>
+pub async fn agentkit_mcp::McpConfigRepository::delete(&self, &str) -> core::result::Result<(), agentkit_mcp::McpConfigError>
+pub async fn agentkit_mcp::McpConfigRepository::initialize(&self) -> core::result::Result<(), agentkit_mcp::McpConfigError>
+pub async fn agentkit_mcp::McpConfigRepository::list(&self) -> core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::mcp_server_dto::McpServerDto>, agentkit_mcp::McpConfigError>
+pub fn agentkit_mcp::McpConfigRepository::new(agentkit_store::actor::SqliteStore, &str, agentkit_engine::ports::SharedRuntime) -> core::result::Result<Self, agentkit_mcp::McpConfigError>
+pub async fn agentkit_mcp::McpConfigRepository::update(&self, &str, agentkit_contracts::dto::update_mcp_server_request::UpdateMcpServerRequest) -> core::result::Result<agentkit_contracts::dto::mcp_server_dto::McpServerDto, agentkit_mcp::McpConfigError>
+pub fn agentkit_mcp::McpConfigRepository::with_ports(self, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_mcp::McpConfigSecrets>>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_mcp::McpConfigRuntime>>) -> core::result::Result<Self, agentkit_mcp::McpConfigError>
 pub struct agentkit_mcp::McpServer
 impl agentkit_mcp::McpServer
 pub async fn agentkit_mcp::McpServer::close(&self)
@@ -211,6 +229,17 @@ pub fn agentkit_mcp::ManagerClock::sleep<'life0, 'async_trait>(&'life0 self, cor
 impl agentkit_mcp::ManagerClock for agentkit_mcp::SystemClock
 pub fn agentkit_mcp::SystemClock::now_ms(&self) -> u64
 pub fn agentkit_mcp::SystemClock::sleep<'life0, 'async_trait>(&'life0 self, core::time::Duration, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_mcp::McpClientError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_mcp::McpConfigLease: core::marker::Send
+impl agentkit_mcp::McpConfigLease for ()
+pub trait agentkit_mcp::McpConfigRuntime: core::marker::Send + core::marker::Sync
+pub fn agentkit_mcp::McpConfigRuntime::invalidate(&self, u64, &[alloc::string::String])
+pub fn agentkit_mcp::McpConfigRuntime::metadata(&self, u64, &str) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_mcp::McpConfigRuntime::prepare<'life0, 'async_trait>(&'life0 self, u64, alloc::vec::Vec<agentkit_contracts::dto::mcp_server_dto::McpServerDto>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_mcp::McpConfigLease>, agentkit_mcp::McpConfigError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_mcp::McpConfigRuntime::reconcile<'life0, 'async_trait>(&'life0 self, u64, alloc::vec::Vec<agentkit_contracts::dto::mcp_server_dto::McpServerDto>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_mcp::McpConfigError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_mcp::McpConfigSecrets: core::marker::Send + core::marker::Sync
+pub fn agentkit_mcp::McpConfigSecrets::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_mcp::McpConfigError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_mcp::McpConfigSecrets::get<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<alloc::string::String>, agentkit_mcp::McpConfigError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_mcp::McpConfigSecrets::set<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_mcp::McpConfigError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_mcp::McpConnection: core::marker::Send + core::marker::Sync
 pub fn agentkit_mcp::McpConnection::binding(&self) -> core::option::Option<agentkit_mcp::ToolBinding>
 pub fn agentkit_mcp::McpConnection::call_tool<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, rmcp::model::JsonObject, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<rmcp::model::CallToolResult, agentkit_mcp::McpClientError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait

@@ -30,6 +30,7 @@ async-trait.workspace = true
 uuid.workspace = true
 # http_fixture example (TypeScript client/react test server)
 agentkit-http = { workspace = true }
+agentkit-mcp = { workspace = true }
 agentkit-contracts = { workspace = true }
 agentkit-connections = { workspace = true, features = ["http"] }
 axum.workspace = true

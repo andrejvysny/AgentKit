@@ -5,13 +5,12 @@ use std::sync::{
 };
 
 use agentkit_contracts::{CreateMcpServerRequest, McpServerDto, UpdateMcpServerRequest};
-use agentkit_host::{
-    McpConfigError, McpConfigRepository, McpConfigRuntime, McpConfigSecrets, SystemRuntime,
-};
+use agentkit_engine::SystemRuntime;
 use agentkit_mcp::{
     ClientOptions, McpClientError, McpClientManager, McpConnection, McpConnector,
     McpSecretResolver, SystemClock, TransportConfig, model,
 };
+use agentkit_mcp::{McpConfigError, McpConfigRepository, McpConfigRuntime, McpConfigSecrets};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};

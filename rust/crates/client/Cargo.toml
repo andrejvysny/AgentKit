@@ -27,6 +27,7 @@ agentkit-connections = { workspace = true }
 agentkit-core = { workspace = true }
 agentkit-host = { workspace = true }
 agentkit-http = { workspace = true }
+agentkit-mcp = { workspace = true }
 agentkit-runtime = { workspace = true }
 agentkit-store = { workspace = true }
 async-trait.workspace = true

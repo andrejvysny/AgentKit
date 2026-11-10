@@ -1,6 +1,7 @@
 use agentkit_contracts::CreateMcpServerRequest;
-use agentkit_host::{McpConfigError, McpConfigRepository, McpConfigSecrets, SystemRuntime};
+use agentkit_host::SystemRuntime;
 use agentkit_http::{Actor, McpConfigurationPort};
+use agentkit_mcp::{McpConfigError, McpConfigRepository, McpConfigSecrets};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};

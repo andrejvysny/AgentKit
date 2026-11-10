@@ -7,7 +7,6 @@ mod context_window;
 mod continuation;
 mod emulated_tool_call;
 mod governance;
-mod mcp_configuration;
 mod ports;
 mod profiles;
 mod project_instructions;
@@ -23,7 +22,6 @@ pub use budget::{
 pub use chat::*;
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
 pub use governance::*;
-pub use mcp_configuration::*;
 pub use ports::*;
 pub use profiles::*;
 pub use project_instructions::*;

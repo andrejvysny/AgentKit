@@ -1,5 +1,6 @@
 use agentkit_contracts::{CreateMcpServerRequest, UpdateMcpServerRequest};
-use agentkit_host::{McpConfigError, McpConfigRepository, SystemRuntime};
+use agentkit_engine::SystemRuntime;
+use agentkit_mcp::{McpConfigError, McpConfigRepository};
 use agentkit_store::SqliteStore;
 use serde_json::json;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ fn input(alias: &str) -> CreateMcpServerRequest {
 }
 
 struct FixedRuntime(i64);
-impl agentkit_host::Runtime for FixedRuntime {
+impl agentkit_engine::Runtime for FixedRuntime {
     fn now_ms(&self) -> i64 {
         self.0
     }

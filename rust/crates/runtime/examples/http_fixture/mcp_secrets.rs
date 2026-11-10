@@ -1,5 +1,5 @@
 //! A private, disposable test vault for synthetic fixture credentials only.
-use agentkit_host::{McpConfigError, McpConfigSecrets};
+use agentkit_mcp::{McpConfigError, McpConfigSecrets};
 use async_trait::async_trait;
 use std::{
     collections::BTreeMap,

@@ -10,12 +10,12 @@ use agentkit_contracts::{
 };
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream};
 use agentkit_host::{
-    Authorization, HostResult, McpConfigRepository, MutationIdentity, ProposalApplier,
-    ProposalService, SystemRuntime,
+    Authorization, HostResult, MutationIdentity, ProposalApplier, ProposalService, SystemRuntime,
 };
 use agentkit_http::{
     Actor, Config, DesktopBackend, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort,
 };
+use agentkit_mcp::McpConfigRepository;
 use agentkit_runtime::AgentRuntime;
 use agentkit_store::{MessageInput, ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
@@ -404,18 +404,18 @@ impl Native {
 struct MemoryVault(Mutex<BTreeMap<String, String>>);
 
 #[async_trait]
-impl agentkit_host::McpConfigSecrets for MemoryVault {
-    async fn get(&self, reference: &str) -> Result<Option<String>, agentkit_host::McpConfigError> {
+impl agentkit_mcp::McpConfigSecrets for MemoryVault {
+    async fn get(&self, reference: &str) -> Result<Option<String>, agentkit_mcp::McpConfigError> {
         Ok(self.0.lock().unwrap().get(reference).cloned())
     }
-    async fn set(&self, reference: &str, value: &str) -> Result<(), agentkit_host::McpConfigError> {
+    async fn set(&self, reference: &str, value: &str) -> Result<(), agentkit_mcp::McpConfigError> {
         self.0
             .lock()
             .unwrap()
             .insert(reference.to_owned(), value.to_owned());
         Ok(())
     }
-    async fn delete(&self, reference: &str) -> Result<(), agentkit_host::McpConfigError> {
+    async fn delete(&self, reference: &str) -> Result<(), agentkit_mcp::McpConfigError> {
         self.0.lock().unwrap().remove(reference);
         Ok(())
     }
