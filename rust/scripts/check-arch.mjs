@@ -23,7 +23,6 @@ const LAYERS = {
   "agentkit-memory": 3,
   "agentkit-automation": 3,
   "agentkit-remote": 3,
-  "agentkit-host": 3, // legacy, transitional
   "agentkit-store": 4,
   "agentkit-store-sqlite": 4,
   "agentkit-store-legacy-import": 4,
@@ -58,15 +57,6 @@ const CONTEXT_DEPS = {
   "agentkit-memory": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-automation": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-remote": ["agentkit-engine", "agentkit-sessions"],
-  "agentkit-host": [
-    "agentkit-engine",
-    "agentkit-sessions",
-    "agentkit-chat",
-    "agentkit-agents",
-    "agentkit-memory",
-    "agentkit-automation",
-    "agentkit-remote",
-  ],
 };
 const SKIP_DIRS = new Set(["tests", "benches", "examples", "target"]);
 const STATIC_RE =
