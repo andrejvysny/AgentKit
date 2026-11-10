@@ -97,8 +97,31 @@ pub fn classify_execution_error<E: RepositoryFault>(
     if let Some(result) = classify_host_error(error) {
         return result;
     }
-    let EngineError::Failure(failure) = error else {
-        return classify_message(&error.to_string(), None);
+    let failure = match error {
+        EngineError::Failure(failure) => failure,
+        EngineError::External { source, .. } => return classify_message(&source.to_string(), None),
+        EngineError::Context {
+            classification: context,
+            ..
+        } => {
+            let reason = match context {
+                crate::ContextClassification::Rejected => "rejected",
+                crate::ContextClassification::Unclassified => "unclassified",
+            };
+            return classification(Terminal, reason);
+        }
+        EngineError::InvalidTimestamp
+        | EngineError::InvalidHostLimits
+        | EngineError::InvalidRetryBackoff
+        | EngineError::InvalidRetryJitter => {
+            return classification(Terminal, "rejected");
+        }
+        EngineError::Worker(source) => return classify_message(&source.to_string(), None),
+        EngineError::Store(fault) if fault.invalid_input().is_some() => {
+            return classification(Terminal, "rejected");
+        }
+        EngineError::Store(fault) => return classify_message(&fault.to_string(), None),
+        _ => return classification(Terminal, "unclassified"),
     };
     if failure.code.as_deref() == Some("ABORT_ERR") {
         return classification(Cancelled, "aborted");
@@ -154,15 +177,12 @@ fn store_fault_code(fault: &impl RepositoryFault) -> Option<&'static str> {
     if fault.is_duplicate() {
         return Some("duplicate_task");
     }
-    let message = fault.invalid_input()?;
-    if message.starts_with("unknown dependency:") {
-        Some("unknown_dependency")
-    } else if message.starts_with("event seq must be") {
-        Some("seq_conflict")
-    } else if message == "invalid_fork_point" {
-        Some("invalid_fork_point")
-    } else {
-        None
+    use crate::TaskInputReason;
+    match fault.task_input_reason()? {
+        TaskInputReason::UnknownDependency => Some("unknown_dependency"),
+        TaskInputReason::EventSequence => Some("seq_conflict"),
+        TaskInputReason::InvalidForkPoint => Some("invalid_fork_point"),
+        TaskInputReason::ReplayIdentityMismatch => None,
     }
 }
 
@@ -261,7 +281,7 @@ impl RetryBackoff {
             || !self.jitter_ratio.is_finite()
             || !(0.0..=1.0).contains(&self.jitter_ratio)
         {
-            return Err(EngineError::Execution("invalid retry backoff".into()));
+            return Err(EngineError::InvalidRetryBackoff);
         }
         Ok(())
     }
@@ -273,7 +293,7 @@ impl RetryBackoff {
     ) -> EngineResult<i64, E> {
         self.validate()?;
         if !random_unit.is_finite() || !(0.0..=1.0).contains(&random_unit) {
-            return Err(EngineError::Execution("invalid retry jitter sample".into()));
+            return Err(EngineError::InvalidRetryJitter);
         }
         if self.base_ms == 0 {
             return Ok(0);

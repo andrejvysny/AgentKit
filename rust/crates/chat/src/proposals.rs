@@ -8,12 +8,12 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait ProposalApplyGuard: Send + Sync {
     /// Check current authority and revision without mutating domain state.
-    async fn authorize(&self, proposal: &ProposalRecord) -> HostResult<()>;
-    async fn authorize_dispatch(&self) -> HostResult<()> {
+    async fn authorize(&self, proposal: &ProposalRecord) -> ChatResult<()>;
+    async fn authorize_dispatch(&self) -> ChatResult<()> {
         Ok(())
     }
     /// Recheck revocable local state after the final asynchronous preflight.
-    fn check_current(&self) -> HostResult<()> {
+    fn check_current(&self) -> ChatResult<()> {
         Ok(())
     }
     fn fence(&self) -> Option<agentkit_core::DispatchFence> {
@@ -23,7 +23,7 @@ pub trait ProposalApplyGuard: Send + Sync {
 
 #[async_trait]
 pub trait ProposalRevisionSource: Send + Sync {
-    async fn current_revision(&self, scope_key: &str) -> HostResult<Option<String>>;
+    async fn current_revision(&self, scope_key: &str) -> ChatResult<Option<String>>;
 }
 
 pub struct ProposalService {
@@ -62,7 +62,7 @@ impl ProposalService {
         id: &str,
         actor: &Value,
         action: &str,
-    ) -> HostResult<ProposalRecord> {
+    ) -> ChatResult<ProposalRecord> {
         let proposal = self
             .store
             .get_proposal(id)
@@ -80,7 +80,7 @@ impl ProposalService {
         Ok(proposal)
     }
 
-    pub async fn approve(&self, id: &str, actor: &Value) -> HostResult<ProposalRecord> {
+    pub async fn approve(&self, id: &str, actor: &Value) -> ChatResult<ProposalRecord> {
         self.approve_with_reason(id, actor, None).await
     }
 
@@ -89,7 +89,7 @@ impl ProposalService {
         id: &str,
         actor: &Value,
         reason: Option<String>,
-    ) -> HostResult<ProposalRecord> {
+    ) -> ChatResult<ProposalRecord> {
         self.authorized(id, actor, "approve").await?;
         Ok(self
             .store
@@ -112,7 +112,7 @@ impl ProposalService {
         id: &str,
         actor: &Value,
         reason: Option<String>,
-    ) -> HostResult<ProposalRecord> {
+    ) -> ChatResult<ProposalRecord> {
         self.authorized(id, actor, "reject").await?;
         Ok(self
             .store
@@ -135,7 +135,7 @@ impl ProposalService {
         id: &str,
         operation_id: &str,
         actor: &Value,
-    ) -> HostResult<ReceiptRecord> {
+    ) -> ChatResult<ReceiptRecord> {
         self.apply_inner(id, operation_id, actor, None).await
     }
 
@@ -145,7 +145,7 @@ impl ProposalService {
         operation_id: &str,
         actor: &Value,
         guard: Arc<dyn ProposalApplyGuard>,
-    ) -> HostResult<ReceiptRecord> {
+    ) -> ChatResult<ReceiptRecord> {
         self.apply_inner(id, operation_id, actor, Some(guard)).await
     }
 
@@ -155,18 +155,18 @@ impl ProposalService {
         operation_id: &str,
         actor: &Value,
         guard: Option<Arc<dyn ProposalApplyGuard>>,
-    ) -> HostResult<ReceiptRecord> {
+    ) -> ChatResult<ReceiptRecord> {
         let proposal = self.authorized(id, actor, "apply").await?;
         if proposal
             .operation_id
             .as_deref()
             .is_some_and(|existing| existing != operation_id)
         {
-            return Err(HostError::Execution("proposal_operation_mismatch".into()));
+            return Err(ChatError::ProposalOperationMismatch);
         }
         if let Some(receipt) = self.store.receipt(operation_id).await? {
             if receipt.proposal_id != id {
-                return Err(HostError::Execution("proposal_operation_mismatch".into()));
+                return Err(ChatError::ProposalOperationMismatch);
             }
             return Ok(receipt);
         }
@@ -197,7 +197,7 @@ impl ProposalService {
         operation_id: &str,
         actor: &Value,
         guard: Option<&dyn ProposalApplyGuard>,
-    ) -> HostResult<Option<ReceiptRecord>> {
+    ) -> ChatResult<Option<ReceiptRecord>> {
         if let Err(error) = self.authorize_claim(proposal, actor).await {
             self.record_guard_refusal(proposal, operation_id).await?;
             return Err(error);
@@ -223,7 +223,7 @@ impl ProposalService {
         Ok(None)
     }
 
-    async fn claim(&self, id: &str, operation_id: &str) -> HostResult<()> {
+    async fn claim(&self, id: &str, operation_id: &str) -> ChatResult<()> {
         self.store
             .transition_proposal(
                 id,
@@ -239,11 +239,11 @@ impl ProposalService {
         Ok(())
     }
 
-    async fn authorize_claim(&self, proposal: &ProposalRecord, actor: &Value) -> HostResult<()> {
+    async fn authorize_claim(&self, proposal: &ProposalRecord, actor: &Value) -> ChatResult<()> {
         if let (Some(source), Some(expected)) = (&self.revisions, &proposal.revision_at_create)
             && source.current_revision(&proposal.scope_key).await?.as_ref() != Some(expected)
         {
-            return Err(HostError::Execution("revision_conflict".into()));
+            return Err(ChatError::RevisionConflict);
         }
         self.authorized(&proposal.id, actor, "apply").await?;
         Ok(())
@@ -254,7 +254,7 @@ impl ProposalService {
         proposal: &ProposalRecord,
         operation_id: &str,
         actor: &Value,
-    ) -> HostResult<()> {
+    ) -> ChatResult<()> {
         // Awaited policy or revision guards may revoke host authority after the
         // claim check. The last authorization must precede domain dispatch.
         if let Err(error) = self.authorized(&proposal.id, actor, "apply").await {
@@ -268,7 +268,7 @@ impl ProposalService {
         &self,
         proposal: &ProposalRecord,
         operation: &str,
-    ) -> HostResult<ReceiptRecord> {
+    ) -> ChatResult<ReceiptRecord> {
         let failed_ops = proposal.operations.iter().enumerate().map(|(index, _)| json!({
             "opIndex":index,"error":"Apply authorization or revision check refused before domain dispatch."
         })).collect();
@@ -285,16 +285,17 @@ impl ProposalService {
             .await?)
     }
 
-    pub async fn reconcile(&self) -> HostResult<Vec<ReceiptRecord>> {
+    pub async fn reconcile(&self) -> ChatResult<Vec<ReceiptRecord>> {
         let proposals = self
             .store
             .proposals(None, Some(ProposalStatus::Applying))
             .await?;
         let mut receipts = vec![];
         for proposal in proposals {
-            let operation = proposal.operation_id.as_deref().ok_or_else(|| {
-                HostError::Execution("applying proposal has no operation identity".into())
-            })?;
+            let operation = proposal
+                .operation_id
+                .as_deref()
+                .ok_or_else(|| ChatError::ApplyingProposalHasNoOperationIdentity)?;
             let identity = mutation_identity(&proposal, operation);
             if let Some(outcome) = self.applier.reconcile(identity).await? {
                 receipts.push(self.complete(&proposal.id, operation, outcome).await?);
@@ -307,20 +308,19 @@ impl ProposalService {
         &self,
         proposal: &ProposalRecord,
         identity: MutationIdentity,
-    ) -> HostResult<ReceiptRecord> {
+    ) -> ChatResult<ReceiptRecord> {
         let outcome = self
             .applier
             .reconcile(identity.clone())
             .await?
-            .ok_or_else(|| HostError::Execution("proposal_outcome_unresolved".into()))?;
+            .ok_or_else(|| ChatError::ProposalOutcomeUnresolved)?;
         self.complete(&proposal.id, &identity.operation_id, outcome)
             .await
     }
 
-    async fn complete(&self, id: &str, operation: &str, value: Value) -> HostResult<ReceiptRecord> {
-        let outcome: ApplyOutcome = serde_json::from_value(value).map_err(|_| {
-            HostError::Execution("invalid domain apply outcome; reconciliation required".into())
-        })?;
+    async fn complete(&self, id: &str, operation: &str, value: Value) -> ChatResult<ReceiptRecord> {
+        let outcome: ApplyOutcome =
+            serde_json::from_value(value).map_err(|_| ChatError::InvalidDomainApplyOutcome)?;
         let proposal = self
             .store
             .get_proposal(id)

@@ -26,7 +26,7 @@
 //!   `0` for a counter no event reported (`null` means "not reported").
 
 use super::*;
-use agentkit_agents::{AgentDefinitionService, AgentsError, TeammateAdmission, TeammateService};
+use agentkit_agents::{AgentDefinitionService, TeammateAdmission, TeammateService};
 use agentkit_sessions::{
     ContextUnit, ContextUnitKind, ProjectSelection, RunProfileService, SelectedSource,
     SelectedSourceKind, TaskProfileOverrides,
@@ -579,35 +579,5 @@ fn project_selection(value: Option<&Value>) -> Result<ProjectSelection, Problem>
     Ok(ProjectSelection { sources })
 }
 
-/// Map the teammate-lane host errors onto the wire. Every refusal an M1
-/// client can provoke is 4xx with a stable code; anything else stays the
-/// honest 500 (redacted) rather than being dressed up.
-fn teammate_problem(error: impl Into<AgentsError>) -> Problem {
-    let error = match error.into() {
-        AgentsError::Host(inner) => inner,
-        refusal @ (AgentsError::InvalidAgent(_) | AgentsError::InvalidAdmission(_)) => {
-            return Problem::new(400, "invalid_request", refusal.to_string());
-        }
-        other => HostError::from(other),
-    };
-    match &error {
-        HostError::Store(agentkit_store::StoreError::Conflict(message)) => {
-            Problem::host("revision_conflict", message.clone())
-        }
-        HostError::Store(agentkit_store::StoreError::InvalidTransition(message)) => {
-            Problem::host("invalid_task_transition", message.clone())
-        }
-        HostError::Store(agentkit_store::StoreError::NotFound(message)) => {
-            Problem::new(404, "not_found", message.clone())
-        }
-        HostError::NotFound(message) => Problem::new(404, "not_found", message.clone()),
-        // Raised by the host-owned run-profile resolver, not the agents context.
-        HostError::Execution(message)
-            if message.starts_with("invalid_overrides")
-                || message.starts_with("run_profile_refused") =>
-        {
-            Problem::new(400, "invalid_request", message.clone())
-        }
-        _ => host_error(error),
-    }
-}
+#[cfg(test)]
+mod teammate_error_tests;

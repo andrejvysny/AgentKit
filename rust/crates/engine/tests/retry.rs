@@ -63,9 +63,10 @@ impl TaskExecutor<agentkit_store::SqliteStore> for Script {
                 ..ExecutionFailure::new("bad credentials")
             },
             FailureStyle::RawNetwork => {
-                return Err(EngineError::Execution(
-                    "ECONNRESET after domain commit".into(),
-                ));
+                return Err(EngineError::External {
+                    source: Box::new(std::io::Error::other("ECONNRESET after domain commit")),
+                    failure_code: None,
+                });
             }
             FailureStyle::Aborted => return Err(EngineError::Cancelled),
         };

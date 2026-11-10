@@ -44,7 +44,7 @@ impl ChatExecutor {
     /// "auto" defers to the provider's recorded capabilities
     /// (`providers.saveCapabilities` document) — staged unless that document
     /// says `toolCalling: false` outright.
-    async fn stage_tools(&self, context: &ExecutionContext, provider_id: &str) -> HostResult<bool> {
+    async fn stage_tools(&self, context: &ExecutionContext, provider_id: &str) -> ChatResult<bool> {
         let mode = context
             .store
             .get_setting("http", "settings")
@@ -68,7 +68,7 @@ impl ChatExecutor {
             .and_then(|capabilities| capabilities["toolCalling"].as_bool())
             .unwrap_or(true))
     }
-    async fn provider(&self, context: &ExecutionContext) -> HostResult<Arc<dyn ChatProvider>> {
+    async fn provider(&self, context: &ExecutionContext) -> ChatResult<Arc<dyn ChatProvider>> {
         if let Some(factory) = &self.options.provider_factory
             && context
                 .task
@@ -81,11 +81,9 @@ impl ChatExecutor {
                 .payload
                 .get("providerSnapshot")
                 .filter(|value| value.is_object())
-                .ok_or_else(|| HostError::Execution("provider_snapshot_required".into()))?;
+                .ok_or_else(|| ChatError::ProviderSnapshotRequired)?;
             if snapshot["model"].as_str() != Some(required(&context.task.payload, "model")?) {
-                return Err(HostError::Execution(
-                    "provider_snapshot_model_mismatch".into(),
-                ));
+                return Err(ChatError::ProviderSnapshotModelMismatch);
             }
             return hooks::bounded(
                 factory.resolve(snapshot, context.cancellation.clone()),
@@ -103,7 +101,7 @@ impl ChatExecutor {
                 .providers
                 .as_ref()
                 .and_then(|registry| registry.get(id))
-                .ok_or_else(|| HostError::Execution("provider_binding_mismatch".into())),
+                .ok_or_else(|| ChatError::ProviderBindingMismatch),
         }
     }
 }
@@ -136,17 +134,26 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             .as_ref()
             .is_some_and(|factory| factory.available())
     }
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), StoreError> {
+        self.execute_chat(context).await.map_err(Into::into)
+    }
+}
+
+impl ChatExecutor {
+    async fn execute_chat(&self, context: ExecutionContext) -> ChatResult<()> {
         context.check_cancelled()?;
         let chat_id = required(&context.task.payload, "chatId")?;
         let model = required(&context.task.payload, "model")?;
         if chat_id != context.task.scope_id {
-            return Err(HostError::Execution("chat scope mismatch".into()));
+            return Err(ChatError::ChatScopeMismatch);
         }
         let session = session_run::is_session_turn(&context, chat_id).await?;
         let profile = agentkit_sessions::task_profile(&context.task.payload)?;
         if session && profile.is_none() {
-            return Err(HostError::Execution("profile_snapshot_required".into()));
+            return Err(ChatError::ProfileSnapshotRequired);
         }
         let mut options = self.options.clone();
         if let Some(profile) = &profile {
@@ -183,7 +190,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             let limit = value
                 .as_u64()
                 .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
-                .ok_or_else(|| HostError::Execution("invalid_max_output_tokens".into()))?;
+                .ok_or_else(|| ChatError::InvalidMaxOutputTokens)?;
             options.max_output_tokens = Some(
                 options
                     .max_output_tokens
@@ -200,7 +207,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             .filter(|v| !v.is_null())
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
-            .map_err(|e| HostError::Execution(format!("invalid_reasoning_effort: {e}")))?;
+            .map_err(ChatError::InvalidReasoningEffort)?;
         let loaded = context.store.messages(chat_id, true).await?;
         // The active chain is what the continuation and the anchor see.
         let records: Vec<_> = loaded
@@ -220,7 +227,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
                     })
                     .map(|message| message.id.clone())
             })
-            .ok_or_else(|| HostError::Execution("assistant placeholder required".into()))?;
+            .ok_or_else(|| ChatError::AssistantPlaceholderRequired)?;
         let provider = self.provider(&context).await?;
         let continuation = history::prepare_continuation(
             &context,
@@ -320,15 +327,11 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             .store
             .list_executions_by_chat(chat_id.to_owned())
             .await
-            .map_err(|error| {
-                HostError::Execution(format!(
-                    "Cannot read durable execution receipts; mutations remain blocked. ({error})"
-                ))
-            })?;
-        let path_snapshot = serde_json::to_value(&records)
-            .map_err(|_| HostError::Execution("context snapshot failed".into()))?;
-        let receipt_snapshot = serde_json::to_value(&receipts)
-            .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
+            .map_err(ChatError::ReadReceipts)?;
+        let path_snapshot =
+            serde_json::to_value(&records).map_err(|_| ChatError::ContextSnapshotFailed)?;
+        let receipt_snapshot =
+            serde_json::to_value(&receipts).map_err(|_| ChatError::ReceiptSnapshotFailed)?;
         let mut entries = history::assemble_with_ids(
             records,
             usize::MAX,
@@ -347,7 +350,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
             .filter(|(_, record_id)| record_id.is_some())
             .count();
         if history_records > options.history_limit {
-            return Err(HostError::Failure(ExecutionFailure {
+            return Err(ChatError::Failure(ExecutionFailure {
                 code: Some("context_overflow".into()),
                 retryable: Some(false),
                 ..ExecutionFailure::new(
@@ -590,11 +593,11 @@ impl agentkit_core::SuspendSink for ParkSink {
     }
 }
 
-fn required<'a>(value: &'a Value, key: &str) -> HostResult<&'a str> {
+fn required<'a>(value: &'a Value, key: &str) -> ChatResult<&'a str> {
     value[key]
         .as_str()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| HostError::Execution(format!("{key} required")))
+        .ok_or_else(|| ChatError::RequiredField(key.to_owned()))
 }
 pub struct SubmitChat {
     pub task_id: String,
@@ -608,7 +611,7 @@ pub struct SubmitChat {
 #[async_trait]
 pub trait ChatHostExt {
     /// Persists the input, display placeholder, and queued work in one transaction.
-    async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle>;
+    async fn submit_chat(&self, input: SubmitChat) -> ChatResult<RunHandle>;
     /// Whether the registered chat-turn executor resolves provider snapshots.
     fn resolves_provider_snapshots(&self) -> bool;
 }
@@ -619,9 +622,11 @@ impl ChatHostExt for AgentHost {
         self.executor_resolves_provider_snapshots(CHAT_TURN_TASK_KIND)
     }
 
-    async fn submit_chat(&self, input: SubmitChat) -> HostResult<RunHandle> {
+    async fn submit_chat(&self, input: SubmitChat) -> ChatResult<RunHandle> {
         if !self.supports(CHAT_TURN_TASK_KIND) {
-            return Err(HostError::UnknownKind(CHAT_TURN_TASK_KIND.into()));
+            return Err(ChatError::Engine(
+                agentkit_engine::EngineError::UnknownKind(CHAT_TURN_TASK_KIND.into()),
+            ));
         }
         if self
             .store()
@@ -633,9 +638,7 @@ impl ChatHostExt for AgentHost {
                     .is_some()
             })
         {
-            return Err(HostError::Execution(
-                "session_submission_required: use AgentSessionService for session turns".into(),
-            ));
+            return Err(ChatError::SessionSubmissionRequired);
         }
         let user = format!("{}_user", input.task_id);
         let assistant = format!("{}_assistant", input.task_id);

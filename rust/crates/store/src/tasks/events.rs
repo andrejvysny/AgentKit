@@ -22,8 +22,9 @@ pub(crate) fn append(
     for event in events {
         let sequence = agentkit_contracts::javascript_number(&event["seq"])
             .filter(|sequence| sequence.is_finite() && *sequence > previous)
-            .ok_or_else(|| {
-                StoreError::InvalidInput(format!("event seq must be greater than {previous}"))
+            .ok_or_else(|| StoreError::TaskInput {
+                reason: agentkit_engine::TaskInputReason::EventSequence,
+                message: format!("event seq must be greater than {previous}"),
             })?;
         let record = EventRecord {
             task_id: task_id.into(),

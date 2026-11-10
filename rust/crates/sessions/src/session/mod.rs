@@ -23,7 +23,7 @@ pub use descriptor::{
 pub use execution_authority::SessionExecutionAuthority;
 pub use report::{FALLBACK_CONTEXT_WINDOW_TOKENS, list_turn_tasks, session_usage, summarize_turn};
 
-use crate::HostResult;
+use crate::{SessionsError, SessionsResult};
 use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
 use agentkit_store::{
@@ -38,68 +38,10 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
-/// A session-domain failure with the TypeScript error's code (`chat_busy`,
-/// `session_not_found`, `invalid_input`, `answer_conflict`, ...).
-#[derive(Clone, Debug, PartialEq)]
-pub struct SessionError {
-    pub code: String,
-    pub message: String,
-}
-
-impl SessionError {
-    pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: code.to_owned(),
-            message: message.into(),
-        }
-    }
-    fn invalid_input(message: impl Into<String>) -> Self {
-        Self::new("invalid_input", message)
-    }
-    fn chat_busy(session_id: &str) -> Self {
-        Self::new("chat_busy", format!("Chat {session_id} is busy."))
-    }
-}
-
 /// Legacy message retained for source compatibility; native content admission
 /// now resolves immutable snapshots and no longer emits this refusal.
 pub const CONTENT_UNSUPPORTED_MESSAGE: &str =
     "Native prompt templates and skills are not configured.";
-
-impl std::fmt::Display for SessionError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for SessionError {}
-
-impl From<agentkit_store::StoreError> for SessionError {
-    fn from(error: agentkit_store::StoreError) -> Self {
-        use agentkit_store::StoreError as E;
-        match error {
-            E::NotFound(message) => Self::new("not_found", message),
-            E::Duplicate(message) => {
-                let code = if message.starts_with("answer_conflict") {
-                    "answer_conflict"
-                } else {
-                    // Plain duplicate records are input conflicts on this
-                    // surface — the same code the binding's store mapping
-                    // uses; "duplicate" is not part of the stable contract.
-                    "input_conflict"
-                };
-                Self::new(code, message)
-            }
-            E::ScopeBusy(scope) => Self::chat_busy(&scope),
-            E::InvalidTransition(message) => Self::new("invalid_state", message),
-            E::LeaseLost(task_id) => Self::new("invalid_state", format!("lease lost: {task_id}")),
-            E::InvalidInput(message) => Self::new("invalid_input", message),
-            other => Self::new("store_failure", other.to_string()),
-        }
-    }
-}
-
-pub type SessionResult<T> = Result<T, SessionError>;
 
 // ---------------------------------------------------------------------------
 // Plan-approval policy (ADR 0019 part 2) — the HOST decides escalation.
@@ -130,9 +72,9 @@ pub trait PlanApprovalPolicy: Send + Sync {
     fn tool_names(&self) -> Vec<String>;
     /// The mode the session moves to when the user approves. Resolving to
     /// `plan` or the empty string denies.
-    async fn granted_mode(&self, session_id: &str) -> HostResult<String>;
+    async fn granted_mode(&self, session_id: &str) -> SessionsResult<String>;
     /// Extra veto (role ceiling, untrusted workspace).
-    async fn authorize(&self, _intent: &PlanGrantIntent<'_>) -> HostResult<PlanAuthorization> {
+    async fn authorize(&self, _intent: &PlanGrantIntent<'_>) -> SessionsResult<PlanAuthorization> {
         Ok(PlanAuthorization::Allowed)
     }
 }
@@ -295,26 +237,16 @@ pub struct AgentSessionService {
 }
 
 /// A stale-answer refusal carrying the TypeScript `AnswerStaleError` text
-/// verbatim: `Request <id> can no longer be answered: <reason>.` (`reason`
-/// rides in the message because `SessionError` carries code+message only,
-/// exactly as the native binding surfaces it).
-fn answer_stale(request_id: &str, reason: &str) -> SessionError {
-    SessionError::new(
-        "answer_stale",
-        format!("Request {request_id} can no longer be answered: {reason}."),
-    )
+/// verbatim: `Request <id> can no longer be answered: <reason>.`
+fn answer_stale(request_id: &str, reason: &str) -> SessionsError {
+    SessionsError::answer_stale(format!(
+        "Request {request_id} can no longer be answered: {reason}."
+    ))
 }
 
-/// A store refusal from the answer settlement: the stale-shaped
-/// `InvalidTransition` the store raises for the races only it can observe
-/// ("a concurrent answer or cancel won") crosses as `answer_stale` with the
-/// store's message verbatim; every other store error keeps the generic
-/// mapping.
-fn answer_store_error(error: agentkit_store::StoreError) -> SessionError {
-    match agentkit_store::answer_stale_reason(&error) {
-        Some(message) => SessionError::new("answer_stale", message.to_owned()),
-        None => SessionError::from(error),
-    }
+/// Preserve the store's typed stale-answer refusal and source.
+fn answer_store_error(error: agentkit_store::StoreError) -> SessionsError {
+    SessionsError::AnswerStore(crate::AnswerStoreError(error))
 }
 
 /// Queueing intent for one input: its stable identity and what should
@@ -421,17 +353,16 @@ impl AgentSessionService {
 
     /// The registry check every task-creating admission runs before its
     /// first write. Ungated wirings (no native worker bound) admit freely.
-    fn require_executable(&self, kind: &str) -> SessionResult<()> {
+    fn require_executable(&self, kind: &str) -> SessionsResult<()> {
         if self
             .deps
             .gate
             .as_ref()
             .is_some_and(|gate| !gate.supports(kind))
         {
-            return Err(SessionError::new(
-                "no_executor_for_kind",
-                format!("No executor registered for task kind \"{kind}\"."),
-            ));
+            return Err(SessionsError::no_executor_for_kind(format!(
+                "No executor registered for task kind \"{kind}\"."
+            )));
         }
         Ok(())
     }
@@ -463,7 +394,7 @@ impl AgentSessionService {
     pub async fn create_session(
         &self,
         input: &CreateSessionInput,
-    ) -> SessionResult<AgentSessionState> {
+    ) -> SessionsResult<AgentSessionState> {
         let chat = self.create_session_chat(input).await?;
         self.get_state(&chat.id).await
     }
@@ -471,18 +402,18 @@ impl AgentSessionService {
     pub async fn create_session_chat(
         &self,
         input: &CreateSessionInput,
-    ) -> SessionResult<ChatRecord> {
+    ) -> SessionsResult<ChatRecord> {
         let mut metadata = match input.metadata.clone().unwrap_or_else(|| json!({})) {
             Value::Object(map) => map,
             _ => {
-                return Err(SessionError::invalid_input("metadata must be an object."));
+                return Err(SessionsError::invalid_input("metadata must be an object."));
             }
         };
         for key in [SESSION_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY] {
             if metadata.contains_key(key) {
                 // Grants are written only by an answered approval; a
                 // caller-supplied one would be a standing approval no human gave.
-                return Err(SessionError::invalid_input(format!(
+                return Err(SessionsError::invalid_input(format!(
                     "metadata must not contain {key}."
                 )));
             }
@@ -490,7 +421,7 @@ impl AgentSessionService {
         if let Some(kind) = &input.turn_kind
             && !is_valid_session_turn_kind(kind)
         {
-            return Err(SessionError::invalid_input(
+            return Err(SessionsError::invalid_input(
                 "turnKind must be a dotted lowercase task kind outside the reserved chat.* / agentkit.* prefixes.",
             ));
         }
@@ -498,10 +429,10 @@ impl AgentSessionService {
             .deps
             .profiles
             .resolve(&input.profile_id)
-            .map_err(|e| SessionError::invalid_input(e.to_string()))?;
+            .map_err(|error| SessionsError::InvalidInputContext(Box::new(error)))?;
         let digest = resolved_profile.digest();
         if input.profile_digest.as_ref().is_some_and(|d| d != &digest) {
-            return Err(SessionError::invalid_input(
+            return Err(SessionsError::invalid_input(
                 "Profile digest does not match resolved profile.",
             ));
         }
@@ -565,7 +496,7 @@ impl AgentSessionService {
             // windowTokens, a Skills entry without revision, an illegal
             // turnKind, …) invalidate the descriptor exactly like a bad
             // `profile.id` — they are never silently dropped.
-            return Err(SessionError::invalid_input(
+            return Err(SessionsError::invalid_input(
                 "profile.id must be a non-empty string and workspace/context/skills/turnKind \
                  must match the session descriptor grammar.",
             ));
@@ -582,7 +513,7 @@ impl AgentSessionService {
                 let updated_at = self.now_iso();
                 Some(
                     execution_state_for_mode(&mode, &updated_at, None)
-                        .ok_or_else(|| SessionError::invalid_input("mode must be non-empty."))?,
+                        .ok_or_else(|| SessionsError::invalid_input("mode must be non-empty."))?,
                 )
             }
             None => None,
@@ -599,7 +530,7 @@ impl AgentSessionService {
         Ok(chat)
     }
 
-    pub async fn get_state(&self, session_id: &str) -> SessionResult<AgentSessionState> {
+    pub async fn get_state(&self, session_id: &str) -> SessionsResult<AgentSessionState> {
         let (chat, descriptor) = self.require_session(session_id).await?;
         let active = self
             .active_turn(session_id, &session_turn_kind(&descriptor))
@@ -654,12 +585,12 @@ impl AgentSessionService {
     /// Corrupt state is an ERROR, never absence: a caller falling back to
     /// its configured permissions would silently replace the human's
     /// recorded authority with whatever the process happens to allow.
-    pub async fn get_execution(&self, session_id: &str) -> SessionResult<Option<Value>> {
+    pub async fn get_execution(&self, session_id: &str) -> SessionsResult<Option<Value>> {
         let (chat, _) = self.require_session(session_id).await?;
         match agentkit_store::inspect_execution_state(&chat.metadata) {
             agentkit_store::ExecutionStateRead::Absent => Ok(None),
             agentkit_store::ExecutionStateRead::Valid(state) => Ok(Some(state)),
-            agentkit_store::ExecutionStateRead::Malformed => Err(SessionError::invalid_input(
+            agentkit_store::ExecutionStateRead::Malformed => Err(SessionsError::invalid_input(
                 "The session's persisted execution state is malformed; refusing to fall back \
                  to configured permissions. Repair the record before granting access.",
             )),
@@ -670,7 +601,7 @@ impl AgentSessionService {
     /// the model. Entering `plan` drops any grant, so a session that was
     /// cleared to edit cannot read its way back into write access without a
     /// new approval.
-    pub async fn set_execution_mode(&self, session_id: &str, mode: &str) -> SessionResult<Value> {
+    pub async fn set_execution_mode(&self, session_id: &str, mode: &str) -> SessionsResult<Value> {
         let now = self.now_ms();
         let mode = mode.to_owned();
         let session = session_id.to_owned();
@@ -705,9 +636,9 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         input: &SendInput,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         if input.when_busy != WhenBusy::Reject && input.input_id.is_none() {
-            return Err(SessionError::invalid_input(format!(
+            return Err(SessionsError::invalid_input(format!(
                 "inputId is required when whenBusy is \"{}\".",
                 match input.when_busy {
                     WhenBusy::Reject => "reject",
@@ -750,7 +681,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         input: &FollowUpInput,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         let (_, descriptor) = self.require_session(session_id).await?;
         self.submit_or_queue(
             session_id,
@@ -771,7 +702,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         input: &SteerInput,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         let (_, descriptor) = self.require_session(session_id).await?;
         self.submit_or_queue(
             session_id,
@@ -796,12 +727,12 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         input: &SteerInput,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         let (_, descriptor) = self.require_session(session_id).await?;
         let input_id = input
             .input_id
             .clone()
-            .ok_or_else(|| SessionError::invalid_input("inputId is required to steer."))?;
+            .ok_or_else(|| SessionsError::invalid_input("inputId is required to steer."))?;
         if let Some(prior) = self
             .prior_receipt(session_id, QueueKind::Steer, &input_id, &input.content)
             .await?
@@ -847,13 +778,11 @@ impl AgentSessionService {
                         self.now_ms(),
                     )
                     .await;
-                Err(SessionError::new(
-                    "chat_idle",
-                    format!("Session {session_id} has no live turn to steer."),
-                ))
+                Err(SessionsError::chat_idle(format!(
+                    "Session {session_id} has no live turn to steer."
+                )))
             }
-            QueueAdmission::Staged(_) => Err(SessionError::new(
-                "chat_idle",
+            QueueAdmission::Staged(_) => Err(SessionsError::chat_idle(
                 "unexpected staged turn from a live-only steer",
             )),
         }
@@ -861,7 +790,7 @@ impl AgentSessionService {
 
     /// Convert the oldest queued input into a turn. Refused with `chat_busy`
     /// while the session has unfinished work; `None` when nothing is queued.
-    pub async fn flush_queue(&self, session_id: &str) -> SessionResult<Option<AgentSendResult>> {
+    pub async fn flush_queue(&self, session_id: &str) -> SessionsResult<Option<AgentSendResult>> {
         let (_, descriptor) = self.require_session(session_id).await?;
         let turn_kind = session_turn_kind(&descriptor);
         self.require_executable(&turn_kind)?;
@@ -881,7 +810,7 @@ impl AgentSessionService {
         // turn; the staged conversion's busy check stays the authoritative
         // guard.
         if self.active_turn(session_id, &turn_kind).await?.is_some() {
-            return Err(SessionError::chat_busy(session_id));
+            return Err(SessionsError::chat_busy(session_id));
         }
         for candidate in self
             .queue_candidates(session_id, &descriptor, &turn_kind, None)
@@ -916,7 +845,7 @@ impl AgentSessionService {
         descriptor: &Value,
         turn_kind: &str,
         settling: Option<&str>,
-    ) -> SessionResult<Vec<StageQueuedTurn>> {
+    ) -> SessionsResult<Vec<StageQueuedTurn>> {
         let pending = self
             .store()
             .list_inputs(AgentInputQuery {
@@ -990,7 +919,7 @@ impl AgentSessionService {
 
     // -- turn lifecycle -------------------------------------------------------
 
-    pub async fn cancel(&self, session_id: &str, turn_id: &str) -> SessionResult<()> {
+    pub async fn cancel(&self, session_id: &str, turn_id: &str) -> SessionsResult<()> {
         self.require_turn(session_id, turn_id).await?;
         self.store().cancel_task(turn_id, self.now_ms()).await?;
         // Unconditional: a turn can park between any pre-cancel status read
@@ -1010,7 +939,7 @@ impl AgentSessionService {
     /// Stop a turn RESUMABLY (distinct from [`Self::cancel`]): the turn parks
     /// `interrupted` with its id, events and records intact, and
     /// [`Self::resume`] continues it with a new attempt.
-    pub async fn interrupt(&self, session_id: &str, turn_id: &str) -> SessionResult<()> {
+    pub async fn interrupt(&self, session_id: &str, turn_id: &str) -> SessionsResult<()> {
         self.require_turn(session_id, turn_id).await?;
         self.store()
             .request_interrupt(turn_id.to_owned(), self.now_ms())
@@ -1020,16 +949,13 @@ impl AgentSessionService {
     }
 
     /// Continue an interrupted turn; any other status is `invalid_state`.
-    pub async fn resume(&self, session_id: &str, turn_id: &str) -> SessionResult<()> {
+    pub async fn resume(&self, session_id: &str, turn_id: &str) -> SessionsResult<()> {
         let task = self.require_turn(session_id, turn_id).await?;
         if task.status != TaskStatus::Interrupted {
-            return Err(SessionError::new(
-                "invalid_state",
-                format!(
-                    "Turn {turn_id} is {:?}; only an interrupted turn can resume.",
-                    task.status
-                ),
-            ));
+            return Err(SessionsError::invalid_state(format!(
+                "Turn {turn_id} is {:?}; only an interrupted turn can resume.",
+                task.status
+            )));
         }
         self.store().resume_task(turn_id, self.now_ms()).await?;
         self.wake();
@@ -1038,7 +964,7 @@ impl AgentSessionService {
 
     // -- reports ---------------------------------------------------------------
 
-    pub async fn list_turns(&self, session_id: &str) -> SessionResult<Vec<Value>> {
+    pub async fn list_turns(&self, session_id: &str) -> SessionsResult<Vec<Value>> {
         let (_, descriptor) = self.require_session(session_id).await?;
         Ok(
             list_turn_tasks(self.store(), session_id, &session_turn_kind(&descriptor))
@@ -1049,13 +975,13 @@ impl AgentSessionService {
         )
     }
 
-    pub async fn get_usage(&self, session_id: &str) -> SessionResult<Value> {
+    pub async fn get_usage(&self, session_id: &str) -> SessionsResult<Value> {
         let (_, descriptor) = self.require_session(session_id).await?;
         session_usage(self.store(), session_id, &descriptor).await
     }
 
     /// A JSON-serializable history: active-path messages, turns, inputs.
-    pub async fn export_session(&self, session_id: &str) -> SessionResult<Value> {
+    pub async fn export_session(&self, session_id: &str) -> SessionsResult<Value> {
         let (chat, descriptor) = self.require_session(session_id).await?;
         report::export_session(
             self.store(),
@@ -1070,29 +996,29 @@ impl AgentSessionService {
     // -- human requests ---------------------------------------------------------
 
     /// Record the answer and re-admit the parked turn, then poke the queue.
-    pub async fn answer(&self, input: &AnswerInput) -> SessionResult<AnswerReceipt> {
+    pub async fn answer(&self, input: &AnswerInput) -> SessionsResult<AnswerReceipt> {
         let request = self
             .store()
             .get_input(input.request_id.clone())
             .await?
             .filter(|record| record.kind == AgentInputKind::HumanRequest)
             .ok_or_else(|| {
-                SessionError::new(
-                    "not_found",
-                    format!("Human request not found: {}", input.request_id),
-                )
+                SessionsError::InputNotFound(format!(
+                    "Human request not found: {}",
+                    input.request_id
+                ))
             })?;
         self.require_session(&request.session_id).await?;
         let response_hash = sha256_hex(
             &serde_json::to_string(&input.response)
-                .map_err(|error| SessionError::invalid_input(error.to_string()))?,
+                .map_err(|error| SessionsError::invalid_input(error.to_string()))?,
         );
         // The TypeScript authority's transaction reads the answer's SHAPE
         // before any stale gate speaks (its `readDecision` runs first), so a
         // malformed approval answer to a cancelled request is
         // `invalid_input`, never `answer_stale`.
         agentkit_store::check_approval_answer_shape(&request.content, &input.response)
-            .map_err(SessionError::from)?;
+            .map_err(SessionsError::from)?;
         // `assertRememberEligible` is the other pre-transaction refusal: a
         // PENDING approval that promises to remember an unofferable call is
         // refused up front, before the stale gates classify it.
@@ -1101,7 +1027,7 @@ impl AgentSessionService {
             && input.response.get("remember") == Some(&Value::Bool(true))
             && agentkit_store::read_standing_key(&request.content).is_none()
         {
-            return Err(SessionError::invalid_input(
+            return Err(SessionsError::invalid_input(
                 "This call is not eligible for a standing approval.",
             ));
         }
@@ -1158,10 +1084,10 @@ impl AgentSessionService {
                 let mode = policy
                     .granted_mode(&session_id)
                     .await
-                    .map_err(|error| SessionError::new("invalid_input", error.to_string()))?;
+                    .map_err(|error| SessionsError::InvalidInputContext(Box::new(error)))?;
                 if mode == "plan" || mode.is_empty() {
                     // The escalation is OUT of plan mode, never a destination.
-                    return Err(SessionError::invalid_input(
+                    return Err(SessionsError::invalid_input(
                         "a plan approval may not grant plan mode: it is the escalation out of it, not a destination.",
                     ));
                 }
@@ -1174,7 +1100,7 @@ impl AgentSessionService {
                         requested_mode: plan["requestedMode"].as_str(),
                     })
                     .await
-                    .map_err(|error| SessionError::new("invalid_input", error.to_string()))?
+                    .map_err(|error| SessionsError::InvalidInputContext(Box::new(error)))?
                 {
                     PlanAuthorization::Allowed => granted_mode = Some(mode),
                     PlanAuthorization::Denied(reason) => {
@@ -1197,7 +1123,7 @@ impl AgentSessionService {
             .store()
             .get_task(&task_id)
             .await
-            .map_err(SessionError::from)?;
+            .map_err(SessionsError::from)?;
         if !matches!(&task, Some(task) if task.status == TaskStatus::WaitingApproval) {
             return Err(answer_stale(
                 &input.request_id,
@@ -1242,7 +1168,7 @@ impl AgentSessionService {
         answer_id: &str,
         note: Option<&str>,
         remember: Option<bool>,
-    ) -> SessionResult<AnswerReceipt> {
+    ) -> SessionsResult<AnswerReceipt> {
         let mut response = Map::new();
         response.insert("decision".into(), "approve".into());
         if let Some(note) = note {
@@ -1265,7 +1191,7 @@ impl AgentSessionService {
         request_id: &str,
         answer_id: &str,
         note: Option<&str>,
-    ) -> SessionResult<AnswerReceipt> {
+    ) -> SessionsResult<AnswerReceipt> {
         let mut response = Map::new();
         response.insert("decision".into(), "deny".into());
         if let Some(note) = note {
@@ -1281,7 +1207,7 @@ impl AgentSessionService {
 
     /// Every standing approval of the session, revoked ones included, newest
     /// first.
-    pub async fn list_approval_grants(&self, session_id: &str) -> SessionResult<Vec<Value>> {
+    pub async fn list_approval_grants(&self, session_id: &str) -> SessionsResult<Vec<Value>> {
         let (chat, _) = self.require_session(session_id).await?;
         let mut grants = standing_grants(&chat.metadata);
         grants.reverse();
@@ -1294,7 +1220,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         grant_id: &str,
-    ) -> SessionResult<Value> {
+    ) -> SessionsResult<Value> {
         self.require_session(session_id).await?;
         Ok(self
             .store()
@@ -1305,7 +1231,7 @@ impl AgentSessionService {
     // -- deferred compaction, queue maintenance, configuration -------------------
 
     /// Request deferred compaction at the next session turn (ADR 0017 part 2).
-    pub async fn compact(&self, session_id: &str) -> SessionResult<()> {
+    pub async fn compact(&self, session_id: &str) -> SessionsResult<()> {
         let (chat, descriptor) = self.require_session(session_id).await?;
         self.store()
             .request_compact(
@@ -1323,7 +1249,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         from_message_id: &str,
-    ) -> SessionResult<AgentSessionState> {
+    ) -> SessionsResult<AgentSessionState> {
         let (_, _) = self.require_session(session_id).await?;
         let forked_id = self.mint("chat_");
         self.store()
@@ -1376,16 +1302,16 @@ impl AgentSessionService {
         provider_id: Option<&str>,
         model: &str,
         reasoning_effort: Option<Option<&str>>,
-    ) -> SessionResult<AgentSessionState> {
+    ) -> SessionsResult<AgentSessionState> {
         if model.is_empty() {
-            return Err(SessionError::invalid_input(
+            return Err(SessionsError::invalid_input(
                 "model must be a non-empty string.",
             ));
         }
         if let Some(Some(effort)) = &reasoning_effort
             && !REASONING_EFFORTS.contains(effort)
         {
-            return Err(SessionError::invalid_input(format!(
+            return Err(SessionsError::invalid_input(format!(
                 "reasoningEffort must be one of {}.",
                 REASONING_EFFORTS.join(", ")
             )));
@@ -1444,7 +1370,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         input_id: &str,
-    ) -> SessionResult<bool> {
+    ) -> SessionsResult<bool> {
         self.require_session(session_id).await?;
         let record = self
             .store()
@@ -1458,10 +1384,9 @@ impl AgentSessionService {
                     )
             })
             .ok_or_else(|| {
-                SessionError::new(
-                    "not_found",
-                    format!("Queued input {input_id} not found in {session_id}."),
-                )
+                SessionsError::InputNotFound(format!(
+                    "Queued input {input_id} not found in {session_id}."
+                ))
             })?;
         if record.status != AgentInputStatus::Pending {
             return Ok(false);
@@ -1481,7 +1406,7 @@ impl AgentSessionService {
 
     /// Cancel every pending queued follow-up and steer of the session. Human
     /// requests are untouched. Returns how many inputs were cancelled.
-    pub async fn clear_queue(&self, session_id: &str) -> SessionResult<usize> {
+    pub async fn clear_queue(&self, session_id: &str) -> SessionsResult<usize> {
         self.require_session(session_id).await?;
         let pending = self
             .store()
@@ -1522,11 +1447,11 @@ impl AgentSessionService {
         skills: Option<Vec<Value>>,
         context: Option<Value>,
         workspace_trusted: Option<bool>,
-    ) -> SessionResult<AgentSessionState> {
+    ) -> SessionsResult<AgentSessionState> {
         if workspace_trusted.is_some() {
             let (_, descriptor) = self.require_session(session_id).await?;
             if descriptor.get("workspace").is_none() {
-                return Err(SessionError::invalid_input(
+                return Err(SessionsError::invalid_input(
                     "workspaceTrusted needs a session with a workspace.",
                 ));
             }
@@ -1572,31 +1497,27 @@ impl AgentSessionService {
 
     // -- internals -----------------------------------------------------------
 
-    async fn require_session(&self, session_id: &str) -> SessionResult<(ChatRecord, Value)> {
+    async fn require_session(&self, session_id: &str) -> SessionsResult<(ChatRecord, Value)> {
         let chat = self.store().get_chat(session_id).await?;
         let descriptor = chat
             .as_ref()
             .and_then(|chat| read_session_descriptor(&chat.metadata));
         match (chat, descriptor) {
             (Some(chat), Some(descriptor)) => Ok((chat, descriptor)),
-            _ => Err(SessionError::new(
-                "session_not_found",
-                format!("Session not found: {session_id}"),
-            )),
+            _ => Err(SessionsError::session_not_found(format!(
+                "Session not found: {session_id}"
+            ))),
         }
     }
 
-    async fn require_turn(&self, session_id: &str, turn_id: &str) -> SessionResult<TaskRecord> {
+    async fn require_turn(&self, session_id: &str, turn_id: &str) -> SessionsResult<TaskRecord> {
         self.require_session(session_id).await?;
         self.store()
             .get_task(turn_id)
             .await?
             .filter(|task| task.scope_id == session_id)
             .ok_or_else(|| {
-                SessionError::new(
-                    "not_found",
-                    format!("Turn {turn_id} not found in {session_id}."),
-                )
+                SessionsError::TurnNotFound(format!("Turn {turn_id} not found in {session_id}."))
             })
     }
 
@@ -1604,7 +1525,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         turn_kind: &str,
-    ) -> SessionResult<Option<TaskRecord>> {
+    ) -> SessionsResult<Option<TaskRecord>> {
         Ok(self
             .store()
             .list_tasks(Some(session_id.to_owned()))
@@ -1613,7 +1534,7 @@ impl AgentSessionService {
             .find(|task| task.kind == turn_kind && !task.status.is_terminal()))
     }
 
-    async fn cancel_requests(&self, session_id: &str, turn_id: &str) -> SessionResult<()> {
+    async fn cancel_requests(&self, session_id: &str, turn_id: &str) -> SessionsResult<()> {
         let requests = self
             .store()
             .list_inputs(AgentInputQuery {
@@ -1662,7 +1583,7 @@ impl AgentSessionService {
         input_id: &str,
         kind: AgentInputKind,
         content: &Value,
-    ) -> SessionResult<Option<StagedCandidate>> {
+    ) -> SessionsResult<Option<StagedCandidate>> {
         let Some(content) = read_input_content(content) else {
             return Ok(None);
         };
@@ -1713,7 +1634,7 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         descriptor: &Value,
-    ) -> SessionResult<TurnStaging> {
+    ) -> SessionsResult<TurnStaging> {
         Ok(TurnStaging {
             kind: session_turn_kind(descriptor),
             config: Value::Object(self.turn_payload_base(session_id, descriptor).await?),
@@ -1730,7 +1651,7 @@ impl AgentSessionService {
         user_message_id: &str,
         assistant_message_id: &str,
         parent_message_id: Option<&str>,
-    ) -> SessionResult<Value> {
+    ) -> SessionsResult<Value> {
         let mut payload = self.turn_payload_base(session_id, descriptor).await?;
         if let Some(parent) = parent_message_id {
             payload.insert("parentMessageId".into(), parent.into());
@@ -1747,7 +1668,7 @@ impl AgentSessionService {
     /// checks live here so no path can stage a turn the native dispatch path
     /// cannot honor.
     /// Captures immutable profile/content and current session defaults before admission.
-    pub async fn snapshot_turn_configuration(&self, session_id: &str) -> SessionResult<Value> {
+    pub async fn snapshot_turn_configuration(&self, session_id: &str) -> SessionsResult<Value> {
         let (_, descriptor) = self.require_session(session_id).await?;
         Ok(Value::Object(
             self.turn_payload_base(session_id, &descriptor).await?,
@@ -1758,25 +1679,25 @@ impl AgentSessionService {
         &self,
         session_id: &str,
         descriptor: &Value,
-    ) -> SessionResult<Map<String, Value>> {
+    ) -> SessionsResult<Map<String, Value>> {
         let mut payload = Map::new();
         payload.insert("chatId".into(), session_id.into());
         payload.insert("sessionDescriptor".into(), descriptor.clone());
         let profile: crate::AgentProfile = match descriptor.get("profileSnapshot") {
             Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
-                SessionError::invalid_input(format!("Invalid profile snapshot: {e}"))
+                SessionsError::invalid_input(format!("Invalid profile snapshot: {e}"))
             })?,
             None => self
                 .deps
                 .profiles
                 .resolve(descriptor["profile"]["id"].as_str().unwrap_or_default())
-                .map_err(|e| SessionError::invalid_input(e.to_string()))?,
+                .map_err(|error| SessionsError::InvalidInputContext(Box::new(error)))?,
         };
         if descriptor["profile"]["digest"]
             .as_str()
             .is_some_and(|d| d != profile.digest())
         {
-            return Err(SessionError::invalid_input(
+            return Err(SessionsError::invalid_input(
                 "Profile snapshot digest mismatch.",
             ));
         }
@@ -1788,7 +1709,7 @@ impl AgentSessionService {
         let mut selection: crate::RunContentSelection = serde_json::from_value(
             session_content_selection(descriptor).unwrap_or_else(|| json!({})),
         )
-        .map_err(|e| SessionError::invalid_input(format!("Invalid content selection: {e}")))?;
+        .map_err(|e| SessionsError::invalid_input(format!("Invalid content selection: {e}")))?;
         for skill in &profile.resources.skills {
             if !selection
                 .skills
@@ -1800,7 +1721,7 @@ impl AgentSessionService {
         }
         if selection.template.is_some() || !selection.skills.is_empty() {
             let selection = serde_json::to_value(selection)
-                .map_err(|e| SessionError::invalid_input(e.to_string()))?;
+                .map_err(|e| SessionsError::invalid_input(e.to_string()))?;
             let snapshot = crate::run_content::freeze_run_content(
                 self.store(),
                 selection.clone(),
@@ -1808,7 +1729,7 @@ impl AgentSessionService {
                 self.deps.content_authority.as_ref(),
             )
             .await
-            .map_err(|e| SessionError::invalid_input(e.to_string()))?;
+            .map_err(|error| SessionsError::InvalidInputContext(Box::new(error)))?;
             payload.insert("contentSelection".into(), selection);
             payload.insert("contentSnapshot".into(), snapshot);
         }
@@ -1841,8 +1762,8 @@ impl AgentSessionService {
                 factory.snapshot(provider, model, cancel),
             )
             .await
-            .map_err(|_| SessionError::invalid_input("provider_snapshot_timeout"))?
-            .map_err(|error| SessionError::invalid_input(error.to_string()))?;
+            .map_err(|_| SessionsError::invalid_input("provider_snapshot_timeout"))?
+            .map_err(|error| SessionsError::InvalidInputContext(Box::new(error)))?;
             if let Some(snapshot) = snapshot {
                 payload.insert("providerSnapshot".into(), snapshot);
             }
@@ -1898,7 +1819,7 @@ impl AgentSessionService {
         kind: QueueKind,
         content: Value,
         intent: QueueIntent,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         if let Some(existing) = &intent.input_id
             && let Some(prior) = self
                 .prior_receipt(session_id, kind, existing, &content)
@@ -1914,7 +1835,10 @@ impl AgentSessionService {
                 self.wake();
                 Ok(result)
             }
-            Err(error) if error.code == "chat_busy" => {
+            Err(SessionsError::ChatBusy(_))
+            | Err(SessionsError::SessionStore(crate::SessionStoreError(
+                agentkit_store::StoreError::ScopeBusy(_),
+            ))) => {
                 self.enqueue_input(session_id, descriptor, kind, content, intent)
                     .await
             }
@@ -1937,7 +1861,7 @@ impl AgentSessionService {
         kind: QueueKind,
         content: Value,
         intent: QueueIntent,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         // The queue-or-stage transaction admits input+task+messages as ONE
         // batch, so the registry check runs before it: a refused admission
         // leaves no input row behind either.
@@ -1947,8 +1871,8 @@ impl AgentSessionService {
             turn_id,
             on_settled,
         } = intent;
-        let input_id =
-            input_id.ok_or_else(|| SessionError::invalid_input("inputId is required to queue."))?;
+        let input_id = input_id
+            .ok_or_else(|| SessionsError::invalid_input("inputId is required to queue."))?;
         // An explicit target is validated up front (a steer aimed at a turn
         // that never existed is `not_found`); with none, the store names the
         // live turn it actually finds, so the running turn sees its steer at
@@ -1960,10 +1884,9 @@ impl AgentSessionService {
                     .await?
                     .filter(|task| task.scope_id == session_id)
                     .ok_or_else(|| {
-                        SessionError::new(
-                            "not_found",
-                            format!("Turn {target} not found in {session_id}."),
-                        )
+                        SessionsError::TurnNotFound(format!(
+                            "Turn {target} not found in {session_id}."
+                        ))
                     })?;
                 Some(target.clone())
             }
@@ -2028,7 +1951,7 @@ impl AgentSessionService {
         kind: QueueKind,
         input_id: &str,
         content: &Value,
-    ) -> SessionResult<Option<AgentSendResult>> {
+    ) -> SessionsResult<Option<AgentSendResult>> {
         if let Some(existing) = self.store().get_input(input_id.to_owned()).await? {
             // createInput is the idempotency check: same input replays, a
             // different one is `input_conflict`.
@@ -2060,7 +1983,7 @@ impl AgentSessionService {
         Ok(turn.map(turn_result))
     }
 
-    async fn receipt_of(&self, record: AgentInputRecord) -> SessionResult<AgentSendResult> {
+    async fn receipt_of(&self, record: AgentInputRecord) -> SessionsResult<AgentSendResult> {
         if record.status == AgentInputStatus::Converted
             && let Some(applied) = &record.applied_task_id
             && let Some(task) = self.store().get_task(applied).await?
@@ -2083,7 +2006,7 @@ impl AgentSessionService {
         descriptor: &Value,
         content: &Value,
         input_id: Option<&str>,
-    ) -> SessionResult<AgentSendResult> {
+    ) -> SessionsResult<AgentSendResult> {
         // Refused before the first mint: a turn whose kind no executor
         // handles would be a task+messages batch the worker can never
         // claim. Nothing above this line writes.
@@ -2185,7 +2108,8 @@ impl agentkit_engine::SessionFlushPlanner<agentkit_store::SqliteStore> for Agent
         &self,
         settling: &TaskRecord,
         completed: bool,
-    ) -> crate::HostResult<agentkit_store::SessionSettle> {
+    ) -> agentkit_engine::EngineResult<agentkit_store::SessionSettle, agentkit_store::StoreError>
+    {
         let none = || agentkit_store::SessionSettle {
             expected_descriptor: None,
             staging: None,

@@ -1,4 +1,4 @@
-use crate::{ExecutionContext, HostError, HostResult};
+use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_core::{ChatMessage, ChatRequest, CoreError};
 use serde_json::{Value, json};
 
@@ -10,7 +10,7 @@ pub(crate) struct ContextBudget {
 }
 
 /// A native connection snapshot binds model metadata independently of live catalogs.
-fn frozen_provider_window(payload: &Value, model: &str) -> HostResult<Option<u64>> {
+fn frozen_provider_window(payload: &Value, model: &str) -> ChatResult<Option<u64>> {
     let snapshot = &payload["providerSnapshot"];
     if snapshot["model"].as_str() != Some(model) {
         return Ok(None);
@@ -25,7 +25,7 @@ fn frozen_provider_window(payload: &Value, model: &str) -> HostResult<Option<u64
             value
                 .as_u64()
                 .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
-                .ok_or_else(|| HostError::Execution("invalid_provider_context_window".into()))
+                .ok_or_else(|| ChatError::InvalidProviderContextWindow)
         })
         .transpose()
 }
@@ -40,12 +40,12 @@ fn frozen_provider_window(payload: &Value, model: &str) -> HostResult<Option<u64
 pub(crate) async fn effective_session_descriptor(
     context: &ExecutionContext,
     chat_id: &str,
-) -> HostResult<Option<Value>> {
+) -> ChatResult<Option<Value>> {
     if let Some(snapshot) = context.task.payload.get("sessionDescriptor") {
         let metadata = json!({"agentkit.session": snapshot});
         return crate::read_session_descriptor(&metadata)
             .map(Some)
-            .ok_or_else(|| HostError::Execution("session_context_invalid".into()));
+            .ok_or_else(|| ChatError::SessionContextInvalid);
     }
     let descriptor = context
         .store
@@ -64,7 +64,7 @@ pub(crate) async fn effective_session_descriptor(
         context.task.payload.get("sessionContext"),
     )
     .map(Some)
-    .ok_or_else(|| HostError::Execution("session_context_invalid".into()))
+    .ok_or_else(|| ChatError::SessionContextInvalid)
 }
 
 /// What the provider-facing history is assembled from (ADR 0017 part 1):
@@ -82,7 +82,7 @@ pub(crate) struct ContextAssembly {
 pub(crate) async fn resolve_context_assembly(
     context: &ExecutionContext,
     chat_id: &str,
-) -> HostResult<ContextAssembly> {
+) -> ChatResult<ContextAssembly> {
     let descriptor = effective_session_descriptor(context, chat_id).await?;
     let options = descriptor
         .as_ref()
@@ -109,7 +109,7 @@ impl ContextBudget {
         chat_id: &str,
         provider: &str,
         model: &str,
-    ) -> HostResult<Option<Self>> {
+    ) -> ChatResult<Option<Self>> {
         let descriptor = effective_session_descriptor(context, chat_id)
             .await?
             .unwrap_or_else(|| json!({}));
@@ -119,9 +119,7 @@ impl ContextBudget {
                     snapshot
                         .as_u64()
                         .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
-                        .ok_or_else(|| {
-                            HostError::Execution("invalid_context_window_snapshot".into())
-                        })?,
+                        .ok_or_else(|| ChatError::InvalidContextWindowSnapshot)?,
                     // A frozen per-turn override is part of the admitted descriptor authority.
                     "descriptor",
                 )

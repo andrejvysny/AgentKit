@@ -61,9 +61,13 @@ async fn durable_event_failure_does_not_skip_later_usage_metering() {
         async move {
             attempts.lock().unwrap().push(item.clone());
             let event_result = if item == json!(1) {
-                Err(HostError::Execution("first event failed".into()))
+                Err(ChatError::External(Box::new(std::io::Error::other(
+                    "first event failed",
+                ))))
             } else if item == json!(2) {
-                Err(HostError::Execution("second event failed".into()))
+                Err(ChatError::External(Box::new(std::io::Error::other(
+                    "second event failed",
+                ))))
             } else {
                 Ok(())
             };

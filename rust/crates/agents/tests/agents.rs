@@ -6,7 +6,6 @@
 use agentkit_agents::*;
 use agentkit_engine::Runtime;
 
-use agentkit_sessions::*;
 use agentkit_store::*;
 use serde_json::json;
 use std::sync::Arc;
@@ -178,10 +177,7 @@ async fn update_derives_model_change_only_when_the_model_moved() {
         .update("prov", 2, definition("prov"))
         .await
         .unwrap_err();
-    assert!(matches!(
-        error,
-        AgentsError::Host(HostError::Store(StoreError::Conflict(_)))
-    ));
+    assert!(matches!(error, AgentsError::Store(StoreError::Conflict(_))));
 }
 
 #[tokio::test]
@@ -194,15 +190,13 @@ async fn lifecycle_admission_and_retention_flow_through_the_service() {
     let error = service.check_admission("life").await.unwrap_err();
     assert!(matches!(
         &error,
-        AgentsError::Host(HostError::Store(StoreError::InvalidTransition(message)))
+        AgentsError::Store(StoreError::InvalidTransition(message))
             if message.starts_with("agent_archived: life")
     ));
     // Archived agents cannot be edited.
     assert!(matches!(
         service.update("life", 1, definition("life")).await,
-        Err(AgentsError::Host(HostError::Store(
-            StoreError::InvalidTransition(_)
-        )))
+        Err(AgentsError::Store(StoreError::InvalidTransition(_)))
     ));
     service.restore("life").await.unwrap();
     assert!(service.check_admission("life").await.is_ok());
@@ -293,16 +287,16 @@ async fn lifecycle_admission_and_retention_flow_through_the_service() {
     assert_eq!(tombstone.lifecycle, AgentLifecycle::Deleted);
     assert!(matches!(
         service.get("life").await,
-        Err(AgentsError::Host(HostError::NotFound(message))) if message.starts_with("agent_not_found: life")
+        Err(AgentsError::AgentNotFound(message)) if message == "life"
     ));
     assert!(matches!(
         service.check_admission("life").await,
-        Err(AgentsError::Host(HostError::Store(StoreError::NotFound(_))))
+        Err(AgentsError::Store(StoreError::NotFound(_)))
     ));
     // Duplicate of a missing agent is the same stable not-found.
     assert!(matches!(
         service.duplicate("ghost", None).await,
-        Err(AgentsError::Host(HostError::Store(StoreError::NotFound(_))))
+        Err(AgentsError::Store(StoreError::NotFound(_)))
     ));
 }
 
@@ -359,15 +353,11 @@ async fn duplicate_strips_credentials_and_export_import_round_trips() {
     // Cross-scope and duplicate identities refuse at the boundary too.
     assert!(matches!(
         import_service.import(&envelope, "other-team").await,
-        Err(AgentsError::Host(HostError::Store(
-            StoreError::InvalidImport { .. }
-        )))
+        Err(AgentsError::Store(StoreError::InvalidImport { .. }))
     ));
     assert!(matches!(
         import_service.import(&envelope, "team").await,
-        Err(AgentsError::Host(HostError::Store(StoreError::Duplicate(
-            _
-        ))))
+        Err(AgentsError::Store(StoreError::Duplicate(_)))
     ));
     // Malformed payloads are invalid imports with a useful reason.
     let error = import_service.import("nope", "team").await.unwrap_err();

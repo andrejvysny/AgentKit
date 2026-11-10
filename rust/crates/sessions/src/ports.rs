@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::HostResult;
+use crate::SessionsResult;
 
 #[async_trait]
 pub trait ChatProviderFactory: Send + Sync {
@@ -15,12 +15,12 @@ pub trait ChatProviderFactory: Send + Sync {
         _provider_id: &str,
         _model: &str,
         _cancel: CancellationToken,
-    ) -> HostResult<Option<Value>> {
+    ) -> SessionsResult<Option<Value>> {
         Ok(None)
     }
     async fn resolve(
         &self,
         snapshot: &Value,
         cancel: CancellationToken,
-    ) -> HostResult<Arc<dyn agentkit_core::ChatProvider>>;
+    ) -> SessionsResult<Arc<dyn agentkit_core::ChatProvider>>;
 }

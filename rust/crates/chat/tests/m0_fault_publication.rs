@@ -73,7 +73,7 @@ async fn a_rejected_publication_commits_nothing() {
         )
         .await;
     assert!(
-        matches!(&regressing, Err(StoreError::InvalidInput(reason)) if reason.starts_with("event seq must be")),
+        matches!(&regressing, Err(StoreError::TaskInput { reason: agentkit_engine::TaskInputReason::EventSequence, message }) if message.starts_with("event seq must be")),
         "a regressing sequence must be refused, got {regressing:?}"
     );
     rejected += 1;

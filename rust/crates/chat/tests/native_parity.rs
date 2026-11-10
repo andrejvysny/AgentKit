@@ -41,7 +41,7 @@ impl ContentAuthority for Authority {
         &self,
         _: &str,
         _: CancellationToken,
-    ) -> HostResult<Vec<String>> {
+    ) -> agentkit_sessions::SessionsResult<Vec<String>> {
         Ok(if self.0.load(Ordering::SeqCst) {
             vec!["github".into()]
         } else {
@@ -323,7 +323,7 @@ impl ContentAuthority for ScopedAuthority {
         &self,
         _: &str,
         _: CancellationToken,
-    ) -> HostResult<Vec<String>> {
+    ) -> agentkit_sessions::SessionsResult<Vec<String>> {
         Ok(self.grants.lock().unwrap().clone())
     }
     async fn authority_identity(
@@ -331,7 +331,7 @@ impl ContentAuthority for ScopedAuthority {
         _: &str,
         required: &[String],
         _: CancellationToken,
-    ) -> HostResult<Value> {
+    ) -> agentkit_sessions::SessionsResult<Value> {
         Ok(json!({"required":required,"generation":self.generation.load(Ordering::SeqCst)}))
     }
 }
@@ -387,7 +387,7 @@ struct AwaitUsage {
 }
 #[async_trait]
 impl UsageAuthorizer for AwaitUsage {
-    async fn authorize(&self, _: &str, _: &Value) -> HostResult<()> {
+    async fn authorize(&self, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
         self.entered.notify_one();
         self.release.notified().await;
         Ok(())

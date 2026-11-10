@@ -1,5 +1,5 @@
 //! Host-owned profiles. Sessions freeze resolved data, never mutable registry references.
-use crate::{HostError, HostResult};
+use crate::{SessionsError, SessionsResult};
 use agentkit_core::{ReasoningEffort, ToolRegistry};
 use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
@@ -54,12 +54,12 @@ pub struct AgentProfile {
     pub resources: AgentResources,
 }
 
-fn invalid(message: impl std::fmt::Display) -> HostError {
-    HostError::Execution(format!("invalid_profile: {message}"))
+fn invalid(message: impl std::fmt::Display) -> SessionsError {
+    SessionsError::InvalidProfile(message.to_string())
 }
 
 impl AgentProfile {
-    pub fn validate(&self) -> HostResult<()> {
+    pub fn validate(&self) -> SessionsResult<()> {
         if self.id.is_empty()
             || agentkit_core::permission::CodingMode::parse(&self.permission_mode).is_none()
             || !["chat", "coding", "research", "automation"].contains(&self.kind.as_str())
@@ -132,7 +132,7 @@ impl AgentProfile {
         sha256_hex(serde_json::to_vec(self).expect("profile serialization"))
     }
 
-    pub fn filter_tools(&self, registry: &ToolRegistry) -> HostResult<Arc<ToolRegistry>> {
+    pub fn filter_tools(&self, registry: &ToolRegistry) -> SessionsResult<Arc<ToolRegistry>> {
         let mut filtered = ToolRegistry::new();
         for definition in registry.definitions() {
             if !self.tools.contains(&definition.name) {
@@ -175,7 +175,7 @@ impl Default for ProfileRegistry {
 
 impl ProfileRegistry {
     /// Overrides inherit built-in fields of the same id. `extends` selects another parent.
-    pub fn new(overrides: &[Value]) -> HostResult<Self> {
+    pub fn new(overrides: &[Value]) -> SessionsResult<Self> {
         let builtins: Vec<Value> =
             serde_json::from_str(include_str!("profiles_builtin.json")).expect("built-in data");
         let base: BTreeMap<String, Value> = builtins
@@ -203,7 +203,7 @@ impl ProfileRegistry {
                 profile.validate()?;
                 Ok((id, profile))
             })
-            .collect::<HostResult<_>>()?;
+            .collect::<SessionsResult<_>>()?;
         Ok(Self { profiles })
     }
 
@@ -211,7 +211,7 @@ impl ProfileRegistry {
         self.profiles.values().cloned().collect()
     }
 
-    pub fn resolve(&self, id: &str) -> HostResult<AgentProfile> {
+    pub fn resolve(&self, id: &str) -> SessionsResult<AgentProfile> {
         self.profiles
             .get(id)
             .cloned()
@@ -244,7 +244,7 @@ fn resolve(
     definitions: &BTreeMap<String, Value>,
     resolved: &mut BTreeMap<String, Value>,
     visiting: &mut HashSet<String>,
-) -> HostResult<Value> {
+) -> SessionsResult<Value> {
     if !visiting.insert(id.to_owned()) {
         return Err(invalid("inheritance cycle"));
     }
@@ -272,7 +272,7 @@ fn resolve(
 }
 
 /// A task's immutable profile must match the descriptor identity captured at admission.
-pub fn task_profile(payload: &Value) -> HostResult<Option<AgentProfile>> {
+pub fn task_profile(payload: &Value) -> SessionsResult<Option<AgentProfile>> {
     let Some(snapshot) = payload.get("profileSnapshot") else {
         return Ok(None);
     };

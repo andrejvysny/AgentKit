@@ -1,5 +1,5 @@
 //! Selected managed content is frozen before turn admission, outside chat history.
-use crate::{ExecutionContext, HostError, HostResult};
+use crate::{ExecutionContext, SessionsError, SessionsResult};
 use agentkit_core::ChatMessage;
 use agentkit_kernel::sha256_hex;
 use agentkit_store::SqliteStore;
@@ -16,14 +16,14 @@ pub trait ContentAuthority: Send + Sync {
         &self,
         chat_id: &str,
         cancel: CancellationToken,
-    ) -> HostResult<Vec<String>>;
+    ) -> SessionsResult<Vec<String>>;
     /// Hosts with account-scoped grants return their exact selected grant identities.
     async fn authority_identity(
         &self,
         _chat_id: &str,
         required_connectors: &[String],
         _cancel: CancellationToken,
-    ) -> HostResult<Value> {
+    ) -> SessionsResult<Value> {
         Ok(serde_json::json!(required_connectors))
     }
 }
@@ -58,16 +58,16 @@ pub async fn freeze_run_content(
     selection: Value,
     chat_id: &str,
     authority: Option<&Arc<dyn ContentAuthority>>,
-) -> HostResult<Value> {
+) -> SessionsResult<Value> {
     let selection: RunContentSelection = serde_json::from_value(selection)
-        .map_err(|e| HostError::Execution(format!("invalid_content_selection: {e}")))?;
+        .map_err(|e| SessionsError::InvalidContentSelectionDetail(e.to_string()))?;
     if selection.skills.len() > 20
         || selection
             .skills
             .iter()
             .any(|s| s.id.is_empty() || s.revision.is_empty())
     {
-        return Err(HostError::Execution("invalid_content_selection".into()));
+        return Err(SessionsError::InvalidContentSelection);
     }
     let cancel = CancellationToken::new();
     let _cancel_on_drop = cancel.clone().drop_guard();
@@ -77,32 +77,36 @@ pub async fn freeze_run_content(
         .await
     {
         Ok(resolved) => resolved,
-        Err(agentkit_store::StoreError::InvalidInput(detail))
-            if detail == "Skill requires a selected authorized connector." =>
-        {
+        Err(agentkit_store::StoreError::ManagedInput {
+            reason: agentkit_store::ManagedInputReason::SelectedConnectorRequired,
+            ..
+        }) => {
             let grants = match authority {
                 Some(authority) => tokio::time::timeout(
                     std::time::Duration::from_secs(10),
                     authority.authorized_connectors(chat_id, cancel.clone()),
                 )
                 .await
-                .map_err(|_| HostError::Execution("content_authority_timeout".into()))??,
+                .map_err(|_| SessionsError::ContentAuthorityTimeout)??,
                 None => vec![],
             };
-            store.resolve_run_content(selected, grants, false).await?
+            store
+                .resolve_run_content(selected, grants, false)
+                .await
+                .map_err(SessionsError::Store)?
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(SessionsError::Store(error)),
     };
     let authorized_connectors: Vec<String> =
         serde_json::from_value(resolved["authorizedConnectors"].clone())
-            .map_err(|_| HostError::Execution("invalid_content_authority".into()))?;
+            .map_err(|_| SessionsError::InvalidContentAuthority)?;
     let authority_identity = match authority {
         Some(authority) if !authorized_connectors.is_empty() => tokio::time::timeout(
             std::time::Duration::from_secs(10),
             authority.authority_identity(chat_id, &authorized_connectors, cancel.clone()),
         )
         .await
-        .map_err(|_| HostError::Execution("content_authority_timeout".into()))??,
+        .map_err(|_| SessionsError::ContentAuthorityTimeout)??,
         _ => serde_json::json!(authorized_connectors),
     };
     let mut messages = Vec::new();
@@ -110,10 +114,10 @@ pub async fn freeze_run_content(
         messages.push(ChatMessage::text(
             message["role"]
                 .as_str()
-                .ok_or_else(|| HostError::Execution("invalid_content_message".into()))?,
+                .ok_or_else(|| SessionsError::InvalidContentMessage)?,
             message["content"]
                 .as_str()
-                .ok_or_else(|| HostError::Execution("invalid_content_message".into()))?,
+                .ok_or_else(|| SessionsError::InvalidContentMessage)?,
         ));
     }
     for block in resolved["blocks"].as_array().into_iter().flatten() {
@@ -121,7 +125,7 @@ pub async fn freeze_run_content(
             "system",
             block["content"]
                 .as_str()
-                .ok_or_else(|| HostError::Execution("invalid_content_block".into()))?,
+                .ok_or_else(|| SessionsError::InvalidContentBlock)?,
         ));
     }
     let mut snapshot = FrozenRunContent {
@@ -132,13 +136,13 @@ pub async fn freeze_run_content(
         digest: String::new(),
     };
     snapshot.digest = snapshot_digest(&snapshot);
-    serde_json::to_value(snapshot).map_err(|e| HostError::Execution(e.to_string()))
+    serde_json::to_value(snapshot).map_err(SessionsError::Json)
 }
 
 pub async fn selected_messages(
     context: &ExecutionContext,
     authority: Option<&Arc<dyn ContentAuthority>>,
-) -> HostResult<Vec<ChatMessage>> {
+) -> SessionsResult<Vec<ChatMessage>> {
     let Some(value) = context
         .task
         .payload
@@ -151,7 +155,7 @@ pub async fn selected_messages(
             .get("contentSelection")
             .is_some_and(|v| !v.is_null())
         {
-            return Err(HostError::Execution("content_snapshot_required".into()));
+            return Err(SessionsError::ContentSnapshotRequired);
         }
         return Ok(vec![]);
     };
@@ -161,8 +165,8 @@ pub async fn selected_messages(
     let _cancel_on_drop = cancel.clone().drop_guard();
     let authorized = match authority {
         Some(authority) if !snapshot.authorized_connectors.is_empty() => tokio::select! {
-            _ = context.cancellation.cancelled() => return Err(HostError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(10), authority.authorized_connectors(&context.task.scope_id, cancel.clone())) => result.map_err(|_| HostError::Execution("content_authority_timeout".into()))??,
+            _ = context.cancellation.cancelled() => return Err(SessionsError::Cancelled),
+            result = tokio::time::timeout(std::time::Duration::from_secs(10), authority.authorized_connectors(&context.task.scope_id, cancel.clone())) => result.map_err(|_| SessionsError::ContentAuthorityTimeout)??,
         },
         _ => vec![],
     };
@@ -171,7 +175,7 @@ pub async fn selected_messages(
         .iter()
         .any(|id| !authorized.contains(id))
     {
-        return Err(HostError::Execution("content_authority_revoked".into()));
+        return Err(SessionsError::ContentAuthorityRevoked);
     }
     let identity = match authority {
         Some(authority) if !snapshot.authorized_connectors.is_empty() => tokio::time::timeout(
@@ -183,23 +187,21 @@ pub async fn selected_messages(
             ),
         )
         .await
-        .map_err(|_| HostError::Execution("content_authority_timeout".into()))??,
+        .map_err(|_| SessionsError::ContentAuthorityTimeout)??,
         _ => serde_json::json!(snapshot.authorized_connectors),
     };
     if identity != snapshot.authority_identity {
-        return Err(HostError::Execution("content_authority_changed".into()));
+        return Err(SessionsError::ContentAuthorityChanged);
     }
     Ok(snapshot.messages)
 }
 
 /// Checks serialized identity and content integrity without granting dispatch authority.
-pub fn validate_frozen_run_content(value: &Value) -> HostResult<FrozenRunContent> {
+pub fn validate_frozen_run_content(value: &Value) -> SessionsResult<FrozenRunContent> {
     let snapshot: FrozenRunContent = serde_json::from_value(value.clone())
-        .map_err(|e| HostError::Execution(format!("invalid_content_snapshot: {e}")))?;
+        .map_err(|e| SessionsError::InvalidContentSnapshot(e.to_string()))?;
     if snapshot.digest != snapshot_digest(&snapshot) {
-        return Err(HostError::Execution(
-            "content_snapshot_digest_mismatch".into(),
-        ));
+        return Err(SessionsError::ContentSnapshotDigestMismatch);
     }
     Ok(snapshot)
 }

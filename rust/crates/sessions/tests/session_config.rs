@@ -3,7 +3,7 @@
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_sessions::{
     AgentHost, AgentSendResult, AgentSessionService, AgentSessionServiceDeps, CreateSessionInput,
-    ExecutionContext, HostOptions, HostResult, SendInput, WhenBusy,
+    ExecutionContext, HostOptions, SendInput, WhenBusy,
 };
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
@@ -127,7 +127,7 @@ async fn create_rejects_malformed_present_descriptor_values() {
             .create_session(&input)
             .await
             .expect_err(&format!("{what} accepted"));
-        assert_eq!(error.code, "invalid_input", "{what}");
+        assert_eq!(error.failure_event_code(), "invalid_input", "{what}");
     }
 }
 
@@ -174,12 +174,8 @@ async fn submit_refuses_missing_selected_skill_revision_before_admission() {
         .send("s1", &send_input(json!("hello"), "in-1", WhenBusy::Reject))
         .await
         .expect_err("selected Skills dispatched");
-    assert_eq!(error.code, "invalid_input");
-    assert!(
-        error
-            .message
-            .contains("Selected skill revision changed or disappeared")
-    );
+    assert_eq!(error.failure_event_code(), "invalid_input");
+    assert!(session_message(&error).contains("Selected skill revision changed or disappeared"));
     // Refused before any turn effect, like the HTTP assertion that a
     // rejected submit leaves no tasks and no messages behind.
     assert!(
@@ -199,12 +195,8 @@ async fn submit_refuses_missing_selected_skill_revision_before_admission() {
         .send("s1", &send_input(json!("hello"), "in-1", WhenBusy::Queue))
         .await
         .expect_err("selected Skills queued");
-    assert_eq!(queued.code, "invalid_input");
-    assert!(
-        queued
-            .message
-            .contains("Selected skill revision changed or disappeared")
-    );
+    assert_eq!(queued.failure_event_code(), "invalid_input");
+    assert!(session_message(&queued).contains("Selected skill revision changed or disappeared"));
     assert!(
         fixture
             .store
@@ -277,7 +269,7 @@ async fn submit_stages_context_assembly_overrides() {
         .configure("s1", None, Some(json!({"policy": "everything"})), None)
         .await
         .expect_err("invented policy accepted");
-    assert_eq!(error.code, "invalid_input");
+    assert_eq!(error.failure_event_code(), "invalid_input");
 }
 
 #[tokio::test]
@@ -325,7 +317,12 @@ async fn compact_records_deferred_request() {
     );
     // Unknown sessions keep the not-found answer.
     assert_eq!(
-        fixture.service.compact("ghost").await.unwrap_err().code,
+        fixture
+            .service
+            .compact("ghost")
+            .await
+            .unwrap_err()
+            .failure_event_code(),
         "session_not_found"
     );
 }
@@ -414,7 +411,7 @@ async fn reasoning_effort_patch_validates_and_keeps_state_on_rejection() {
         .set_model("s1", None, "model-b", Some(Some("ultra")))
         .await
         .expect_err("unknown effort accepted");
-    assert_eq!(error.code, "invalid_input");
+    assert_eq!(error.failure_event_code(), "invalid_input");
     let state = fixture.service.get_state("s1").await.unwrap();
     assert_eq!(state.descriptor["model"], json!("model-a"));
     assert_eq!(state.descriptor["reasoningEffort"], json!("medium"));
@@ -424,7 +421,7 @@ async fn reasoning_effort_patch_validates_and_keeps_state_on_rejection() {
             .set_model("s1", None, "", Some(Some("low")))
             .await
             .unwrap_err()
-            .code,
+            .failure_event_code(),
         "invalid_input"
     );
 }
@@ -518,7 +515,10 @@ struct CountingTurn(Arc<AtomicUsize>);
 
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for CountingTurn {
-    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        _context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -562,8 +562,8 @@ async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
         .send("s1", &send_input(json!("hello"), "in-0", WhenBusy::Reject))
         .await
         .expect_err("chat.turn has no executor here");
-    assert_eq!(error.code, "no_executor_for_kind");
-    assert!(error.message.contains("chat.turn"));
+    assert_eq!(error.failure_event_code(), "no_executor_for_kind");
+    assert!(session_message(&error).contains("chat.turn"));
     assert!(
         store
             .list_tasks(Some("s1".into()))
@@ -589,7 +589,7 @@ async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
         .send("s1", &send_input(json!("later"), "in-1", WhenBusy::Queue))
         .await
         .expect_err("the queue path is gated too");
-    assert_eq!(queued.code, "no_executor_for_kind");
+    assert_eq!(queued.failure_event_code(), "no_executor_for_kind");
     assert_eq!(
         store.list_tasks(Some("s1".into())).await.unwrap().len(),
         1,
@@ -604,7 +604,7 @@ async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
             .flush_queue("s1")
             .await
             .expect_err("promotion is an admission too")
-            .code,
+            .failure_event_code(),
         "no_executor_for_kind"
     );
 
@@ -625,4 +625,10 @@ async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
     .unwrap();
     assert!(runner.run_once().await.unwrap());
     assert_eq!(turns.load(Ordering::SeqCst), 1);
+}
+
+fn session_message(error: &agentkit_sessions::SessionsError) -> String {
+    let display = error.to_string();
+    let prefix = format!("{}: ", error.failure_event_code());
+    display.strip_prefix(&prefix).unwrap_or(&display).to_owned()
 }

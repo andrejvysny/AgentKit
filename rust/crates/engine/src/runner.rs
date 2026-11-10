@@ -236,9 +236,7 @@ impl<R: TaskRepository> AgentHost<R> {
             || options.concurrency == 0
             || options.poll_interval_ms == 0
         {
-            return Err(EngineError::Execution(
-                "invalid host execution limits".into(),
-            ));
+            return Err(EngineError::InvalidHostLimits);
         }
         options.retry_backoff.validate()?;
         Ok(Self {
@@ -435,7 +433,7 @@ impl<R: TaskRepository> AgentHost<R> {
             let mut failure = None;
             while let Some(result) = workers.join_next().await {
                 let result = result
-                    .map_err(|error| EngineError::Execution(error.to_string()))
+                    .map_err(EngineError::Worker)
                     .and_then(|result| result);
                 if let Err(error) = result {
                     stop.cancel();
@@ -607,7 +605,7 @@ impl<R: TaskRepository> AgentHost<R> {
                     hook.verify(context.clone()),
                 )
                 .await
-                .map_err(|_| EngineError::Execution("hook_timeout: verify".into()))??;
+                .map_err(|_| EngineError::VerificationTimeout)??;
                 context
                     .emit(
                         "run.verification",
@@ -981,7 +979,7 @@ impl<R: TaskRepository> AgentHost<R> {
         let now = self.runtime.now_ms();
         let available_at = now
             .checked_add(delay)
-            .ok_or_else(|| EngineError::Execution("retry deadline overflow".into()))?;
+            .ok_or_else(|| EngineError::RetryDeadlineOverflow)?;
         self.store
             .retry_task(RetryTask {
                 fence: context.fence.clone(),
@@ -1013,9 +1011,7 @@ impl<R: TaskRepository> WorkerHandle<R> {
     /// Waits for the worker without consuming the handle, so a caller can
     /// bound the wait, escalate with `interrupt_active`, and wait again.
     pub async fn join(&mut self) -> EngineResult<(), R::Error> {
-        (&mut self.task)
-            .await
-            .map_err(|error| EngineError::Execution(error.to_string()))?
+        (&mut self.task).await.map_err(EngineError::Worker)?
     }
 
     /// Hard-stops active runs for process shutdown: each run's execution
@@ -1034,8 +1030,6 @@ impl<R: TaskRepository> WorkerHandle<R> {
     /// Stops admissions and waits for admitted attempts to finish.
     pub async fn shutdown(self) -> EngineResult<(), R::Error> {
         self.stop().await;
-        self.task
-            .await
-            .map_err(|error| EngineError::Execution(error.to_string()))?
+        self.task.await.map_err(EngineError::Worker)?
     }
 }

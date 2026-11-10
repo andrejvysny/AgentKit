@@ -29,6 +29,11 @@ pub enum InMemoryRepositoryError {
     InvalidTransition(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("invalid input: {message}")]
+    TaskInput {
+        reason: agentkit_engine::TaskInputReason,
+        message: String,
+    },
     #[error("scope busy: {0}")]
     ScopeBusy(String),
     #[error("session descriptor changed while staging settlement: {0}")]
@@ -61,7 +66,14 @@ impl RepositoryFault for InMemoryRepositoryError {
 
     fn invalid_input(&self) -> Option<&str> {
         match self {
-            Self::InvalidInput(message) => Some(message),
+            Self::InvalidInput(message) | Self::TaskInput { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
+    fn task_input_reason(&self) -> Option<agentkit_engine::TaskInputReason> {
+        match self {
+            Self::TaskInput { reason, .. } => Some(*reason),
             _ => None,
         }
     }
@@ -303,9 +315,10 @@ impl State {
         }
         for dependency in input.depends_on.iter().chain(input.parent_task_id.iter()) {
             if self.find(dependency).is_none() {
-                return Err(Fault::InvalidInput(format!(
-                    "unknown dependency: {dependency}"
-                )));
+                return Err(Fault::TaskInput {
+                    reason: agentkit_engine::TaskInputReason::UnknownDependency,
+                    message: format!("unknown dependency: {dependency}"),
+                });
             }
         }
         let task = TaskRecord {
@@ -358,8 +371,9 @@ impl State {
                 .get("seq")
                 .and_then(Value::as_f64)
                 .filter(|seq| seq.is_finite() && *seq > previous)
-                .ok_or_else(|| {
-                    Fault::InvalidInput(format!("event seq must be greater than {previous}"))
+                .ok_or_else(|| Fault::TaskInput {
+                    reason: agentkit_engine::TaskInputReason::EventSequence,
+                    message: format!("event seq must be greater than {previous}"),
                 })?;
             let record = EventRecord {
                 task_id: task_id.into(),

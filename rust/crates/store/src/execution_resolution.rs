@@ -103,9 +103,7 @@ impl SqliteStore {
                     {
                         Ok(record)
                     }
-                    _ => Err(StoreError::InvalidTransition(format!(
-                        "{RECEIPT_NOT_UNCERTAIN}: execution {execution_id} is already finished"
-                    ))),
+                    _ => Err(StoreError::ReceiptTransition { reason: crate::ReceiptTransitionReason::NotUncertain, message: format!("{RECEIPT_NOT_UNCERTAIN}: execution {execution_id} is already finished") }),
                 };
             }
             // The authoritative check: a non-terminal run may still execute
@@ -114,10 +112,7 @@ impl SqliteStore {
             let active = get::<TaskRecord>(&transaction, "tasks", "id", &record.run_id)?
                 .is_some_and(|task| !task.status.is_terminal());
             if active {
-                return Err(StoreError::InvalidTransition(format!(
-                    "{RECEIPT_RUN_ACTIVE}: run {} is still active",
-                    record.run_id
-                )));
+                return Err(StoreError::ReceiptTransition { reason: crate::ReceiptTransitionReason::RunActive, message: format!("{RECEIPT_RUN_ACTIVE}: run {} is still active", record.run_id) });
             }
             record.status = match request.outcome {
                 ResolutionOutcome::Completed => ExecutionReceiptStatus::Completed,

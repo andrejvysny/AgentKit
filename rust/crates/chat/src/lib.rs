@@ -4,6 +4,7 @@ mod budget;
 mod chat;
 mod continuation;
 mod emulated_tool_call;
+mod error;
 mod governance;
 mod ports;
 mod project_instructions;
@@ -18,6 +19,7 @@ pub use chat::{
     CorrectionConfig, SubmitChat,
 };
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
+pub use error::{ChatError, ChatResult};
 pub use governance::{
     AUTO_APPLY_FAILED_MESSAGE, ContributorFailure, DurableExecution, GovernedProposalTool,
     MutatingPolicy, NATIVE_GOVERNANCE_IDENTITY_VERSION, ProposalBuild, ProposalBuilder,
@@ -51,7 +53,7 @@ use agentkit_engine::{
 
 use agentkit_sessions::{
     AgentHost, CHAT_TURN_TASK_KIND, ChatProviderFactory, ContentAuthority, ExecutionContext,
-    HostError, HostResult, RunHandle, VerificationInput, read_session_descriptor,
+    RunHandle, VerificationInput, read_session_descriptor,
 };
 
 #[cfg(test)]

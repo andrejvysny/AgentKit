@@ -9,6 +9,14 @@ use crate::{
 use async_trait::async_trait;
 use serde_json::Value;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskInputReason {
+    UnknownDependency,
+    EventSequence,
+    InvalidForkPoint,
+    ReplayIdentityMismatch,
+}
+
 /// How the engine tells repository faults apart without knowing the
 /// adapter's error enum. One predicate per fault the engine reacts to.
 pub trait RepositoryFault: std::error::Error + Send + Sync + 'static {
@@ -21,6 +29,7 @@ pub trait RepositoryFault: std::error::Error + Send + Sync + 'static {
     fn is_not_found(&self) -> bool;
     /// The message of an invalid-input refusal, when this fault is one.
     fn invalid_input(&self) -> Option<&str>;
+    fn task_input_reason(&self) -> Option<TaskInputReason>;
     /// The scope whose session descriptor changed while staging a
     /// settlement, when this fault is that conflict.
     fn session_conflict(&self) -> Option<&str>;

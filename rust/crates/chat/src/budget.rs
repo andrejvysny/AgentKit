@@ -1,4 +1,4 @@
-use crate::{ExecutionContext, HostError, HostResult};
+use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_core::{
     BudgetCheckpoint, BudgetLimits, BudgetSnapshot, CoreError, ExecutionBudget, Runtime,
 };
@@ -36,8 +36,8 @@ struct PersistedBudget {
     snapshot: BudgetSnapshot,
 }
 
-fn invalid(message: &str) -> HostError {
-    HostError::Execution(format!("invalid_budget: {message}"))
+fn invalid(message: &str) -> ChatError {
+    ChatError::InvalidBudget(message.to_string())
 }
 
 /// Per-role execution overrides a subagent child turn carries on its chat
@@ -59,7 +59,7 @@ pub struct RoleTaskOverrides {
 pub async fn task_overrides(
     store: &agentkit_store::SqliteStore,
     chat_id: &str,
-) -> HostResult<RoleTaskOverrides> {
+) -> ChatResult<RoleTaskOverrides> {
     let record = match store.get_chat(chat_id).await? {
         Some(chat) => chat,
         None => return Ok(RoleTaskOverrides::default()),
@@ -95,7 +95,7 @@ impl RoleTaskOverrides {
     }
 }
 
-fn known_fields(value: &Value, fields: &[&str]) -> HostResult<()> {
+fn known_fields(value: &Value, fields: &[&str]) -> ChatResult<()> {
     let object = value
         .as_object()
         .ok_or_else(|| invalid("expected object"))?;
@@ -105,7 +105,7 @@ fn known_fields(value: &Value, fields: &[&str]) -> HostResult<()> {
     Ok(())
 }
 
-pub fn parse_budget_limits(value: Option<&Value>) -> HostResult<BudgetLimits> {
+pub fn parse_budget_limits(value: Option<&Value>) -> ChatResult<BudgetLimits> {
     let Some(value) = value else {
         return Ok(BudgetLimits::default());
     };
@@ -113,7 +113,7 @@ pub fn parse_budget_limits(value: Option<&Value>) -> HostResult<BudgetLimits> {
     serde_json::from_value(value.clone()).map_err(|_| invalid("invalid budget limits"))
 }
 
-fn decode(value: Value) -> HostResult<PersistedBudget> {
+fn decode(value: Value) -> ChatResult<PersistedBudget> {
     known_fields(&value["limits"], LIMIT_FIELDS)?;
     known_fields(&value["snapshot"], SNAPSHOT_FIELDS)?;
     let record: PersistedBudget =
@@ -122,7 +122,7 @@ fn decode(value: Value) -> HostResult<PersistedBudget> {
     Ok(record)
 }
 
-fn validate(record: &PersistedBudget) -> HostResult<()> {
+fn validate(record: &PersistedBudget) -> ChatResult<()> {
     if record.version != 1 || record.snapshot.version != 1 {
         return Err(invalid("unsupported persisted budget version"));
     }
@@ -152,7 +152,7 @@ fn validate(record: &PersistedBudget) -> HostResult<()> {
     Ok(())
 }
 
-fn encode(record: &PersistedBudget) -> HostResult<Value> {
+fn encode(record: &PersistedBudget) -> ChatResult<Value> {
     serde_json::to_value(record).map_err(|_| invalid("budget serialization failed"))
 }
 
@@ -161,7 +161,7 @@ pub async fn restore_execution_budget(
     context: &ExecutionContext,
     limits: BudgetLimits,
     runtime: Arc<dyn Runtime>,
-) -> HostResult<Arc<ExecutionBudget>> {
+) -> ChatResult<Arc<ExecutionBudget>> {
     let task = context
         .store
         .get_task(&context.task.task_id)
@@ -187,9 +187,7 @@ pub async fn restore_execution_budget(
             .retries
             .is_some_and(|limit| record.snapshot.retries > limit)
         {
-            return Err(HostError::Execution(
-                "execution_budget_exhausted: retries".into(),
-            ));
+            return Err(ChatError::ExecutionBudgetExhaustedRetries);
         }
         record.attempt_number = task.attempt_count;
         record
@@ -291,7 +289,7 @@ impl BudgetCheckpoint for DurableCheckpoint {
     }
 }
 
-fn core_error(error: HostError) -> CoreError {
+fn core_error(error: ChatError) -> CoreError {
     CoreError::new("invalid_budget", &error.to_string())
 }
 

@@ -9,7 +9,7 @@ use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, To
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_sessions::{
     AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
-    CreateSessionInput, HostResult, PlanApprovalPolicy, SessionExecutionAuthority, WhenBusy,
+    CreateSessionInput, PlanApprovalPolicy, SessionExecutionAuthority, WhenBusy,
 };
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, ExecutionReceiptStatus, SqliteStore,
@@ -93,7 +93,7 @@ impl PlanApprovalPolicy for ToAsk {
     fn tool_names(&self) -> Vec<String> {
         vec!["submit_plan".into()]
     }
-    async fn granted_mode(&self, _: &str) -> HostResult<String> {
+    async fn granted_mode(&self, _: &str) -> agentkit_sessions::SessionsResult<String> {
         Ok("ask".into())
     }
 }

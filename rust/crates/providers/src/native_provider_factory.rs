@@ -134,31 +134,27 @@ impl agentkit_sessions::ChatProviderFactory for NativeProviderFactory {
         provider_id: &str,
         model: &str,
         cancel: CancellationToken,
-    ) -> agentkit_sessions::HostResult<Option<Value>> {
+    ) -> agentkit_sessions::SessionsResult<Option<Value>> {
         if cancel.is_cancelled() {
-            return Err(agentkit_sessions::HostError::Execution("cancelled".into()));
+            return Err(agentkit_sessions::SessionsError::ProviderCancelled);
         }
         let binding = self
             .binding
             .read()
-            .map_err(|_| {
-                agentkit_sessions::HostError::Execution("provider_authority_unavailable".into())
-            })?
+            .map_err(|_| agentkit_sessions::SessionsError::ProviderAuthorityUnavailable)?
             .clone();
         let Some(binding) = binding else {
             return self.static_snapshot(provider_id);
         };
         let id = agentkit_connections::ConnectionId::new(provider_id)
-            .map_err(|_| agentkit_sessions::HostError::Execution("invalid_provider_id".into()))?;
+            .map_err(|_| agentkit_sessions::SessionsError::InvalidProviderId)?;
         let selected = match binding.connections.get(&id) {
             Ok(connection) => connection,
             Err(agentkit_connections::ConnectionError::NotFound) => {
                 return self.static_snapshot(provider_id);
             }
             Err(_) => {
-                return Err(agentkit_sessions::HostError::Execution(
-                    "connection_changed".into(),
-                ));
+                return Err(agentkit_sessions::SessionsError::ConnectionChanged);
             }
         };
         let snapshot = json!({"connection":selected,"model":model});
@@ -176,36 +172,28 @@ impl agentkit_sessions::ChatProviderFactory for NativeProviderFactory {
         &self,
         snapshot: &Value,
         cancel: CancellationToken,
-    ) -> agentkit_sessions::HostResult<Arc<dyn ChatProvider>> {
+    ) -> agentkit_sessions::SessionsResult<Arc<dyn ChatProvider>> {
         if cancel.is_cancelled() {
-            return Err(agentkit_sessions::HostError::Execution("cancelled".into()));
+            return Err(agentkit_sessions::SessionsError::ProviderCancelled);
         }
         let binding = self
             .binding
             .read()
-            .map_err(|_| {
-                agentkit_sessions::HostError::Execution("provider_authority_unavailable".into())
-            })?
+            .map_err(|_| agentkit_sessions::SessionsError::ProviderAuthorityUnavailable)?
             .clone()
-            .ok_or_else(|| {
-                agentkit_sessions::HostError::Execution("provider_authority_unavailable".into())
-            })?;
-        let selected: Connection =
-            serde_json::from_value(snapshot["connection"].clone()).map_err(|_| {
-                agentkit_sessions::HostError::Execution("invalid_provider_snapshot".into())
-            })?;
+            .ok_or_else(|| agentkit_sessions::SessionsError::ProviderAuthorityUnavailable)?;
+        let selected: Connection = serde_json::from_value(snapshot["connection"].clone())
+            .map_err(|_| agentkit_sessions::SessionsError::InvalidProviderSnapshot)?;
         let current = binding
             .connections
             .get(&selected.id)
-            .map_err(|_| agentkit_sessions::HostError::Execution("connection_changed".into()))?;
+            .map_err(|_| agentkit_sessions::SessionsError::ConnectionChanged)?;
         let model = snapshot["model"]
             .as_str()
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| agentkit_sessions::HostError::Execution("unsupported_model".into()))?;
+            .ok_or_else(|| agentkit_sessions::SessionsError::UnsupportedModel)?;
         if current != selected || !current.config.enabled {
-            return Err(agentkit_sessions::HostError::Execution(
-                "connection_changed".into(),
-            ));
+            return Err(agentkit_sessions::SessionsError::ConnectionChanged);
         }
         let protocol = protocol(snapshot, &selected)?;
         let capability = if protocol == "responses" {
@@ -234,18 +222,19 @@ impl agentkit_sessions::ChatProviderFactory for NativeProviderFactory {
             ChatCompletionsProvider::new(transport)
                 .map(|provider| Arc::new(provider) as Arc<dyn ChatProvider>)
         }
-        .map_err(|error| agentkit_sessions::HostError::Execution(error.code))
+        .map_err(agentkit_sessions::SessionsError::ProviderCore)
     }
 }
 
 impl NativeProviderFactory {
-    fn static_snapshot(&self, provider_id: &str) -> agentkit_sessions::HostResult<Option<Value>> {
+    fn static_snapshot(
+        &self,
+        provider_id: &str,
+    ) -> agentkit_sessions::SessionsResult<Option<Value>> {
         if self.static_provider_ids.contains(provider_id) {
             Ok(None)
         } else {
-            Err(agentkit_sessions::HostError::Execution(
-                "unknown_provider".into(),
-            ))
+            Err(agentkit_sessions::SessionsError::UnknownProvider)
         }
     }
 }
@@ -254,11 +243,9 @@ fn validate_selection(
     selected: &Connection,
     model: &str,
     capability: &Capability,
-) -> agentkit_sessions::HostResult<()> {
+) -> agentkit_sessions::SessionsResult<()> {
     if !selected.config.enabled {
-        return Err(agentkit_sessions::HostError::Execution(
-            "connection_changed".into(),
-        ));
+        return Err(agentkit_sessions::SessionsError::ConnectionChanged);
     }
     if !selected.config.capabilities.contains(capability)
         || !selected
@@ -267,9 +254,7 @@ fn validate_selection(
             .iter()
             .any(|item| item.id == model && item.capabilities.contains(capability))
     {
-        return Err(agentkit_sessions::HostError::Execution(
-            "unsupported_model".into(),
-        ));
+        return Err(agentkit_sessions::SessionsError::UnsupportedModel);
     }
     Ok(())
 }
@@ -277,12 +262,10 @@ fn validate_selection(
 fn protocol<'a>(
     snapshot: &'a Value,
     selected: &Connection,
-) -> agentkit_sessions::HostResult<&'a str> {
+) -> agentkit_sessions::SessionsResult<&'a str> {
     match snapshot.get("protocol").and_then(Value::as_str) {
         Some(value @ ("responses" | "chat-completions")) => Ok(value),
-        Some(_) => Err(agentkit_sessions::HostError::Execution(
-            "unsupported_capability".into(),
-        )),
+        Some(_) => Err(agentkit_sessions::SessionsError::UnsupportedCapability),
         None if selected
             .config
             .capabilities

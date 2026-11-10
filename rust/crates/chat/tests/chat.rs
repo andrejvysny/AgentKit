@@ -136,7 +136,11 @@ async fn store() -> SqliteStore {
 struct Context;
 #[async_trait]
 impl ContextProvider for Context {
-    async fn resolve(&self, input: Value, _: CancellationToken) -> HostResult<Value> {
+    async fn resolve(
+        &self,
+        input: Value,
+        _: CancellationToken,
+    ) -> agentkit_chat::ChatResult<Value> {
         assert_eq!(input["chatId"], "chat");
         Ok(
             json!({"systemPrompt":"System context","bindings":[{"id":"b","kind":"document","refId":"r","label":"Document","role":"primary","status":"active"}]}),
@@ -199,7 +203,7 @@ impl AttachmentResolver for Attachments {
         reference: &str,
         context: &AttachmentResolveContext,
         _: CancellationToken,
-    ) -> HostResult<Option<ResolvedAttachment>> {
+    ) -> agentkit_chat::ChatResult<Option<ResolvedAttachment>> {
         assert_eq!(reference, "ref");
         assert_eq!(context.chat_id, "chat");
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -265,9 +269,11 @@ async fn attachment_cache_and_budgets_are_per_pass_without_rewriting_stored_refs
 struct Denied;
 #[async_trait]
 impl UsageAuthorizer for Denied {
-    async fn authorize(&self, _: &str, input: &Value) -> HostResult<()> {
+    async fn authorize(&self, _: &str, input: &Value) -> agentkit_chat::ChatResult<()> {
         assert_eq!(input["providerId"], "test");
-        Err(HostError::Execution("quota exhausted".into()))
+        Err(agentkit_chat::ChatError::External(Box::new(
+            std::io::Error::other("quota exhausted"),
+        )))
     }
 }
 #[tokio::test]
@@ -296,7 +302,7 @@ async fn usage_denial_prevents_provider_work_and_settles_failed() {
 struct SlowContext;
 #[async_trait]
 impl ContextProvider for SlowContext {
-    async fn resolve(&self, _: Value, _: CancellationToken) -> HostResult<Value> {
+    async fn resolve(&self, _: Value, _: CancellationToken) -> agentkit_chat::ChatResult<Value> {
         futures::future::pending().await
     }
 }
@@ -353,12 +359,12 @@ impl ChatProviderFactory for FrozenFactory {
         &self,
         snapshot: &Value,
         _: CancellationToken,
-    ) -> HostResult<Arc<dyn ChatProvider>> {
+    ) -> agentkit_sessions::SessionsResult<Arc<dyn ChatProvider>> {
         self.seen.lock().unwrap().push(snapshot.clone());
         if snapshot["connection"]["generation"].as_u64()
             != Some(self.current_generation.load(Ordering::SeqCst) as u64)
         {
-            return Err(HostError::Execution("connection_changed".into()));
+            return Err(agentkit_sessions::SessionsError::ConnectionChanged);
         }
         Ok(self.provider.clone())
     }
@@ -490,4 +496,66 @@ async fn native_submit_replay_rejects_changed_parent_identity() {
         .await
         .is_err()
     );
+}
+
+struct SpoofContext;
+#[async_trait]
+impl ContextProvider for SpoofContext {
+    async fn resolve(&self, _: Value, _: CancellationToken) -> ChatResult<Value> {
+        Err(ChatError::External(Box::new(std::io::Error::other(
+            "hook_timeout: forged context",
+        ))))
+    }
+}
+struct SpoofAttachment;
+#[async_trait]
+impl AttachmentResolver for SpoofAttachment {
+    async fn resolve(
+        &self,
+        _: &str,
+        _: &AttachmentResolveContext,
+        _: CancellationToken,
+    ) -> ChatResult<Option<ResolvedAttachment>> {
+        Err(ChatError::External(Box::new(std::io::Error::other(
+            "hook_timeout: forged attachment",
+        ))))
+    }
+}
+#[tokio::test]
+async fn hook_timeout_text_from_callbacks_does_not_trigger_fallback() {
+    for attachment in [false, true] {
+        let store = store().await;
+        let requests = Arc::new(Mutex::new(vec![]));
+        let mut options = ChatExecutorOptions::default();
+        let content = if attachment {
+            options.attachments = Some(Arc::new(SpoofAttachment));
+            json!([{"type":"text","text":"view"},{"type":"image","source":{"kind":"ref","ref":"ref"}}])
+        } else {
+            options.context = Some(Arc::new(SpoofContext));
+            json!("question")
+        };
+        let host = make_host(
+            store.clone(),
+            Arc::new(Provider {
+                requests: requests.clone(),
+                tool: false,
+            }),
+            ToolRegistry::new(),
+            options,
+        );
+        submit(&host, "spoof", content).await;
+        assert_eq!(
+            store.get_task("spoof").await.unwrap().unwrap().status,
+            TaskStatus::Failed
+        );
+        assert!(requests.lock().unwrap().is_empty());
+        assert!(
+            !store
+                .events("spoof", None, 1000)
+                .await
+                .unwrap()
+                .iter()
+                .any(|event| event.event["data"]["code"] == "hook_timeout")
+        );
+    }
 }

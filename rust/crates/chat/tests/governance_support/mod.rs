@@ -3,7 +3,6 @@ use agentkit_chat::*;
 use agentkit_core::{ToolContext, ToolDefinition, ToolLimits};
 use agentkit_engine::Runtime;
 use agentkit_governance::ToolContributionContext;
-use agentkit_sessions::*;
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -35,7 +34,12 @@ pub struct Permission {
 
 #[async_trait]
 impl Authorization for Permission {
-    async fn authorize(&self, _actor: &Value, action: &str, _resource: &Value) -> HostResult<()> {
+    async fn authorize(
+        &self,
+        _actor: &Value,
+        action: &str,
+        _resource: &Value,
+    ) -> agentkit_chat::ChatResult<()> {
         if action == "apply"
             && self.revoke_policy_on_claim
             && self.apply_checks.fetch_add(1, Ordering::SeqCst) >= 1
@@ -45,7 +49,9 @@ impl Authorization for Permission {
         if self.allowed.load(Ordering::SeqCst) {
             Ok(())
         } else {
-            Err(HostError::Execution("private-authorizer-detail".into()))
+            Err(agentkit_chat::ChatError::External(Box::new(
+                std::io::Error::other("private-authorizer-detail"),
+            )))
         }
     }
 }
@@ -60,7 +66,11 @@ pub struct Domain {
 
 #[async_trait]
 impl ProposalApplier for Domain {
-    async fn apply(&self, identity: MutationIdentity, operations: Value) -> HostResult<Value> {
+    async fn apply(
+        &self,
+        identity: MutationIdentity,
+        operations: Value,
+    ) -> agentkit_chat::ChatResult<Value> {
         self.execution_fences
             .lock()
             .unwrap()
@@ -78,12 +88,17 @@ impl ProposalApplier for Domain {
             (identity.fingerprint, result.clone()),
         );
         if self.ambiguous.load(Ordering::SeqCst) {
-            Err(HostError::Execution("private-domain-detail".into()))
+            Err(agentkit_chat::ChatError::External(Box::new(
+                std::io::Error::other("private-domain-detail"),
+            )))
         } else {
             Ok(result)
         }
     }
-    async fn reconcile(&self, identity: MutationIdentity) -> HostResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        identity: MutationIdentity,
+    ) -> agentkit_chat::ChatResult<Option<Value>> {
         Ok(self
             .receipts
             .lock()
@@ -101,7 +116,11 @@ pub struct Builder {
 
 #[async_trait]
 impl ProposalBuilder for Builder {
-    async fn build(&self, _context: &ToolContext, input: &Value) -> HostResult<ProposalBuild> {
+    async fn build(
+        &self,
+        _context: &ToolContext,
+        input: &Value,
+    ) -> agentkit_chat::ChatResult<ProposalBuild> {
         *self.last_input.lock().unwrap() = Some(input.clone());
         Ok(ProposalBuild {
             scope_key: input["scope"].as_str().unwrap_or("document").into(),
@@ -128,7 +147,7 @@ impl ProposalBuilder for Builder {
             revision_at_create: Some("1".into()),
         })
     }
-    async fn current_revision(&self, _scope: &str) -> HostResult<Option<String>> {
+    async fn current_revision(&self, _scope: &str) -> agentkit_chat::ChatResult<Option<String>> {
         Ok(self.revision.lock().unwrap().clone())
     }
 }

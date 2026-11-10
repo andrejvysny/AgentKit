@@ -1,6 +1,8 @@
 use crate::bridge::VerificationView;
+use agentkit_engine::EngineResult;
 use agentkit_engine::{VerificationHook, VerificationReport};
-use agentkit_sessions::{ExecutionContext, HostResult};
+use agentkit_sessions::ExecutionContext;
+use agentkit_store::StoreError;
 use agentkit_store::{ProposalStatus, SqliteStore, TaskRecord};
 use async_trait::async_trait;
 
@@ -14,7 +16,11 @@ impl LocalVerifier {
         Self { store }
     }
 
-    pub async fn inspect(&self, chat_id: &str, run_id: &str) -> HostResult<VerificationReport> {
+    pub async fn inspect(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+    ) -> EngineResult<VerificationReport, StoreError> {
         let messages = self.store.messages(chat_id, true).await?;
         let has_answer = messages.iter().any(|message| {
             message.run_id.as_deref() == Some(run_id)
@@ -45,7 +51,11 @@ impl LocalVerifier {
         })
     }
 
-    async fn check_note(&self, chat_id: &str, deficiencies: &mut Vec<String>) -> HostResult<()> {
+    async fn check_note(
+        &self,
+        chat_id: &str,
+        deficiencies: &mut Vec<String>,
+    ) -> EngineResult<(), StoreError> {
         let proposals = self
             .store
             .proposals(Some(chat_id.into()), Some(ProposalStatus::Applied))
@@ -79,7 +89,10 @@ impl LocalVerifier {
 
 #[async_trait]
 impl VerificationHook<agentkit_store::SqliteStore> for LocalVerifier {
-    async fn verify(&self, context: ExecutionContext) -> HostResult<VerificationReport> {
+    async fn verify(
+        &self,
+        context: ExecutionContext,
+    ) -> EngineResult<VerificationReport, StoreError> {
         let chat_id = context.task.payload["chatId"].as_str().unwrap_or("");
         self.inspect(chat_id, &context.task.task_id).await
     }
@@ -88,7 +101,7 @@ impl VerificationHook<agentkit_store::SqliteStore> for LocalVerifier {
 pub async fn reports(
     store: &SqliteStore,
     tasks: &[TaskRecord],
-) -> HostResult<Vec<VerificationView>> {
+) -> EngineResult<Vec<VerificationView>, StoreError> {
     let mut reports = Vec::new();
     for task in tasks {
         let next = store.next_seq(&task.task_id).await?;

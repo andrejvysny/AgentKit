@@ -1,4 +1,4 @@
-use crate::{HostError, HostResult};
+use crate::{ChatError, ChatResult};
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult};
 use agentkit_governance::{
     ApprovalAsk, ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
@@ -17,7 +17,7 @@ mod execution_recheck;
 fn check_contribution(
     tool: &ContributedTool,
     context: &ToolContributionContext,
-) -> HostResult<Arc<dyn Tool>> {
+) -> ChatResult<Arc<dyn Tool>> {
     match tool {
         ContributedTool::Read(tool) if tool.definition().effect == "read" => Ok(tool.clone()),
         ContributedTool::DirectWrite(tool) if tool.definition().effect == "write" => {
@@ -36,7 +36,7 @@ fn check_contribution(
         {
             Ok(tool.clone())
         }
-        _ => Err(HostError::Execution("tool_effect_or_actor_mismatch".into())),
+        _ => Err(ChatError::ToolEffectOrActorMismatch),
     }
 }
 
@@ -132,7 +132,7 @@ pub async fn stage_tools(
     contributors: &[Arc<dyn ToolContributor>],
     guards: &[Arc<dyn ToolGuard>],
     context: ToolContributionContext,
-) -> HostResult<StagedTools> {
+) -> ChatResult<StagedTools> {
     for contributor in contributors {
         validate_namespace(contributor.as_ref())?;
     }
@@ -145,7 +145,7 @@ pub async fn stage_tools(
             let tool = check_contribution(&tool, &context)?;
             let name = &tool.definition().name;
             if owners.get(name).is_some_and(|owner| *owner != index) {
-                return Err(HostError::Execution("tool_name_collision".into()));
+                return Err(ChatError::ToolNameCollision);
             }
             owners.insert(name.clone(), index);
             collected.push((contributor.namespace().to_owned(), tool));
@@ -202,7 +202,7 @@ async fn register_tools(
     context: &ToolContributionContext,
     allowed: Option<BTreeSet<String>>,
     failed: Vec<ContributorFailure>,
-) -> HostResult<StagedTools> {
+) -> ChatResult<StagedTools> {
     let mut registry = ToolRegistry::new();
     let mut namespaces = BTreeMap::new();
     let mut skipped = vec![];
@@ -710,17 +710,17 @@ fn guard_refusal(context: &ToolContext, reason: &str) -> ToolResult {
     }
 }
 
-fn validate_namespace(contributor: &dyn ToolContributor) -> HostResult<()> {
+fn validate_namespace(contributor: &dyn ToolContributor) -> ChatResult<()> {
     let name = contributor.namespace();
     let valid = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && name.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
         });
     if !valid {
-        return Err(HostError::Execution("tool_namespace_invalid".into()));
+        return Err(ChatError::ToolNamespaceInvalid);
     }
     if !contributor.privileged() && ["agentkit", "chat", "mcp"].contains(&name) {
-        return Err(HostError::Execution("tool_namespace_reserved".into()));
+        return Err(ChatError::ToolNamespaceReserved);
     }
     Ok(())
 }

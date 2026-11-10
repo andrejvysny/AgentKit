@@ -198,7 +198,7 @@ impl agentkit_sessions::ContentAuthority for JsContentAuthority {
         &self,
         chat_id: &str,
         cancel: CancellationToken,
-    ) -> agentkit_sessions::HostResult<Vec<String>> {
+    ) -> agentkit_sessions::SessionsResult<Vec<String>> {
         let value = self
             .0
             .clone()
@@ -209,17 +209,16 @@ impl agentkit_sessions::ContentAuthority for JsContentAuthority {
                 &cancel,
             )
             .await
-            .map_err(agentkit_sessions::HostError::Execution)?;
-        serde_json::from_value(value).map_err(|e| {
-            agentkit_sessions::HostError::Execution(format!("invalid_content_authority: {e}"))
-        })
+            .map_err(agentkit_sessions::SessionsError::ContentAuthorityCallback)?;
+        serde_json::from_value(value)
+            .map_err(agentkit_sessions::SessionsError::InvalidContentAuthorityDetail)
     }
     async fn authority_identity(
         &self,
         chat_id: &str,
         required_connectors: &[String],
         cancel: CancellationToken,
-    ) -> agentkit_sessions::HostResult<Value> {
-        self.0.clone().request(PendingKind::ContentAuthority, &uuid::Uuid::new_v4().to_string(), &json!({"operation":"identity","chatId":chat_id,"requiredConnectors":required_connectors}), &cancel).await.map_err(agentkit_sessions::HostError::Execution)
+    ) -> agentkit_sessions::SessionsResult<Value> {
+        self.0.clone().request(PendingKind::ContentAuthority, &uuid::Uuid::new_v4().to_string(), &json!({"operation":"identity","chatId":chat_id,"requiredConnectors":required_connectors}), &cancel).await.map_err(agentkit_sessions::SessionsError::ContentAuthorityCallback)
     }
 }

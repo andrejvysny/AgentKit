@@ -952,7 +952,7 @@ async fn mailbox_orders_per_agent_and_promotes_head_first() {
     // Double-cancel is refused by the machine, not pretended.
     assert!(matches!(
         store.cancel_agent_mailbox("i3".into(), 1_104).await,
-        Err(StoreError::InvalidTransition(_))
+        Err(StoreError::AgentInputTransition(_))
     ));
     // Bob's head is untouched by alice's drains.
     let bob_head = store

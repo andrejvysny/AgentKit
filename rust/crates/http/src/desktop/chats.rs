@@ -45,13 +45,7 @@ impl DesktopBackend {
                 ..Default::default()
             })
             .await
-            .map_err(|error| {
-                if error.code == "invalid_input" {
-                    Problem::new(400, "invalid_request", error.message)
-                } else {
-                    Problem::host("internal_error", error.to_string())
-                }
-            })
+            .map_err(session_service_error)
     }
 
     pub(super) async fn chats(

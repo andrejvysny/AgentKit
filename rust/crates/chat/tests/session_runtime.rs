@@ -220,10 +220,10 @@ struct Fixture {
 struct UsageMeter(Arc<Mutex<Vec<Value>>>);
 #[async_trait]
 impl UsageAuthorizer for UsageMeter {
-    async fn authorize(&self, _: &str, _: &Value) -> HostResult<()> {
+    async fn authorize(&self, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
         Ok(())
     }
-    async fn record(&self, usage: &Value) -> HostResult<()> {
+    async fn record(&self, usage: &Value) -> agentkit_chat::ChatResult<()> {
         self.0.lock().unwrap().push(usage.clone());
         Ok(())
     }
@@ -511,7 +511,7 @@ async fn an_asked_call_parks_answers_spends_once_and_the_queue_moves() {
         })
         .await
         .unwrap_err();
-    assert_eq!(conflict.code, "answer_conflict");
+    assert_eq!(conflict.failure_event_code(), "answer_conflict");
     assert_eq!(f.calls.lock().unwrap().len(), 1);
 
     // Settlement promoted the queued follow-up; running it completes the
@@ -1871,7 +1871,8 @@ impl SessionFlushPlanner<agentkit_store::SqliteStore> for Racy {
         &self,
         settling: &agentkit_store::TaskRecord,
         completed: bool,
-    ) -> HostResult<agentkit_store::SessionSettle> {
+    ) -> agentkit_engine::EngineResult<agentkit_store::SessionSettle, agentkit_store::StoreError>
+    {
         let plan = self.inner.settle_plan(settling, completed).await?;
         if completed && self.armed.swap(false, Ordering::SeqCst) {
             match self.mode {
@@ -2493,7 +2494,11 @@ async fn a_config_change_after_planning_revalidates_queued_turns() {
         AgentInputStatus::Pending
     );
     assert_eq!(
-        f.service.flush_queue("s1").await.unwrap_err().code,
+        f.service
+            .flush_queue("s1")
+            .await
+            .unwrap_err()
+            .failure_event_code(),
         "invalid_input"
     );
     assert_eq!(f.requests.lock().unwrap().len(), 1);
@@ -2592,7 +2597,8 @@ impl SessionFlushPlanner<agentkit_store::SqliteStore> for ChangingEveryPlan {
         &self,
         settling: &agentkit_store::TaskRecord,
         completed: bool,
-    ) -> HostResult<agentkit_store::SessionSettle> {
+    ) -> agentkit_engine::EngineResult<agentkit_store::SessionSettle, agentkit_store::StoreError>
+    {
         let plan = self.service.settle_plan(settling, completed).await?;
         let calls = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         self.service
@@ -2640,7 +2646,7 @@ async fn continuous_config_changes_return_a_bounded_conflict_without_partial_set
         .expect("configuration churn has a bounded outcome");
     assert!(matches!(
         result,
-        Err(HostError::Store(
+        Err(agentkit_engine::EngineError::Store(
             agentkit_store::StoreError::SessionDescriptorChanged(_)
         ))
     ));
@@ -2672,7 +2678,10 @@ async fn continuous_config_changes_return_a_bounded_conflict_without_partial_set
 struct Maintenance;
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for Maintenance {
-    async fn execute(&self, _: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        _: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         Ok(())
     }
 }
@@ -2716,7 +2725,7 @@ async fn a_different_task_kind_cannot_accept_a_session_follow_up() {
         input_id: Some("after-maintenance".into()),
     };
     let error = f.service.follow_up("s1", &input).await.unwrap_err();
-    assert_eq!(error.code, "chat_busy");
+    assert_eq!(error.failure_event_code(), "chat_busy");
     assert!(
         f.store
             .get_input("after-maintenance".into())
@@ -3256,7 +3265,14 @@ async fn compact_is_busy_for_queued_turn_and_no_cut_clears_request() {
         .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
         .await
         .unwrap();
-    assert_eq!(f.service.compact("s1").await.unwrap_err().code, "chat_busy");
+    assert_eq!(
+        f.service
+            .compact("s1")
+            .await
+            .unwrap_err()
+            .failure_event_code(),
+        "chat_busy"
+    );
     f.host.run_once().await.unwrap();
     f.service.compact("s1").await.unwrap();
     f.service

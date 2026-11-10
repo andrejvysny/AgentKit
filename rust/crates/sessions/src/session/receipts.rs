@@ -5,18 +5,18 @@
 //! explicit session-service call, never a side effect of anything else, and
 //! it is audited inside the receipt itself.
 
-use super::{AgentSessionService, SessionError, SessionResult};
+use super::AgentSessionService;
+use crate::{SessionsError, SessionsResult};
 use agentkit_core::{ToolLimits, ToolResult};
 use agentkit_store::{
-    ExecutionReceiptRecord, ExecutionReceiptStatus, RECEIPT_NOT_UNCERTAIN, RECEIPT_RUN_ACTIVE,
-    ResolutionOutcome, ResolveExecution, StoreError,
+    ExecutionReceiptRecord, ExecutionReceiptStatus, ResolutionOutcome, ResolveExecution, StoreError,
 };
 use serde_json::Value;
 
 /// Wrap an operator-supplied completion in the model-facing `ToolResult`
 /// shape, so replay and history reconciliation read it like any recorded
 /// result. A string becomes the summary; any other JSON value becomes data.
-fn operator_tool_result(result: Value) -> Result<Value, SessionError> {
+fn operator_tool_result(result: Value) -> Result<Value, SessionsError> {
     let (summary, data) = match result {
         Value::String(text) => (Some(text.clone()), Value::String(text)),
         other => (None, other),
@@ -33,19 +33,11 @@ fn operator_tool_result(result: Value) -> Result<Value, SessionError> {
         status: None,
         model_content: None,
     })
-    .map_err(|error| SessionError::invalid_input(format!("unserializable result: {error}")))
+    .map_err(|error| SessionsError::invalid_input(format!("unserializable result: {error}")))
 }
 
-fn map_store_error(error: StoreError) -> SessionError {
-    match error {
-        StoreError::InvalidTransition(message) if message.starts_with(RECEIPT_NOT_UNCERTAIN) => {
-            SessionError::new(RECEIPT_NOT_UNCERTAIN, message)
-        }
-        StoreError::InvalidTransition(message) if message.starts_with(RECEIPT_RUN_ACTIVE) => {
-            SessionError::new(RECEIPT_RUN_ACTIVE, message)
-        }
-        other => other.into(),
-    }
+fn map_store_error(error: StoreError) -> SessionsError {
+    SessionsError::ReceiptStore(crate::ReceiptStoreError(error))
 }
 
 impl AgentSessionService {
@@ -54,7 +46,7 @@ impl AgentSessionService {
     pub async fn list_uncertain_executions(
         &self,
         session_id: &str,
-    ) -> SessionResult<Vec<ExecutionReceiptRecord>> {
+    ) -> SessionsResult<Vec<ExecutionReceiptRecord>> {
         self.require_session(session_id).await?;
         let receipts = self
             .store()
@@ -78,7 +70,7 @@ impl AgentSessionService {
         result: Option<Value>,
         note: Option<String>,
         resolved_by: Option<String>,
-    ) -> SessionResult<ExecutionReceiptRecord> {
+    ) -> SessionsResult<ExecutionReceiptRecord> {
         self.require_session(session_id).await?;
         let receipt = self
             .store()
@@ -89,20 +81,19 @@ impl AgentSessionService {
             // Same answer for "no such receipt" and "another session's
             // receipt": existence is not leaked across sessions.
             .ok_or_else(|| {
-                SessionError::new(
-                    "not_found",
-                    format!("Execution {execution_id} not found in {session_id}."),
-                )
+                SessionsError::ExecutionNotFound(format!(
+                    "Execution {execution_id} not found in {session_id}."
+                ))
             })?;
         let result = match (outcome, result) {
             (ResolutionOutcome::Completed, Some(value)) => Some(operator_tool_result(value)?),
             (ResolutionOutcome::Completed, None) => {
-                return Err(SessionError::invalid_input(
+                return Err(SessionsError::invalid_input(
                     "A completed resolution requires a result.",
                 ));
             }
             (_, Some(_)) => {
-                return Err(SessionError::invalid_input(
+                return Err(SessionsError::invalid_input(
                     "Only a completed resolution may carry a result.",
                 ));
             }
@@ -138,7 +129,7 @@ impl AgentSessionService {
         result: Option<Value>,
         note: Option<String>,
         resolved_by: Option<String>,
-    ) -> SessionResult<ExecutionReceiptRecord> {
+    ) -> SessionsResult<ExecutionReceiptRecord> {
         crate::receipts::resolve_uncertain_execution(
             self.store(),
             chat_id,
@@ -150,30 +141,12 @@ impl AgentSessionService {
             self.now_ms(),
         )
         .await
-        .map_err(map_governance_error)
+        .map_err(|error| match error {
+            SessionsError::Store(error) => map_store_error(error),
+            other => other,
+        })
     }
 }
 
-/// Governance errors carry their stable code as a `"<code>: <message>"`
-/// prefix; the store's refusal codes (`receipt_run_active`,
-/// `receipt_not_uncertain`) keep their full messages, and anything
-/// unrecognised surfaces as `internal` rather than being re-labelled.
-fn map_governance_error(error: crate::HostError) -> SessionError {
-    match error {
-        crate::HostError::Store(error) => map_store_error(error),
-        other => {
-            let text = other.to_string();
-            match text.split_once(": ") {
-                Some((code, message))
-                    if !code.is_empty()
-                        && code
-                            .bytes()
-                            .all(|byte| byte.is_ascii_lowercase() || byte == b'_') =>
-                {
-                    SessionError::new(code, message)
-                }
-                _ => SessionError::new("internal", text),
-            }
-        }
-    }
-}
+#[cfg(test)]
+mod receipt_error_tests;

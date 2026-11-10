@@ -193,7 +193,10 @@ impl agentkit_engine::VerificationHook<agentkit_store::SqliteStore> for VerifyOn
     async fn verify(
         &self,
         _: agentkit_sessions::ExecutionContext,
-    ) -> agentkit_sessions::HostResult<agentkit_engine::VerificationReport> {
+    ) -> agentkit_engine::EngineResult<
+        agentkit_engine::VerificationReport,
+        agentkit_store::StoreError,
+    > {
         let first = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
         Ok(agentkit_engine::VerificationReport {
             status: if first {

@@ -190,7 +190,7 @@ async fn unknown_agent_refuses_admission() {
         .expect_err("unknown agent is absence");
     assert!(matches!(
         error,
-        AgentsError::Host(HostError::Store(agentkit_store::StoreError::NotFound(_)))
+        AgentsError::Store(agentkit_store::StoreError::NotFound(_))
     ));
 }
 
@@ -354,7 +354,10 @@ struct ParentExecutor;
 
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for ParentExecutor {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         if context.task.attempt_count == 1 {
             context
                 .spawn_child(SubmitTask {
@@ -390,7 +393,10 @@ struct ChildExecutor;
 
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for ChildExecutor {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         context.emit("run.child.done", json!({})).await?;
         Ok(())
     }
@@ -523,7 +529,10 @@ async fn the_runner_never_gives_one_agent_two_active_writers() {
     struct Quiet;
     #[async_trait]
     impl TaskExecutor<agentkit_store::SqliteStore> for Quiet {
-        async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+        async fn execute(
+            &self,
+            _context: ExecutionContext,
+        ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
             Ok(())
         }
     }

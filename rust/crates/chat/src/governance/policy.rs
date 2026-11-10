@@ -1,4 +1,4 @@
-use crate::{HostError, HostResult};
+use crate::{ChatError, ChatResult};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Mutex};
 
@@ -87,16 +87,16 @@ impl SessionWritePolicy {
         }
     }
 
-    pub fn mode(&self) -> HostResult<WritePolicyMode> {
+    pub fn mode(&self) -> ChatResult<WritePolicyMode> {
         Ok(self.state.lock().map_err(|_| poisoned())?.mode)
     }
 
-    pub fn set_mode(&self, mode: WritePolicyMode) -> HostResult<()> {
+    pub fn set_mode(&self, mode: WritePolicyMode) -> ChatResult<()> {
         self.state.lock().map_err(|_| poisoned())?.mode = mode;
         Ok(())
     }
 
-    pub fn allow(&self, allowance: WriteAllowance) -> HostResult<String> {
+    pub fn allow(&self, allowance: WriteAllowance) -> ChatResult<String> {
         if allowance.actor_id.is_some()
             && (allowance.scope_key.is_none()
                 || allowance
@@ -104,9 +104,7 @@ impl SessionWritePolicy {
                     .as_deref()
                     .is_none_or(str::is_empty))
         {
-            return Err(HostError::Execution(
-                "actor_allowance_requires_exact_scope_and_payload".into(),
-            ));
+            return Err(ChatError::ActorAllowanceRequiresExactScopeAndPayload);
         }
         let key = allowance_key(&allowance);
         self.state
@@ -117,7 +115,7 @@ impl SessionWritePolicy {
         Ok(key)
     }
 
-    pub fn list(&self, chat_id: &str) -> HostResult<Vec<(String, WriteAllowance)>> {
+    pub fn list(&self, chat_id: &str) -> ChatResult<Vec<(String, WriteAllowance)>> {
         Ok(self
             .state
             .lock()
@@ -129,7 +127,7 @@ impl SessionWritePolicy {
             .collect())
     }
 
-    pub fn revoke(&self, chat_id: &str, key: &str) -> HostResult<()> {
+    pub fn revoke(&self, chat_id: &str, key: &str) -> ChatResult<()> {
         let mut state = self.state.lock().map_err(|_| poisoned())?;
         if state
             .allowances
@@ -141,7 +139,7 @@ impl SessionWritePolicy {
         Ok(())
     }
 
-    pub fn revoke_actor(&self, actor_id: &str) -> HostResult<()> {
+    pub fn revoke_actor(&self, actor_id: &str) -> ChatResult<()> {
         self.state
             .lock()
             .map_err(|_| poisoned())?
@@ -207,6 +205,6 @@ fn allowance_key(grant: &WriteAllowance) -> String {
     .to_string()
 }
 
-fn poisoned() -> HostError {
-    HostError::Execution("write_policy_unavailable".into())
+fn poisoned() -> ChatError {
+    ChatError::WritePolicyUnavailable
 }

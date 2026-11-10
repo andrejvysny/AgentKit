@@ -44,7 +44,7 @@ fn invalid(message: impl std::fmt::Display) -> AgentsError {
 }
 
 fn not_found(agent_id: &str) -> AgentsError {
-    AgentsError::not_found(format!("agent_not_found: {agent_id}"))
+    AgentsError::AgentNotFound(agent_id.to_owned())
 }
 
 /// Validate the semantic vocabulary the durable store keeps as bounded

@@ -21,7 +21,6 @@ use agentkit_chat::{
     ProjectInstructionsSource, ProjectInstructionsText, append_to_system_prompt,
     load_project_instructions,
 };
-use agentkit_sessions::HostResult;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -213,9 +212,11 @@ async fn throwing_source_yields_the_exact_skip_warning_and_continues() {
             _root: &str,
             name: &str,
             _max_bytes: usize,
-        ) -> HostResult<Option<ProjectInstructionsText>> {
+        ) -> agentkit_chat::ChatResult<Option<ProjectInstructionsText>> {
             if name == "AGENTS.md" {
-                return Err(agentkit_sessions::HostError::Execution("refused".into()));
+                return Err(agentkit_chat::ChatError::External(Box::new(
+                    std::io::Error::other("refused"),
+                )));
             }
             Ok(Some(ProjectInstructionsText {
                 text: "b\n".into(),

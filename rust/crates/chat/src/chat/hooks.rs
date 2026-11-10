@@ -136,7 +136,7 @@ pub(crate) async fn resolve_context(
     options: &ChatExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
-) -> HostResult<ContextSnapshot> {
+) -> ChatResult<ContextSnapshot> {
     let Some(provider) = &options.context else {
         return Ok(ContextSnapshot::default());
     };
@@ -152,29 +152,38 @@ pub(crate) async fn resolve_context(
     match resolved {
         Ok(value) => {
             let snapshot: ContextSnapshot = serde_json::from_value(value)
-                .map_err(|_| HostError::Execution("invalid context provider result".into()))?;
+                .map_err(|_| ChatError::InvalidContextProviderResult)?;
             for binding in &snapshot.bindings {
                 agentkit_contracts::validate_schema("AiContextBindingSchema", binding)
-                    .map_err(|_| HostError::Execution("invalid context binding".into()))?;
+                    .map_err(|_| ChatError::InvalidContextBinding)?;
             }
             Ok(snapshot)
         }
-        Err(HostError::Execution(error)) if error.starts_with("hook_timeout:") => {
+        Err(ChatError::HookTimeout(_)) => {
             context.emit("run.warning",json!({"code":"hook_timeout","message":"The context provider did not answer in time; this turn ran with no context bindings or system prompt."})).await?;
             Ok(ContextSnapshot::default())
         }
         Err(error) => Err(error),
     }
 }
-pub(crate) async fn bounded<T>(
-    future: impl Future<Output = HostResult<T>>,
+pub(crate) async fn bounded<T, E: Into<ChatError>>(
+    future: impl Future<Output = Result<T, E>>,
     cancellation: CancellationToken,
     milliseconds: u64,
     hook: &str,
-) -> HostResult<T> {
-    tokio::select! {biased;
-        _=cancellation.cancelled()=>Err(HostError::Cancelled),
-        value=async {if milliseconds==0 {future.await} else {tokio::time::timeout(Duration::from_millis(milliseconds),future).await.map_err(|_|HostError::Execution(format!("hook_timeout: {hook}")))?}}=>value,
+) -> ChatResult<T> {
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(ChatError::Cancelled),
+        result = async {
+            let result = if milliseconds == 0 {
+                future.await
+            } else {
+                tokio::time::timeout(Duration::from_millis(milliseconds), future)
+                    .await.map_err(|_| ChatError::HookTimeout(hook.to_owned()))?
+            };
+            result.map_err(Into::into)
+        } => result,
     }
 }
 #[derive(Clone)]
@@ -234,8 +243,9 @@ impl ChatProvider for PreparedProvider {
         }).try_flatten())
     }
 }
-fn core_error(error: HostError) -> CoreError {
-    if matches!(error, HostError::Cancelled) {
+fn core_error(error: impl Into<ChatError>) -> CoreError {
+    let error = error.into();
+    if matches!(error, ChatError::Cancelled) {
         CoreError::new("cancelled", "aborted")
     } else {
         CoreError::new("host_hook_failed", &error.to_string())
@@ -258,7 +268,7 @@ async fn resolve_attachments(
     context: &ExecutionContext,
     chat_id: &str,
     mut messages: Vec<ChatMessage>,
-) -> HostResult<(Vec<ChatMessage>, Vec<ProviderEvent>)> {
+) -> ChatResult<(Vec<ChatMessage>, Vec<ProviderEvent>)> {
     let mut cache = HashMap::<String, Option<Value>>::new();
     let mut total = 0;
     let mut images = 0;
@@ -275,7 +285,7 @@ async fn resolve_attachments(
             }
             let reference = part["source"]["ref"]
                 .as_str()
-                .ok_or_else(|| HostError::Execution("invalid attachment reference".into()))?;
+                .ok_or_else(|| ChatError::InvalidAttachmentReference)?;
             if !cache.contains_key(reference) {
                 let resolved = resolve_one(options, context, chat_id, reference).await?;
                 cache.insert(reference.into(), resolved);
@@ -324,7 +334,7 @@ async fn resolve_one(
     context: &ExecutionContext,
     chat_id: &str,
     reference: &str,
-) -> HostResult<Option<Value>> {
+) -> ChatResult<Option<Value>> {
     let Some(resolver) = &options.attachments else {
         return Ok(None);
     };
@@ -339,7 +349,7 @@ async fn resolve_one(
     )
     .await;
     let result = match result {
-        Err(HostError::Execution(error)) if error.starts_with("hook_timeout:") => None,
+        Err(ChatError::HookTimeout(_)) => None,
         other => other?,
     };
     result
@@ -347,7 +357,7 @@ async fn resolve_one(
             let value =
                 json!({"kind":"data","mediaType":resolved.media_type,"base64":resolved.base64});
             agentkit_contracts::validate_schema("AiImageSourceSchema", &value)
-                .map_err(|_| HostError::Execution("invalid resolved attachment".into()))?;
+                .map_err(|_| ChatError::InvalidResolvedAttachment)?;
             Ok(value)
         })
         .transpose()
@@ -391,7 +401,7 @@ pub(super) async fn stage_registry(
     static_registry: Arc<agentkit_core::ToolRegistry>,
     bindings: &[Value],
     approvals: std::collections::HashMap<String, crate::governance::ApprovalGrant>,
-) -> HostResult<Arc<agentkit_core::ToolRegistry>> {
+) -> ChatResult<Arc<agentkit_core::ToolRegistry>> {
     // Every host-served mutation carries a durable execution receipt
     // (ADR 0020): the fast path wraps static write tools, the staged path
     // governs them inside `GuardedTool`. There is no receipt-free chat path.

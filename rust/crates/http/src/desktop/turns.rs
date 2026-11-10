@@ -209,14 +209,7 @@ impl DesktopBackend {
                             "Provider snapshot authority did not answer.",
                         )
                     })?
-                    .map_err(|error| match &error {
-                        HostError::Execution(code) if code == "unknown_provider" => Problem::new(
-                            400,
-                            "provider_not_bound",
-                            "Requested provider is not bound to this host executor.",
-                        ),
-                        _ => host_error(error),
-                    })?
+                    .map_err(provider_snapshot_error)?
                 }
                 None => None,
             }
@@ -282,7 +275,7 @@ impl DesktopBackend {
                     self.content_authority.as_ref(),
                 )
                 .await
-                .map_err(host_error)?,
+                .map_err(session_error)?,
             ),
             None => None,
         };
@@ -354,11 +347,10 @@ impl DesktopBackend {
                 201,
                 json!({"chatId":chat_id,"runId":key.task_id,"userMessageId":user_id,"assistantMessageId":assistant_id}),
             )),
-            Err(StoreError::InvalidInput(message))
-                if message == "task replay identity mismatch" =>
-            {
-                replay(self.host.store(), self.read_run(&key.task_id).await?, input).await
-            }
+            Err(StoreError::TaskInput {
+                reason: agentkit_engine::TaskInputReason::ReplayIdentityMismatch,
+                ..
+            }) => replay(self.host.store(), self.read_run(&key.task_id).await?, input).await,
             Err(error) => Err(store_error(error)),
         }
     }

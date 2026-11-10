@@ -15,7 +15,7 @@ use agentkit_kernel::sha256_hex;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::{ChatExecutorOptions, ExecutionContext, HostResult};
+use crate::{ChatExecutorOptions, ChatResult, ExecutionContext};
 
 pub use fs::FileProjectInstructions;
 
@@ -52,7 +52,7 @@ pub trait ProjectInstructionsSource: Send + Sync {
         root: &str,
         name: &str,
         max_bytes: usize,
-    ) -> HostResult<Option<ProjectInstructionsText>>;
+    ) -> ChatResult<Option<ProjectInstructionsText>>;
 }
 
 /// The loaded sections and the warnings collected along the way.
@@ -137,7 +137,7 @@ pub(crate) async fn augment_system_prompt(
     context: &ExecutionContext,
     chat_id: &str,
     system_prompt: Option<String>,
-) -> HostResult<Option<String>> {
+) -> ChatResult<Option<String>> {
     let Some(source) = options.project_instructions.clone() else {
         return Ok(system_prompt);
     };
@@ -175,7 +175,7 @@ pub(crate) async fn augment_system_prompt(
 /// The session descriptor's `{root, trusted}` workspace, when the chat is an
 /// agent session whose descriptor carries one (the descriptor reader has
 /// already validated both fields).
-async fn session_workspace(context: &ExecutionContext, chat_id: &str) -> HostResult<Option<Value>> {
+async fn session_workspace(context: &ExecutionContext, chat_id: &str) -> ChatResult<Option<Value>> {
     let Some(chat) = context.store.get_chat(chat_id).await? else {
         return Ok(None);
     };

@@ -85,15 +85,22 @@ impl Tool for Echo {
     }
 }
 struct Verify {
-    reports: Mutex<Vec<HostResult<VerificationReport>>>,
+    reports:
+        Mutex<Vec<agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError>>>,
     seen: Mutex<Vec<(String, usize, u32)>>,
 }
 #[async_trait]
 impl VerificationHook<agentkit_store::SqliteStore> for Verify {
-    async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
+    async fn verify(
+        &self,
+        _: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError> {
         panic!("typed pass verifier expected")
     }
-    async fn verify_pass(&self, input: VerificationInput) -> HostResult<VerificationReport> {
+    async fn verify_pass(
+        &self,
+        input: VerificationInput,
+    ) -> agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError> {
         self.seen
             .lock()
             .unwrap()
@@ -101,7 +108,9 @@ impl VerificationHook<agentkit_store::SqliteStore> for Verify {
         self.reports.lock().unwrap().remove(0)
     }
 }
-fn partial(count: usize) -> HostResult<VerificationReport> {
+fn partial(
+    count: usize,
+) -> agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError> {
     Ok(VerificationReport {
         status: "partial".into(),
         deficiencies: (0..count).map(|index| format!("defect{index}")).collect(),
@@ -222,7 +231,10 @@ async fn correction_verifier_failure_is_unavailable_never_pass() {
     let verifier = Arc::new(Verify {
         reports: Mutex::new(vec![
             partial(2),
-            Err(HostError::Execution("offline".into())),
+            Err(agentkit_engine::EngineError::External {
+                source: Box::new(std::io::Error::other("offline")),
+                failure_code: None,
+            }),
         ]),
         seen: Mutex::new(vec![]),
     });
@@ -320,13 +332,16 @@ async fn correction_hard_cap_is_five_despite_larger_host_configuration() {
 struct NullVerifier;
 #[async_trait]
 impl VerificationHook<agentkit_store::SqliteStore> for NullVerifier {
-    async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
+    async fn verify(
+        &self,
+        _: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError> {
         panic!("optional verifier expected")
     }
     async fn verify_optional(
         &self,
         _: VerificationInput,
-    ) -> HostResult<Option<VerificationReport>> {
+    ) -> agentkit_engine::EngineResult<Option<VerificationReport>, agentkit_store::StoreError> {
         Ok(None)
     }
 }
@@ -416,4 +431,78 @@ async fn contributors_stage_once_and_same_guarded_registry_serves_correction_pas
             .iter()
             .all(|request| request.tools.len() == 2)
     );
+}
+
+#[tokio::test]
+async fn correction_persists_typed_and_opaque_failure_codes() {
+    for (report, expected_code, expected_message) in [
+        (
+            Ok(VerificationReport {
+                status: "bad".into(),
+                deficiencies: vec![],
+            }),
+            "invalid verification status",
+            "invalid verification status",
+        ),
+        (
+            Err(ChatError::InvalidBudget("large".into()).into()),
+            "invalid_budget",
+            "invalid_budget: large",
+        ),
+        (
+            Err(agentkit_sessions::SessionsError::InvalidProfile("missing".into()).into()),
+            "invalid_profile",
+            "invalid_profile: missing",
+        ),
+        (
+            Err(ChatError::Core(CoreError::new("provider_explicit", "provider declined")).into()),
+            "provider_explicit",
+            "provider declined",
+        ),
+        (
+            Err(agentkit_engine::EngineError::Store(
+                agentkit_store::StoreError::LeaseLost("turn:input".into()),
+            )),
+            "lease lost for task turn",
+            "lease lost for task turn:input",
+        ),
+        (
+            Err(agentkit_engine::EngineError::External {
+                source: Box::new(std::io::Error::other("invalid_budget: spoof")),
+                failure_code: None,
+            }),
+            "host_error",
+            "invalid_budget: spoof",
+        ),
+        (
+            Err(agentkit_engine::EngineError::External {
+                source: Box::new(std::io::Error::other("hook_timeout: spoof")),
+                failure_code: None,
+            }),
+            "host_error",
+            "hook_timeout: spoof",
+        ),
+    ] {
+        let verifier = Arc::new(Verify {
+            reports: Mutex::new(vec![report]),
+            seen: Mutex::new(vec![]),
+        });
+        let (host, _) = make(
+            ChatExecutorOptions {
+                verification: Some(verifier),
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .await;
+        execute(&host).await;
+        let events = host.store().events("run", None, 1000).await.unwrap();
+        let failed = events
+            .iter()
+            .find(|event| event.event["type"] == "run.failed")
+            .expect("persisted failure");
+        assert_eq!(failed.event["data"]["errorCode"], expected_code);
+        assert_eq!(failed.event["data"]["errorMessage"], expected_message);
+    }
 }

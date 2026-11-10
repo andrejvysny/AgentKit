@@ -1,18 +1,64 @@
 pub mod agentkit_agents
 pub enum agentkit_agents::AgentsError
+pub agentkit_agents::AgentsError::AdvisorBudgetUnavailable(agentkit_store::StoreError)
+pub agentkit_agents::AgentsError::AdvisorDisabled
+pub agentkit_agents::AgentsError::AdvisorInvalidBudget(agentkit_core::types::CoreError)
+pub agentkit_agents::AgentsError::AdvisorModelRequired(alloc::string::String)
+pub agentkit_agents::AgentsError::AdvisorModelUnconfigured
 pub agentkit_agents::AgentsError::AdvisorNotConfigured
-pub agentkit_agents::AgentsError::Host(agentkit_sessions::store_aliases::HostError)
+pub agentkit_agents::AgentsError::AdvisorProviderUnavailable(alloc::string::String)
+pub agentkit_agents::AgentsError::AdvisorRateLimited(alloc::string::String)
+pub agentkit_agents::AgentsError::AdvisorRecursionRefused
+pub agentkit_agents::AgentsError::AdvisorRunFailed
+pub agentkit_agents::AgentsError::AdvisorSaturated
+pub agentkit_agents::AgentsError::AdvisorWorker(tokio::runtime::task::error::JoinError)
+pub agentkit_agents::AgentsError::AgentNotFound(alloc::string::String)
+pub agentkit_agents::AgentsError::Cancelled
+pub agentkit_agents::AgentsError::Chat(agentkit_chat::error::ChatError)
+pub agentkit_agents::AgentsError::ChatIdRequired
+pub agentkit_agents::AgentsError::ChildCancelledAfterParent
+pub agentkit_agents::AgentsError::ChildSessionConflict(alloc::string::String)
+pub agentkit_agents::AgentsError::Core(agentkit_core::types::CoreError)
+pub agentkit_agents::AgentsError::Engine(agentkit_engine::error::EngineError<agentkit_store::StoreError>)
+pub agentkit_agents::AgentsError::ForeignChildAwait
 pub agentkit_agents::AgentsError::InvalidAdmission(alloc::string::String)
 pub agentkit_agents::AgentsError::InvalidAgent(alloc::string::String)
+pub agentkit_agents::AgentsError::InvalidReasoningEffort
+pub agentkit_agents::AgentsError::ModelNotAllowed(alloc::string::String)
+pub agentkit_agents::AgentsError::ParentSessionDescriptorMissing
+pub agentkit_agents::AgentsError::ParentSessionNotFound
+pub agentkit_agents::AgentsError::ParentTurnAlreadySettled
+pub agentkit_agents::AgentsError::QueuedChildCancelled
+pub agentkit_agents::AgentsError::RegistrationConcurrencyLimit
+pub agentkit_agents::AgentsError::ResumeParentTurnRequired
+pub agentkit_agents::AgentsError::RoleCannotSpawn(alloc::string::String)
+pub agentkit_agents::AgentsError::RoleDenied(agentkit_agents::RoleDenial)
+pub agentkit_agents::AgentsError::Sessions(agentkit_sessions::error::SessionsError)
+pub agentkit_agents::AgentsError::SpawnIdentityConflict(alloc::string::String)
+pub agentkit_agents::AgentsError::SpawnParentTurnRequired
+pub agentkit_agents::AgentsError::Store(agentkit_store::StoreError)
+pub agentkit_agents::AgentsError::SubagentBudgetExhausted(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentConcurrencyLimitDetail(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentDepthExceeded(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentHasNoTurnToResume
+pub agentkit_agents::AgentsError::SubagentModelRequired(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentNotFound(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentParentLimit(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentPromptMustNotBeEmpty
+pub agentkit_agents::AgentsError::SubagentProviderUnavailable(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentRowVanished
+pub agentkit_agents::AgentsError::SubagentRowVanishedDetail(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentTerminal(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentTurnInvalid(alloc::string::String)
+pub agentkit_agents::AgentsError::SubagentsDisabled
 pub agentkit_agents::AgentsError::SubagentsNotConfigured
+pub agentkit_agents::AgentsError::UnknownSubagentRole(alloc::string::String)
+pub agentkit_agents::AgentsError::WorkspaceBusy(alloc::string::String)
+pub agentkit_agents::AgentsError::WorkspaceRequired(alloc::string::String)
+impl core::convert::From<agentkit_agents::AgentsError> for agentkit_engine::error::EngineError<agentkit_store::StoreError>
+pub fn agentkit_engine::error::EngineError<agentkit_store::StoreError>::from(agentkit_agents::AgentsError) -> Self
 impl core::convert::From<agentkit_agents::AgentsError> for agentkit_governance::error::GovernanceError
 pub fn agentkit_governance::error::GovernanceError::from(agentkit_agents::AgentsError) -> Self
-impl core::convert::From<agentkit_agents::AgentsError> for agentkit_sessions::store_aliases::HostError
-pub fn agentkit_sessions::store_aliases::HostError::from(agentkit_agents::AgentsError) -> Self
-impl core::convert::From<agentkit_core::types::CoreError> for agentkit_agents::AgentsError
-pub fn agentkit_agents::AgentsError::from(agentkit_core::types::CoreError) -> Self
-impl core::convert::From<agentkit_store::StoreError> for agentkit_agents::AgentsError
-pub fn agentkit_agents::AgentsError::from(agentkit_store::StoreError) -> Self
 pub enum agentkit_agents::FindingCategory
 pub agentkit_agents::FindingCategory::ImplementationRisk
 pub agentkit_agents::FindingCategory::OutputInvalid

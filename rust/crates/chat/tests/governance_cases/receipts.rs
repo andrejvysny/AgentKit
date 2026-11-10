@@ -2,7 +2,6 @@ use super::support::*;
 use agentkit_chat::*;
 use agentkit_core::Tool;
 use agentkit_engine::SystemRuntime;
-use agentkit_sessions::*;
 use agentkit_store::ProposalStatus;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -18,11 +17,18 @@ struct InvalidOutcome {
 
 #[async_trait]
 impl ProposalApplier for InvalidOutcome {
-    async fn apply(&self, _identity: MutationIdentity, _operations: Value) -> HostResult<Value> {
+    async fn apply(
+        &self,
+        _identity: MutationIdentity,
+        _operations: Value,
+    ) -> agentkit_chat::ChatResult<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.value.clone())
     }
-    async fn reconcile(&self, _identity: MutationIdentity) -> HostResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        _identity: MutationIdentity,
+    ) -> agentkit_chat::ChatResult<Option<Value>> {
         Ok(None)
     }
 }

@@ -2,7 +2,6 @@ use super::support::*;
 use agentkit_chat::*;
 use agentkit_core::{Tool, ToolContext};
 use agentkit_engine::SystemRuntime;
-use agentkit_sessions::*;
 use agentkit_store::ProposalStatus;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -19,11 +18,15 @@ struct RevokingBuilder {
 
 #[async_trait]
 impl ProposalBuilder for RevokingBuilder {
-    async fn build(&self, context: &ToolContext, input: &Value) -> HostResult<ProposalBuild> {
+    async fn build(
+        &self,
+        context: &ToolContext,
+        input: &Value,
+    ) -> agentkit_chat::ChatResult<ProposalBuild> {
         self.inner.build(context, input).await
     }
 
-    async fn current_revision(&self, scope: &str) -> HostResult<Option<String>> {
+    async fn current_revision(&self, scope: &str) -> agentkit_chat::ChatResult<Option<String>> {
         if self.revision_reads.fetch_add(1, Ordering::SeqCst) == 1 {
             tokio::task::yield_now().await;
             self.permission.allowed.store(false, Ordering::SeqCst);
@@ -67,7 +70,12 @@ struct FinalAuthorization {
 
 #[async_trait]
 impl Authorization for FinalAuthorization {
-    async fn authorize(&self, actor: &Value, action: &str, resource: &Value) -> HostResult<()> {
+    async fn authorize(
+        &self,
+        actor: &Value,
+        action: &str,
+        resource: &Value,
+    ) -> agentkit_chat::ChatResult<()> {
         if action == "apply" && self.apply_checks.fetch_add(1, Ordering::SeqCst) == 2 {
             tokio::task::yield_now().await;
             if self.cancel {

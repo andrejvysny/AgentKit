@@ -1,5 +1,6 @@
 //! Optional desktop HTTP boundary. One immutable actor owns one local store.
 mod chats;
+mod error;
 mod managed_content;
 mod native_provider_binding;
 mod native_provider_operations;
@@ -17,10 +18,14 @@ mod teammates;
 mod turns;
 
 use crate::{Actor, Backend, OperationRequest, OperationResponse, Problem};
-use agentkit_sessions::{AgentHost, HostError};
+use agentkit_sessions::AgentHost;
 use agentkit_store::StoreError;
 use async_trait::async_trait;
 use axum::http::HeaderMap;
+use error::{
+    host_error, managed_store_error, managed_validation_error, proposal_error,
+    provider_snapshot_error, session_error, session_service_error, store_error, teammate_problem,
+};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -394,33 +399,6 @@ fn constant_equal(a: &[u8], b: &[u8]) -> bool {
     difference == 0
 }
 
-fn store_error(error: StoreError) -> Problem {
-    let code = match &error {
-        StoreError::NotFound(_) => "not_found",
-        StoreError::Duplicate(_) => "duplicate_task",
-        StoreError::ScopeBusy(_) => "chat_busy",
-        StoreError::LeaseLost(_) => "lease_lost",
-        StoreError::InvalidTransition(_) => "invalid_task_transition",
-        StoreError::InvalidInput(message) if message == "invalid_fork_point" => {
-            "invalid_fork_point"
-        }
-        StoreError::InvalidInput(_) => "invalid_request",
-        _ => "internal_error",
-    };
-    if code == "invalid_request" {
-        Problem::new(400, code, error.to_string())
-    } else {
-        Problem::host(code, error.to_string())
-    }
-}
-fn host_error(error: HostError) -> Problem {
-    match error {
-        HostError::Store(error) => store_error(error),
-        HostError::UnknownKind(kind) => Problem::host("executor_not_found", kind),
-        HostError::NoExecutorForKind(kind) => Problem::host("no_executor_for_kind", kind),
-        _ => Problem::host("internal_error", error.to_string()),
-    }
-}
 fn missing(kind: &str, id: &str) -> Problem {
     Problem::new(404, "not_found", format!("{kind} not found: {id}"))
 }

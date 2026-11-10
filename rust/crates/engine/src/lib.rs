@@ -13,7 +13,7 @@ mod runner;
 mod subscription;
 
 pub use context::ExecutionContext;
-pub use error::{EngineError, EngineResult};
+pub use error::{ContextClassification, EngineError, EngineResult};
 pub use model::{
     AttemptRecord, ClaimInput, ClaimedTask, EventRecord, Lease, LeaseFence, MessageInput,
     PinnedRunProfile, RecoveryMode, RetryTask, SettleTask, SubmitTask, TaskBinding, TaskRecord,
@@ -23,7 +23,7 @@ pub use ports::{
     ObserverError, Runtime, SharedRuntime, SystemRuntime, TaskExecutor, TaskSettledObserver,
     VerificationHook, VerificationInput, VerificationReport,
 };
-pub use repository::{RepositoryFault, SessionSettlement, TaskRepository};
+pub use repository::{RepositoryFault, SessionSettlement, TaskInputReason, TaskRepository};
 pub use retry::{
     ExecutionErrorClassification, ExecutionErrorKind, ExecutionFailure, RetryBackoff, RetrySafety,
     classify_execution_error,

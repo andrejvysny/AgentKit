@@ -1035,7 +1035,7 @@ async fn steer_live_refuses_idle_sessions_and_delivers_to_live_turns() {
         .steer_live("parent", &steer("late-1"))
         .await
         .expect_err("idle");
-    assert_eq!(error.code, "chat_idle");
+    assert_eq!(error.failure_event_code(), "chat_idle");
     let tasks = h.store.list_tasks(Some("parent".into())).await.unwrap();
     assert!(tasks.iter().all(|task| task.status.is_terminal()));
     let state = h.service.get_state("parent").await.unwrap();

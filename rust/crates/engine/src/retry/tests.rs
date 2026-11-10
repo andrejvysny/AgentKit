@@ -25,6 +25,9 @@ impl RepositoryFault for NoFault {
     fn invalid_input(&self) -> Option<&str> {
         None
     }
+    fn task_input_reason(&self) -> Option<crate::TaskInputReason> {
+        None
+    }
     fn session_conflict(&self) -> Option<&str> {
         None
     }
@@ -172,5 +175,153 @@ fn backoff_is_exponential_capped_jittered_and_overflow_safe() {
         }
         .delay_ms::<NoFault>(1, 0.5)
         .is_err()
+    );
+}
+
+#[test]
+fn typed_host_failures_override_misleading_diagnostics() {
+    use ExecutionErrorKind::*;
+    for (error, kind, reason) in [
+        (EngineError::Cancelled, Cancelled, "aborted"),
+        (
+            EngineError::UnknownKind("503 socket".into()),
+            Terminal,
+            "executor_not_found",
+        ),
+        (
+            EngineError::NoExecutorForKind("ETIMEDOUT".into()),
+            Terminal,
+            "no_executor_for_kind",
+        ),
+        (
+            failure(Some("not_found"), None, Some(503), "socket timeout"),
+            Terminal,
+            "not_found",
+        ),
+        (
+            failure(Some("lease_lost"), None, Some(400), "permission denied"),
+            Transient,
+            "lease_lost",
+        ),
+    ] {
+        assert_eq!(
+            classify_execution_error(&error),
+            classification(kind, reason)
+        );
+        assert!(!retry_is_safe(&error));
+    }
+}
+
+#[test]
+fn context_errors_keep_sources_and_ignore_misleading_diagnostics() {
+    use std::error::Error;
+    let source = std::io::Error::other("hook_timeout: ETIMEDOUT 503 cancelled");
+    let error = EngineError::Context {
+        source: Box::new(source),
+        classification: crate::ContextClassification::Rejected,
+        failure_code: None,
+    };
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "hook_timeout: ETIMEDOUT 503 cancelled"
+    );
+    assert_eq!(
+        classify_execution_error(&error),
+        classification(ExecutionErrorKind::Terminal, "rejected")
+    );
+    assert!(!retry_is_safe(&error));
+    let external = EngineError::External {
+        source: Box::new(std::io::Error::other("ETIMEDOUT")),
+        failure_code: None,
+    };
+    assert_eq!(
+        classify_execution_error(&external),
+        classification(ExecutionErrorKind::Transient, "network:ETIMEDOUT")
+    );
+    assert!(!retry_is_safe(&external));
+    let cancelled_text = EngineError::External {
+        source: Box::new(std::io::Error::other("cancelled")),
+        failure_code: None,
+    };
+    assert_eq!(
+        classify_execution_error(&cancelled_text),
+        classification(ExecutionErrorKind::Terminal, "unclassified")
+    );
+}
+
+#[test]
+fn failure_event_metadata_cannot_override_retry_classification() {
+    let external = EngineError::External {
+        source: Box::new(std::io::Error::other("cancelled")),
+        failure_code: Some("ABORT_ERR".into()),
+    };
+    assert_eq!(
+        classify_execution_error(&external),
+        classification(ExecutionErrorKind::Terminal, "unclassified")
+    );
+    assert!(!retry_is_safe(&external));
+    let context = EngineError::Context {
+        source: Box::new(std::io::Error::other("ETIMEDOUT")),
+        classification: crate::ContextClassification::Rejected,
+        failure_code: Some("lease_lost".into()),
+    };
+    assert_eq!(
+        classify_execution_error(&context),
+        classification(ExecutionErrorKind::Terminal, "rejected")
+    );
+    assert!(!retry_is_safe(&context));
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid input: {message}")]
+struct InputFault {
+    message: String,
+    reason: Option<crate::TaskInputReason>,
+}
+
+impl RepositoryFault for InputFault {
+    fn is_transient(&self) -> bool {
+        false
+    }
+    fn is_duplicate(&self) -> bool {
+        false
+    }
+    fn is_lease_lost(&self) -> bool {
+        false
+    }
+    fn is_invalid_transition(&self) -> bool {
+        false
+    }
+    fn is_not_found(&self) -> bool {
+        false
+    }
+    fn invalid_input(&self) -> Option<&str> {
+        Some(&self.message)
+    }
+    fn task_input_reason(&self) -> Option<crate::TaskInputReason> {
+        self.reason
+    }
+    fn session_conflict(&self) -> Option<&str> {
+        None
+    }
+}
+
+#[test]
+fn typed_input_reason_wins_over_untrusted_diagnostic() {
+    let broad = super::EngineError::Store(InputFault {
+        message: "unknown dependency: ETIMEDOUT 503".into(),
+        reason: None,
+    });
+    assert_eq!(
+        classify_execution_error(&broad),
+        classification(ExecutionErrorKind::Terminal, "rejected")
+    );
+    let typed = super::EngineError::Store(InputFault {
+        message: "ETIMEDOUT 503".into(),
+        reason: Some(crate::TaskInputReason::UnknownDependency),
+    });
+    assert_eq!(
+        classify_execution_error(&typed),
+        classification(ExecutionErrorKind::Terminal, "unknown_dependency")
     );
 }

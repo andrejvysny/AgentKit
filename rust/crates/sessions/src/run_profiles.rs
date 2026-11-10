@@ -36,7 +36,7 @@
 //! whitelisted metadata only (no `apiKey`, no headers), environment
 //! values are recorded as digests, and secret references stay references.
 
-use crate::{HostError, HostResult};
+use crate::{SessionsError, SessionsResult};
 use agentkit_kernel::sha256_hex;
 use agentkit_store::{AgentBudgets, PinnedRunProfile, SqliteStore, run_profile_digest};
 use serde::Deserialize;
@@ -179,12 +179,12 @@ pub struct ApprovalGrantRef {
     pub digest: String,
 }
 
-fn refused(reason: impl std::fmt::Display) -> HostError {
-    HostError::Execution(format!("run_profile_refused:{reason}"))
+fn refused(reason: impl std::fmt::Display) -> SessionsError {
+    SessionsError::RunProfileRefused(reason.to_string())
 }
 
-fn invalid_overrides(detail: impl std::fmt::Display) -> HostError {
-    HostError::Execution(format!("invalid_overrides: {detail}"))
+fn invalid_overrides(detail: impl std::fmt::Display) -> SessionsError {
+    SessionsError::InvalidOverrides(detail.to_string())
 }
 
 /// The permission ladder. Higher ranks may attempt strictly more than
@@ -269,7 +269,7 @@ fn check_capability(
     resolved: &ResolvedProvider,
     task: &TaskProfileOverrides,
     tools: &[String],
-) -> HostResult<bool> {
+) -> SessionsResult<bool> {
     if !tools.is_empty()
         && (!resolved.tool_calling || resolved.supports_tool_calling_model == Some(false))
     {
@@ -290,7 +290,7 @@ fn compile_context(
     compiled: &mut [CompiledSource],
     budget: u64,
     truncate: bool,
-) -> HostResult<Option<Value>> {
+) -> SessionsResult<Option<Value>> {
     let all = |compiled: &[CompiledSource]| -> Vec<(bool, u64)> {
         compiled
             .iter()
@@ -506,7 +506,7 @@ impl RunProfileService {
         project: &ProjectSelection,
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
-    ) -> HostResult<PinnedRunProfile> {
+    ) -> SessionsResult<PinnedRunProfile> {
         self.resolve_inner(agent_id, now, project, task, approvals, None)
             .await
     }
@@ -524,7 +524,7 @@ impl RunProfileService {
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
         host: &HostProviderPin,
-    ) -> HostResult<PinnedRunProfile> {
+    ) -> SessionsResult<PinnedRunProfile> {
         self.resolve_inner(agent_id, now, project, task, approvals, Some(host))
             .await
     }
@@ -537,7 +537,7 @@ impl RunProfileService {
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
         host: Option<&HostProviderPin>,
-    ) -> HostResult<PinnedRunProfile> {
+    ) -> SessionsResult<PinnedRunProfile> {
         if task
             .truncation
             .as_ref()
@@ -548,9 +548,10 @@ impl RunProfileService {
         let agent = self
             .store
             .get_agent(agent_id.to_string())
-            .await?
+            .await
+            .map_err(SessionsError::Store)?
             .filter(|agent| agent.lifecycle != agentkit_store::AgentLifecycle::Deleted)
-            .ok_or_else(|| HostError::NotFound(format!("agent {agent_id}")))?;
+            .ok_or_else(|| SessionsError::AgentNotFound(agent_id.to_owned()))?;
         let mut provenance = serde_json::Map::new();
         let resolved = match host {
             Some(pin) => self.host_provider(pin, task, &mut provenance)?,
@@ -643,7 +644,7 @@ impl RunProfileService {
         host: &HostProviderPin,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> HostResult<ResolvedProvider> {
+    ) -> SessionsResult<ResolvedProvider> {
         if host.provider_id.trim().is_empty() {
             return Err(refused("provider_unnamed"));
         }
@@ -695,7 +696,7 @@ impl RunProfileService {
         agent: &agentkit_store::AgentRecord,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> HostResult<ResolvedProvider> {
+    ) -> SessionsResult<ResolvedProvider> {
         // -- provider & routing: only explicitly configured fallbacks ---
         let provider_id = match task.provider_id.as_deref() {
             Some(requested) if requested != self.defaults.provider_id => {
@@ -718,7 +719,8 @@ impl RunProfileService {
         let provider = self
             .store
             .get_provider(&provider_id)
-            .await?
+            .await
+            .map_err(SessionsError::Store)?
             .ok_or_else(|| refused(format!("unknown_provider:{provider_id}")))?;
         if provider["enabled"].as_bool() != Some(true) {
             return Err(refused(format!("provider_disabled:{provider_id}")));
@@ -750,7 +752,8 @@ impl RunProfileService {
         let model_row = self
             .store
             .list_provider_models(&provider_id)
-            .await?
+            .await
+            .map_err(SessionsError::Store)?
             .into_iter()
             .find(|row| row["modelId"].as_str() == Some(model_id.as_str()));
 
@@ -758,7 +761,8 @@ impl RunProfileService {
         let capabilities = self
             .store
             .get_provider_capabilities(&provider_id)
-            .await?
+            .await
+            .map_err(SessionsError::Store)?
             .ok_or_else(|| refused(format!("provider_capability_missing:{provider_id}")))?;
         let window = model_row
             .as_ref()
@@ -785,7 +789,7 @@ impl RunProfileService {
         agent: &agentkit_store::AgentRecord,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> HostResult<(agentkit_core::permission::CodingMode, Vec<String>)> {
+    ) -> SessionsResult<(agentkit_core::permission::CodingMode, Vec<String>)> {
         let default_mode =
             agentkit_core::permission::CodingMode::parse(&self.defaults.permission_mode)
                 .ok_or_else(|| refused("default_permission_mode"))?;
@@ -864,13 +868,17 @@ impl RunProfileService {
     }
 
     /// Skills: pinned versions resolve or the run refuses.
-    async fn pinned_skills(&self, agent: &agentkit_store::AgentRecord) -> HostResult<Vec<Value>> {
+    async fn pinned_skills(
+        &self,
+        agent: &agentkit_store::AgentRecord,
+    ) -> SessionsResult<Vec<Value>> {
         let mut skills = Vec::new();
         for selection in &agent.definition.skills {
             let entry = self
                 .store
                 .get_skill(selection.id.clone())
-                .await?
+                .await
+                .map_err(SessionsError::Store)?
                 .ok_or_else(|| refused(format!("skill_revoked:{}", selection.id)))?;
             if entry["revision"].as_str() != Some(selection.revision.as_str()) {
                 // The pinned version no longer exists: a re-published
@@ -887,7 +895,7 @@ impl RunProfileService {
         &self,
         agent: &agentkit_store::AgentRecord,
         project: &ProjectSelection,
-    ) -> HostResult<Vec<CompiledSource>> {
+    ) -> SessionsResult<Vec<CompiledSource>> {
         let mut compiled: Vec<CompiledSource> = Vec::new();
         for source in &project.sources {
             let granted = match source.kind {
@@ -935,11 +943,12 @@ impl RunProfileService {
         agent: &agentkit_store::AgentRecord,
         source: &SelectedSource,
         units: &mut Vec<ContextUnit>,
-    ) -> HostResult<String> {
+    ) -> SessionsResult<String> {
         let entry = self
             .store
             .get_skill(source.id.clone())
-            .await?
+            .await
+            .map_err(SessionsError::Store)?
             .ok_or_else(|| refused(format!("skill_revoked:{}", source.id)))?;
         let revision = entry["revision"]
             .as_str()
@@ -979,7 +988,7 @@ impl RunProfileService {
         agent: &agentkit_store::AgentRecord,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> HostResult<serde_json::Map<String, Value>> {
+    ) -> SessionsResult<serde_json::Map<String, Value>> {
         let mut budgets = serde_json::Map::new();
         let (a, d, t) = (
             &agent.definition.budgets,
@@ -1040,9 +1049,14 @@ impl RunProfileService {
     /// material (values, credentials, headers) and no private reasoning
     /// can ride along. The seal is recomputed before anything is said —
     /// an explanation never vouches for a tampered row.
-    pub async fn explain(&self, task_id: &str) -> HostResult<Option<Value>> {
-        let Some(task) = self.store.get_task(task_id).await? else {
-            return Err(HostError::NotFound(format!("task {task_id}")));
+    pub async fn explain(&self, task_id: &str) -> SessionsResult<Option<Value>> {
+        let Some(task) = self
+            .store
+            .get_task(task_id)
+            .await
+            .map_err(SessionsError::Store)?
+        else {
+            return Err(SessionsError::TaskNotFound(task_id.to_owned()));
         };
         let Some(pin) = task.run_profile.as_ref() else {
             return Ok(None);
@@ -1072,7 +1086,8 @@ impl RunProfileService {
         let refusal = self
             .store
             .run_profile_dispatch_refusal(task_id.to_owned())
-            .await?;
+            .await
+            .map_err(SessionsError::Store)?;
         Ok(Some(json!({
             "taskId": task.task_id,
             "profileDigest": pin.digest,

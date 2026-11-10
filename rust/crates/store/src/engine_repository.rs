@@ -15,7 +15,7 @@ impl RepositoryFault for StoreError {
     }
 
     fn is_duplicate(&self) -> bool {
-        matches!(self, Self::Duplicate(_))
+        matches!(self, Self::Duplicate(_) | Self::AnswerConflict(_))
     }
 
     fn is_lease_lost(&self) -> bool {
@@ -23,7 +23,13 @@ impl RepositoryFault for StoreError {
     }
 
     fn is_invalid_transition(&self) -> bool {
-        matches!(self, Self::InvalidTransition(_))
+        matches!(
+            self,
+            Self::InvalidTransition(_)
+                | Self::AgentInputTransition(_)
+                | Self::AnswerStale(_)
+                | Self::ReceiptTransition { .. }
+        )
     }
 
     fn is_not_found(&self) -> bool {
@@ -32,7 +38,16 @@ impl RepositoryFault for StoreError {
 
     fn invalid_input(&self) -> Option<&str> {
         match self {
-            Self::InvalidInput(message) => Some(message),
+            Self::InvalidInput(message)
+            | Self::TaskInput { message, .. }
+            | Self::ManagedInput { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
+    fn task_input_reason(&self) -> Option<agentkit_engine::TaskInputReason> {
+        match self {
+            Self::TaskInput { reason, .. } => Some(*reason),
             _ => None,
         }
     }

@@ -66,19 +66,19 @@ pub async fn resolve_uncertain_execution(
     note: Option<String>,
     resolved_by: Option<String>,
     now: i64,
-) -> crate::HostResult<agentkit_store::ExecutionReceiptRecord> {
-    let invalid = |message: &str| crate::HostError::Execution(format!("invalid_input: {message}"));
+) -> crate::SessionsResult<agentkit_store::ExecutionReceiptRecord> {
+    let invalid = |message: &str| crate::SessionsError::ReceiptInvalidInput(message.to_owned());
     let receipt = store
         .list_executions_by_chat(chat_id.to_owned())
-        .await?
+        .await
+        .map_err(crate::SessionsError::Store)?
         .into_iter()
         .find(|record| record.execution_id == execution_id)
         // Same answer for "no such receipt" and "another chat's receipt":
         // existence is not leaked across chats.
-        .ok_or_else(|| {
-            crate::HostError::NotFound(format!(
-                "not_found: execution {execution_id} not found in chat {chat_id}."
-            ))
+        .ok_or_else(|| crate::SessionsError::ReceiptNotFound {
+            execution_id: execution_id.to_owned(),
+            chat_id: chat_id.to_owned(),
         })?;
     let result = match (outcome, result) {
         (agentkit_store::ResolutionOutcome::Completed, Some(value)) => {
@@ -92,7 +92,7 @@ pub async fn resolve_uncertain_execution(
         }
         (_, None) => None,
     };
-    Ok(store
+    store
         .resolve_execution(
             receipt.execution_id,
             agentkit_store::ResolveExecution {
@@ -103,5 +103,6 @@ pub async fn resolve_uncertain_execution(
                 now,
             },
         )
-        .await?)
+        .await
+        .map_err(crate::SessionsError::Store)
 }

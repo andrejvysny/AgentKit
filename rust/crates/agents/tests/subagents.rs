@@ -820,7 +820,7 @@ async fn resume_refuses_live_turns_and_unknown_children() {
     assert!(error.to_string().contains("subagent_not_found"));
     assert!(matches!(
         h.subagents.status("sub_missing").await,
-        Err(AgentsError::Host(HostError::NotFound(message))) if message == "subagent_not_found: sub_missing"
+        Err(AgentsError::SubagentNotFound(message)) if message == "sub_missing"
     ));
     h.hold(false);
     h.release();

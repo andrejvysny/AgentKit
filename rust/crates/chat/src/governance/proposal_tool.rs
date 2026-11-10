@@ -3,7 +3,7 @@ use super::proposal_support::{
 };
 use super::{ToolWritePolicy, WriteQuery, WriteRisk};
 use crate::{
-    Authorization, HostError, HostResult, ProposalApplyGuard, ProposalService, SharedRuntime,
+    Authorization, ChatError, ChatResult, ProposalApplyGuard, ProposalService, SharedRuntime,
 };
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
 use agentkit_store::{ProposalPatch, ProposalRecord, ProposalStatus, ReceiptRecord, SqliteStore};
@@ -34,8 +34,8 @@ pub struct ProposalBuild {
 
 #[async_trait]
 pub trait ProposalBuilder: Send + Sync {
-    async fn build(&self, context: &ToolContext, input: &Value) -> HostResult<ProposalBuild>;
-    async fn current_revision(&self, _scope_key: &str) -> HostResult<Option<String>> {
+    async fn build(&self, context: &ToolContext, input: &Value) -> ChatResult<ProposalBuild>;
+    async fn current_revision(&self, _scope_key: &str) -> ChatResult<Option<String>> {
         Ok(None)
     }
 }
@@ -59,11 +59,9 @@ pub struct GovernedProposalTool {
 }
 
 impl GovernedProposalTool {
-    pub fn new(mut definition: ToolDefinition, options: ProposalToolOptions) -> HostResult<Self> {
+    pub fn new(mut definition: ToolDefinition, options: ProposalToolOptions) -> ChatResult<Self> {
         if definition.effect != "write" || options.actor.is_null() || options.policy_id.is_empty() {
-            return Err(HostError::Execution(
-                "write_tool_requires_write_effect_and_trusted_actor".into(),
-            ));
+            return Err(ChatError::WriteToolRequiresWriteEffectAndTrustedActor);
         }
         let notice = match options.mode {
             WriteExecutionMode::ProposeOnly => {
@@ -84,17 +82,17 @@ impl GovernedProposalTool {
         &self,
         context: &ToolContext,
         input: &Value,
-    ) -> HostResult<(ProposalRecord, WriteQuery, bool)> {
+    ) -> ChatResult<(ProposalRecord, WriteQuery, bool)> {
         let chat = context
             .chat_id
             .as_ref()
-            .ok_or_else(|| HostError::Execution("write_tool_requires_chat".into()))?;
+            .ok_or_else(|| ChatError::WriteToolRequiresChat)?;
         self.options.authorization.authorize(&self.options.actor, "tool.execute", &json!({
             "toolName":self.definition.name,"effect":"write","chatId":chat,"scopeKey":context.scope_id
         })).await?;
         let built = self.options.builder.build(context, input).await?;
         if built.scope_key.is_empty() || built.kind.is_empty() || !built.envelope.is_object() {
-            return Err(HostError::Execution("invalid_proposal_build".into()));
+            return Err(ChatError::InvalidProposalBuild);
         }
         let query = query(
             &self.definition.name,
@@ -108,8 +106,7 @@ impl GovernedProposalTool {
             .authorize(
                 &self.options.actor,
                 "proposal.stage",
-                &serde_json::to_value(&query)
-                    .map_err(|_| HostError::Execution("invalid_write_query".into()))?,
+                &serde_json::to_value(&query).map_err(|_| ChatError::InvalidWriteQuery)?,
             )
             .await?;
         let record = self.record(context, input, built, &query);
@@ -163,7 +160,7 @@ impl GovernedProposalTool {
         }
     }
 
-    async fn prior(&self, record: &ProposalRecord) -> HostResult<Option<ProposalRecord>> {
+    async fn prior(&self, record: &ProposalRecord) -> ChatResult<Option<ProposalRecord>> {
         let Some(action) = &record.action_id else {
             return Ok(None);
         };
@@ -180,7 +177,7 @@ impl GovernedProposalTool {
         }))
     }
 
-    async fn execute_staged(&self, context: &ToolContext, input: &Value) -> HostResult<ToolResult> {
+    async fn execute_staged(&self, context: &ToolContext, input: &Value) -> ChatResult<ToolResult> {
         let (proposal, query, created) = self.stage(context, input).await?;
         if !created {
             return self.duplicate(context, &proposal).await;
@@ -231,7 +228,7 @@ impl GovernedProposalTool {
         &self,
         context: &ToolContext,
         proposal: &ProposalRecord,
-    ) -> HostResult<ToolResult> {
+    ) -> ChatResult<ToolResult> {
         self.options
             .authorization
             .authorize(
@@ -265,7 +262,7 @@ impl GovernedProposalTool {
         context: &ToolContext,
         proposal: &ProposalRecord,
         query: WriteQuery,
-    ) -> HostResult<ReceiptRecord> {
+    ) -> ChatResult<ReceiptRecord> {
         let guard = Arc::new(PolicyGuard {
             policy: self.options.policy.clone(),
             builder: self.options.builder.clone(),
@@ -329,19 +326,19 @@ struct PolicyGuard {
 
 #[async_trait]
 impl ProposalApplyGuard for PolicyGuard {
-    async fn authorize_dispatch(&self) -> HostResult<()> {
+    async fn authorize_dispatch(&self) -> ChatResult<()> {
         if let Some(guard) = &self.dispatch_guard {
             guard
                 .check()
                 .await
-                .map_err(|_| HostError::Execution("dispatch_fence_lost".into()))?;
+                .map_err(|_| ChatError::DispatchFenceLost)?;
         }
         Ok(())
     }
 
-    fn check_current(&self) -> HostResult<()> {
+    fn check_current(&self) -> ChatResult<()> {
         if self.cancellation.is_cancelled() || !self.policy.is_auto_apply_allowed(&self.query) {
-            return Err(HostError::Execution("write_policy_revoked".into()));
+            return Err(ChatError::WritePolicyRevoked);
         }
         Ok(())
     }
@@ -350,10 +347,10 @@ impl ProposalApplyGuard for PolicyGuard {
         self.dispatch_guard.as_ref().map(|guard| guard.fence())
     }
 
-    async fn authorize(&self, proposal: &ProposalRecord) -> HostResult<()> {
+    async fn authorize(&self, proposal: &ProposalRecord) -> ChatResult<()> {
         self.check_current()?;
         if self.builder.current_revision(&proposal.scope_key).await? != self.query.revision {
-            return Err(HostError::Execution("revision_conflict".into()));
+            return Err(ChatError::RevisionConflict);
         }
         self.check_current()
     }

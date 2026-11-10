@@ -351,7 +351,7 @@ impl Fixture {
         id: &str,
         outcome: ResolutionOutcome,
         result: Option<Value>,
-    ) -> SessionResult<agentkit_store::ExecutionReceiptRecord> {
+    ) -> SessionsResult<agentkit_store::ExecutionReceiptRecord> {
         self.service
             .resolve_uncertain_execution(
                 "s1",
@@ -448,7 +448,7 @@ async fn completed_resolution_reconciles_history_with_the_supplied_result() {
         .resolve(&id, ResolutionOutcome::NotStarted, None)
         .await
         .unwrap_err();
-    assert_eq!(conflict.code, "receipt_not_uncertain");
+    assert_eq!(conflict.failure_event_code(), "receipt_not_uncertain");
 
     f.run_turn("t1").await;
     let answer = answer_to(&f, "seed-1");
@@ -485,7 +485,7 @@ async fn wrong_session_and_invalid_payloads_are_refused() {
         .resolve_uncertain_execution("s2", &id, ResolutionOutcome::NotStarted, None, None, None)
         .await
         .unwrap_err();
-    assert_eq!(other.code, "not_found");
+    assert_eq!(other.failure_event_code(), "not_found");
     let missing = f
         .service
         .resolve_uncertain_execution(
@@ -498,17 +498,17 @@ async fn wrong_session_and_invalid_payloads_are_refused() {
         )
         .await
         .unwrap_err();
-    assert_eq!(missing.code, "not_found");
+    assert_eq!(missing.failure_event_code(), "not_found");
     let no_result = f
         .resolve(&id, ResolutionOutcome::Completed, None)
         .await
         .unwrap_err();
-    assert_eq!(no_result.code, "invalid_input");
+    assert_eq!(no_result.failure_event_code(), "invalid_input");
     let extra = f
         .resolve(&id, ResolutionOutcome::Acknowledged, Some(json!("x")))
         .await
         .unwrap_err();
-    assert_eq!(extra.code, "invalid_input");
+    assert_eq!(extra.failure_event_code(), "invalid_input");
     assert_eq!(f.uncertain().await.len(), 1, "nothing was resolved");
 }
 
@@ -520,7 +520,7 @@ async fn resolution_is_refused_while_the_receipts_run_is_active() {
         .resolve(&execution, ResolutionOutcome::NotStarted, None)
         .await
         .unwrap_err();
-    assert_eq!(refused.code, RECEIPT_RUN_ACTIVE);
+    assert_eq!(refused.failure_event_code(), RECEIPT_RUN_ACTIVE);
     assert_eq!(f.uncertain().await.len(), 1);
 }
 
@@ -531,4 +531,92 @@ fn test_profiles() -> Arc<agentkit_sessions::ProfileRegistry> {
         ])
         .unwrap(),
     )
+}
+
+#[tokio::test]
+async fn chat_scoped_service_and_static_route_preserve_receipt_refusal_context() {
+    let f = fixture().await;
+    let execution = f.seed_admitted("live", "call-x", false).await;
+    let service = f
+        .service
+        .resolve_uncertain_execution_for_chat(
+            "s1",
+            &execution,
+            ResolutionOutcome::NotStarted,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        service.to_string(),
+        "receipt_run_active: receipt_run_active: run turn:crash:live is still active"
+    );
+    let raw = agentkit_sessions::resolve_uncertain_execution(
+        &f.store,
+        "s1",
+        &execution,
+        ResolutionOutcome::NotStarted,
+        None,
+        None,
+        None,
+        5000,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        raw.to_string(),
+        "invalid transition: receipt_run_active: run turn:crash:live is still active"
+    );
+
+    let f = fixture().await;
+    let execution = f.seed_admitted("old", "call-y", true).await;
+    f.service
+        .resolve_uncertain_execution_for_chat(
+            "s1",
+            &execution,
+            ResolutionOutcome::NotStarted,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let service = f
+        .service
+        .resolve_uncertain_execution_for_chat(
+            "s1",
+            &execution,
+            ResolutionOutcome::Acknowledged,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        service.to_string(),
+        format!(
+            "receipt_not_uncertain: receipt_not_uncertain: execution {execution} is already finished"
+        )
+    );
+    let raw = agentkit_sessions::resolve_uncertain_execution(
+        &f.store,
+        "s1",
+        &execution,
+        ResolutionOutcome::Acknowledged,
+        None,
+        None,
+        None,
+        5000,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        raw.to_string(),
+        format!(
+            "invalid transition: receipt_not_uncertain: execution {execution} is already finished"
+        )
+    );
 }

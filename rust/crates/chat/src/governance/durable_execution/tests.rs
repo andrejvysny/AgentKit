@@ -484,7 +484,10 @@ async fn static_fast_path_uncertain_receipt_resolves_then_the_retry_proceeds() {
         )
         .await
         .expect_err("a sessionless chat is not resolvable through the session surface");
-    assert_eq!(dead_end.code, "session_not_found");
+    assert!(matches!(
+        dead_end,
+        agentkit_sessions::SessionsError::SessionNotFound(_)
+    ));
 
     // The host-owned resolve route: explicit, audited, and the only thing
     // that ever unblocks the effect.

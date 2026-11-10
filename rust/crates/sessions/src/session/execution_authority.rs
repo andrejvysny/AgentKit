@@ -48,7 +48,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             // chat must be able to run its tools). Only a real read failure
             // stays an error; the guard then fails closed.
             .or_else(|error| {
-                if error.code == "session_not_found" {
+                if matches!(error, crate::SessionsError::SessionNotFound(_)) {
                     Ok(None)
                 } else {
                     Err(error)
@@ -56,7 +56,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             })
             .map_err(|error| {
                 GovernanceError::Execution(format!(
-                    "Cannot read the session's execution state; permissions stay with the guard. ({error:?})"
+                    "Cannot read the session's execution state; permissions stay with the guard. ({:?})", crate::error::LegacySessionDebug(&error)
                 ))
             })?;
         let Some(state) = state else {
@@ -82,7 +82,9 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
         };
         let state = match self.service.get_state(session_id).await {
             Ok(state) => state,
-            Err(error) if error.code == "session_not_found" => return Ok(None),
+            Err(crate::SessionsError::SessionNotFound(_)) => {
+                return Ok(None);
+            }
             Err(error) => return Err(GovernanceError::Execution(error.to_string())),
         };
         match state.descriptor["profileSnapshot"]["role"].as_str() {
@@ -114,10 +116,13 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             // Not an agent session: nothing can have approved this plan —
             // the same answer as a chat without a session at all, and never
             // a silent pass.
-            Err(error) if error.code == "session_not_found" => return Ok(None),
+            Err(crate::SessionsError::SessionNotFound(_)) => {
+                return Ok(None);
+            }
             Err(error) => {
                 return Err(GovernanceError::Execution(format!(
-                    "Cannot read the session's execution state; the plan stays unjudged. ({error:?})"
+                    "Cannot read the session's execution state; the plan stays unjudged. ({:?})",
+                    crate::error::LegacySessionDebug(&error)
                 )));
             }
         };

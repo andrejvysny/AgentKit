@@ -16,7 +16,6 @@ use agentkit_http::{
 };
 use agentkit_mcp::McpConfigRepository;
 use agentkit_runtime::AgentRuntime;
-use agentkit_sessions::HostResult;
 use agentkit_store::{MessageInput, ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
 use axum::{extract::Request, middleware::Next, response::Response};
@@ -190,21 +189,21 @@ impl ProviderOperations for Ports {
 
 #[async_trait]
 impl Authorization for Ports {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> HostResult<()> {
+    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
         Ok(())
     }
 }
 
 #[async_trait]
 impl ProposalApplier for Ports {
-    async fn apply(&self, _: MutationIdentity, _: Value) -> HostResult<Value> {
+    async fn apply(&self, _: MutationIdentity, _: Value) -> agentkit_chat::ChatResult<Value> {
         self.applied.fetch_add(1, Ordering::SeqCst);
         Ok(json!({
             "status": "applied", "appliedOps": 1, "failedOps": [],
             "resultJson": null, "revision": null,
         }))
     }
-    async fn reconcile(&self, _: MutationIdentity) -> HostResult<Option<Value>> {
+    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
         Ok(None)
     }
 }
@@ -215,7 +214,9 @@ const FAR: i64 = 4_000_000_000_000;
 
 /// The two pending proposals and the interrupted chat turn the service suites
 /// act on, written through the store the server owns.
-async fn seed(store: &SqliteStore) -> HostResult<()> {
+async fn seed(
+    store: &SqliteStore,
+) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
     store.create_chat(CHAT, None, json!({}), 0).await?;
     store.create_chat("resume-chat", None, json!({}), 0).await?;
     for (id, role, parent) in [

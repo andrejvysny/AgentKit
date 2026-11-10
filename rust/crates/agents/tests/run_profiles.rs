@@ -909,7 +909,7 @@ async fn host_resolve(
     project: &ProjectSelection,
     task: &TaskProfileOverrides,
     pin: &HostProviderPin,
-) -> Result<PinnedRunProfile, HostError> {
+) -> Result<PinnedRunProfile, agentkit_sessions::SessionsError> {
     fixture
         .profiles
         .resolve_with_host_provider("alice", 1_000, project, task, &[], pin)

@@ -361,14 +361,13 @@ impl Watchdog {
                     .review_reserved(&request, origin, CancellationToken::new(), reservation)
                     .await
                 {
-                    // Code prefix only: the full text may embed provider or
-                    // finding payloads.
-                    let text = error.to_string();
-                    let code = text.split(':').next().unwrap_or_default();
-                    eprintln!("agentkit-host: watchdog review for {trigger_name} failed: {code}");
-                    // These refusals land before any provider request, so the
-                    // trigger may fire again once the cause is fixed.
-                    if matches!(code, "advisor_disabled" | "advisor_model_unconfigured") {
+                    let refusal = retryable_refusal(&error);
+                    eprintln!(
+                        "agentkit-host: watchdog review for {trigger_name} failed: {}",
+                        refusal.unwrap_or("review_failed")
+                    );
+                    // These refusals land before any provider request.
+                    if refusal.is_some() {
                         watchdog.retract_fire(&run, &chat, trigger_name, now);
                     }
                 }
@@ -571,7 +570,7 @@ pub async fn explicit_review(
     cancellation: CancellationToken,
 ) -> AgentsResult<super::engine::AdvisorReport> {
     if chat_id.is_empty() {
-        return Err(AgentsError::execution("chatId is required".into()));
+        return Err(AgentsError::ChatIdRequired);
     }
     engine
         .review(
@@ -626,5 +625,34 @@ mod tests {
         sessions.insert("ghost".to_owned(), SessionState::default());
         prune_sessions(&mut sessions, 10_000_000, 3_600_000);
         assert!(sessions.is_empty());
+    }
+}
+
+fn retryable_refusal(error: &AgentsError) -> Option<&'static str> {
+    match error {
+        AgentsError::AdvisorDisabled => Some("advisor_disabled"),
+        AgentsError::AdvisorModelUnconfigured => Some("advisor_model_unconfigured"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod error_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn only_typed_advisor_refusals_retract_a_trigger() {
+        assert_eq!(
+            retryable_refusal(&AgentsError::AdvisorDisabled),
+            Some("advisor_disabled")
+        );
+        assert_eq!(
+            retryable_refusal(&AgentsError::AdvisorModelUnconfigured),
+            Some("advisor_model_unconfigured")
+        );
+        for code in ["advisor_disabled", "advisor_model_unconfigured"] {
+            let spoof = AgentsError::Core(agentkit_core::CoreError::new(code, "spoof"));
+            assert_eq!(retryable_refusal(&spoof), None);
+        }
     }
 }

@@ -10,7 +10,7 @@ use agentkit_store::{SqliteStore, SubagentRecord};
 use std::collections::HashSet;
 
 fn exhausted(detail: String) -> AgentsError {
-    AgentsError::execution(format!("subagent_budget_exhausted: {detail}"))
+    AgentsError::SubagentBudgetExhausted(format!("subagent_budget_exhausted: {detail}"))
 }
 
 /// Topmost non-subagent ancestor of `chat_id`. Prefers the `rootChatId`

@@ -64,7 +64,7 @@ impl<R: TaskRepository> RunHandle<R> {
             let task = self
                 .status()
                 .await?
-                .ok_or_else(|| EngineError::Execution("task not found".into()))?;
+                .ok_or_else(|| EngineError::TaskNotFound)?;
             let events = self
                 .host
                 .store

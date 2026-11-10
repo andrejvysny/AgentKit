@@ -463,31 +463,12 @@ impl NativeTeammates {
 /// Map a host error the way this lane's namespaces promise: the optimistic
 /// concurrency conflict keeps the established `revision_conflict` code (the
 /// same code the HTTP host answers with); admission/validation sentinels
-/// the services raise through `HostError::Execution` are caller fixes
+/// the services raise as typed profile refusals are caller fixes
 /// (`invalid_input`); store transition and duplicate legality keep this
 /// lane's namespace codes; everything else maps exactly as the crate-wide
 /// host mapping.
 fn map_host(error: impl Into<AgentsError>) -> Error {
-    use agentkit_sessions::HostError as H;
-    use agentkit_store::StoreError as S;
-    let error = match error.into() {
-        AgentsError::Host(inner) => inner,
-        refusal @ (AgentsError::InvalidAgent(_) | AgentsError::InvalidAdmission(_)) => {
-            return errors::invalid(refusal.to_string());
-        }
-        other => return errors::agents(other),
-    };
-    // Raised by the host-owned run-profile resolver, not the agents context.
-    if let H::Execution(message) = &error
-        && (message.starts_with("invalid_overrides") || message.starts_with("run_profile_refused"))
-    {
-        return errors::invalid(message.clone());
-    }
-    match error {
-        H::Store(S::Conflict(message)) => errors::stable("revision_conflict", message, None),
-        H::Store(inner) => errors::store_port(inner, "invalid_task_transition", "duplicate_task"),
-        _ => errors::host(error),
-    }
+    errors::teammate(error)
 }
 
 fn parse_json<T: serde::de::DeserializeOwned>(raw: String, what: &str) -> Result<T> {
@@ -663,3 +644,6 @@ fn parse_run_profile_defaults(options_json: Option<&str>) -> Result<RunProfileDe
         }
     }
 }
+
+#[cfg(test)]
+mod teammate_error_tests;

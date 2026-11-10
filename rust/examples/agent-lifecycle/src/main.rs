@@ -10,7 +10,6 @@
 //! for consumers integrating the host crate.
 
 use agentkit_agents::{AgentDefinitionService, AgentsError};
-use agentkit_sessions::HostError;
 use agentkit_store::{
     AgentDefinition, AgentLifecycle, AgentRevisionSource, AgentSkillSelection, ArgsHashProvenance,
     ClaimInput, CreateAgent, ExecutionReceiptAdmission, SqliteStore, SubmitTask,
@@ -80,9 +79,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let conflict = service.update(&created.agent_id, 1, edited.clone()).await;
     assert!(matches!(
         conflict,
-        Err(AgentsError::Host(HostError::Store(
-            agentkit_store::StoreError::Conflict(_)
-        )))
+        Err(AgentsError::Store(agentkit_store::StoreError::Conflict(_)))
     ));
     println!(
         "    revision={} after conflict-free retry window",
@@ -117,9 +114,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let refused = service.check_admission(&created.agent_id).await;
     assert!(matches!(
         refused,
-        Err(AgentsError::Host(HostError::Store(
+        Err(AgentsError::Store(
             agentkit_store::StoreError::InvalidTransition(_)
-        )))
+        ))
     ));
     service.restore(&created.agent_id).await?;
     assert!(service.check_admission(&created.agent_id).await.is_ok());

@@ -3,6 +3,8 @@
 //! it holds no provider client and knows nothing about chat turns.
 
 pub mod context_window;
+mod error;
+mod failure_code;
 mod ports;
 mod profiles;
 mod receipts;
@@ -11,6 +13,9 @@ mod run_profiles;
 mod session;
 mod store_aliases;
 
+pub use error::{
+    AnswerStoreError, ReceiptStoreError, SessionStoreError, SessionsError, SessionsResult,
+};
 pub use ports::ChatProviderFactory;
 pub use profiles::{
     AgentLimits, AgentProfile, AgentResources, ProfileRegistry, SkillSelection, task_profile,
@@ -31,12 +36,10 @@ pub use session::{
     CONTENT_UNSUPPORTED_MESSAGE, CodingPermissionAuthority, CreateSessionInput,
     FALLBACK_CONTEXT_WINDOW_TOKENS, FollowUpInput, OnSettled, PermissionContext,
     PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent, REASONING_EFFORTS, RECEIPT_RUN_ACTIVE,
-    SendInput, SessionError, SessionExecutionAuthority, SessionResult, SteerInput,
-    TURN_CONFIG_KEYS, WhenBusy, is_valid_session_turn_kind, list_turn_tasks,
-    read_session_descriptor, session_content_selection, session_turn_kind, session_usage,
-    summarize_turn, turn_config,
+    SendInput, SessionExecutionAuthority, SteerInput, TURN_CONFIG_KEYS, WhenBusy,
+    is_valid_session_turn_kind, list_turn_tasks, read_session_descriptor,
+    session_content_selection, session_turn_kind, session_usage, summarize_turn, turn_config,
 };
 pub use store_aliases::{
-    AgentHost, ExecutionContext, HostError, HostOptions, HostResult, RunHandle, VerificationInput,
-    WorkerHandle,
+    AgentHost, ExecutionContext, HostOptions, RunHandle, VerificationInput, WorkerHandle,
 };

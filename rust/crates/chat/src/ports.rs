@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::HostResult;
+use crate::ChatResult;
 
 /// Subagent coordination tools that change durable child state. They keep
 /// `effect: "read"` so the permission modes still admit them, but must carry
@@ -25,7 +25,7 @@ pub trait DelegationGuidance: Send + Sync {
 
 #[async_trait]
 pub trait ContextProvider: Send + Sync {
-    async fn resolve(&self, input: Value, cancel: CancellationToken) -> HostResult<Value>;
+    async fn resolve(&self, input: Value, cancel: CancellationToken) -> ChatResult<Value>;
 }
 
 #[async_trait]
@@ -35,7 +35,7 @@ pub trait AttachmentResolver: Send + Sync {
         reference: &str,
         context: &AttachmentResolveContext,
         cancel: CancellationToken,
-    ) -> HostResult<Option<ResolvedAttachment>>;
+    ) -> ChatResult<Option<ResolvedAttachment>>;
 }
 
 pub struct AttachmentResolveContext {
@@ -49,13 +49,13 @@ pub struct ResolvedAttachment {
 
 #[async_trait]
 pub trait Authorization: Send + Sync {
-    async fn authorize(&self, actor: &Value, action: &str, resource: &Value) -> HostResult<()>;
+    async fn authorize(&self, actor: &Value, action: &str, resource: &Value) -> ChatResult<()>;
 }
 
 #[async_trait]
 pub trait UsageAuthorizer: Send + Sync {
-    async fn authorize(&self, task_id: &str, usage: &Value) -> HostResult<()>;
-    async fn record(&self, _usage: &Value) -> HostResult<()> {
+    async fn authorize(&self, task_id: &str, usage: &Value) -> ChatResult<()>;
+    async fn record(&self, _usage: &Value) -> ChatResult<()> {
         Ok(())
     }
 }
@@ -72,6 +72,6 @@ pub struct MutationIdentity {
 pub trait ProposalApplier: Send + Sync {
     /// When present, enforce execution_fence atomically with the mutation. A
     /// local preflight cannot prevent a worker becoming stale during this await.
-    async fn apply(&self, identity: MutationIdentity, operations: Value) -> HostResult<Value>;
-    async fn reconcile(&self, identity: MutationIdentity) -> HostResult<Option<Value>>;
+    async fn apply(&self, identity: MutationIdentity, operations: Value) -> ChatResult<Value>;
+    async fn reconcile(&self, identity: MutationIdentity) -> ChatResult<Option<Value>>;
 }

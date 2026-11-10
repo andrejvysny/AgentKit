@@ -3,7 +3,7 @@ use super::{
     compaction_request,
     context_budget::{self, ContextBudget},
 };
-use crate::{ExecutionContext, HostError, HostResult};
+use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_core::{ChatProvider, ChatRequest, RunOptions, Terminal, ToolRegistry};
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -32,13 +32,13 @@ struct Snapshot {
     summaries: Vec<Value>,
 }
 impl Snapshot {
-    async fn capture(input: &Input) -> HostResult<Self> {
+    async fn capture(input: &Input) -> ChatResult<Self> {
         let chat = input
             .context
             .store
             .get_chat(&input.chat_id)
             .await?
-            .ok_or_else(|| HostError::Execution("session not found".into()))?;
+            .ok_or_else(|| ChatError::SessionNotFound)?;
         let summaries = input
             .context
             .store
@@ -129,7 +129,7 @@ fn message_budget(input: &Input) -> u64 {
             tools.div_ceil(4)
         })
 }
-pub(super) async fn apply(input: Input) -> HostResult<Vec<Entry>> {
+pub(super) async fn apply(input: Input) -> ChatResult<Vec<Entry>> {
     let snapshot = Snapshot::capture(&input).await?;
     let plan = make_plan(&input, &snapshot);
     if !plan.triggered {
@@ -171,7 +171,7 @@ async fn save_summary(
     plan: &Plan,
     id: &str,
     text: &str,
-) -> HostResult<Vec<Entry>> {
+) -> ChatResult<Vec<Entry>> {
     let body = &input.entries[plan.body_start..];
     let (details, commands) =
         compaction_request::file_details(&body[plan.from..plan.cut], plan.previous.as_ref());
@@ -181,13 +181,13 @@ async fn save_summary(
     input.context.emit("run.context.compacted", json!({"summaryId":id,"tokensBefore":record["tokensBefore"],"tokensAfter":record["tokensAfter"],"coveredMessages":plan.cut,"reason":if snapshot.manual() {"manual"} else {"threshold"}})).await?;
     Ok(compaction::apply_summary(&input.entries, &record).unwrap_or_else(|| plan.working.clone()))
 }
-async fn emit_usage(input: &Input, usage: Vec<Value>) -> HostResult<()> {
+async fn emit_usage(input: &Input, usage: Vec<Value>) -> ChatResult<()> {
     account_all(usage, |item| account_one(input, item)).await
 }
-async fn account_all<F, Fut>(usage: Vec<Value>, mut account: F) -> HostResult<()>
+async fn account_all<F, Fut>(usage: Vec<Value>, mut account: F) -> ChatResult<()>
 where
     F: FnMut(Value) -> Fut,
-    Fut: std::future::Future<Output = HostResult<()>>,
+    Fut: std::future::Future<Output = ChatResult<()>>,
 {
     let mut first_error = None;
     for item in usage {
@@ -199,7 +199,7 @@ where
     }
     first_error.map_or(Ok(()), Err)
 }
-async fn account_one(input: &Input, mut item: Value) -> HostResult<()> {
+async fn account_one(input: &Input, mut item: Value) -> ChatResult<()> {
     item["step"] = 0.into();
     let recorded = input.context.emit("run.usage", item.clone()).await;
     if let Some(meter) = &input.usage {
@@ -220,7 +220,7 @@ async fn account_one(input: &Input, mut item: Value) -> HostResult<()> {
         )
         .await;
     }
-    recorded
+    recorded.map_err(Into::into)
 }
 async fn summarize(
     input: &Input,
@@ -338,21 +338,21 @@ fn record(
     id: &str,
     summary: &str,
     details: Value,
-) -> HostResult<Value> {
+) -> ChatResult<Value> {
     let timestamp =
         agentkit_store::ConversationTimestamp::from_epoch_millis(input.context.runtime.now_ms())
             .and_then(|value| value.wire_text().map(|text| text.into_owned()))
-            .map_err(|_| HostError::Execution("invalid runtime timestamp".into()))?;
+            .map_err(|_| ChatError::InvalidRuntimeTimestamp)?;
     let through = body[cut - 1]
         .1
         .as_deref()
-        .ok_or_else(|| HostError::Execution("summary source id missing".into()))?;
+        .ok_or_else(|| ChatError::SummarySourceIdMissing)?;
     let kept = body[cut]
         .1
         .as_deref()
-        .ok_or_else(|| HostError::Execution("summary source id missing".into()))?;
-    let hash = compaction::hash_source(&body[..cut])
-        .ok_or_else(|| HostError::Execution("summary source hash failed".into()))?;
+        .ok_or_else(|| ChatError::SummarySourceIdMissing)?;
+    let hash =
+        compaction::hash_source(&body[..cut]).ok_or_else(|| ChatError::SummarySourceHashFailed)?;
     let before: u64 = body[..cut]
         .iter()
         .map(|entry| context_budget::message_tokens(&entry.0))
@@ -368,7 +368,7 @@ fn record(
     )
 }
 
-async fn commit(input: &Input, snapshot: &Snapshot, record: Option<Value>) -> HostResult<()> {
+async fn commit(input: &Input, snapshot: &Snapshot, record: Option<Value>) -> ChatResult<()> {
     let tx = input.context.store.begin_transaction().await?;
     let view = tx.view();
     verify_active(input, &view).await?;
@@ -396,19 +396,19 @@ async fn commit(input: &Input, snapshot: &Snapshot, record: Option<Value>) -> Ho
     tx.commit().await?;
     Ok(())
 }
-async fn verify_active(input: &Input, view: &agentkit_store::SqliteStore) -> HostResult<()> {
+async fn verify_active(input: &Input, view: &agentkit_store::SqliteStore) -> ChatResult<()> {
     input.context.check_cancelled()?;
     view.verify_fence(&input.context.fence, input.context.runtime.now_ms())
         .await?;
     let task = view
         .get_task(&input.context.task.task_id)
         .await?
-        .ok_or_else(|| HostError::Execution("compaction task disappeared".into()))?;
+        .ok_or_else(|| ChatError::CompactionTaskDisappeared)?;
     if task.cancel_requested {
-        return Err(HostError::Cancelled);
+        return Err(ChatError::Cancelled);
     }
     if task.interrupt_requested {
-        return Err(HostError::Execution("compaction interrupted".into()));
+        return Err(ChatError::CompactionInterrupted);
     }
     Ok(())
 }
@@ -416,15 +416,15 @@ async fn validate_snapshot(
     input: &Input,
     snapshot: &Snapshot,
     view: &agentkit_store::SqliteStore,
-) -> HostResult<agentkit_store::ChatRecord> {
+) -> ChatResult<agentkit_store::ChatRecord> {
     let chat = view
         .get_chat(&input.chat_id)
         .await?
-        .ok_or_else(|| HostError::Execution("session disappeared".into()))?;
+        .ok_or_else(|| ChatError::SessionDisappeared)?;
     let path = serde_json::to_value(view.messages(&input.chat_id, true).await?)
-        .map_err(|_| HostError::Execution("context snapshot failed".into()))?;
+        .map_err(|_| ChatError::ContextSnapshotFailed)?;
     let receipts = serde_json::to_value(view.list_executions_by_chat(input.chat_id.clone()).await?)
-        .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
+        .map_err(|_| ChatError::ReceiptSnapshotFailed)?;
     let summaries = view.list_context_summaries(&input.chat_id).await?;
     if chat.metadata.get("agentkit.session") != snapshot.descriptor.as_ref()
         || chat
@@ -435,9 +435,7 @@ async fn validate_snapshot(
         || receipts != snapshot.receipts
         || summaries != snapshot.summaries
     {
-        return Err(HostError::Execution(
-            "context changed during compaction".into(),
-        ));
+        return Err(ChatError::ContextChangedDuringCompaction);
     }
     Ok(chat)
 }
@@ -446,7 +444,7 @@ async fn trim_and_report(
     context: &ExecutionContext,
     entries: Vec<Entry>,
     budget: u64,
-) -> HostResult<Vec<Entry>> {
+) -> ChatResult<Vec<Entry>> {
     let (entries, dropped) = trim_entries(entries, budget);
     if dropped > 0 {
         let remaining = entries_tokens(&entries);

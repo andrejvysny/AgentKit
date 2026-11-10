@@ -1,9 +1,9 @@
 //! Fixture-only RPC for original tool contributor callbacks.
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
+use agentkit_governance::GovernanceError;
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
-use agentkit_sessions::HostError;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -29,7 +29,7 @@ impl ToolContributor for Contributor {
             .bearer_auth(&self.token)
             .json(&input)
             .send();
-        let response = tokio::select! {_=ctx.cancellation.cancelled()=>return Err(HostError::Cancelled.into()),result=request=>result.map_err(error)?};
+        let response = tokio::select! {_=ctx.cancellation.cancelled()=>return Err(GovernanceError::Execution("execution cancelled".into())),result=request=>result.map_err(error)?};
         let definitions: Vec<ToolDefinition> = response
             .error_for_status()
             .map_err(error)?
@@ -82,8 +82,8 @@ impl Tool for CallbackTool {
             .map_err(core_error)
     }
 }
-fn error(error: impl std::fmt::Display) -> HostError {
-    HostError::Execution(error.to_string())
+fn error(error: impl std::fmt::Display) -> GovernanceError {
+    GovernanceError::Execution(error.to_string())
 }
 fn core_error(error: impl std::fmt::Display) -> CoreError {
     CoreError::new("test_tool_bridge", &error.to_string())

@@ -12,12 +12,12 @@ use agentkit_agents::{
     SubagentService, SubagentView,
 };
 use agentkit_chat::DelegationGuidance;
+use agentkit_engine::EngineError;
 use agentkit_engine::{ObserverError, TaskSettledObserver};
 use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor, ToolGuard,
     ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_sessions::HostError;
 use agentkit_store::TaskRecord;
 
 use crate::error::RuntimeError;
@@ -212,7 +212,7 @@ impl TaskSettledObserver for SubagentLane {
             Some(service) => Ok(service
                 .observe_settled(task)
                 .await
-                .map_err(HostError::from)?),
+                .map_err(EngineError::from)?),
             None => Ok(()),
         }
     }

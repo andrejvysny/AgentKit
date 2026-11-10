@@ -19,7 +19,7 @@ use std::time::Duration;
 use agentkit_core::permission::CodingMode;
 use agentkit_engine::RunUpdate;
 use agentkit_runtime::{AgentRuntime, CodingLane, ExternalToolsPolicy, PlanConfiguration};
-use agentkit_sessions::{HostResult, RunHandle};
+use agentkit_sessions::RunHandle;
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
@@ -1194,7 +1194,11 @@ impl Drop for SubscriptionHandle {
 }
 
 struct Subscription {
-    receiver: Mutex<Option<mpsc::Receiver<HostResult<RunUpdate>>>>,
+    receiver: Mutex<
+        Option<
+            mpsc::Receiver<agentkit_engine::EngineResult<RunUpdate, agentkit_store::StoreError>>,
+        >,
+    >,
     closed: AtomicBool,
     /// Wakes a `poll` that is parked on the receiver: `cancel` must not
     /// depend on winning the receiver lock (a parked poll holds it).
@@ -1379,7 +1383,9 @@ enum Drain {
     Done(Option<Value>),
 }
 
-fn drain_update(update: HostResult<RunUpdate>) -> Result<Drain> {
+fn drain_update(
+    update: agentkit_engine::EngineResult<RunUpdate, agentkit_store::StoreError>,
+) -> Result<Drain> {
     match update {
         Ok(RunUpdate::Event(record)) => {
             let value = serde_json::to_value(&record)

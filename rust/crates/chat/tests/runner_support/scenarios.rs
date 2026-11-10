@@ -28,7 +28,10 @@ pub struct Script {
 }
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for Script {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         if self.scenario == "verification" {
             return self.commit(&context).await;
         }
@@ -48,7 +51,12 @@ impl TaskExecutor<agentkit_store::SqliteStore> for Script {
             self.witness.entered.notify_one();
             self.witness.release.notified().await;
             let result = context.emit("fault.committed", json!({"effect":1})).await;
-            if matches!(&result, Err(HostError::Store(StoreError::LeaseLost(_)))) {
+            if matches!(
+                &result,
+                Err(agentkit_engine::EngineError::Store(StoreError::LeaseLost(
+                    _
+                )))
+            ) {
                 self.witness.stale_denied.store(true, Ordering::SeqCst);
             }
             assert!(result.is_err(), "stale worker published event");
@@ -83,15 +91,19 @@ impl TaskExecutor<agentkit_store::SqliteStore> for Script {
             context.check_cancelled()?;
         }
         if self.scenario == "uncertain_write" {
-            return Err(HostError::Execution(
-                "ECONNRESET after domain commit".into(),
-            ));
+            return Err(agentkit_engine::EngineError::External {
+                source: Box::new(std::io::Error::other("ECONNRESET after domain commit")),
+                failure_code: None,
+            });
         }
         Ok(())
     }
 }
 impl Script {
-    async fn commit(&self, context: &ExecutionContext) -> HostResult<()> {
+    async fn commit(
+        &self,
+        context: &ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         let effect = self.witness.effects.fetch_add(1, Ordering::SeqCst) + 1;
         context
             .emit("fault.committed", json!({"effect":effect}))
@@ -105,7 +117,10 @@ pub struct Verify {
 }
 #[async_trait]
 impl VerificationHook<agentkit_store::SqliteStore> for Verify {
-    async fn verify(&self, context: ExecutionContext) -> HostResult<VerificationReport> {
+    async fn verify(
+        &self,
+        context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError> {
         let task = self.store.get_task(&context.task.task_id).await?.unwrap();
         let events = self.store.events(&context.task.task_id, None, 100).await?;
         *self.witness.verification.lock().unwrap() = json!({"status":task.status,"eventTypes":events.into_iter().map(|event|event.event["type"].clone()).collect::<Vec<_>>()});
@@ -139,7 +154,9 @@ pub async fn run(store: SqliteStore, scenario: &str) -> Vec<Value> {
 /// Start one attempt and suspend it at the gate, so the driver can act on the
 /// live attempt lease (admit a receipt, append a publication, cancel) before
 /// the attempt ends.
-pub async fn suspend(env: &Environment) -> tokio::task::JoinHandle<HostResult<bool>> {
+pub async fn suspend(
+    env: &Environment,
+) -> tokio::task::JoinHandle<agentkit_engine::EngineResult<bool, agentkit_store::StoreError>> {
     let host = env.host.clone();
     let running = tokio::spawn(async move { host.run_once().await });
     entered(env).await;
@@ -155,7 +172,9 @@ async fn supersede(env: &Environment) {
     let captured = env.witness.captured.lock().unwrap().clone().unwrap();
     assert!(matches!(
         captured.emit("fault.committed", json!({"effect":1})).await,
-        Err(HostError::Store(StoreError::LeaseLost(_)))
+        Err(agentkit_engine::EngineError::Store(StoreError::LeaseLost(
+            _
+        )))
     ));
     env.witness.stale_denied.store(true, Ordering::SeqCst);
 }
@@ -177,7 +196,9 @@ async fn run_gate(env: &Environment, scenario: &str, transcript: &mut Vec<Value>
     if scenario == "stale_publication" {
         assert!(matches!(
             result,
-            Err(HostError::Store(StoreError::LeaseLost(_)))
+            Err(agentkit_engine::EngineError::Store(StoreError::LeaseLost(
+                _
+            )))
         ));
         transcript.push(
             snapshot(

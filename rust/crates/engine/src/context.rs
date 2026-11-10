@@ -55,7 +55,7 @@ impl<R: TaskRepository> ExecutionContext<R> {
         let now = self.runtime.now_ms();
         let timestamp = agentkit_kernel::ConversationTimestamp::from_epoch_millis(now)
             .and_then(|value| value.wire_text().map(|text| text.into_owned()))
-            .map_err(|_| EngineError::Execution("invalid runtime timestamp".into()))?;
+            .map_err(|_| EngineError::InvalidTimestamp)?;
         let event = json!({
             "type": event_type, "data": data, "runId": self.task.task_id,
             "seq": seq, "eventId": self.runtime.id(), "timestamp": timestamp,

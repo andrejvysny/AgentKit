@@ -1,11 +1,13 @@
 pub mod agentkit_runtime
 pub enum agentkit_runtime::RuntimeError
 pub agentkit_runtime::RuntimeError::Agents(agentkit_agents::errors::AgentsError)
+pub agentkit_runtime::RuntimeError::Chat(agentkit_chat::error::ChatError)
 pub agentkit_runtime::RuntimeError::Coded
 pub agentkit_runtime::RuntimeError::Coded::code: alloc::string::String
 pub agentkit_runtime::RuntimeError::Coded::message: alloc::string::String
-pub agentkit_runtime::RuntimeError::Host(agentkit_sessions::store_aliases::HostError)
+pub agentkit_runtime::RuntimeError::Engine(agentkit_engine::error::EngineError<agentkit_store::StoreError>)
 pub agentkit_runtime::RuntimeError::InvalidInput(alloc::string::String)
+pub agentkit_runtime::RuntimeError::Sessions(agentkit_sessions::error::SessionsError)
 pub struct agentkit_runtime::AdvisorLane
 impl agentkit_runtime::AdvisorLane
 pub fn agentkit_runtime::AdvisorLane::configure(&self, agentkit_agents::advisor::config::AdvisorConfig)

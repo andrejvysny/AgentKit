@@ -11,7 +11,7 @@
 mod runner_support;
 use runner_support::support;
 
-use agentkit_sessions::HostError;
+use agentkit_engine::EngineError;
 use agentkit_store::{SqliteStore, SubmitTask};
 use serde_json::json;
 use support::{Directory, Environment, snapshot};
@@ -72,7 +72,7 @@ async fn a_refused_admission_leaves_no_durable_row() {
         .submit(task("ghost", "unregistered", "scope"))
         .await;
     assert!(
-        matches!(&refused, Err(HostError::NoExecutorForKind(kind)) if kind.as_str() == "unregistered"),
+        matches!(&refused, Err(EngineError::NoExecutorForKind(kind)) if kind.as_str() == "unregistered"),
         "an unregistered kind must be refused by the admission gate"
     );
     // Zero unauthorized mutation: no task, no attempt, no event, no publication.

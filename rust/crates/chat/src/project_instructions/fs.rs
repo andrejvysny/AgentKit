@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 
 use super::{ProjectInstructionsSource, ProjectInstructionsText};
-use crate::{HostError, HostResult};
+use crate::{ChatError, ChatResult};
 
 /// Reads `AGENTS.md` / `CLAUDE.md` from a workspace root through a
 /// symlink-refusing, root-confining open (POSIX and Windows; see the module
@@ -37,7 +37,7 @@ impl ProjectInstructionsSource for FileProjectInstructions {
         root: &str,
         name: &str,
         max_bytes: usize,
-    ) -> HostResult<Option<ProjectInstructionsText>> {
+    ) -> ChatResult<Option<ProjectInstructionsText>> {
         if name.is_empty()
             || name == "."
             || name == ".."
@@ -45,30 +45,26 @@ impl ProjectInstructionsSource for FileProjectInstructions {
             || name.contains('\\')
             || name.contains('\0')
         {
-            return Err(HostError::Execution(
-                "Instruction file name must be a plain file name.".into(),
-            ));
+            return Err(ChatError::InstructionFileNameMustBeAPlainFileName);
         }
         #[cfg(unix)]
         {
             let (root, name) = (root.to_owned(), name.to_owned());
             tokio::task::spawn_blocking(move || read_plain_file(&root, &name, max_bytes))
                 .await
-                .map_err(|_| HostError::Execution("Instruction reader stopped.".into()))?
+                .map_err(|_| ChatError::InstructionReaderStopped)?
         }
         #[cfg(windows)]
         {
             let (root, name) = (root.to_owned(), name.to_owned());
             tokio::task::spawn_blocking(move || read_plain_file(&root, &name, max_bytes))
                 .await
-                .map_err(|_| HostError::Execution("Instruction reader stopped.".into()))?
+                .map_err(|_| ChatError::InstructionReaderStopped)?
         }
         #[cfg(all(not(unix), not(windows)))]
         {
             let _ = (root, max_bytes);
-            Err(HostError::Execution(
-                "Project instructions are not read on this platform.".into(),
-            ))
+            Err(ChatError::ProjectInstructionsAreNotReadOnThisPlatform)
         }
     }
 }
@@ -81,7 +77,7 @@ fn read_plain_file(
     root: &str,
     name: &str,
     max_bytes: usize,
-) -> HostResult<Option<ProjectInstructionsText>> {
+) -> ChatResult<Option<ProjectInstructionsText>> {
     use std::ffi::CString;
     use std::io::ErrorKind;
     use std::mem::MaybeUninit;
@@ -90,12 +86,10 @@ fn read_plain_file(
     use std::os::unix::fs::MetadataExt;
 
     // A symlinked root is the caller's explicit choice: resolve it once.
-    let real_root = std::fs::canonicalize(root)
-        .map_err(|error| HostError::Execution(format!("Cannot resolve workspace root: {error}")))?;
+    let real_root = std::fs::canonicalize(root).map_err(ChatError::ResolveWorkspaceRoot)?;
     let root_c = CString::new(real_root.as_os_str().as_bytes())
-        .map_err(|_| HostError::Execution("Workspace root contains a NUL byte.".into()))?;
-    let name_c = CString::new(name)
-        .map_err(|_| HostError::Execution("Instruction file name contains a NUL byte.".into()))?;
+        .map_err(|_| ChatError::WorkspaceRootContainsANulByte)?;
+    let name_c = CString::new(name).map_err(|_| ChatError::InstructionFileNameContainsANulByte)?;
     // Pin the canonical root as a directory fd: every later lookup is
     // relative to THIS directory, so a path component swapped for a symlink
     // after canonicalization cannot redirect the read.
@@ -108,10 +102,7 @@ fn read_plain_file(
         )
     };
     if raw_dir < 0 {
-        return Err(HostError::Execution(format!(
-            "Cannot open workspace root: {}",
-            std::io::Error::last_os_error()
-        )));
+        return Err(ChatError::OpenWorkspaceRoot(std::io::Error::last_os_error()));
     }
     // SAFETY: `raw_dir` is a freshly opened, valid descriptor that nothing
     // else owns; `OwnedFd` takes over closing it.
@@ -133,23 +124,17 @@ fn read_plain_file(
         if error.kind() == ErrorKind::NotFound {
             return Ok(None);
         }
-        return Err(HostError::Execution(format!(
-            "Cannot inspect instruction file: {error}"
-        )));
+        return Err(ChatError::InspectInstructionFile(error));
     }
     // SAFETY: `fstatat` returned 0, so it filled the whole struct.
     let expected = unsafe { stat.assume_init() };
     match expected.st_mode & libc::S_IFMT {
         libc::S_IFLNK => {
-            return Err(HostError::Execution(
-                "Instruction file is a symlink.".into(),
-            ));
+            return Err(ChatError::InstructionFileIsASymlink);
         }
         libc::S_IFREG => {}
         _ => {
-            return Err(HostError::Execution(
-                "Instruction file is not a regular file.".into(),
-            ));
+            return Err(ChatError::InstructionFileIsNotARegularFile);
         }
     }
     // O_NOFOLLOW refuses a swap to a symlink; O_NONBLOCK refuses a FIFO.
@@ -163,26 +148,21 @@ fn read_plain_file(
         )
     };
     if raw_file < 0 {
-        return Err(HostError::Execution(format!(
-            "Cannot open instruction file: {}",
-            std::io::Error::last_os_error()
-        )));
+        return Err(ChatError::OpenInstructionFile(
+            std::io::Error::last_os_error(),
+        ));
     }
     // SAFETY: `raw_file` is a freshly opened, valid descriptor that nothing
     // else owns; `File` takes over closing it.
     let mut file = unsafe { std::fs::File::from_raw_fd(raw_file) };
     // fstat the OPEN file: same dev/ino or the check raced a replacement.
-    let opened = file
-        .metadata()
-        .map_err(|error| HostError::Execution(format!("Cannot stat instruction file: {error}")))?;
+    let opened = file.metadata().map_err(ChatError::StatInstructionFile)?;
     if !opened.is_file()
         // Same widening std's own `MetadataExt::dev`/`ino` perform.
         || opened.dev() != expected.st_dev as u64
         || opened.ino() != expected.st_ino as u64
     {
-        return Err(HostError::Execution(
-            "Instruction file changed during open.".into(),
-        ));
+        return Err(ChatError::InstructionFileChangedDuringOpen);
     }
     Ok(Some(drain_and_decode(&mut file, max_bytes)?))
 }
@@ -203,33 +183,26 @@ fn read_plain_file(
     root: &str,
     name: &str,
     max_bytes: usize,
-) -> HostResult<Option<ProjectInstructionsText>> {
+) -> ChatResult<Option<ProjectInstructionsText>> {
     use std::fs::OpenOptions;
     use std::io::ErrorKind;
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 
-    let real_root = std::fs::canonicalize(root)
-        .map_err(|error| HostError::Execution(format!("Cannot resolve workspace root: {error}")))?;
+    let real_root = std::fs::canonicalize(root).map_err(ChatError::ResolveWorkspaceRoot)?;
     let target = real_root.join(name);
     let expected = match std::fs::symlink_metadata(&target) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(HostError::Execution(format!(
-                "Cannot inspect instruction file: {error}"
-            )));
+            return Err(ChatError::InspectInstructionFile(error));
         }
     };
     if expected.file_type().is_symlink() {
-        return Err(HostError::Execution(
-            "Instruction file is a symlink.".into(),
-        ));
+        return Err(ChatError::InstructionFileIsASymlink);
     }
     if !expected.is_file() {
-        return Err(HostError::Execution(
-            "Instruction file is not a regular file.".into(),
-        ));
+        return Err(ChatError::InstructionFileIsNotARegularFile);
     }
     // `lstat` half of the identity check: query the volume serial + file
     // index of the entry itself. The reparse-point flag means the handle is
@@ -239,9 +212,7 @@ fn read_plain_file(
         .read(true)
         .attributes(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(&target)
-        .map_err(|error| {
-            HostError::Execution(format!("Cannot inspect instruction file: {error}"))
-        })?;
+        .map_err(ChatError::InspectInstructionFile)?;
     let expected_identity = file_identity(&inspected)?;
     drop(inspected);
     // `O_NOFOLLOW` has no Windows equivalent, so the swap between the check
@@ -250,14 +221,10 @@ fn read_plain_file(
     let mut file = OpenOptions::new()
         .read(true)
         .open(&target)
-        .map_err(|error| HostError::Execution(format!("Cannot open instruction file: {error}")))?;
-    let opened = file
-        .metadata()
-        .map_err(|error| HostError::Execution(format!("Cannot stat instruction file: {error}")))?;
+        .map_err(ChatError::OpenInstructionFile)?;
+    let opened = file.metadata().map_err(ChatError::StatInstructionFile)?;
     if !opened.is_file() || file_identity(&file)? != expected_identity {
-        return Err(HostError::Execution(
-            "Instruction file changed during open.".into(),
-        ));
+        return Err(ChatError::InstructionFileChangedDuringOpen);
     }
     Ok(Some(drain_and_decode(&mut file, max_bytes)?))
 }
@@ -268,7 +235,7 @@ fn read_plain_file(
 /// matching `std::os::windows::fs::MetadataExt` getters are unstable behind
 /// `windows_by_handle`, which the pinned stable toolchain rejects outright.
 #[cfg(windows)]
-fn file_identity(handle: &impl std::os::windows::io::AsRawHandle) -> HostResult<(u32, u64)> {
+fn file_identity(handle: &impl std::os::windows::io::AsRawHandle) -> ChatResult<(u32, u64)> {
     use std::mem::MaybeUninit;
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
@@ -279,10 +246,9 @@ fn file_identity(handle: &impl std::os::windows::io::AsRawHandle) -> HostResult<
     // out-param points at writable memory of the exact struct size.
     let reported = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), info.as_mut_ptr()) };
     if reported == 0 {
-        return Err(HostError::Execution(format!(
-            "Cannot identify instruction file: {}",
-            std::io::Error::last_os_error()
-        )));
+        return Err(ChatError::IdentifyInstructionFile(
+            std::io::Error::last_os_error(),
+        ));
     }
     // SAFETY: a successful call fills the whole struct.
     let info = unsafe { info.assume_init() };
@@ -297,7 +263,7 @@ fn file_identity(handle: &impl std::os::windows::io::AsRawHandle) -> HostResult<
 fn drain_and_decode<R: std::io::Read>(
     file: &mut R,
     max_bytes: usize,
-) -> HostResult<ProjectInstructionsText> {
+) -> ChatResult<ProjectInstructionsText> {
     use std::io::ErrorKind;
 
     let mut buffer = vec![0u8; max_bytes + 1];
@@ -308,9 +274,7 @@ fn drain_and_decode<R: std::io::Read>(
             Ok(read) => total += read,
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(error) => {
-                return Err(HostError::Execution(format!(
-                    "Cannot read instruction file: {error}"
-                )));
+                return Err(ChatError::ReadInstructionFile(error));
             }
         }
     }

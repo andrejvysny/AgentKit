@@ -105,7 +105,10 @@ struct Mutate {
 struct CountingVerifier(Arc<AtomicUsize>);
 #[async_trait]
 impl VerificationHook<agentkit_store::SqliteStore> for CountingVerifier {
-    async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
+    async fn verify(
+        &self,
+        _: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<VerificationReport, agentkit_store::StoreError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(VerificationReport {
             status: "pass".into(),
@@ -218,10 +221,13 @@ impl PlanApprovalPolicy for ModePolicy {
     fn tool_names(&self) -> Vec<String> {
         vec![self.tool.into()]
     }
-    async fn granted_mode(&self, _: &str) -> HostResult<String> {
+    async fn granted_mode(&self, _: &str) -> agentkit_sessions::SessionsResult<String> {
         Ok(self.granted.into())
     }
-    async fn authorize(&self, _: &PlanGrantIntent<'_>) -> HostResult<PlanAuthorization> {
+    async fn authorize(
+        &self,
+        _: &PlanGrantIntent<'_>,
+    ) -> agentkit_sessions::SessionsResult<PlanAuthorization> {
         Ok(match self.deny_with.lock().unwrap().clone() {
             None => PlanAuthorization::Allowed,
             Some(reason) => PlanAuthorization::Denied(Some(reason)),
@@ -673,7 +679,7 @@ async fn plan_mode_is_never_a_grantable_destination() {
         .approve(&request.input_id, "ans-1", None, None)
         .await
         .unwrap_err();
-    assert_eq!(error.code, "invalid_input");
+    assert_eq!(error.failure_event_code(), "invalid_input");
     // Nothing was consumed: the request still awaits a legitimate answer.
     assert_eq!(f.pending(&turn).await.len(), 1);
 }
@@ -1252,10 +1258,12 @@ impl WatchPolicy {
             consulted: AtomicUsize::new(0),
         }
     }
-    fn unavailable(&self) -> HostResult<()> {
+    fn unavailable(&self) -> agentkit_sessions::SessionsResult<()> {
         self.consulted.fetch_add(1, Ordering::SeqCst);
         if self.down.load(Ordering::SeqCst) {
-            return Err(HostError::Execution("the grant service is down".into()));
+            return Err(agentkit_sessions::SessionsError::ContentAuthorityCallback(
+                "the grant service is down".into(),
+            ));
         }
         Ok(())
     }
@@ -1269,11 +1277,14 @@ impl PlanApprovalPolicy for WatchPolicy {
     fn tool_names(&self) -> Vec<String> {
         vec![self.tool.into()]
     }
-    async fn granted_mode(&self, _: &str) -> HostResult<String> {
+    async fn granted_mode(&self, _: &str) -> agentkit_sessions::SessionsResult<String> {
         self.unavailable()?;
         Ok(self.granted.into())
     }
-    async fn authorize(&self, _: &PlanGrantIntent<'_>) -> HostResult<PlanAuthorization> {
+    async fn authorize(
+        &self,
+        _: &PlanGrantIntent<'_>,
+    ) -> agentkit_sessions::SessionsResult<PlanAuthorization> {
         self.unavailable()?;
         Ok(PlanAuthorization::Allowed)
     }
@@ -1355,7 +1366,7 @@ async fn an_approved_plan_request_still_refuses_a_down_grant_policy() {
         .approve(&request.input_id, "ans-1", None, None)
         .await
         .unwrap_err();
-    assert_eq!(error.code, "invalid_input");
+    assert_eq!(error.failure_event_code(), "invalid_input");
     assert!(policy.count() > 0, "an approval does consult the policy");
     assert_eq!(
         f.pending(&turn).await.len(),

@@ -176,9 +176,9 @@ async fn a_request_that_names_no_turn_is_stale() {
         .answer(&answer("req-no-turn", "ans-1", json!({"answer": "a.txt"})))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_stale");
+    assert_eq!(error.failure_event_code(), "answer_stale");
     assert_eq!(
-        error.message,
+        session_message(&error),
         "Request req-no-turn can no longer be answered: it names no turn."
     );
 }
@@ -211,9 +211,9 @@ async fn a_cancelled_request_is_stale() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_stale");
+    assert_eq!(error.failure_event_code(), "answer_stale");
     assert_eq!(
-        error.message,
+        session_message(&error),
         "Request req-cancelled can no longer be answered: it was cancelled."
     );
 }
@@ -242,9 +242,9 @@ async fn a_turn_that_is_no_longer_waiting_is_stale() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_stale");
+    assert_eq!(error.failure_event_code(), "answer_stale");
     assert_eq!(
-        error.message,
+        session_message(&error),
         "Request req-not-waiting can no longer be answered: its turn is no longer waiting."
     );
 }
@@ -263,9 +263,9 @@ async fn a_turn_whose_record_is_gone_is_stale() {
         .answer(&answer("req-gone", "ans-1", json!({"answer": "a.txt"})))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_stale");
+    assert_eq!(error.failure_event_code(), "answer_stale");
     assert_eq!(
-        error.message,
+        session_message(&error),
         "Request req-gone can no longer be answered: its turn is no longer waiting."
     );
 }
@@ -288,9 +288,9 @@ async fn an_expired_request_is_stale() {
         .answer(&answer("req-expired", "ans-1", json!({"answer": "a.txt"})))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_stale");
+    assert_eq!(error.failure_event_code(), "answer_stale");
     assert_eq!(
-        error.message,
+        session_message(&error),
         "Request req-expired can no longer be answered: it expired."
     );
 }
@@ -331,7 +331,7 @@ async fn a_malformed_approval_answer_to_a_cancelled_request_is_invalid_input() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "invalid_input");
+    assert_eq!(error.failure_event_code(), "invalid_input");
 }
 
 #[tokio::test]
@@ -354,9 +354,9 @@ async fn a_remembered_answer_without_a_standing_key_is_invalid_input_before_stal
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "invalid_input");
+    assert_eq!(error.failure_event_code(), "invalid_input");
     assert_eq!(
-        error.message,
+        session_message(&error),
         "This call is not eligible for a standing approval."
     );
 }
@@ -454,13 +454,11 @@ async fn an_answered_request_answered_differently_still_conflicts() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_conflict");
+    assert_eq!(error.failure_event_code(), "answer_conflict");
     assert!(
-        error
-            .message
-            .contains("Request req-conflict was already answered differently."),
+        session_message(&error).contains("Request req-conflict was already answered differently."),
         "unexpected message: {}",
-        error.message
+        session_message(&error)
     );
     // A different ANSWER ID with the same response conflicts too.
     let error = service
@@ -471,5 +469,11 @@ async fn an_answered_request_answered_differently_still_conflicts() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "answer_conflict");
+    assert_eq!(error.failure_event_code(), "answer_conflict");
+}
+
+fn session_message(error: &agentkit_sessions::SessionsError) -> String {
+    let display = error.to_string();
+    let prefix = format!("{}: ", error.failure_event_code());
+    display.strip_prefix(&prefix).unwrap_or(&display).to_owned()
 }

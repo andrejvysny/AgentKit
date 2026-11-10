@@ -1,7 +1,6 @@
 use agentkit_chat::{Authorization, MutationIdentity, ProposalApplier};
 use agentkit_contracts::*;
 use agentkit_http::{Actor, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort};
-use agentkit_sessions::HostResult;
 use agentkit_store::{ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
@@ -80,22 +79,24 @@ impl ProviderOperations for FixturePorts {
 }
 #[async_trait]
 impl Authorization for FixturePorts {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> HostResult<()> {
+    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
         Ok(())
     }
 }
 #[async_trait]
 impl ProposalApplier for FixturePorts {
-    async fn apply(&self, _: MutationIdentity, _: Value) -> HostResult<Value> {
+    async fn apply(&self, _: MutationIdentity, _: Value) -> agentkit_chat::ChatResult<Value> {
         Ok(
             json!({"status":"applied","appliedOps":1,"failedOps":[],"resultJson":null,"revision":null}),
         )
     }
-    async fn reconcile(&self, _: MutationIdentity) -> HostResult<Option<Value>> {
+    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
         Ok(None)
     }
 }
-pub async fn seed(store: &SqliteStore) -> HostResult<()> {
+pub async fn seed(
+    store: &SqliteStore,
+) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
     if store.get_chat("chat-client").await?.is_none() {
         store.create_chat("chat-client", None, json!({}), 0).await?;
     }

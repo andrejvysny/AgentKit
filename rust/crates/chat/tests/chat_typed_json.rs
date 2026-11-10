@@ -1,7 +1,7 @@
 use agentkit_chat::{ChatExecutor, ChatExecutorOptions, ChatHostExt, ContextProvider, SubmitChat};
 use agentkit_core::*;
 use agentkit_engine::TaskExecutor;
-use agentkit_sessions::{AgentHost, HostOptions, HostResult};
+use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 struct Context;
 #[async_trait]
 impl ContextProvider for Context {
-    async fn resolve(&self, _: Value, _: CancellationToken) -> HostResult<Value> {
+    async fn resolve(&self, _: Value, _: CancellationToken) -> agentkit_chat::ChatResult<Value> {
         Ok(agentkit_contracts::parse_javascript_json(r#"{"bindings":[{"id":"b","kind":"document","refId":"r","label":"Document","role":"primary","status":"active","metadata":{"nested":{"$serde_json::private::Number":"123"}}}]}"#).unwrap())
     }
 }

@@ -17,7 +17,7 @@ pub(super) async fn prepare_continuation(
     chat_id: &str,
     model: &str,
     anchor: &str,
-) -> HostResult<Option<ContinuationSession>> {
+) -> ChatResult<Option<ContinuationSession>> {
     let mut runs = HashSet::new();
     for message in records {
         if let Some(run) = &message.run_id
@@ -50,36 +50,30 @@ pub(super) async fn prepare_continuation(
         .is_none_or(|identity| identity.protocol != "responses")
     {
         if previous.is_some() {
-            return Err(HostError::Execution(
-                "provider_continuation_scope_mismatch".into(),
-            ));
+            return Err(ChatError::ProviderContinuationScopeMismatch);
         }
         return Ok(None);
     }
     let identity = identity.expect("checked");
     if identity.provider_id != provider.id() {
-        return Err(HostError::Execution("invalid_provider_connection".into()));
+        return Err(ChatError::InvalidProviderConnection);
     }
     if !records.iter().any(|message| message.id == anchor) {
-        return Err(HostError::Execution(
-            "provider_continuation_branch_mismatch".into(),
-        ));
+        return Err(ChatError::ProviderContinuationBranchMismatch);
     }
     let branch = records
         .iter()
         .rev()
         .find(|message| message.branch_index > 0)
         .or_else(|| records.first())
-        .ok_or_else(|| HostError::Execution("provider_continuation_branch_mismatch".into()))?;
+        .ok_or_else(|| ChatError::ProviderContinuationBranchMismatch)?;
     let scope = json!({"providerId":identity.provider_id,"protocol":identity.protocol,"connectionId":identity.connection_id,"generation":identity.generation,
         "chatId":chat_id,"branchId":branch.id,"model":model});
     if previous
         .as_ref()
         .is_some_and(|state| state["scope"] != scope)
     {
-        return Err(HostError::Execution(
-            "provider_continuation_scope_mismatch".into(),
-        ));
+        return Err(ChatError::ProviderContinuationScopeMismatch);
     }
     context
         .store

@@ -91,7 +91,10 @@ impl TaskExecutor<agentkit_store::SqliteStore> for Leaves {
             _=context.cancellation.cancelled()=>return Err(EngineError::Cancelled),
         }
         if context.task.payload["explode"] == true {
-            return Err(EngineError::Execution("leaf work exploded".into()));
+            return Err(EngineError::External {
+                source: Box::new(std::io::Error::other("leaf work exploded")),
+                failure_code: None,
+            });
         }
         context.report_progress(json!({"done":1,"total":1})).await?;
         context

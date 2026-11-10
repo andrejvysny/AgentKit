@@ -495,24 +495,16 @@ fn request_tool_name(content: &Value) -> String {
 }
 
 fn stale(request_id: &str, reason: &str) -> StoreError {
-    StoreError::InvalidTransition(format!(
+    StoreError::AnswerStale(format!(
         "Request {request_id} can no longer be answered: {reason}."
     ))
 }
 
-/// The message of a stale-answer refusal (`Request <id> can no longer be
-/// answered: <reason>.`) — the only `InvalidTransition` text this module's
-/// answer settlement raises, for the races only the store can observe. The
-/// session layer surfaces it under the TypeScript `answer_stale` code with
-/// this message verbatim; every other `InvalidTransition` stays a generic
-/// invalid-state failure.
+/// The message of a typed stale-answer refusal. The session layer surfaces
+/// it verbatim under `answer_stale`; unrelated transitions remain invalid state.
 pub fn answer_stale_reason(error: &StoreError) -> Option<&str> {
     match error {
-        StoreError::InvalidTransition(message)
-            if message.contains(" can no longer be answered: ") =>
-        {
-            Some(message)
-        }
+        StoreError::AnswerStale(message) => Some(message),
         _ => None,
     }
 }
@@ -695,7 +687,7 @@ impl SqliteStore {
                 if request.answer_id.as_deref() != Some(input.answer_id.as_str())
                     || request.applied_message_id.as_deref() != Some(marker.as_str())
                 {
-                    return Err(StoreError::Duplicate(format!(
+                    return Err(StoreError::AnswerConflict(format!(
                         "answer_conflict: Request {} was already answered differently.",
                         input.request_id
                     )));
@@ -735,7 +727,7 @@ impl SqliteStore {
                         .and_then(Value::as_str)
                         != Some(input.response_hash.as_str())
                 {
-                    return Err(StoreError::Duplicate(format!(
+                    return Err(StoreError::AnswerConflict(format!(
                         "answer_conflict: Request {} was already answered differently.",
                         input.request_id
                     )));
@@ -840,10 +832,7 @@ impl SqliteStore {
                     Ok(())
                 })();
                 if let Err(error) = transition {
-                    if matches!(error, StoreError::InvalidTransition(_))
-                        && (error.to_string().contains("cannot move")
-                            || error.to_string().contains("expected one of"))
-                    {
+                    if matches!(error, StoreError::AgentInputTransition(_)) {
                         return Err(stale(
                             &input.request_id,
                             "a concurrent answer or cancel won",
@@ -885,7 +874,7 @@ impl SqliteStore {
                 Ok(())
             })();
             if let Err(error) = transition {
-                if matches!(error, StoreError::InvalidTransition(_)) {
+                if matches!(error, StoreError::AgentInputTransition(_)) {
                     return Err(stale(
                         &input.request_id,
                         "a concurrent answer or cancel won",
@@ -1231,7 +1220,7 @@ impl SqliteStore {
                         crate::conversations::append(&transaction, apply.message.clone(), now)?;
                         applied.push(apply.input_id.clone());
                     }
-                    Err(StoreError::InvalidTransition(_)) => {
+                    Err(StoreError::AgentInputTransition(_)) => {
                         // Meaningful CAS: only the identical earlier
                         // placement counts as an idempotent replay. A won
                         // cancellation (or another owner's placement) leaves
@@ -1764,11 +1753,11 @@ pub(crate) fn cancel_turn_requests(
     Ok(())
 }
 
-/// A lost compare-and-set (`InvalidTransition`) is an expected race outcome;
+/// A lost agent-input compare-and-set is an expected race outcome;
 /// every other failure is real and must not be swallowed.
 fn ignore_lost_cas(result: Result<AgentInputRecord>) -> Result<()> {
     match result {
-        Ok(_) | Err(StoreError::InvalidTransition(_)) => Ok(()),
+        Ok(_) | Err(StoreError::AgentInputTransition(_)) => Ok(()),
         Err(error) => Err(error),
     }
 }

@@ -28,12 +28,14 @@ fn normalize_error(error: StoreError) -> Value {
         StoreError::Duplicate(_) => "duplicate_task",
         StoreError::ScopeBusy(_) => "chat_busy",
         StoreError::LeaseLost(_) => "lease_lost",
-        StoreError::InvalidInput(message) if message.starts_with("unknown dependency:") => {
-            "unknown_dependency"
-        }
-        StoreError::InvalidInput(message) if message.starts_with("event seq must be ") => {
-            "seq_conflict"
-        }
+        StoreError::TaskInput {
+            reason: agentkit_engine::TaskInputReason::UnknownDependency,
+            ..
+        } => "unknown_dependency",
+        StoreError::TaskInput {
+            reason: agentkit_engine::TaskInputReason::EventSequence,
+            ..
+        } => "seq_conflict",
         StoreError::InvalidImport { reason }
             if reason == "forward_parent" || reason == "unknown_parent" =>
         {

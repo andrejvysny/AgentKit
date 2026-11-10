@@ -51,7 +51,7 @@ struct Pass {
     messages: Vec<ChatMessage>,
 }
 impl ChatSession {
-    pub async fn execute(mut self) -> HostResult<()> {
+    pub async fn execute(mut self) -> ChatResult<()> {
         match self.drive().await {
             Ok(pass) => {
                 if self.context.suspension.lock().await.is_some() {
@@ -76,7 +76,7 @@ impl ChatSession {
                 self.finish(&pass).await?;
                 match pass.terminal {
                     Terminal::Completed => Ok(()),
-                    Terminal::Cancelled => Err(HostError::Cancelled),
+                    Terminal::Cancelled => Err(ChatError::Cancelled),
                     Terminal::Failed => Err(pass
                         .failure
                         .unwrap_or_else(|| ExecutionFailure::new("provider run failed"))
@@ -84,13 +84,13 @@ impl ChatSession {
                 }
             }
             Err(error) => {
-                if matches!(error, HostError::Cancelled) {
+                if matches!(error, ChatError::Cancelled) {
                     self.context
                         .emit("run.cancelled", json!({"reason":"aborted"}))
                         .await?;
                 } else {
                     let message = error.to_string();
-                    let code = message.split(':').next().unwrap_or("host_error");
+                    let code = error.failure_event_code();
                     self.context
                         .emit(
                             "run.failed",
@@ -102,7 +102,7 @@ impl ChatSession {
             }
         }
     }
-    async fn drive(&mut self) -> HostResult<Pass> {
+    async fn drive(&mut self) -> ChatResult<Pass> {
         let initial = self.base.request.messages.clone();
         let mut pass = self
             .run_pass(
@@ -206,7 +206,7 @@ impl ChatSession {
         messages: Vec<ChatMessage>,
         registry: Arc<ToolRegistry>,
         iterations: u32,
-    ) -> HostResult<Pass> {
+    ) -> ChatResult<Pass> {
         self.context.check_cancelled()?;
         let mut options = self.base.clone();
         options.request.messages = messages.clone();
@@ -222,8 +222,7 @@ impl ChatSession {
         let mut calls = HashSet::new();
         let mut failure = None;
         while let Some(event) = handle.events.next().await {
-            let event = serde_json::to_value(event)
-                .map_err(|error| HostError::Execution(error.to_string()))?;
+            let event = serde_json::to_value(event).map_err(ChatError::Json)?;
             match event["type"].as_str() {
                 Some("run.message.delta") => {
                     content.push_str(event["data"]["delta"].as_str().unwrap_or(""))
@@ -254,10 +253,7 @@ impl ChatSession {
                 _ => {}
             }
         }
-        let result = core_run
-            .result()
-            .await
-            .map_err(|error| HostError::Execution(error.to_string()))?;
+        let result = core_run.result().await.map_err(ChatError::Worker)?;
         if let Some(state) = result.continuation {
             self.base.request.continuation = Some(state);
             self.base.request.continuation_required = true;
@@ -289,7 +285,7 @@ impl ChatSession {
     fn private(&self) -> bool {
         self.base.request.continuation_scope.is_some()
     }
-    async fn boundary(&self, pass: u32, reason: &str, message: &str) -> HostResult<()> {
+    async fn boundary(&self, pass: u32, reason: &str, message: &str) -> ChatResult<()> {
         if let Some(budget) = &self.base.request.budget {
             budget
                 .consume(if reason == "correction" {
@@ -298,7 +294,7 @@ impl ChatSession {
                     "retries"
                 })
                 .await
-                .map_err(|error| HostError::Execution(error.to_string()))?;
+                .map_err(ChatError::Core)?;
         }
         self.context
             .emit(
@@ -324,7 +320,7 @@ impl ChatSession {
         pass: &Pass,
         text: &str,
         correction: Option<u32>,
-    ) -> HostResult<Vec<ChatMessage>> {
+    ) -> ChatResult<Vec<ChatMessage>> {
         let mut messages = pass.messages.clone();
         messages.push(ChatMessage::text("user", text));
         let mut metadata = json!({"internal":true});
@@ -356,7 +352,7 @@ impl ChatSession {
         mut pass: Pass,
         passes: u32,
         initial: &[ChatMessage],
-    ) -> HostResult<Pass> {
+    ) -> ChatResult<Pass> {
         let Some(verification) = self.options.verification.clone() else {
             return Ok(pass);
         };
@@ -391,7 +387,7 @@ impl ChatSession {
                     }
                     break;
                 }
-                Ok(_) => return Err(HostError::Execution("invalid verification status".into())),
+                Ok(_) => return Err(ChatError::InvalidVerificationStatus),
                 Err(error) if correction.is_none() => return Err(error),
                 Err(_) => {
                     self.verification_event(index, "unavailable", &[]).await?;
@@ -458,15 +454,16 @@ impl ChatSession {
         pass: u32,
         status: &str,
         deficiencies: &[String],
-    ) -> HostResult<()> {
+    ) -> ChatResult<()> {
         self.context
             .emit(
                 "run.verification",
                 json!({"pass":pass,"status":status,"deficiencies":deficiencies}),
             )
             .await
+            .map_err(Into::into)
     }
-    async fn banner(&self, report: &VerificationReport) -> HostResult<()> {
+    async fn banner(&self, report: &VerificationReport) -> ChatResult<()> {
         let text = if report.deficiencies.is_empty() {
             "Verification did not pass, but reported no specific deficiency.".into()
         } else {
@@ -498,7 +495,7 @@ impl ChatSession {
             .await?;
         Ok(())
     }
-    async fn finish(&self, pass: &Pass) -> HostResult<()> {
+    async fn finish(&self, pass: &Pass) -> ChatResult<()> {
         let mut metadata = self
             .context
             .store

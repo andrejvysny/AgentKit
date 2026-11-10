@@ -29,10 +29,14 @@ struct Builder {
 }
 #[async_trait]
 impl ProposalBuilder for Builder {
-    async fn build(&self, context: &ToolContext, input: &Value) -> HostResult<ProposalBuild> {
+    async fn build(
+        &self,
+        context: &ToolContext,
+        input: &Value,
+    ) -> agentkit_chat::ChatResult<ProposalBuild> {
         self.inner.build(context, input).await
     }
-    async fn current_revision(&self, _: &str) -> HostResult<Option<String>> {
+    async fn current_revision(&self, _: &str) -> agentkit_chat::ChatResult<Option<String>> {
         if self.expire && self.checks.fetch_add(1, Ordering::SeqCst) == 1 {
             self.clock.0.store(10000, Ordering::SeqCst);
         }
@@ -47,7 +51,11 @@ struct Domain {
 }
 #[async_trait]
 impl ProposalApplier for Domain {
-    async fn apply(&self, identity: MutationIdentity, _: Value) -> HostResult<Value> {
+    async fn apply(
+        &self,
+        identity: MutationIdentity,
+        _: Value,
+    ) -> agentkit_chat::ChatResult<Value> {
         let fence = identity
             .execution_fence
             .expect("Durable tool must supply its trusted fence");
@@ -58,7 +66,9 @@ impl ProposalApplier for Domain {
         }
         let mut newest = self.newest_token.lock().unwrap();
         if fence.fencing_token < *newest {
-            return Err(HostError::Execution("domain_fence_superseded".into()));
+            return Err(agentkit_chat::ChatError::External(Box::new(
+                std::io::Error::other("domain_fence_superseded"),
+            )));
         }
         *newest = fence.fencing_token;
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -66,7 +76,7 @@ impl ProposalApplier for Domain {
             json!({"status":"applied","appliedOps":1,"failedOps":[],"resultJson":null,"revision":"2"}),
         )
     }
-    async fn reconcile(&self, _: MutationIdentity) -> HostResult<Option<Value>> {
+    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
         Ok(None)
     }
 }
@@ -76,7 +86,10 @@ struct RunTool {
 }
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for RunTool {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+    async fn execute(
+        &self,
+        context: ExecutionContext,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         let capture = self.capture.lock().unwrap().take();
         if let Some(capture) = capture {
             let _ = capture.send(context);
@@ -89,7 +102,10 @@ impl TaskExecutor<agentkit_store::SqliteStore> for RunTool {
         self.tool
             .execute(tool_context, json!({"action_id":"edit_item_document"}))
             .await
-            .map_err(|error| HostError::Execution(error.to_string()))?;
+            .map_err(|error| agentkit_engine::EngineError::External {
+                source: Box::new(error),
+                failure_code: None,
+            })?;
         Ok(())
     }
 }

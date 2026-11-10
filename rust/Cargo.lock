@@ -22,7 +22,6 @@ name = "agentkit-agent-lifecycle"
 version = "0.1.0"
 dependencies = [
  "agentkit-agents",
- "agentkit-sessions",
  "agentkit-store",
  "serde_json",
  "tokio",
@@ -72,6 +71,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "uuid",
@@ -418,6 +418,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
 ]

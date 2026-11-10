@@ -93,7 +93,7 @@ impl agentkit_engine::TaskExecutor<agentkit_store::SqliteStore> for NoopTurn {
     async fn execute(
         &self,
         _: agentkit_sessions::ExecutionContext,
-    ) -> agentkit_sessions::HostResult<()> {
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         Ok(())
     }
 }

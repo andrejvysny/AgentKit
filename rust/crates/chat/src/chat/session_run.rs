@@ -18,10 +18,10 @@ use std::collections::{HashMap, HashSet};
 
 /// Is this task the session turn of its chat (the chat carries a session
 /// descriptor and the task kind is the session's turn kind)?
-pub(crate) async fn is_session_turn(context: &ExecutionContext, chat_id: &str) -> HostResult<bool> {
+pub(crate) async fn is_session_turn(context: &ExecutionContext, chat_id: &str) -> ChatResult<bool> {
     if let Some(snapshot) = context.task.payload.get("sessionDescriptor") {
         let descriptor = read_session_descriptor(&serde_json::json!({"agentkit.session":snapshot}))
-            .ok_or_else(|| HostError::Execution("session_context_invalid".into()))?;
+            .ok_or_else(|| ChatError::SessionContextInvalid)?;
         return Ok(session_turn_kind(&descriptor) == context.task.kind);
     }
     let Some(chat) = context.store.get_chat(chat_id).await? else {
@@ -275,7 +275,7 @@ impl SteeringSource for SessionSteering {
 pub(crate) async fn backfill_applied_steers(
     context: &ExecutionContext,
     chat_id: &str,
-) -> HostResult<()> {
+) -> ChatResult<()> {
     let applied = context
         .store
         .list_inputs(AgentInputQuery {
@@ -380,7 +380,7 @@ pub(crate) async fn resolve_approved_calls(
     context: &ExecutionContext,
     chat_id: &str,
     anchor: &str,
-) -> HostResult<(
+) -> ChatResult<(
     HashMap<String, crate::governance::ApprovalGrant>,
     Vec<ToolCall>,
 )> {
@@ -560,7 +560,7 @@ async fn append_approval_mismatch(
     chat_id: &str,
     anchor: &str,
     call: &ToolCall,
-) -> HostResult<()> {
+) -> ChatResult<()> {
     let id = format!("approval-mismatch:{}:{}", context.task.task_id, call.id);
     if context.store.get_message(&id).await?.is_some() {
         return Ok(());

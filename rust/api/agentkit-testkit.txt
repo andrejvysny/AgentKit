@@ -11,6 +11,9 @@ pub agentkit_testkit::InMemoryRepositoryError::LeaseLost(alloc::string::String)
 pub agentkit_testkit::InMemoryRepositoryError::NotFound(alloc::string::String)
 pub agentkit_testkit::InMemoryRepositoryError::ScopeBusy(alloc::string::String)
 pub agentkit_testkit::InMemoryRepositoryError::SessionConflict(alloc::string::String)
+pub agentkit_testkit::InMemoryRepositoryError::TaskInput
+pub agentkit_testkit::InMemoryRepositoryError::TaskInput::message: alloc::string::String
+pub agentkit_testkit::InMemoryRepositoryError::TaskInput::reason: agentkit_engine::repository::TaskInputReason
 impl agentkit_engine::repository::RepositoryFault for agentkit_testkit::InMemoryRepositoryError
 pub fn agentkit_testkit::InMemoryRepositoryError::invalid_input(&self) -> core::option::Option<&str>
 pub fn agentkit_testkit::InMemoryRepositoryError::is_duplicate(&self) -> bool
@@ -19,6 +22,7 @@ pub fn agentkit_testkit::InMemoryRepositoryError::is_lease_lost(&self) -> bool
 pub fn agentkit_testkit::InMemoryRepositoryError::is_not_found(&self) -> bool
 pub fn agentkit_testkit::InMemoryRepositoryError::is_transient(&self) -> bool
 pub fn agentkit_testkit::InMemoryRepositoryError::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_testkit::InMemoryRepositoryError::task_input_reason(&self) -> core::option::Option<agentkit_engine::repository::TaskInputReason>
 pub struct agentkit_testkit::InMemorySessionSettle
 pub agentkit_testkit::InMemorySessionSettle::staged_kinds: alloc::vec::Vec<alloc::string::String>
 impl agentkit_engine::repository::SessionSettlement for agentkit_testkit::InMemorySessionSettle

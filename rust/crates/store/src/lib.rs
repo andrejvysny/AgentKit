@@ -72,6 +72,22 @@ pub use ts_import::{
 };
 pub use util::id;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiptTransitionReason {
+    NotUncertain,
+    RunActive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagedInputReason {
+    SecretReferencesUnsupported,
+    InvalidAlias,
+    IdentityRequired,
+    ImmutableIdentity,
+    AliasConflict,
+    SelectedConnectorRequired,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
@@ -90,6 +106,8 @@ pub enum StoreError {
     NotFound(String),
     #[error("duplicate record: {0}")]
     Duplicate(String),
+    #[error("duplicate record: {0}")]
+    AnswerConflict(String),
     /// Optimistic concurrency: the record moved out from under the caller's
     /// expected version and the write applied NOTHING. The caller re-reads
     /// and retries against the current version; versions never silently
@@ -106,8 +124,27 @@ pub enum StoreError {
     LeaseLost(String),
     #[error("invalid transition: {0}")]
     InvalidTransition(String),
+    #[error("invalid transition: {0}")]
+    AnswerStale(String),
+    #[error("invalid transition: {0}")]
+    AgentInputTransition(String),
+    #[error("invalid transition: {message}")]
+    ReceiptTransition {
+        reason: ReceiptTransitionReason,
+        message: String,
+    },
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("invalid input: {message}")]
+    TaskInput {
+        reason: agentkit_engine::TaskInputReason,
+        message: String,
+    },
+    #[error("invalid input: {message}")]
+    ManagedInput {
+        reason: ManagedInputReason,
+        message: String,
+    },
     #[error("invalid import: {reason}")]
     InvalidImport { reason: String },
     #[error("recovery evidence unreadable: {0}")]

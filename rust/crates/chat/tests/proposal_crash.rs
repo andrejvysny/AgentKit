@@ -1,7 +1,6 @@
 use agentkit_chat::*;
 use agentkit_engine::SystemRuntime;
 
-use agentkit_sessions::*;
 use agentkit_store::{ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -10,7 +9,7 @@ use std::{path::Path, process::Command, sync::Arc};
 struct Permit;
 #[async_trait]
 impl Authorization for Permit {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> HostResult<()> {
+    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
         Ok(())
     }
 }
@@ -21,7 +20,11 @@ struct DurableDomain {
 }
 #[async_trait]
 impl ProposalApplier for DurableDomain {
-    async fn apply(&self, identity: MutationIdentity, _: Value) -> HostResult<Value> {
+    async fn apply(
+        &self,
+        identity: MutationIdentity,
+        _: Value,
+    ) -> agentkit_chat::ChatResult<Value> {
         assert_eq!(
             self.crash.as_deref(),
             Some("apply"),
@@ -37,7 +40,10 @@ impl ProposalApplier for DurableDomain {
         // Immediate process termination skips all Rust destructors after durable commit.
         std::process::exit(72);
     }
-    async fn reconcile(&self, identity: MutationIdentity) -> HostResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        identity: MutationIdentity,
+    ) -> agentkit_chat::ChatResult<Option<Value>> {
         let receipt = self
             .ledger
             .get_setting("domain-receipt", &identity.operation_id)

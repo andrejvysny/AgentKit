@@ -6,6 +6,8 @@ mod provider;
 mod ui;
 mod verification;
 
+type ExampleResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1100.0, 780.0]),

@@ -139,7 +139,7 @@ pub fn assert_agent_input_transition(
     to: AgentInputStatus,
 ) -> Result<()> {
     if !from.contains(&record.status) {
-        return Err(StoreError::InvalidTransition(format!(
+        return Err(StoreError::AgentInputTransition(format!(
             "Input {} is {:?}, expected one of {from:?}.",
             record.input_id, record.status
         )));
@@ -150,7 +150,7 @@ pub fn assert_agent_input_transition(
             .find(|(kind, _)| *kind == record.kind)
             .is_some_and(|(_, targets)| targets.contains(&to));
     if !legal {
-        return Err(StoreError::InvalidTransition(format!(
+        return Err(StoreError::AgentInputTransition(format!(
             "Input {} ({:?}) cannot move {:?} → {to:?}.",
             record.input_id, record.kind, record.status
         )));

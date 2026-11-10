@@ -5,7 +5,9 @@ use agentkit_connections::{
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_engine::{SystemRuntime, TaskExecutor};
 use agentkit_http::{Actor, Config, DesktopBackend};
-use agentkit_sessions::{AgentHost, ChatProviderFactory, HostError, HostOptions, HostResult};
+use agentkit_sessions::{
+    AgentHost, ChatProviderFactory, HostOptions, SessionsError, SessionsResult,
+};
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -38,12 +40,12 @@ impl ChatProviderFactory for Factory {
         &self,
         snapshot: &Value,
         _: CancellationToken,
-    ) -> HostResult<Arc<dyn ChatProvider>> {
+    ) -> SessionsResult<Arc<dyn ChatProvider>> {
         self.observed.lock().unwrap().push(snapshot.clone());
         let frozen: Connection = serde_json::from_value(snapshot["connection"].clone()).unwrap();
         let current = self.connections.get(&frozen.id).unwrap();
         if current != frozen {
-            return Err(HostError::Execution("connection_changed".into()));
+            return Err(SessionsError::ConnectionChanged);
         }
         Ok(Arc::new(Provider))
     }

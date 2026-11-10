@@ -1,5 +1,11 @@
 use crate::ExecutionFailure;
 
+#[derive(Clone, Copy, Debug)]
+pub enum ContextClassification {
+    Rejected,
+    Unclassified,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError<E: std::error::Error> {
     #[error(transparent)]
@@ -18,28 +24,51 @@ pub enum EngineError<E: std::error::Error> {
     NoExecutorForKind(String),
     #[error("execution cancelled")]
     Cancelled,
+    #[error("invalid runtime timestamp")]
+    InvalidTimestamp,
+    #[error("invalid host execution limits")]
+    InvalidHostLimits,
+    #[error("invalid retry backoff")]
+    InvalidRetryBackoff,
+    #[error("invalid retry jitter sample")]
+    InvalidRetryJitter,
+    #[error("retry deadline overflow")]
+    RetryDeadlineOverflow,
+    #[error("hook_timeout: verify")]
+    VerificationTimeout,
+    #[error("task not found")]
+    TaskNotFound,
     #[error("{0}")]
-    Execution(String),
-    /// A named durable record does not exist; the message carries the
-    /// stable code (e.g. `subagent_not_found: <id>`).
-    #[error("{0}")]
-    NotFound(String),
+    Worker(#[source] tokio::task::JoinError),
+    #[error("{source}")]
+    External {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+        /// Persistence metadata only; never used for retries or transport mapping.
+        failure_code: Option<String>,
+    },
+    #[error("{source}")]
+    Context {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+        classification: ContextClassification,
+        /// Persistence metadata only; never used for retries or transport mapping.
+        failure_code: Option<String>,
+    },
 }
 
 impl<E: std::error::Error> From<agentkit_governance::GovernanceError> for EngineError<E> {
     fn from(error: agentkit_governance::GovernanceError) -> Self {
-        match error {
-            agentkit_governance::GovernanceError::Execution(message) => Self::Execution(message),
+        Self::External {
+            source: Box::new(error),
+            failure_code: None,
         }
     }
 }
 
 impl<E: std::error::Error> From<EngineError<E>> for agentkit_governance::GovernanceError {
     fn from(error: EngineError<E>) -> Self {
-        match error {
-            EngineError::Execution(message) => Self::Execution(message),
-            other => Self::Execution(other.to_string()),
-        }
+        Self::Execution(error.to_string())
     }
 }
 

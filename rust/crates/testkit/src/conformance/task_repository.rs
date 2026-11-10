@@ -222,21 +222,19 @@ async fn submit_rejects_empty_fields<R: TaskRepository>(repo: R) {
 async fn submit_unknown_dependency_is_invalid_input<R: TaskRepository>(repo: R) {
     let mut input = task("a", "scope");
     input.depends_on = vec!["ghost".into()];
-    assert!(
-        repo.submit(input)
-            .await
-            .unwrap_err()
-            .invalid_input()
-            .is_some()
+    let error = repo.submit(input).await.unwrap_err();
+    assert!(error.invalid_input().is_some());
+    assert_eq!(
+        error.task_input_reason(),
+        Some(agentkit_engine::TaskInputReason::UnknownDependency)
     );
     let mut input = task("a", "scope");
     input.parent_task_id = Some("ghost".into());
-    assert!(
-        repo.submit(input)
-            .await
-            .unwrap_err()
-            .invalid_input()
-            .is_some()
+    let error = repo.submit(input).await.unwrap_err();
+    assert!(error.invalid_input().is_some());
+    assert_eq!(
+        error.task_input_reason(),
+        Some(agentkit_engine::TaskInputReason::UnknownDependency)
     );
     assert!(repo.get_task("a").await.unwrap().is_none());
 }
@@ -631,6 +629,10 @@ async fn append_events_refuses_non_increasing_seq<R: TaskRepository>(repo: R) {
             .await
             .unwrap_err();
         assert!(error.invalid_input().is_some());
+        assert_eq!(
+            error.task_input_reason(),
+            Some(agentkit_engine::TaskInputReason::EventSequence)
+        );
     }
     // A batch is all-or-nothing.
     let error = repo

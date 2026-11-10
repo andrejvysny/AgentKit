@@ -2,7 +2,7 @@
 //! (port of `sessions/session-report.ts`). Pure queries over the store;
 //! nothing here writes.
 
-use super::SessionResult;
+use super::SessionsResult;
 use super::descriptor::session_turn_kind;
 use agentkit_store::TaskRecord;
 use serde_json::{Map, Value};
@@ -26,7 +26,7 @@ pub async fn list_turn_tasks(
     store: &agentkit_store::SqliteStore,
     session_id: &str,
     kind: &str,
-) -> SessionResult<Vec<TaskRecord>> {
+) -> SessionsResult<Vec<TaskRecord>> {
     let mut tasks: Vec<TaskRecord> = store
         .list_tasks(Some(session_id.to_owned()))
         .await?
@@ -87,7 +87,7 @@ fn num(data: &Value, key: &str) -> f64 {
 async fn turn_usage(
     store: &agentkit_store::SqliteStore,
     task: &TaskRecord,
-) -> SessionResult<Value> {
+) -> SessionsResult<Value> {
     let mut last_admission = None;
     let mut requests = 0i64;
     let mut prompt_tokens = 0f64;
@@ -135,7 +135,7 @@ pub async fn session_usage(
     store: &agentkit_store::SqliteStore,
     session_id: &str,
     descriptor: &Value,
-) -> SessionResult<Value> {
+) -> SessionsResult<Value> {
     let tasks = list_turn_tasks(store, session_id, &session_turn_kind(descriptor)).await?;
     let mut turns = vec![];
     for task in &tasks {
@@ -200,7 +200,7 @@ async fn report_window(
     descriptor: &Value,
     task: Option<&TaskRecord>,
     admission: Option<&Value>,
-) -> SessionResult<(Value, Value)> {
+) -> SessionsResult<(Value, Value)> {
     if let Some(admission) = admission {
         return Ok((
             admission["windowTokens"].clone(),
@@ -215,8 +215,7 @@ async fn report_window(
         task.payload.get("sessionContext"),
     )
     .ok_or_else(|| {
-        super::SessionError::new(
-            "session_context_invalid",
+        crate::SessionsError::session_context_invalid(
             "The turn's admitted context snapshot is unreadable.",
         )
     })?;
@@ -239,7 +238,7 @@ pub async fn export_session(
     descriptor: &Value,
     chat_metadata: &Value,
     exported_at: &str,
-) -> SessionResult<Value> {
+) -> SessionsResult<Value> {
     let records = store.messages(session_id, false).await?;
     let messages: Vec<Value> = records
         .iter()

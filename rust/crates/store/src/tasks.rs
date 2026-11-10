@@ -144,9 +144,10 @@ pub(crate) fn insert_bound(
     }
     for dependency in input.depends_on.iter().chain(input.parent_task_id.iter()) {
         if get::<TaskRecord>(db, "tasks", "id", dependency)?.is_none() {
-            return Err(StoreError::InvalidInput(format!(
-                "unknown dependency: {dependency}"
-            )));
+            return Err(StoreError::TaskInput {
+                reason: agentkit_engine::TaskInputReason::UnknownDependency,
+                message: format!("unknown dependency: {dependency}"),
+            });
         }
     }
     let task = TaskRecord {
@@ -223,9 +224,10 @@ impl SqliteStore {
                     || task.depends_on != input.depends_on
                     || task.parent_task_id != input.parent_task_id
                 {
-                    return Err(StoreError::InvalidInput(
-                        "task replay identity mismatch".into(),
-                    ));
+                    return Err(StoreError::TaskInput {
+                        reason: agentkit_engine::TaskInputReason::ReplayIdentityMismatch,
+                        message: "task replay identity mismatch".into(),
+                    });
                 }
                 return Ok(task);
             }

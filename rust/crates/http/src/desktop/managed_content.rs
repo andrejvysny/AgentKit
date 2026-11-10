@@ -11,7 +11,6 @@
 //! error is honest precisely because it is not a silent success.
 
 use super::*;
-use agentkit_store::SECRET_REF_MARKER;
 use serde_json::{Value, json};
 
 /// The documented MCP-OAuth reduction (verbatim in `docs/rust/parity.md`).
@@ -120,18 +119,7 @@ impl DesktopBackend {
                 // TypeScript handler: validator issues are the request's
                 // fault (`invalid_request` with the validator's detail).
                 agentkit_store::validate_connection_config(&Value::Object(config.clone()))
-                    .map_err(|error| {
-                        let agentkit_store::StoreError::InvalidInput(detail) = &error else {
-                            return managed_store_error(error);
-                        };
-                        if detail.starts_with(SECRET_REF_MARKER) {
-                            // Deny-all posture: a reference this backend can
-                            // never resolve is refused, never accepted-and-
-                            // dropped, with the binding's dedicated code.
-                            return Problem::new(400, "mcp_secret_missing", detail.clone());
-                        }
-                        invalid_request(detail)
-                    })?;
+                    .map_err(managed_validation_error)?;
                 let revision = positive_integer(&body["revision"]);
                 let expected = match body.get("expectedRevision") {
                     None | Some(Value::Null) => Some(None),
@@ -217,37 +205,4 @@ fn positive_integer(value: &Value) -> Option<i64> {
                 .map(|n| n as i64)
         })
         .filter(|value| *value >= 1)
-}
-
-/// Managed-content store refusals, mapped the way the TypeScript transport
-/// maps this surface: a lost compare-and-swap is the connection's stale
-/// conflict (409); identity/alias refusals are the reference's invalid
-/// connection configuration (400 `mcp_invalid_config`); everything else
-/// keeps the generic mapping.
-fn managed_store_error(error: agentkit_store::StoreError) -> Problem {
-    use agentkit_store::StoreError as E;
-    match &error {
-        E::InvalidTransition(detail) => Problem::new(409, "mcp_stale_connection", detail.clone()),
-        E::InvalidInput(detail) => {
-            if detail.starts_with(SECRET_REF_MARKER) {
-                Problem::new(400, "mcp_secret_missing", detail.clone())
-            } else if is_config_refusal(detail) {
-                Problem::new(400, "mcp_invalid_config", detail.clone())
-            } else {
-                Problem::new(400, "invalid_request", detail.clone())
-            }
-        }
-        _ => store_error(error),
-    }
-}
-
-/// The `ConnectionService` refusals (TypeScript throws them as
-/// `McpError("mcp_invalid_config", ...)`); the config-validator messages —
-/// backtick-prefixed field complaints — are request-validation instead and
-/// are decided before the engine call.
-fn is_config_refusal(detail: &str) -> bool {
-    detail == "Connection and account identities are required."
-        || detail == "Account and workspace identity are immutable; create a separate connection."
-        || detail == "Connection aliases must be unique across accounts."
-        || detail.starts_with("MCP server alias \"")
 }

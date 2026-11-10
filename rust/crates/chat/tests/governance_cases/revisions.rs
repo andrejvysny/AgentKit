@@ -2,7 +2,6 @@ use super::support::*;
 use agentkit_chat::*;
 use agentkit_core::Tool;
 use agentkit_engine::SystemRuntime;
-use agentkit_sessions::*;
 use agentkit_store::ProposalStatus;
 use async_trait::async_trait;
 use serde_json::json;
@@ -15,7 +14,7 @@ struct Revisions {
 
 #[async_trait]
 impl ProposalRevisionSource for Revisions {
-    async fn current_revision(&self, _scope: &str) -> HostResult<Option<String>> {
+    async fn current_revision(&self, _scope: &str) -> agentkit_chat::ChatResult<Option<String>> {
         if let Some(permission) = &self.revoke_authority {
             permission.allowed.store(false, Ordering::SeqCst);
         }

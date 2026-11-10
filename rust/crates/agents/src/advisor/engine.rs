@@ -222,9 +222,13 @@ impl AdvisorEngine {
             .providers
             .as_ref()
             .and_then(|registry| registry.get(id))
-            .ok_or_else(|| AgentsError::execution(format!("advisor_provider_unavailable: {id}")))?;
+            .ok_or_else(|| {
+                AgentsError::AdvisorProviderUnavailable(format!(
+                    "advisor_provider_unavailable: {id}"
+                ))
+            })?;
         if model.as_deref().is_none_or(str::is_empty) && self.model_override.is_none() {
-            return Err(AgentsError::execution(format!(
+            return Err(AgentsError::AdvisorModelRequired(format!(
                 "advisor_model_required: provider {id} needs an explicit model"
             )));
         }
@@ -310,18 +314,16 @@ impl AdvisorEngine {
             .clone();
         reviews
             .try_acquire_owned()
-            .map_err(|_| AgentsError::execution("advisor_saturated".into()))
+            .map_err(|_| AgentsError::AdvisorSaturated)
     }
 
     /// Kill switch + loop guard (part 1: reviews never review reviews).
     fn admit(&self, chat_id: &str) -> AgentsResult<()> {
         if !self.config().enabled {
-            return Err(AgentsError::execution("advisor_disabled".into()));
+            return Err(AgentsError::AdvisorDisabled);
         }
         if is_advisor_chat_id(chat_id) {
-            return Err(AgentsError::execution(
-                "advisor may not review an advisor run".into(),
-            ));
+            return Err(AgentsError::AdvisorRecursionRefused);
         }
         Ok(())
     }
@@ -408,13 +410,9 @@ impl AdvisorEngine {
                 i64::from(config.reviews_per_window),
             )
             .await
-            .map_err(|error| {
-                AgentsError::execution(format!(
-                    "advisor_rate_limited: review budget unavailable: {error}"
-                ))
-            })?;
+            .map_err(AgentsError::AdvisorBudgetUnavailable)?;
         if !reserved {
-            return Err(AgentsError::execution(format!(
+            return Err(AgentsError::AdvisorRateLimited(format!(
                 "advisor_rate_limited: {} reviews already started for this chat within {} ms",
                 config.reviews_per_window, config.window_ms
             )));
@@ -451,13 +449,11 @@ impl AdvisorEngine {
     ) -> AgentsResult<AdvisorReport> {
         let config = self.config();
         if !config.enabled {
-            return Err(AgentsError::execution("advisor_disabled".into()));
+            return Err(AgentsError::AdvisorDisabled);
         }
         if is_advisor_chat_id(&request.chat_id) {
             // Loop guard, part 1: reviews never review reviews.
-            return Err(AgentsError::execution(
-                "advisor may not review an advisor run".into(),
-            ));
+            return Err(AgentsError::AdvisorRecursionRefused);
         }
         let provider = self.resolve_provider(&config, &origin)?;
         let configured = self.model_override.clone().or_else(|| match origin {
@@ -469,13 +465,10 @@ impl AdvisorEngine {
             // No advisor-specific model: review with the reviewed chat's
             // own durable session model. Never send an empty `model` — a
             // provider rejects it, failing every review opaquely.
-            None => self.session_model(&request.chat_id).await?.ok_or_else(|| {
-                AgentsError::execution(
-                    "advisor_model_unconfigured: set advisor `model`/`watchdogModel` \
-                         or review a session chat with a model"
-                        .into(),
-                )
-            })?,
+            None => self
+                .session_model(&request.chat_id)
+                .await?
+                .ok_or_else(|| AgentsError::AdvisorModelUnconfigured)?,
         };
         let tools = self.tools.read_tools(&request.chat_id).await;
         let mut registry = ToolRegistry::new();
@@ -683,7 +676,7 @@ impl AdvisorEngine {
         };
         let budget = Arc::new(
             ExecutionBudget::new(limits, self.runtime.clone(), None)
-                .map_err(|error| AgentsError::execution(format!("invalid_budget: {error}")))?,
+                .map_err(AgentsError::AdvisorInvalidBudget)?,
         );
         let request = ChatRequest {
             run_id: run_id.to_owned(),
@@ -708,17 +701,12 @@ impl AdvisorEngine {
         // Drain the event stream to completion (backpressure on the core
         // channel), then join the result.
         futures::StreamExt::for_each(handle.events, |_event| async {}).await;
-        let result = handle
-            .result
-            .await
-            .map_err(|error| AgentsError::execution(format!("advisor join: {error}")))?;
+        let result = handle.result.await.map_err(AgentsError::AdvisorWorker)?;
         match result.terminal {
             Terminal::Completed => {}
-            Terminal::Cancelled => return Err(AgentsError::cancelled()),
+            Terminal::Cancelled => return Err(AgentsError::Cancelled),
             Terminal::Failed => {
-                return Err(AgentsError::execution(
-                    "advisor run failed (budget or provider)".into(),
-                ));
+                return Err(AgentsError::AdvisorRunFailed);
             }
         }
         let answer = result

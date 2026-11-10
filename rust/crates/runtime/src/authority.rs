@@ -21,8 +21,8 @@ use agentkit_governance::{
     ToolGuardContext, ToolGuardVerdict,
 };
 use agentkit_sessions::{
-    AgentSessionService, HostResult, PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent,
-    SessionExecutionAuthority,
+    AgentSessionService, PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent,
+    SessionExecutionAuthority, SessionsResult,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -228,11 +228,11 @@ impl PlanApprovalPolicy for BindingPlanPolicy {
         self.plan.tool_names.clone()
     }
 
-    async fn granted_mode(&self, _session_id: &str) -> HostResult<String> {
+    async fn granted_mode(&self, _session_id: &str) -> SessionsResult<String> {
         Ok(self.plan.granted_mode.as_str().to_owned())
     }
 
-    async fn authorize(&self, _intent: &PlanGrantIntent<'_>) -> HostResult<PlanAuthorization> {
+    async fn authorize(&self, _intent: &PlanGrantIntent<'_>) -> SessionsResult<PlanAuthorization> {
         Ok(PlanAuthorization::Allowed)
     }
 }

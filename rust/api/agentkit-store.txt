@@ -57,6 +57,13 @@ pub enum agentkit_store::ExecutionStateRead
 pub agentkit_store::ExecutionStateRead::Absent
 pub agentkit_store::ExecutionStateRead::Malformed
 pub agentkit_store::ExecutionStateRead::Valid(serde_json::value::Value)
+pub enum agentkit_store::ManagedInputReason
+pub agentkit_store::ManagedInputReason::AliasConflict
+pub agentkit_store::ManagedInputReason::IdentityRequired
+pub agentkit_store::ManagedInputReason::ImmutableIdentity
+pub agentkit_store::ManagedInputReason::InvalidAlias
+pub agentkit_store::ManagedInputReason::SecretReferencesUnsupported
+pub agentkit_store::ManagedInputReason::SelectedConnectorRequired
 pub enum agentkit_store::ProposalStatus
 pub agentkit_store::ProposalStatus::Applied
 pub agentkit_store::ProposalStatus::Applying
@@ -70,6 +77,9 @@ pub fn agentkit_store::ProposalStatus::from_json(serde_json::value::Value) -> co
 pub enum agentkit_store::QueueAdmission
 pub agentkit_store::QueueAdmission::Queued(agentkit_store::AgentInputRecord)
 pub agentkit_store::QueueAdmission::Staged(agentkit_engine::model::TaskRecord)
+pub enum agentkit_store::ReceiptTransitionReason
+pub agentkit_store::ReceiptTransitionReason::NotUncertain
+pub agentkit_store::ReceiptTransitionReason::RunActive
 pub enum agentkit_store::ResolutionOutcome
 pub agentkit_store::ResolutionOutcome::Acknowledged
 pub agentkit_store::ResolutionOutcome::Completed
@@ -79,7 +89,10 @@ pub agentkit_store::SettingsCommit::Aborted(agentkit_store::StoreError)
 pub agentkit_store::SettingsCommit::Applied
 pub agentkit_store::SettingsCommit::Conflict
 pub enum agentkit_store::StoreError
+pub agentkit_store::StoreError::AgentInputTransition(alloc::string::String)
 pub agentkit_store::StoreError::AlreadyOwned
+pub agentkit_store::StoreError::AnswerConflict(alloc::string::String)
+pub agentkit_store::StoreError::AnswerStale(alloc::string::String)
 pub agentkit_store::StoreError::Closed
 pub agentkit_store::StoreError::Conflict(alloc::string::String)
 pub agentkit_store::StoreError::Database(rusqlite::error::Error)
@@ -93,10 +106,19 @@ pub agentkit_store::StoreError::InvalidTransition(alloc::string::String)
 pub agentkit_store::StoreError::Io(core::io::error::Error)
 pub agentkit_store::StoreError::Json(serde_json::error::Error)
 pub agentkit_store::StoreError::LeaseLost(alloc::string::String)
+pub agentkit_store::StoreError::ManagedInput
+pub agentkit_store::StoreError::ManagedInput::message: alloc::string::String
+pub agentkit_store::StoreError::ManagedInput::reason: agentkit_store::ManagedInputReason
 pub agentkit_store::StoreError::NotFound(alloc::string::String)
+pub agentkit_store::StoreError::ReceiptTransition
+pub agentkit_store::StoreError::ReceiptTransition::message: alloc::string::String
+pub agentkit_store::StoreError::ReceiptTransition::reason: agentkit_store::ReceiptTransitionReason
 pub agentkit_store::StoreError::RecoveryUnreadable(alloc::string::String)
 pub agentkit_store::StoreError::ScopeBusy(alloc::string::String)
 pub agentkit_store::StoreError::SessionDescriptorChanged(alloc::string::String)
+pub agentkit_store::StoreError::TaskInput
+pub agentkit_store::StoreError::TaskInput::message: alloc::string::String
+pub agentkit_store::StoreError::TaskInput::reason: agentkit_engine::repository::TaskInputReason
 pub agentkit_store::StoreError::TransactionGateTimeout
 pub agentkit_store::StoreError::TransactionScopeExpired
 pub agentkit_store::StoreError::UnsupportedVersion(i64)
@@ -108,6 +130,7 @@ pub fn agentkit_store::StoreError::is_lease_lost(&self) -> bool
 pub fn agentkit_store::StoreError::is_not_found(&self) -> bool
 pub fn agentkit_store::StoreError::is_transient(&self) -> bool
 pub fn agentkit_store::StoreError::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_store::StoreError::task_input_reason(&self) -> core::option::Option<agentkit_engine::repository::TaskInputReason>
 impl core::convert::From<agentkit_kernel::timestamp::TimestampOutOfRange> for agentkit_store::StoreError
 pub fn agentkit_store::StoreError::from(agentkit_kernel::timestamp::TimestampOutOfRange) -> Self
 impl core::convert::From<agentkit_store::StoreError> for agentkit_engine::error::EngineError<agentkit_store::StoreError>

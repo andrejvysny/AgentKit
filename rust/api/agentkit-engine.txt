@@ -1,12 +1,28 @@
 pub mod agentkit_engine
+pub enum agentkit_engine::ContextClassification
+pub agentkit_engine::ContextClassification::Rejected
+pub agentkit_engine::ContextClassification::Unclassified
 pub enum agentkit_engine::EngineError<E: core::error::Error>
 pub agentkit_engine::EngineError::Cancelled
-pub agentkit_engine::EngineError::Execution(alloc::string::String)
+pub agentkit_engine::EngineError::Context
+pub agentkit_engine::EngineError::Context::classification: agentkit_engine::ContextClassification
+pub agentkit_engine::EngineError::Context::failure_code: core::option::Option<alloc::string::String>
+pub agentkit_engine::EngineError::Context::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
+pub agentkit_engine::EngineError::External
+pub agentkit_engine::EngineError::External::failure_code: core::option::Option<alloc::string::String>
+pub agentkit_engine::EngineError::External::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
 pub agentkit_engine::EngineError::Failure(agentkit_engine::ExecutionFailure)
+pub agentkit_engine::EngineError::InvalidHostLimits
+pub agentkit_engine::EngineError::InvalidRetryBackoff
+pub agentkit_engine::EngineError::InvalidRetryJitter
+pub agentkit_engine::EngineError::InvalidTimestamp
 pub agentkit_engine::EngineError::NoExecutorForKind(alloc::string::String)
-pub agentkit_engine::EngineError::NotFound(alloc::string::String)
+pub agentkit_engine::EngineError::RetryDeadlineOverflow
 pub agentkit_engine::EngineError::Store(E)
+pub agentkit_engine::EngineError::TaskNotFound
 pub agentkit_engine::EngineError::UnknownKind(alloc::string::String)
+pub agentkit_engine::EngineError::VerificationTimeout
+pub agentkit_engine::EngineError::Worker(tokio::runtime::task::error::JoinError)
 impl<E: core::error::Error> core::convert::From<agentkit_engine::EngineError<E>> for agentkit_governance::error::GovernanceError
 pub fn agentkit_governance::error::GovernanceError::from(agentkit_engine::EngineError<E>) -> Self
 impl<E: core::error::Error> core::convert::From<agentkit_governance::error::GovernanceError> for agentkit_engine::EngineError<E>
@@ -24,6 +40,11 @@ pub agentkit_engine::RetrySafety::UnknownOutcome
 pub enum agentkit_engine::RunUpdate
 pub agentkit_engine::RunUpdate::Event(agentkit_engine::EventRecord)
 pub agentkit_engine::RunUpdate::Settled(alloc::boxed::Box<agentkit_engine::TaskRecord>)
+pub enum agentkit_engine::TaskInputReason
+pub agentkit_engine::TaskInputReason::EventSequence
+pub agentkit_engine::TaskInputReason::InvalidForkPoint
+pub agentkit_engine::TaskInputReason::ReplayIdentityMismatch
+pub agentkit_engine::TaskInputReason::UnknownDependency
 pub enum agentkit_engine::TaskStatus
 pub agentkit_engine::TaskStatus::Cancelled
 pub agentkit_engine::TaskStatus::Completed
@@ -281,6 +302,7 @@ pub fn agentkit_engine::RepositoryFault::is_lease_lost(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_not_found(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_transient(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::task_input_reason(&self) -> core::option::Option<agentkit_engine::TaskInputReason>
 pub trait agentkit_engine::Runtime: core::marker::Send + core::marker::Sync
 pub fn agentkit_engine::Runtime::id(&self) -> alloc::string::String
 pub fn agentkit_engine::Runtime::now_ms(&self) -> i64
