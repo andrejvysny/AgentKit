@@ -28,6 +28,15 @@ fn version_one(path: &Path) {
         DROP TABLE agent_config_revisions;
         DROP TABLE agent_admissions;
         DROP INDEX tasks_agent;
+        DROP INDEX native_session_bindings_task;
+        DROP TABLE native_session_bindings;
+        DROP INDEX native_interactions_task;
+        DROP TABLE native_interactions;
+        DROP INDEX native_continuations_scope;
+        DROP INDEX native_continuations_attempt;
+        DROP TABLE native_continuations;
+        DROP INDEX native_call_receipts_invocation;
+        DROP TABLE native_call_receipts;
         DROP INDEX tasks_status;
         DROP INDEX tasks_parent;
         DROP TRIGGER messages_search_insert;

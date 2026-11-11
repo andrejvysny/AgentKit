@@ -16,6 +16,10 @@ exclude = ["tests/fixtures/**/*.sqlite"]
 default = []
 http = ["dep:agentkit-transport-http", "dep:axum"]
 
+[[example]]
+name = "native-chat-lifecycle"
+required-features = ["http"]
+
 # The HTTP teammates conformance lane compiles only with `http`; without the
 # required-features declaration `cargo test --test http_teammates` reports a
 # vacuous green "0 passed". Run it as:
@@ -24,10 +28,17 @@ http = ["dep:agentkit-transport-http", "dep:axum"]
 name = "http_teammates"
 required-features = ["http"]
 
+# Opt-in live qualification against the real `claude` CLI (ignored by
+# default; also requires the broker's HTTP stack).
+[[test]]
+name = "live_claude_mcp"
+required-features = ["http"]
+
 [dependencies]
 agentkit-store = { path = "../store", version = "0.1.0" }
 agentkit-core = { path = "../core", version = "0.1.0" }
 agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-native = { path = "../native", version = "0.1.0" }
 agentkit-connections = { path = "../connections", version = "0.1.0", features = ["http"] }
 agentkit-mcp = { path = "../mcp", version = "0.1.0" }
 agentkit-transport-http = { path = "../transport-http", version = "0.1.0", optional = true }
@@ -56,6 +67,10 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 
 [dev-dependencies]
 agentkit-mcp = { path = "../mcp", version = "0.1.0" }
+# Review round-3 F4: the deadline-chain guard test reads the claude
+# adapter's outer MCP budget alongside the host's authorize budget.
+# (dev-only: claude sits ABOVE host, so this never creates a cycle.)
+agentkit-claude = { path = "../claude", version = "0.1.0" }
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"
 # The imported-receipt acceptance tests drive the TypeScript importer

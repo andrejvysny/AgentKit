@@ -768,6 +768,7 @@ impl SubagentService {
             .send(
                 child_chat_id,
                 &SendInput {
+                    frozen_payload: None,
                     content,
                     input_id: Some(input_id.clone()),
                     when_busy: WhenBusy::Queue,
@@ -886,6 +887,7 @@ impl SubagentService {
                     .steer(
                         child_chat_id,
                         &SteerInput {
+                            frozen_payload: None,
                             content,
                             input_id: Some(input_id),
                             turn_id: view.turn_task_id.clone(),
@@ -899,6 +901,7 @@ impl SubagentService {
                     .follow_up(
                         child_chat_id,
                         &FollowUpInput {
+                            frozen_payload: None,
                             content,
                             input_id: Some(input_id),
                         },
@@ -1154,6 +1157,7 @@ impl SubagentService {
                     .follow_up(
                         child_chat_id,
                         &FollowUpInput {
+                            frozen_payload: None,
                             content: Value::String(note),
                             input_id: Some(input_id),
                         },

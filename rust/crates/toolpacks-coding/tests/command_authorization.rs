@@ -237,6 +237,7 @@ async fn run(f: &Fixture) -> String {
                 when_busy: WhenBusy::Reject,
                 turn_id: None,
                 on_settled: None,
+                frozen_payload: None,
             },
         )
         .await

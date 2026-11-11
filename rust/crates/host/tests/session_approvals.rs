@@ -378,6 +378,7 @@ impl Fixture {
             .send(
                 "s1",
                 &SendInput {
+                    frozen_payload: None,
                     content: json!(text),
                     input_id: Some(id.into()),
                     when_busy: WhenBusy::Reject,
@@ -419,6 +420,7 @@ impl Fixture {
             .send(
                 "s1",
                 &SendInput {
+                    frozen_payload: None,
                     content: json!("work"),
                     input_id: Some(format!("crash:{run_id}")),
                     when_busy: WhenBusy::Reject,

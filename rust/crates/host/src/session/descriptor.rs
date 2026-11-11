@@ -26,7 +26,14 @@
 //!   `HOST_TASK_KIND` regex `^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$` — a lowercase
 //!   first segment, later segments drawn from `[a-z0-9_-]` and non-empty (so
 //!   `project.1` and `project._worker` are legal) — whose root segment is
-//!   neither `chat` nor `agentkit`.
+//!   neither `chat` nor `agentkit`;
+//! - `nativeExecution` (Rust-first native lane, no TS ancestor) is absent or a
+//!   non-empty record that never carries `turnInput` (per-turn input is frozen
+//!   per SEND, never per session). Its inner keys are consumer-frozen
+//!   admission material, opaque to the host; every turn's payload inherits
+//!   them verbatim so queued, flushed and settlement-promoted turns carry the
+//!   identical stanza (AGENTKIT-112: normalization must not drop native
+//!   fields).
 //!
 //! Absent optional fields are accepted and stay omitted with their defaults;
 //! any field that is PRESENT but malformed invalidates the whole descriptor —
@@ -125,7 +132,37 @@ pub fn read_session_descriptor(metadata: &Value) -> Option<Value> {
         }
         next.insert("turnKind".into(), kind.into());
     }
+    if let Some(native) = raw.get("nativeExecution") {
+        match read_native_execution(Some(native)) {
+            Field::Absent | Field::Malformed => return None,
+            Field::Valid(value) => next.insert("nativeExecution".into(), value),
+        };
+    }
     Some(Value::Object(next))
+}
+
+/// The session-frozen native stanza: a non-empty record, NEVER one that
+/// freezes `turnInput` (that is per-turn admission — freezing it at
+/// session scope would replay one text across the whole session), and —
+/// with the native lane compiled in — every inner key must already parse
+/// against the executor's own typed contract (review round-3 F5): a
+/// session must not be creatable with an inherited target that its turns
+/// could only fail to admit later.
+fn read_native_execution(raw: Option<&Value>) -> Field<Value> {
+    let Some(value) = raw else {
+        return Field::Absent;
+    };
+    let Some(record) = value.as_object() else {
+        return Field::Malformed;
+    };
+    if record.is_empty() || record.contains_key("turnInput") {
+        return Field::Malformed;
+    }
+    #[cfg(feature = "http")]
+    if crate::native_executor::NativeAgentExecutor::validate_frozen_stanza(record).is_err() {
+        return Field::Malformed;
+    }
+    Field::Valid(value.clone())
 }
 
 /// The JS integer test behind `raw["version"] !== 1` and

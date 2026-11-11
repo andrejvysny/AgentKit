@@ -14,6 +14,10 @@ mod governance;
 #[cfg(feature = "http")]
 pub mod http;
 mod mcp_configuration;
+#[cfg(feature = "http")]
+pub mod native_bridge;
+#[cfg(feature = "http")]
+pub mod native_executor;
 mod ports;
 mod profiles;
 mod project_instructions;
@@ -36,6 +40,11 @@ pub use connection_transport::*;
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
 pub use governance::*;
 pub use mcp_configuration::*;
+#[cfg(feature = "http")]
+pub use native_bridge::{
+    AttemptBroker, BrokerAuthority, BrokerBackend, BrokerDenial, BrokerExecuted, BrokerInvocation,
+    BrokerLimits, BrokerToolDefinition,
+};
 pub use ports::*;
 pub use profiles::*;
 pub use project_instructions::*;
@@ -121,6 +130,15 @@ impl ExecutionContext {
             .update_progress(self.fence.clone(), progress, self.runtime.now_ms())
             .await?;
         Ok(())
+    }
+
+    /// The attempt's live lease proof. Lane-side executors use it with the
+    /// store's fenced task APIs (`append_projected`) to settle durable rows
+    /// — events, projected messages — under the SAME fence the runner's
+    /// claim published; a replaced attempt is refused like everywhere else.
+    #[must_use]
+    pub fn lease_fence(&self) -> LeaseFence {
+        self.fence.clone()
     }
 
     /// Completed external effects must be recorded even after cancellation.

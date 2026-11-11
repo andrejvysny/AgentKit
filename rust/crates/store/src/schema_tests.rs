@@ -112,28 +112,40 @@ fn orphaned_legacy_owner_locks_are_swept_live_and_held_locks_are_not() {
         live_db.canonicalize().unwrap().display().to_string(),
         "the lock records the database it keys"
     );
-    // (1) Orphan: the name claims a database that no longer exists.
+    // Fixture databases are ALL created while their originals are alive:
+    // a filesystem may recycle a just-freed inode immediately, which
+    // would collide two scenarios' lock names (or make a "replaced"
+    // database identical by dev+ino, the only identity that exists).
     let gone_db = directory.path().join("gone.db");
+    let moved_db = directory.path().join("moved.db");
+    let replacement = directory.path().join("moved-v2.db");
+    let held_db = directory.path().join("held.db");
     std::fs::write(&gone_db, "").unwrap();
+    std::fs::write(&moved_db, "").unwrap();
+    std::fs::write(&replacement, "x").unwrap();
+    std::fs::write(&held_db, "").unwrap();
     let gone_meta = std::fs::metadata(&gone_db).unwrap();
+    let old_meta = std::fs::metadata(&moved_db).unwrap();
+    let new_meta = std::fs::metadata(&replacement).unwrap();
+    let held_meta = std::fs::metadata(&held_db).unwrap();
+    assert_ne!(
+        new_meta.ino(),
+        old_meta.ino(),
+        "replacement must be a new inode"
+    );
+    // (1) Orphan: the name claims a database that no longer exists.
     std::fs::remove_file(&gone_db).unwrap();
     let gone_lock = owners.join(format!("{}-{}.lock", gone_meta.dev(), gone_meta.ino()));
     std::fs::write(&gone_lock, "/definitely/removed/agentkit-gone.db\n").unwrap();
     // (2) Replaced: the recorded path exists but at a different inode.
-    let moved_db = directory.path().join("moved.db");
-    std::fs::write(&moved_db, "").unwrap();
-    let old_meta = std::fs::metadata(&moved_db).unwrap();
     std::fs::remove_file(&moved_db).unwrap();
-    std::fs::write(&moved_db, "").unwrap();
+    std::fs::rename(&replacement, &moved_db).unwrap();
     let moved_lock = owners.join(format!("{}-{}.lock", old_meta.dev(), old_meta.ino()));
     std::fs::write(&moved_lock, format!("{}\n", moved_db.display())).unwrap();
     // (3) Untagged legacy file (pre-sweep builds): never provably orphaned.
     let legacy_lock = owners.join("1-1.lock");
     std::fs::write(&legacy_lock, "").unwrap();
     // (4) Orphan content but the flock is held: somebody is using it.
-    let held_db = directory.path().join("held.db");
-    std::fs::write(&held_db, "").unwrap();
-    let held_meta = std::fs::metadata(&held_db).unwrap();
     let held_lock = owners.join(format!("{}-{}.lock", held_meta.dev(), held_meta.ino()));
     std::fs::write(&held_lock, "/definitely/removed/agentkit-held.db\n").unwrap();
     let hold = std::fs::OpenOptions::new()

@@ -104,6 +104,7 @@ async fn send(service: &AgentSessionService, id: &str) -> String {
         .send(
             "chat",
             &SendInput {
+                frozen_payload: None,
                 content: json!("question"),
                 input_id: Some(id.into()),
                 when_busy: WhenBusy::Reject,

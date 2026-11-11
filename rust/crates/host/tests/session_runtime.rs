@@ -356,6 +356,7 @@ async fn fixture_with_runtime(
 
 fn send_input(content: Value, input_id: Option<&str>, when_busy: WhenBusy) -> SendInput {
     SendInput {
+        frozen_payload: None,
         content,
         input_id: input_id.map(str::to_owned),
         when_busy,
@@ -419,6 +420,7 @@ async fn an_asked_call_parks_answers_spends_once_and_the_queue_moves() {
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("and summarize"),
                 input_id: Some("in2".into()),
             },
@@ -1021,6 +1023,7 @@ async fn a_live_steer_projects_exactly_once_now_and_after_reopening() {
         .steer(
             "s1",
             &SteerInput {
+                frozen_payload: None,
                 content: json!("left!"),
                 input_id: Some("st-1".into()),
                 turn_id: Some(turn_id.clone()),
@@ -1135,6 +1138,7 @@ async fn a_steer_cancelled_before_projection_leaves_no_applied_message() {
         .steer(
             "s1",
             &SteerInput {
+                frozen_payload: None,
                 content: json!("too late"),
                 input_id: Some("st-2".into()),
                 turn_id: Some(turn_id.clone()),
@@ -1252,6 +1256,7 @@ async fn a_crash_between_placement_and_announcement_backfills_the_event() {
         .steer(
             "s1",
             &SteerInput {
+                frozen_payload: None,
                 content: json!("left!"),
                 input_id: Some("st-1".into()),
                 turn_id: Some(turn_id.clone()),
@@ -1406,6 +1411,7 @@ async fn reconciliation_never_announces_a_placed_steer_twice() {
         .steer(
             "s1",
             &SteerInput {
+                frozen_payload: None,
                 content: json!("left!"),
                 input_id: Some("st-1".into()),
                 turn_id: Some(turn_id.clone()),
@@ -1515,6 +1521,7 @@ async fn a_completed_turn_promotes_its_follow_up_in_one_commit_surviving_reopen(
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("later"),
                 input_id: Some("in2".into()),
             },
@@ -1611,6 +1618,7 @@ async fn a_failed_turn_leaves_the_queue_pending_until_an_explicit_flush() {
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("later"),
                 input_id: Some("in2".into()),
             },
@@ -1693,6 +1701,7 @@ async fn a_cancelled_turn_leaves_the_queue_pending() {
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("later"),
                 input_id: Some("in2".into()),
             },
@@ -1759,6 +1768,7 @@ async fn a_poison_queued_input_never_wedges_the_settle_or_the_flush() {
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!(""),
                 input_id: Some("poison".into()),
             },
@@ -1769,6 +1779,7 @@ async fn a_poison_queued_input_never_wedges_the_settle_or_the_flush() {
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("real"),
                 input_id: Some("in2".into()),
             },
@@ -1870,6 +1881,7 @@ impl SessionFlushPlanner for Racy {
                         .follow_up(
                             "s1",
                             &FollowUpInput {
+                                frozen_payload: None,
                                 content: json!("and summarize"),
                                 input_id: Some("late".into()),
                             },
@@ -1903,6 +1915,7 @@ impl SessionFlushPlanner for Racy {
                         .follow_up(
                             "s1",
                             &FollowUpInput {
+                                frozen_payload: None,
                                 content: json!("after the model change"),
                                 input_id: Some("late-model".into()),
                             },
@@ -1932,6 +1945,7 @@ impl SessionFlushPlanner for Racy {
                         .follow_up(
                             "s1",
                             &FollowUpInput {
+                                frozen_payload: None,
                                 content: json!("after removing unsupported config"),
                                 input_id: Some("late-supported".into()),
                             },
@@ -2056,6 +2070,7 @@ async fn a_candidate_cancelled_after_the_snapshot_still_promotes_the_next() {
                     .follow_up(
                         "s1",
                         &FollowUpInput {
+                            frozen_payload: None,
                             content: json!(text),
                             input_id: Some(id.into()),
                         },
@@ -2238,6 +2253,7 @@ async fn a_follow_up_whose_admission_straddles_the_settlement_is_never_stranded(
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("probe"),
                 input_id: Some("probe".into()),
             },
@@ -2261,6 +2277,7 @@ async fn a_follow_up_whose_admission_straddles_the_settlement_is_never_stranded(
             .follow_up(
                 "s1",
                 &FollowUpInput {
+                    frozen_payload: None,
                     content: json!("and summarize"),
                     input_id: Some("late".into()),
                 },
@@ -2452,6 +2469,7 @@ async fn a_config_change_after_planning_revalidates_queued_turns() {
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("next"),
                 input_id: Some("next".into()),
             },
@@ -2505,6 +2523,7 @@ async fn planning_a_settlement_does_not_cancel_its_steers() {
         .steer(
             "s1",
             &SteerInput {
+                frozen_payload: None,
                 content: json!("only this turn"),
                 input_id: Some("steer-cancel".into()),
                 turn_id: Some(turn_id.clone()),
@@ -2611,6 +2630,7 @@ async fn continuous_config_changes_return_a_bounded_conflict_without_partial_set
         .follow_up(
             "s1",
             &FollowUpInput {
+                frozen_payload: None,
                 content: json!("next"),
                 input_id: Some("next".into()),
             },
@@ -2701,6 +2721,7 @@ async fn a_different_task_kind_cannot_accept_a_session_follow_up() {
         .await
         .unwrap();
     let input = FollowUpInput {
+        frozen_payload: None,
         content: json!("next"),
         input_id: Some("after-maintenance".into()),
     };

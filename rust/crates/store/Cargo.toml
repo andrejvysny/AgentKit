@@ -11,6 +11,7 @@ readme = "../../../README.md"
 
 [dependencies]
 agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-native = { path = "../native", version = "0.1.0" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 # AGENTKIT-72 at-rest sealing. `ring` is already in the workspace Cargo.lock
 # (the rustls stack behind the `http` feature); this edge adds no new crate to

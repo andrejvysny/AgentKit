@@ -163,6 +163,7 @@ mod reservation_tests {
                 principal: Value::Null,
                 chat_id: None,
                 actor_id: "a".into(),
+                request_id: None,
                 cancellation: CancellationToken::new(),
             },
             state.backend.clone(),
@@ -284,9 +285,18 @@ impl McpServer {
         })
     }
     pub fn router(&self) -> Router {
+        self.router_at("/")
+    }
+    /// The same transport mounted at an additional endpoint (review R4 F1:
+    /// a host that ADVERTISES `http://127.0.0.1:<port>/mcp` must serve
+    /// exactly that path — an advertised URL that answers 404 is a dead
+    /// tool door). Every mount is the identical authenticated `handle`;
+    /// mounting at several paths is how the broker keeps `/` working for
+    /// existing clients while also serving the advertised `/mcp`.
+    pub fn router_at(&self, path: &str) -> Router {
         let server = self.clone();
         Router::new().route(
-            "/",
+            path,
             any(move |request| {
                 let server = server.clone();
                 async move { server.handle(request).await }
@@ -620,6 +630,7 @@ impl McpServer {
                 principal,
                 chat_id,
                 actor_id: format!("mcp_{}", uuid::Uuid::new_v4()),
+                request_id: None,
                 cancellation: self.state.shutdown.child_token(),
             },
             self.state.backend.clone(),

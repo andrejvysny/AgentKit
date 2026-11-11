@@ -599,7 +599,7 @@ impl AgentHost {
                 return Ok(());
             }
             if let Some(hook) = &self.options.verification
-                && !executor.handles_verification()
+                && !executor.handles_verification_for(&context.task.payload)
             {
                 context.check_cancelled()?;
                 let report = tokio::time::timeout(
