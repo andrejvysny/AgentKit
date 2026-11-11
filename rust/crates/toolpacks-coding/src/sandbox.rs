@@ -12,17 +12,28 @@
 //! Ported from `packages/toolpacks-coding/src/sandbox.ts`.
 
 use std::collections::HashSet;
-use std::sync::LazyLock;
-
-use regex::Regex;
 
 use crate::errors::CodingError;
 
 /// The macOS Seatbelt launcher.
 pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
-static SAFE_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^/[A-Za-z0-9._/-]{1,512}$").expect("safe path pattern"));
+/// Longest path (in bytes) the profile embeds.
+const MAX_PROFILE_PATH_BYTES: usize = 1024;
+
+/// Whether `path` can be embedded in an SBPL string literal as-is. Paths
+/// sit only inside `"..."` literals, so the characters that matter are the
+/// literal's own delimiter and escape (`"`, `\`) and control characters;
+/// spaces and non-ASCII names (common macOS folders such as
+/// `~/Documents/Default Project`) are ordinary literal content.
+fn profile_safe_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path.len() > 1
+        && path.len() <= MAX_PROFILE_PATH_BYTES
+        && !path
+            .chars()
+            .any(|ch| ch == '"' || ch == '\\' || ch.is_control())
+}
 
 // Home, volumes and shared temp dirs hold credentials and other projects.
 const DENIED_READ_ROOTS: &[&str] = &[
@@ -113,10 +124,10 @@ pub fn sandbox_profile(policy: &SandboxPolicy) -> Result<String, CodingError> {
         .into_iter()
         .chain(policy.readable.iter())
         .collect();
-    if !paths.iter().all(|path| SAFE_PATH.is_match(path)) {
+    if !paths.iter().all(|path| profile_safe_path(path)) {
         return Err(CodingError::new(
             "shell_isolation_unavailable",
-            "a path needed by the sandbox profile contains characters outside [A-Za-z0-9._/-]; refusing to build the profile",
+            "a path needed by the sandbox profile contains a quote, backslash or control character; refusing to build the profile",
         ));
     }
     let subpath = |path: &str| format!("(subpath \"{path}\")");
@@ -249,7 +260,7 @@ pub fn toolchain_paths(env: &std::collections::HashMap<String, String>) -> Vec<S
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    found.retain(|path| SAFE_PATH.is_match(path));
+    found.retain(|path| profile_safe_path(path));
     found.sort();
     found
 }
@@ -389,12 +400,32 @@ mod tests {
 
     #[test]
     fn unsafe_paths_are_refused() {
-        for bad in ["/w/my root", "/w/\"root\"", "/w/r;oot"] {
+        for bad in [
+            "/w/\"root\"",
+            "/w/ro\\ot",
+            "/w/ro\not",
+            "relative/root",
+            "/",
+        ] {
             let mut p = policy();
             p.root = bad.to_owned();
             let error = sandbox_profile(&p).unwrap_err();
             assert_eq!(error.code, "shell_isolation_unavailable");
-            assert!(error.message.contains("characters outside"));
+            assert!(error.message.contains("quote, backslash or control"));
+        }
+    }
+
+    #[test]
+    fn spaces_and_unicode_paths_build_a_profile() {
+        for good in [
+            "/Users/me/Documents/Default Project/web",
+            "/w/ž dir",
+            "/w/r;oot",
+        ] {
+            let mut p = policy();
+            p.root = good.to_owned();
+            let profile = sandbox_profile(&p).expect("profile");
+            assert!(profile.contains(&format!("(subpath \"{good}\")")));
         }
     }
 

@@ -91,6 +91,7 @@ struct Shared {
     interrupts: Mutex<Vec<InterruptPolicy>>,
     spawn_calls: AtomicUsize,
     stderr: Mutex<Vec<u8>>,
+    cleanup_uncertain: std::sync::atomic::AtomicBool,
 }
 
 struct FakeChild {
@@ -195,6 +196,19 @@ impl ProcessSupervisor for FakeSupervisor {
         }))
     }
 
+    fn descendant_cleanup(&self, _pid: u32, _generation: u64) -> Option<InterruptReceipt> {
+        self.shared
+            .cleanup_uncertain
+            .load(Ordering::SeqCst)
+            .then(|| InterruptReceipt {
+                terminated: true,
+                escalated_to_sigterm: false,
+                escalated_to_sigkill: false,
+                cleanup_uncertain: true,
+                detail: Some("injected unobservable descendants".into()),
+            })
+    }
+
     async fn drain_owned(&self, _policy: InterruptPolicy) -> Vec<InterruptReceipt> {
         Vec::new()
     }
@@ -279,6 +293,39 @@ async fn chat_turn_plain_chat_completes_via_adapter() {
         .collect();
     assert_eq!(leftover, vec![std::ffi::OsString::from("cwd")]);
     assert_eq!(shared.spawn_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn completed_answer_exposes_supervisor_cleanup_uncertainty() {
+    ensure_fixture();
+    let tmp = tempfile::tempdir().unwrap();
+    let supervisor = FakeSupervisor::new(
+        vec![
+            r#"{"type":"system","subtype":"init","session_id":"sess-fx","model":"sonnet"}"#,
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"VISIBLE","session_id":"sess-fx"}"#,
+        ],
+        false,
+    );
+    supervisor
+        .shared
+        .cleanup_uncertain
+        .store(true, Ordering::SeqCst);
+    let outcome = chat(tmp.path(), supervisor)
+        .chat_turn(
+            &plain_target(NativeProfile::PlainChat),
+            &turn_input(
+                TurnResume::Exact {
+                    vendor_session_id: "sess-fx".to_owned(),
+                },
+                "hello",
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, NativeTerminalOutcome::Uncertain {
+        class: agentkit_native::FailureClass::CleanupUncertain,
+        partial_text: Some(text), ..
+    } if text == "VISIBLE"));
 }
 
 /// Fix C: a CLI that dies before any frame explains itself on stderr; the

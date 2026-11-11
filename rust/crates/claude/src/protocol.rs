@@ -856,6 +856,19 @@ impl ClaudeStreamAdapter {
                 )
             })?
             .to_owned();
+        // A deferred result is not successful completion, even when the
+        // public CLI uses subtype=success and omits success-only fields.
+        if matches!(
+            frame.get("stop_reason").and_then(Value::as_str),
+            Some("tool_deferred" | "tool_deferred_unavailable")
+        ) || frame.get("deferred_tool_use").is_some_and(|v| !v.is_null())
+        {
+            self.deferred = Some(
+                "vendor deferred a tool call: native deferral is excluded from this profile"
+                    .to_owned(),
+            );
+            return Ok(Vec::new());
+        }
         let is_error = frame
             .get("is_error")
             .and_then(Value::as_bool)
@@ -2399,6 +2412,31 @@ mod tests {
                 assert_eq!(partial_text, None)
             }
             other => panic!("expected Uncertain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn documented_deferred_success_preserves_visible_text() {
+        for extra in [
+            r#""stop_reason":"tool_deferred""#,
+            r#""stop_reason":"tool_deferred_unavailable""#,
+            r#""deferred_tool_use":{"id":"call-1","name":"AskUserQuestion","input":{}}"#,
+        ] {
+            for error_field in ["", r#", "is_error":false"#] {
+                let mut adapter = ClaudeStreamAdapter::new();
+                push(&mut adapter, INIT);
+                push(&mut adapter, MSG_HELLO);
+                push(
+                    &mut adapter,
+                    &format!(
+                        r#"{{"type":"result","subtype":"success","session_id":"sess-1","result":"",{extra}{error_field}}}"#
+                    ),
+                );
+                assert!(matches!(
+                    adapter.terminal_outcome(&exit_with(Some(0), None, false)),
+                    NativeTerminalOutcome::DeferredBlocked { partial_text: Some(text), .. } if text == "Hello"
+                ));
+            }
         }
     }
 

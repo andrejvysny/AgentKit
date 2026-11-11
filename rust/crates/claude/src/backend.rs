@@ -107,6 +107,19 @@ impl NativeBackend for ClaudeCodeBackend {
             ));
         }
 
+        if let Some(admitted_version) = &target.backend_version
+            && admitted_version != &executable.version
+        {
+            return Err(NativeRefusal::new(
+                "executable_version_mismatch",
+                format!(
+                    "admission froze version '{admitted_version}', execution observed '{}'; readmit the turn",
+                    executable.version
+                ),
+                false,
+            ));
+        }
+
         let auth = locator.auth_status().await?;
         Self::check_cancel(cancel)?;
 
@@ -379,6 +392,22 @@ mod tests {
         // …but a properly signed-in subscription user is NEVER blocked:
         // the executor refuses only on `blocking_issues` (P1-1 regression).
         assert!(report.blocking_issues.is_empty());
+    }
+
+    #[test]
+    fn preflight_rejects_frozen_version_drift() {
+        let mut target = plain_target(&GOOD_PATH);
+        target.backend_version = Some("2.1.259".into());
+        let error = preflight_with(
+            &target,
+            ScriptedLocator {
+                evidence: Ok(evidence()),
+                auth: Ok(auth_subscription()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "executable_version_mismatch");
+        assert!(error.message.contains("readmit"));
     }
 
     #[test]

@@ -16,7 +16,7 @@
 //! * revocation is immediate: at attempt settlement, cancellation or lease
 //! * loss, tokens stop authenticating and live calls are cancelled.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -108,6 +108,21 @@ pub trait BrokerAuthority: Send + Sync + 'static {
         arguments: Value,
     ) -> Result<BrokerExecuted, BrokerDenial>;
 
+    /// Acknowledged durable lifecycle transition. An unfinished effectStarted
+    /// record is uncertainty evidence after a crash; terminal settlement may
+    /// refine it only for this exact invocation and argument identity.
+    async fn record_lifecycle(
+        &self,
+        _invocation: &BrokerInvocation,
+        _phase: &str,
+        _outcome: &Value,
+    ) -> Result<(), BrokerDenial> {
+        Err(BrokerDenial {
+            code: "durability_unavailable".into(),
+            message: "authority has no durable lifecycle journal".into(),
+        })
+    }
+
     /// Durable bookkeeping hook for every terminal call outcome.
     fn record(&self, _invocation: &BrokerInvocation, _outcome: &Value) {}
 }
@@ -117,6 +132,9 @@ pub trait BrokerAuthority: Send + Sync + 'static {
 pub struct BrokerLimits {
     pub max_calls: usize,
     pub max_args_bytes: usize,
+    /// Complete serialized MCP result and result-evidence payload limit.
+    /// Durable receipt identity/envelope has a separate complete-row cap
+    /// of 2 MiB, enforced by the store lifecycle API.
     pub max_result_bytes: usize,
     pub call_timeout_ms: i64,
     /// Hard bound on `BrokerAuthority::authorize` (the human approval
@@ -205,7 +223,7 @@ struct MemoKey {
 /// key restated with different content is a different call wearing an
 /// old badge — it never replays this result.
 struct Memo {
-    result: CallToolResult,
+    result: Option<CallToolResult>,
     tool: String,
     digest: String,
 }
@@ -266,11 +284,8 @@ pub struct BrokerBackend {
     /// a restated id whose content differs is not the same call and never
     /// replays a result it did not produce.
     memos: Mutex<HashMap<MemoKey, Memo>>,
-    /// In-flight counterpart of `memos`: an id restated while its first
-    /// execution is still running is refused, not doubled. Same
-    /// session-scoped typed key.
-    inflight: Mutex<HashSet<MemoKey>>,
     cancellation: CancellationToken,
+    settlements: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl BrokerBackend {
@@ -284,6 +299,12 @@ impl BrokerBackend {
         cancellation: CancellationToken,
     ) -> Result<Arc<Self>, BrokerDenial> {
         validate_server_name(server_name)?;
+        if limits.max_result_bytes < 100 {
+            return Err(BrokerDenial {
+                code: "broker_limits".into(),
+                message: "result limit must allow a 100-byte error envelope".into(),
+            });
+        }
         let mut defs = Vec::with_capacity(catalog.len());
         let mut allowed = Vec::with_capacity(catalog.len());
         for entry in catalog {
@@ -329,7 +350,7 @@ impl BrokerBackend {
             parked_ms: std::sync::atomic::AtomicU64::new(0),
             park_gate: Mutex::new(ParkState::default()),
             memos: Mutex::new(HashMap::new()),
-            inflight: Mutex::new(HashSet::new()),
+            settlements: Mutex::new(Vec::new()),
             cancellation,
         }))
     }
@@ -378,6 +399,35 @@ impl BrokerBackend {
         done.saturating_add(live)
     }
 
+    async fn drain_settlements(&self, budget: Duration) {
+        let settlements =
+            std::mem::take(&mut *self.settlements.lock().expect("broker settlements"));
+        // One aggregate deadline bounds shutdown regardless of call count.
+        // Dropping a join handle detaches its writer; durable effect-start
+        // evidence remains if the process exits before settlement finishes.
+        let _ = tokio::time::timeout(budget, async move {
+            for settlement in settlements {
+                let _ = settlement.await;
+            }
+        })
+        .await;
+    }
+
+    fn error_result(&self, payload: &Value) -> CallToolResult {
+        let result = CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
+        if serde_json::to_vec(&result).map_or(usize::MAX, |bytes| bytes.len())
+            <= self.limits.max_result_bytes
+        {
+            return result;
+        }
+        let code = payload
+            .get("code")
+            .and_then(Value::as_str)
+            .filter(|code| code.len() <= 16)
+            .unwrap_or("quota_result");
+        CallToolResult::error(vec![ContentBlock::text(code)])
+    }
+
     fn denied(&self, code: &str, message: impl Into<String>) -> CallToolResult {
         let message = message.into();
         let denial = json!({"denied": true, "code": code, "message": message});
@@ -394,7 +444,7 @@ impl BrokerBackend {
             },
             &denial,
         );
-        CallToolResult::error(vec![ContentBlock::text(denial.to_string())])
+        self.error_result(&denial)
     }
 
     /// Authorization + execution once the call passed mechanical bounds.
@@ -409,6 +459,7 @@ impl BrokerBackend {
         invocation: &BrokerInvocation,
         arguments: Value,
         effect_started: &std::sync::atomic::AtomicBool,
+        effect_uncertain: &std::sync::atomic::AtomicBool,
     ) -> CallToolResult {
         if let Err(denial) = {
             // Timing the human gate: approval parks are credited (LIVE,
@@ -441,11 +492,19 @@ impl BrokerBackend {
         } {
             let payload = json!({"denied": true, "code": denial.code, "message": denial.message});
             self.authority.record(invocation, &payload);
-            return CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
+            return self.error_result(&payload);
         }
         // The effect MAY have started from this line onward: set the flag
         // BEFORE awaiting so an abandonment at any later point is visible
         // to the reservation guard (review R4 F7a).
+        let start = json!({"contentHash": canonical_digest(&arguments)});
+        if let Err(denial) = self
+            .authority
+            .record_lifecycle(invocation, "effectStarted", &start)
+            .await
+        {
+            return self.denied(&denial.code, denial.message);
+        }
         effect_started.store(true, std::sync::atomic::Ordering::SeqCst);
         let executed = tokio::time::timeout(
             Duration::from_millis(self.limits.call_timeout_ms.max(1) as u64),
@@ -454,18 +513,19 @@ impl BrokerBackend {
         .await;
         match executed {
             Err(_) => {
+                effect_uncertain.store(true, std::sync::atomic::Ordering::SeqCst);
                 let payload = json!({
-                    "denied": true, "code": "call_timeout",
+                    "uncertain": true, "code": "effect_uncertain",
                     "message": format!("call exceeded {} ms", self.limits.call_timeout_ms),
                 });
                 self.authority.record(invocation, &payload);
-                CallToolResult::error(vec![ContentBlock::text(payload.to_string())])
+                self.error_result(&payload)
             }
             Ok(Err(denial)) => {
                 let payload =
                     json!({"denied": true, "code": denial.code, "message": denial.message});
                 self.authority.record(invocation, &payload);
-                CallToolResult::error(vec![ContentBlock::text(payload.to_string())])
+                self.error_result(&payload)
             }
             Ok(Ok(result)) => {
                 let mut parts = Vec::new();
@@ -492,9 +552,17 @@ impl BrokerBackend {
                 if parts.is_empty() {
                     parts.push(ContentBlock::text("{}".to_owned()));
                 }
-                let serialized = serde_json::to_string(&result.content)
-                    .unwrap_or_default()
-                    .len();
+                let mut response = CallToolResult::success(parts);
+                response.structured_content = result.structured.clone();
+                response.is_error = Some(false);
+                let outcome = json!({
+                    "executed": true, "tool": invocation.tool_name,
+                    "invocationId": invocation.invocation_id,
+                    "content": result.content, "structured": result.structured,
+                });
+                let serialized = serde_json::to_vec(&response)
+                    .map_or(usize::MAX, |v| v.len())
+                    .max(serde_json::to_vec(&outcome).map_or(usize::MAX, |v| v.len()));
                 if serialized > self.limits.max_result_bytes {
                     // Never silently truncate: the model sees the bound.
                     let payload = json!({
@@ -502,19 +570,9 @@ impl BrokerBackend {
                         "message": format!("result exceeds {} bytes", self.limits.max_result_bytes),
                     });
                     self.authority.record(invocation, &payload);
-                    return CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
+                    return self.error_result(&payload);
                 }
-                let outcome = json!({
-                    "executed": true,
-                    "tool": invocation.tool_name,
-                    "invocationId": invocation.invocation_id,
-                    "content": result.content,
-                    "structured": result.structured,
-                });
                 self.authority.record(invocation, &outcome);
-                let mut response = CallToolResult::success(parts);
-                response.structured_content = result.structured;
-                response.is_error = Some(false);
                 response
             }
         }
@@ -598,6 +656,8 @@ struct ReservationGuard<'a> {
     effect_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     tool: String,
     digest: String,
+    invocation: BrokerInvocation,
+    armed: bool,
 }
 
 impl<'a> ReservationGuard<'a> {
@@ -607,6 +667,7 @@ impl<'a> ReservationGuard<'a> {
         effect_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
         tool: String,
         digest: String,
+        invocation: BrokerInvocation,
     ) -> Self {
         Self {
             backend,
@@ -614,22 +675,22 @@ impl<'a> ReservationGuard<'a> {
             effect_started,
             tool,
             digest,
+            invocation,
+            armed: true,
         }
     }
     /// The dispatch settled normally: the caller records the real memo.
     fn disarm(&mut self) {
-        self.key = None;
+        self.armed = false;
     }
 }
 
 impl Drop for ReservationGuard<'_> {
     fn drop(&mut self) {
-        let Some(key) = self.key.take() else { return };
-        self.backend
-            .inflight
-            .lock()
-            .expect("broker inflight")
-            .remove(&key);
+        if !self.armed {
+            return;
+        }
+        let key = self.key.take();
         if self
             .effect_started
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -640,14 +701,36 @@ impl Drop for ReservationGuard<'_> {
                             request was abandoned; its outcome is uncertain and \
                             it will never be re-executed automatically",
             });
-            self.backend.memos.lock().expect("broker memos").insert(
-                key,
-                Memo {
-                    result: CallToolResult::error(vec![ContentBlock::text(outcome.to_string())]),
-                    tool: std::mem::take(&mut self.tool),
-                    digest: std::mem::take(&mut self.digest),
-                },
-            );
+            self.backend.authority.record(&self.invocation, &outcome);
+            let authority = self.backend.authority.clone();
+            let invocation = self.invocation.clone();
+            let durable = outcome.clone();
+            let settlement = tokio::spawn(async move {
+                let _ = authority
+                    .record_lifecycle(&invocation, "uncertain", &durable)
+                    .await;
+            });
+            self.backend
+                .settlements
+                .lock()
+                .expect("broker settlements")
+                .push(settlement);
+            if let Some(key) = key {
+                self.backend.memos.lock().expect("broker memos").insert(
+                    key,
+                    Memo {
+                        result: Some(self.backend.error_result(&outcome)),
+                        tool: std::mem::take(&mut self.tool),
+                        digest: std::mem::take(&mut self.digest),
+                    },
+                );
+            }
+        } else if let Some(key) = key {
+            self.backend
+                .memos
+                .lock()
+                .expect("broker requests")
+                .remove(&key);
         }
     }
 }
@@ -709,33 +792,23 @@ impl Backend for BrokerBackend {
         // and the same arguments.
         let digest = canonical_digest(&arguments);
         if let Some(key) = &memo_key {
-            if let Some(memo) = self.memos.lock().expect("broker memos").get(key) {
-                if memo.tool == name && memo.digest == digest {
-                    return Ok(memo.result.clone());
+            let mut requests = self.memos.lock().expect("broker requests");
+            if let Some(memo) = requests.get(key) {
+                if memo.tool != name || memo.digest != digest {
+                    return Ok(self.denied("replay_conflict", "request identity changed"));
                 }
-                // Fail closed: a restated key carrying DIFFERENT content
-                // is not the call this memo records — replaying would
-                // answer a new request with an unrelated result, and
-                // re-dispatching would let a transport that claims
-                // restatement smuggle a second effect under an old id.
-                // The in-band refusal is stable and never executes.
-                return Ok(self.denied(
-                    "replay_conflict",
-                    "this request id was already recorded for different \
-                     arguments; the recorded outcome will not be replayed",
-                ));
+                return Ok(memo.result.clone().unwrap_or_else(|| {
+                    self.denied("duplicate_in_progress", "request is still executing")
+                }));
             }
-            if !self
-                .inflight
-                .lock()
-                .expect("broker inflight")
-                .insert(key.clone())
-            {
-                return Ok(self.denied(
-                    "duplicate_in_progress",
-                    "the identical request is still executing; retry after it settles",
-                ));
-            }
+            requests.insert(
+                key.clone(),
+                Memo {
+                    result: None,
+                    tool: name.to_owned(),
+                    digest: digest.clone(),
+                },
+            );
         }
         // Count the call before authorize: approvals that park also spend
         // the attempt's CALL QUOTA (no infinite approval loops), even
@@ -745,7 +818,7 @@ impl Backend for BrokerBackend {
             live.calls += 1;
             if live.calls > self.limits.max_calls {
                 if let Some(key) = &memo_key {
-                    self.inflight.lock().expect("broker inflight").remove(key);
+                    self.memos.lock().expect("broker requests").remove(key);
                 }
                 return Ok(self.denied(
                     "quota_calls",
@@ -766,6 +839,7 @@ impl Backend for BrokerBackend {
             request_id: request_id.clone(),
         };
         let effect_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let effect_uncertain = std::sync::atomic::AtomicBool::new(false);
         let outcome = {
             // RAII (review R5): the gauge returns to zero even if the
             // dispatch future is abandoned mid-flight — an abandoned
@@ -779,19 +853,42 @@ impl Backend for BrokerBackend {
                 effect_started.clone(),
                 name.to_owned(),
                 digest.clone(),
+                invocation.clone(),
             );
             let outcome = self
-                .dispatch_authorized(&invocation, arguments, &effect_started)
+                .dispatch_authorized(&invocation, arguments, &effect_started, &effect_uncertain)
                 .await;
+            // Response compaction must not erase whether execution was
+            // entered: a quota error may follow a successful mutation.
+            let payload = json!({
+                "response": outcome,
+                "effectStarted": effect_started.load(std::sync::atomic::Ordering::SeqCst),
+                "effectUncertain": effect_uncertain.load(std::sync::atomic::Ordering::SeqCst),
+            });
+            let phase = if effect_uncertain.load(std::sync::atomic::Ordering::SeqCst) {
+                "uncertain"
+            } else {
+                "terminal"
+            };
+            if self
+                .authority
+                .record_lifecycle(&invocation, phase, &payload)
+                .await
+                .is_err()
+            {
+                return Ok(self.denied(
+                    "effect_uncertain",
+                    "terminal receipt could not be persisted",
+                ));
+            }
             reservation.disarm();
             outcome
         };
         if let Some(key) = &memo_key {
-            self.inflight.lock().expect("broker inflight").remove(key);
             self.memos.lock().expect("broker memos").insert(
                 key.clone(),
                 Memo {
-                    result: outcome.clone(),
+                    result: Some(outcome.clone()),
                     tool: name.to_owned(),
                     digest,
                 },
@@ -986,6 +1083,7 @@ impl AttemptBroker {
     pub async fn shutdown(&self) {
         self.backend.revoke();
         self.server.close().await;
+        self.backend.drain_settlements(Duration::from_secs(5)).await;
         self.cancellation.cancel();
         self.serve.abort();
     }
@@ -1063,6 +1161,15 @@ mod tests {
 
     #[async_trait]
     impl BrokerAuthority for ScriptedAuthority {
+        async fn record_lifecycle(
+            &self,
+            _: &BrokerInvocation,
+            _: &str,
+            _: &Value,
+        ) -> Result<(), BrokerDenial> {
+            Ok(())
+        }
+
         fn attempt_generation(&self) -> Option<u64> {
             if self.live { Some(7) } else { None }
         }
@@ -1153,6 +1260,15 @@ mod tests {
 
     #[async_trait]
     impl BrokerAuthority for SequencingAuthority {
+        async fn record_lifecycle(
+            &self,
+            _: &BrokerInvocation,
+            _: &str,
+            _: &Value,
+        ) -> Result<(), BrokerDenial> {
+            Ok(())
+        }
+
         fn attempt_generation(&self) -> Option<u64> {
             Some(7)
         }
@@ -1381,6 +1497,15 @@ mod tests {
         }
         #[async_trait]
         impl BrokerAuthority for ParkingAuthority {
+            async fn record_lifecycle(
+                &self,
+                _: &BrokerInvocation,
+                _: &str,
+                _: &Value,
+            ) -> Result<(), BrokerDenial> {
+                Ok(())
+            }
+
             fn attempt_generation(&self) -> Option<u64> {
                 Some(1)
             }
@@ -1476,6 +1601,15 @@ mod tests {
         }
         #[async_trait]
         impl BrokerAuthority for NeverAnswers {
+            async fn record_lifecycle(
+                &self,
+                _: &BrokerInvocation,
+                _: &str,
+                _: &Value,
+            ) -> Result<(), BrokerDenial> {
+                Ok(())
+            }
+
             fn attempt_generation(&self) -> Option<u64> {
                 Some(1)
             }
@@ -1549,6 +1683,15 @@ mod tests {
         }
         #[async_trait]
         impl BrokerAuthority for NeverAnswers {
+            async fn record_lifecycle(
+                &self,
+                _: &BrokerInvocation,
+                _: &str,
+                _: &Value,
+            ) -> Result<(), BrokerDenial> {
+                Ok(())
+            }
+
             fn attempt_generation(&self) -> Option<u64> {
                 Some(1)
             }
@@ -1688,9 +1831,22 @@ mod tests {
 
     #[tokio::test]
     async fn result_bound_is_reported_not_truncated() {
-        struct Huge;
+        struct Huge(Arc<Mutex<Vec<Value>>>);
         #[async_trait]
         impl BrokerAuthority for Huge {
+            async fn record_lifecycle(
+                &self,
+                _: &BrokerInvocation,
+                phase: &str,
+                outcome: &Value,
+            ) -> Result<(), BrokerDenial> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(json!({"phase": phase, "outcome": outcome}));
+                Ok(())
+            }
+
             fn attempt_generation(&self) -> Option<u64> {
                 Some(1)
             }
@@ -1703,21 +1859,22 @@ mod tests {
                 _: Value,
             ) -> Result<BrokerExecuted, BrokerDenial> {
                 Ok(BrokerExecuted {
-                    content: vec![json!("y".repeat(8 * 1024))],
-                    structured: None,
+                    content: vec![json!("ok")],
+                    structured: Some(json!({"large": "y".repeat(16 * 1024)})),
                 })
             }
         }
+        let records = Arc::new(Mutex::new(Vec::new()));
         let backend = BrokerBackend::new(
             "t",
             "a",
             "s",
             catalog(),
             BrokerLimits {
-                max_result_bytes: 1024,
+                max_result_bytes: 100,
                 ..BrokerLimits::default()
             },
-            Arc::new(Huge),
+            Arc::new(Huge(records.clone())),
             CancellationToken::new(),
         )
         .unwrap();
@@ -1725,7 +1882,25 @@ mod tests {
             .call_tool("search_notes", Default::default(), &scope())
             .await
             .unwrap();
-        assert_eq!(denial_of(&result).unwrap()["code"], "quota_result");
+        assert!(
+            serde_json::to_string(&result)
+                .unwrap()
+                .contains("quota_result")
+        );
+        assert!(
+            serde_json::to_vec(&result).unwrap().len() <= 100,
+            "{}",
+            serde_json::to_string(&result).unwrap()
+        );
+        let receipts = records.lock().unwrap();
+        let terminal = receipts.last().unwrap();
+        assert_eq!(terminal["phase"], "terminal");
+        assert_eq!(terminal["outcome"]["effectStarted"], true);
+        assert_eq!(terminal["outcome"]["effectUncertain"], false);
+        assert!(
+            !terminal.to_string().contains(&"y".repeat(100)),
+            "oversized output must not reach durable receipt"
+        );
     }
 
     #[tokio::test]
@@ -2167,6 +2342,15 @@ mod tests {
         }
         #[async_trait]
         impl BrokerAuthority for SlowApproval {
+            async fn record_lifecycle(
+                &self,
+                _: &BrokerInvocation,
+                _: &str,
+                _: &Value,
+            ) -> Result<(), BrokerDenial> {
+                Ok(())
+            }
+
             fn attempt_generation(&self) -> Option<u64> {
                 Some(3)
             }
@@ -2254,6 +2438,7 @@ mod tests {
         in_authorize: tokio::sync::Notify,
         in_execute: tokio::sync::Notify,
         executions: AtomicUsize,
+        records: Mutex<Vec<Value>>,
     }
 
     async fn wait_gate(
@@ -2269,6 +2454,22 @@ mod tests {
 
     #[async_trait]
     impl BrokerAuthority for GateAuthority {
+        async fn record_lifecycle(
+            &self,
+            _: &BrokerInvocation,
+            _phase: &str,
+            _outcome: &Value,
+        ) -> Result<(), BrokerDenial> {
+            self.records
+                .lock()
+                .unwrap()
+                .push(json!({"phase": _phase, "outcome": _outcome}));
+            Ok(())
+        }
+
+        fn record(&self, _: &BrokerInvocation, outcome: &Value) {
+            self.records.lock().unwrap().push(outcome.clone());
+        }
         fn attempt_generation(&self) -> Option<u64> {
             Some(9)
         }
@@ -2304,6 +2505,7 @@ mod tests {
             in_authorize: tokio::sync::Notify::new(),
             in_execute: tokio::sync::Notify::new(),
             executions: AtomicUsize::new(0),
+            records: Mutex::new(Vec::new()),
         });
         let backend = BrokerBackend::new(
             "task-1",
@@ -2390,6 +2592,14 @@ mod tests {
         authority.in_execute.notified().await;
         calling.abort();
         let _ = calling.await;
+        assert!(
+            authority
+                .records
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|record| record["code"] == "effect_uncertain")
+        );
         drop(tx);
         let redelivered = gated_call(
             &backend,
@@ -2524,5 +2734,105 @@ mod tests {
             serde_json::to_string(&first).unwrap()
         );
         assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn thirty_two_simultaneous_redeliveries_execute_once() {
+        let authority = Arc::new(SequencingAuthority {
+            calls: AtomicUsize::new(0),
+        });
+        let backend = BrokerBackend::new(
+            "task",
+            "attempt",
+            "broker",
+            catalog(),
+            BrokerLimits::default(),
+            authority.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(32));
+        let mut callers = Vec::new();
+        for _ in 0..32 {
+            let backend = backend.clone();
+            let barrier = barrier.clone();
+            callers.push(tokio::spawn(async move {
+                barrier.wait().await;
+                backend
+                    .call_tool(
+                        "search_notes",
+                        JsonObject::new(),
+                        &scope_with("session", Some(RpcId::Number(42))),
+                    )
+                    .await
+                    .unwrap()
+            }));
+        }
+        for caller in callers {
+            let _ = caller.await.unwrap();
+        }
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn pending_request_also_checks_argument_identity() {
+        let (release, gate) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(None, Some(gate));
+        let calling = gated_call(&backend, "session", Some(RpcId::Number(3)), "original");
+        authority.in_execute.notified().await;
+        let conflict = gated_call(&backend, "session", Some(RpcId::Number(3)), "changed")
+            .await
+            .unwrap();
+        assert_eq!(denial_of(&conflict).unwrap()["code"], "replay_conflict");
+        release.send(true).unwrap();
+        calling.await.unwrap();
+        assert_eq!(authority.executions.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn abandoned_effect_replay_respects_small_result_limit() {
+        let (_release, gate) = tokio::sync::watch::channel(false);
+        let (mut backend, authority) = gate_backend(None, Some(gate));
+        Arc::get_mut(&mut backend).unwrap().limits.max_result_bytes = 100;
+        let calling = gated_call(&backend, "session", Some(RpcId::Number(17)), "original");
+        authority.in_execute.notified().await;
+        calling.abort();
+        let _ = calling.await;
+        let replay = gated_call(&backend, "session", Some(RpcId::Number(17)), "original")
+            .await
+            .unwrap();
+        let wire = serde_json::to_string(&replay).unwrap();
+        assert!(wire.len() <= 100, "{wire}");
+        assert!(wire.contains("effect_uncertain"), "{wire}");
+        assert_eq!(authority.executions.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn settlement_drain_has_one_deadline_and_keeps_writers_alive() {
+        let (backend, _) = backend(true).await;
+        let (release, gate) = tokio::sync::watch::channel(false);
+        let settled = Arc::new(AtomicUsize::new(0));
+        for _ in 0..10 {
+            let mut gate = gate.clone();
+            let settled = settled.clone();
+            let writer = tokio::spawn(async move {
+                while !*gate.borrow_and_update() {
+                    gate.changed().await.unwrap();
+                }
+                settled.fetch_add(1, Ordering::SeqCst);
+            });
+            backend.settlements.lock().unwrap().push(writer);
+        }
+        let start = std::time::Instant::now();
+        backend.drain_settlements(Duration::from_millis(20)).await;
+        assert!(
+            start.elapsed() < Duration::from_millis(150),
+            "each writer must not receive its own timeout"
+        );
+        release.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while settled.load(Ordering::SeqCst) != 10 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

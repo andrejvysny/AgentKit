@@ -263,7 +263,7 @@ impl ContinuationClaim {
         }
     }
 
-    /// The attempt handed its input to the transport: from here on the
+    /// Input delivery is about to start: from here on the
     /// vendor may have consumed the prompt, so only `uncertain` is an
     /// honest non-completion disposition.
     fn mark_input_accepted(&self) {
@@ -271,7 +271,7 @@ impl ContinuationClaim {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Whether the input reached the transport — the honest selector for
+    /// Whether input may have reached the transport — the honest selector for
     /// `discharge` on terminal paths.
     fn accepted(&self) -> bool {
         self.input_accepted
@@ -1070,14 +1070,8 @@ impl TaskExecutor for NativeAgentExecutor {
             (Some(scope), Some(binding)) => {
                 let claimed = self
                     .store
-                    .claim_continuation(
-                        &scope.conversation,
-                        &scope.parent,
-                        scope.history_position,
-                        &scope.backend,
-                        &scope.executable,
-                        &scope.config_identity,
-                        scope.system_prompt_revision.as_deref(),
+                    .claim_selected_continuation(
+                        binding,
                         &context.task.task_id,
                         &context.attempt_id,
                         context.runtime.now_ms(),
@@ -1187,13 +1181,15 @@ impl TaskExecutor for NativeAgentExecutor {
                 return Err(self.terminal(&refusal.code, refusal.message));
             }
         };
+        // Delivery can be cancelled after bytes reached the child but before
+        // its future resolves. Reserve consumption before entering that future.
+        if let Some(claim) = &continuation_claim {
+            claim.mark_input_accepted();
+        }
         if let Some(fault) = child.deliver_input(&input_bytes, true).await.err() {
             // Bytes entered the transport (possibly partially): from here
             // the vendor MAY have consumed the prompt — the honest
             // non-completion disposition is `uncertain`, never release.
-            if let Some(claim) = &continuation_claim {
-                claim.mark_input_accepted();
-            }
             let emission = self
                 .emit(
                     &context,
@@ -1212,8 +1208,6 @@ impl TaskExecutor for NativeAgentExecutor {
                 owner.mark_settled();
                 return Err(error);
             }
-        } else if let Some(claim) = &continuation_claim {
-            claim.mark_input_accepted();
         }
 
         // 11. Stream loop with startup/idle/overall bounds and dual cancel.
@@ -2080,6 +2074,9 @@ mod tests {
         delivered: Arc<Mutex<Vec<Vec<u8>>>>,
         frames: Arc<Mutex<VecDeque<Vec<u8>>>>,
         hang: Arc<AtomicBool>,
+        delivery_hang: Arc<AtomicBool>,
+        preflight_hang: Arc<AtomicBool>,
+        preflight_entered: Arc<AtomicBool>,
         outcome: Arc<Mutex<Option<NativeTerminalOutcome>>>,
         preflight_refusal: Arc<Mutex<Option<NativeRefusal>>>,
         preflight_notes: Arc<Mutex<Vec<String>>>,
@@ -2198,6 +2195,10 @@ mod tests {
             _locator: &dyn ExecutableLocator,
             _cancel: &CancellationToken,
         ) -> Result<PreflightReport, NativeRefusal> {
+            self.shared.preflight_entered.store(true, Ordering::SeqCst);
+            while self.shared.preflight_hang.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
             if let Some(refusal) = self.shared.preflight_refusal.lock().unwrap().clone() {
                 return Err(refusal);
             }
@@ -2292,6 +2293,9 @@ mod tests {
             _close: bool,
         ) -> Result<(), TransportFault> {
             self.shared.delivered.lock().unwrap().push(bytes.to_vec());
+            if self.shared.delivery_hang.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             Ok(())
         }
         async fn interrupt(
@@ -2504,6 +2508,14 @@ mod tests {
 
     #[async_trait]
     impl BrokerAuthority for AllowAll {
+        async fn record_lifecycle(
+            &self,
+            _invocation: &crate::native_bridge::BrokerInvocation,
+            _phase: &str,
+            _outcome: &Value,
+        ) -> Result<(), crate::native_bridge::BrokerDenial> {
+            Ok(())
+        }
         fn attempt_generation(&self) -> Option<u64> {
             Some(7)
         }
@@ -4422,6 +4434,126 @@ mod tests {
             .await
             .unwrap();
         claimed.lease.attempt_id
+    }
+
+    #[tokio::test]
+    async fn stale_selection_during_preflight_never_spawns_or_claims_replacement() {
+        let h = harness();
+        publish_input_position(&h, "stale-selection", "msg-1", 1, "vendor-x").await;
+        h.shared.preflight_entered.store(false, Ordering::SeqCst);
+        h.shared.preflight_hang.store(true, Ordering::SeqCst);
+        h.submit(
+            "stale",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &turn_input(TurnResume::Exact {
+                    vendor_session_id: "vendor-x".into(),
+                }),
+                None,
+                Some(&scope("stale-selection", "msg-1", 1)),
+            ),
+        )
+        .await;
+        let claimed = h.claim("stale").await;
+        let executor = h.executor();
+        let context = h.context(&claimed, CancellationToken::new(), CancellationToken::new());
+        let handle = tokio::spawn(async move { executor.execute(context).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !h.shared.preflight_entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("selection reached preflight");
+        h.submit("replacement", &json!({})).await;
+        let replacement = h.claim("replacement").await;
+        let y = h
+            .store
+            .commit_continuation(agentkit_store::CommitContinuation {
+                conversation: "stale-selection".into(),
+                parent: "msg-1".into(),
+                history_position: 1,
+                backend: BACKEND.into(),
+                executable: "/usr/bin/claude".into(),
+                config_identity: "cfg-digest".into(),
+                system_prompt_revision: None,
+                vendor_session_id: "vendor-y".into(),
+                owning_attempt_id: replacement.lease.attempt_id.clone(),
+                owning_task_id: "replacement".into(),
+                committed_at: h.runtime.now_ms(),
+            })
+            .await
+            .unwrap();
+        h.shared.preflight_hang.store(false, Ordering::SeqCst);
+        let (code, _) = Harness::failure(handle.await.unwrap().unwrap_err());
+        assert_eq!(code.as_deref(), Some("continuation_mismatch"));
+        assert_eq!(
+            h.shared.spawn_count.load(Ordering::SeqCst),
+            1,
+            "only seeding turn spawned"
+        );
+        let current = h
+            .store
+            .continuation_for_attempt(&replacement.lease.attempt_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.binding_id, y.binding_id);
+        assert_eq!(current.state, "active", "replacement remains unclaimed");
+    }
+
+    #[tokio::test]
+    async fn abort_during_pending_delivery_keeps_continuation_uncertain() {
+        let h = harness();
+        let seeding =
+            publish_input_position(&h, "pending-delivery", "msg-1", 1, "vendor-pending").await;
+        h.shared.delivered.lock().unwrap().clear();
+        h.shared.delivery_hang.store(true, Ordering::SeqCst);
+        h.submit(
+            "pending",
+            &scoped_payload(
+                &native_target(NativeProfile::PlainChat, false),
+                &turn_input(TurnResume::Exact {
+                    vendor_session_id: "vendor-pending".into(),
+                }),
+                None,
+                Some(&scope("pending-delivery", "msg-1", 1)),
+            ),
+        )
+        .await;
+        let claimed = h.claim("pending").await;
+        let executor = h.executor();
+        let context = h.context(&claimed, CancellationToken::new(), CancellationToken::new());
+        let handle = tokio::spawn(async move { executor.execute(context).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while h.shared.delivered.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("delivery entered");
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let row = h
+                    .store
+                    .continuation_for_attempt(&seeding)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if row.state == "uncertain" {
+                    break;
+                }
+                assert_ne!(
+                    row.state, "active",
+                    "pending delivery must never release consumed input"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("aborted attempt settled uncertain");
     }
 
     #[tokio::test]

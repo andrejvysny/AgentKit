@@ -242,6 +242,8 @@ mod dirfd {
     use std::fs::File;
     use std::io;
     use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+    #[cfg(target_os = "macos")]
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;

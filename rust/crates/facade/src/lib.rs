@@ -495,6 +495,10 @@ impl NativeChat {
             || transport_faults
                 .iter()
                 .any(|fault| fault.code == "cleanup_uncertain")
+            || self
+                .supervisor
+                .descendant_cleanup(exit.pid, exit.generation)
+                .is_some_and(|receipt| receipt.cleanup_uncertain)
             || !dir_removed;
         // Only outcomes decided by the exit rows (no root result) get the
         // stderr suffix; the rule lives next to the sanitiser in `native`.
@@ -520,6 +524,13 @@ impl NativeChat {
             other => other,
         };
         Ok(match (outcome, cleanup_uncertain) {
+            (NativeTerminalOutcome::Completed { text, .. }, true) => {
+                NativeTerminalOutcome::Uncertain {
+                    class: FailureClass::CleanupUncertain,
+                    detail: "answer completed but owned descendant cleanup is uncertain".to_owned(),
+                    partial_text: Some(text),
+                }
+            }
             (
                 NativeTerminalOutcome::Failed {
                     class,

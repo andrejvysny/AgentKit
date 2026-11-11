@@ -176,9 +176,10 @@ fn policy_label(policy: InterruptPolicy) -> &'static str {
 /// Send a signal to our own process group only. The recorded pgid equals
 /// the child pid (process_group(0)); we refuse privileged/self targets.
 fn group_kill(pgid: u32, sig: i32) -> Result<(), String> {
-    if pgid <= 1 || pgid == std::process::id() {
+    if pgid <= 1 || pgid > i32::MAX as u32 || pgid == std::process::id() {
         return Err(format!("refusing to signal process group {pgid}"));
     }
+    // SAFETY: kill receives only an owned, validated process-group ID.
     let rc = unsafe { libc::kill(-(pgid as i32), sig) };
     if rc == 0 {
         return Ok(());
@@ -191,23 +192,46 @@ fn group_kill(pgid: u32, sig: i32) -> Result<(), String> {
     Err(format!("kill(-{pgid}, {sig}) failed: {err}"))
 }
 
+fn kernel_group_absent(pgid: u32) -> bool {
+    if pgid <= 1 || pgid > i32::MAX as u32 || pgid == std::process::id() {
+        return false;
+    }
+    // SAFETY: signal zero probes an owned group without delivering a signal.
+    let result = unsafe { libc::kill(-(pgid as i32), 0) };
+    let error = std::io::Error::last_os_error();
+    #[cfg(test)]
+    if result != 0 && error.raw_os_error() != Some(libc::ESRCH) {
+        eprintln!("probe {pgid}: {error}");
+    }
+    result != 0 && error.raw_os_error() == Some(libc::ESRCH)
+}
+
 /// Live (non-zombie) members of our process group, via /proc, or `None`
 /// when the scan itself could not be trusted. `Some(0)` is a group VERIFIED
-/// empty; `None` is uncertainty and must NEVER be read as quiet (review
+/// empty only after a kernel absence probe; `None` must NEVER be read as quiet (review
 /// round-4 F5). Used to make the shutdown ladder honest about descendants:
 /// a leader that exits while its group keeps running is not a terminated
 /// shutdown, and a normal leader exit is not a cleaned-up group either.
 #[cfg(target_os = "linux")]
 fn group_live_scan(pgid: u32) -> Option<usize> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    group_live_scan_at(pgid, std::path::Path::new("/proc"))
+}
+
+#[cfg(target_os = "linux")]
+fn group_live_scan_at(pgid: u32, proc_root: &std::path::Path) -> Option<usize> {
+    if kernel_group_absent(pgid) {
+        return Some(0);
+    }
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
         return None;
     };
     // A pid that vanished between `readdir` and the read is normal; a pid
     // still present whose `stat` we cannot read is not, and must not be
     // silently counted as "not a member".
-    let present = |pid: u32| std::path::Path::new(&format!("/proc/{pid}")).exists();
+    let present = |pid: u32| proc_root.join(pid.to_string()).exists();
     let mut live = 0;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else { return None };
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -220,7 +244,7 @@ fn group_live_scan(pgid: u32) -> Option<usize> {
         if pid == std::process::id() {
             continue;
         }
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        let Ok(stat) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) else {
             if present(pid) {
                 return None;
             }
@@ -248,33 +272,22 @@ fn group_live_scan(pgid: u32) -> Option<usize> {
             Err(_) => {}
         }
     }
+    // A different PID namespace (or restricted proc mount) may hide all
+    // members. Only the kernel can corroborate absence. Zombie-only groups
+    // conservatively remain uncertain until their parent reaps them.
+    if live == 0 && !kernel_group_absent(pgid) {
+        return None;
+    }
     Some(live)
 }
 
-/// Ladder-facing view of [`group_live_scan`]: a failed scan stays "quiet"
-/// so a rung on an unobservable /proc never hangs the bounded shutdown
-/// (pre-F5 semantics, preserved for the ladder paths). Callers that need
-/// CLEANUP CERTAINTY must use [`group_live_scan`] directly.
-#[cfg(target_os = "linux")]
-fn group_live_count(pgid: u32) -> usize {
-    group_live_scan(pgid).unwrap_or(0)
-}
-
 #[cfg(not(target_os = "linux"))]
-fn group_live_scan(_pgid: u32) -> Option<usize> {
-    // No /proc: group liveness is unobservable, which is uncertainty,
-    // never certainty (AGENTKIT-110).
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
-fn group_live_count(_pgid: u32) -> usize {
-    0
+fn group_live_scan(pgid: u32) -> Option<usize> {
+    kernel_group_absent(pgid).then_some(0)
 }
 
 /// Whether process-group liveness is observable at all. Non-Linux
-/// [`group_live_count`] reports 0 unconditionally; that must never be read
-/// as cleanup certainty (AGENTKIT-110).
+/// cleanup must never be read as certainty (AGENTKIT-110).
 #[cfg(target_os = "linux")]
 fn group_liveness_observable() -> bool {
     true
@@ -282,7 +295,7 @@ fn group_liveness_observable() -> bool {
 
 #[cfg(not(target_os = "linux"))]
 fn group_liveness_observable() -> bool {
-    false
+    true
 }
 
 /// Build a successful ladder receipt: on platforms where group liveness is
@@ -314,12 +327,19 @@ async fn await_rung(shared: &Arc<SharedChild>, ms: i64) -> bool {
             }
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
-        while group_live_count(shared.pgid) > 0 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        if !group_liveness_observable() {
+            return true;
+        }
+        loop {
+            match group_live_scan(shared.pgid) {
+                Some(0) => return true,
+                Some(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                None => return false,
+            }
         }
     })
     .await
-    .is_ok()
+    .unwrap_or(false)
 }
 
 /// Receipt for a cleanup whose CONFIRMATION failed: the leader is gone,
@@ -348,7 +368,7 @@ async fn await_group_quiet(shared: &Arc<SharedChild>, ms: i64) -> bool {
             match group_live_scan(shared.pgid) {
                 Some(0) => return true,
                 Some(_) => tokio::time::sleep(Duration::from_millis(10)).await,
-                None => return false,
+                None => tokio::time::sleep(Duration::from_millis(10)).await,
             }
         }
     })
@@ -398,10 +418,14 @@ async fn reconcile_group_after_leader_exit(
         );
     }
     let Some(stragglers) = group_live_scan(shared.pgid) else {
+        let _ = group_kill(shared.pgid, SIGKILL);
+        if await_group_quiet(shared, limits.cleanup_timeout_ms).await {
+            return success_receipt(label, false, true, "process group absent after SIGKILL");
+        }
         return uncertain_receipt(
             label,
             false,
-            false,
+            true,
             format!("{cause} but the process-group scan failed: descendants unverified"),
         );
     };
@@ -1086,6 +1110,17 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn empty_or_missing_proc_never_proves_live_group_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: getpgrp has no arguments and only reads process identity.
+        let group = unsafe { libc::getpgrp() } as u32;
+        assert!(!kernel_group_absent(group));
+        assert_eq!(group_live_scan_at(group, dir.path()), None);
+        assert_eq!(group_live_scan_at(group, &dir.path().join("missing")), None);
+    }
+
     fn fixture(dir: &TempDir, name: &str, script: &str) -> PathBuf {
         let path = dir.path().join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
@@ -1297,12 +1332,7 @@ mod tests {
         // `sleep 0.3` so the write deterministically sees a dead pipe.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let stat =
-                std::fs::read_to_string(format!("/proc/{}/stat", child.pid())).unwrap_or_default();
-            if stat
-                .rfind(')')
-                .is_some_and(|c| stat[c + 1..].split_whitespace().next() == Some("S"))
-            {
+            if process_state(child.pid()).is_some_and(|state| state.starts_with('S')) {
                 break;
             }
             assert!(
@@ -1402,13 +1432,13 @@ mod tests {
         // Deliberately a bare `sleep 60 &`: POSIX sh starts background
         // jobs with SIGINT ignored, so this descendant survives the first
         // rung and forces the ladder to escalate until the whole group is
-        // dead — leader exit alone must never count as shutdown. The
-        // /proc/comm spin gate guarantees the descendant has exec'd
-        // before the ready frame, so the interrupt never races its start.
+        // dead — leader exit alone must never count as shutdown.
+        // The descendant emits its own readiness frame, so the interrupt
+        // cannot race its launch.
         let exe = fixture(
             &dir,
             "descendants.sh",
-            "sleep 60 & p=$!\nwhile [ \"$(cat /proc/$p/comm 2>/dev/null)\" != sleep ]; do :; done\nprintf 'r\\n'\nwait",
+            "trap ':' INT\ntrap 'kill $p 2>/dev/null; wait $p 2>/dev/null; exit 0' TERM\nsh -c 'printf \"r\\n\"; exec sleep 60' & p=$!\nwhile kill -0 $p 2>/dev/null; do wait $p; done",
         );
         let sup = OwnedProcessSupervisor::new();
         let mut child = spawn_child(&sup, exe, &dir, &tight_limits()).await;
@@ -1428,6 +1458,9 @@ mod tests {
         // terminated (the receipt already proves the group leader was
         // reaped by the supervisor's own reaper).
         let group_has_live_member = |pgid: u32| -> bool {
+            if !cfg!(target_os = "linux") {
+                return !kernel_group_absent(pgid);
+            }
             let Ok(entries) = std::fs::read_dir("/proc") else {
                 return true;
             };
@@ -1603,10 +1636,7 @@ mod tests {
         let mut child = spawn_child(&sup, exe, &dir, &tight_limits()).await;
         assert_eq!(read_frame(child.as_mut(), 5_000).await, Some(line(b"r")));
         let pid = child.pid();
-        assert!(
-            std::path::Path::new(&format!("/proc/{pid}")).exists(),
-            "child is alive before the drop"
-        );
+        assert!(pid_is_live(pid), "child is alive before the drop");
 
         drop(child);
         drop(sup);
@@ -1615,7 +1645,7 @@ mod tests {
         // (grace+terminate+cleanup ≈ 7s worst case), so plain absence is
         // the check — no group-label assumptions.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        while pid_is_live(pid) {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "child {pid} survived dropping its handle and supervisor"
@@ -1643,15 +1673,12 @@ mod tests {
         // EOF: the frame channel closes while the process is still alive.
         assert_eq!(child.next_frame().await, None);
         let pid = child.pid();
-        assert!(
-            std::path::Path::new(&format!("/proc/{pid}")).exists(),
-            "child must still be running at EOF"
-        );
+        assert!(pid_is_live(pid), "child must still be running at EOF");
 
         drop(child);
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        while pid_is_live(pid) {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "child {pid} survived EOF + drop: EOF wrongly disarmed cleanup"
@@ -1732,7 +1759,7 @@ mod tests {
         assert_eq!(read_frame(child_a.as_mut(), 5_000).await, Some(line(b"r")));
         let pid = child_a.pid();
         assert!(
-            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            pid_is_live(pid),
             "the fixture child is alive before shutdown"
         );
 
@@ -1744,7 +1771,7 @@ mod tests {
         // The group SIGKILL is issued synchronously in Drop; poll honestly
         // (reaping is delegated to the still-running reaper task).
         for _ in 0..500 {
-            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            if !pid_is_live(pid) {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1756,12 +1783,22 @@ mod tests {
     /// the signal landed and only reaping is pending (the reaper may be a
     /// runtime task that outlives the assertion window).
     fn pid_is_live(pid: u32) -> bool {
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(stat) => stat
-                .rfind(')')
-                .is_some_and(|c| stat[c + 1..].split_whitespace().next() != Some("Z")),
-            Err(_) => false,
-        }
+        process_state(pid).is_some_and(|state| !state.starts_with('Z'))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_state(pid: u32) -> Option<String> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat[stat.rfind(')')? + 1..]
+            .split_whitespace()
+            .next()
+            .map(str::to_owned)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn process_state(pid: u32) -> Option<String> {
+        // SAFETY: signal zero only probes existence of a test-owned process.
+        (unsafe { libc::kill(pid as i32, 0) } == 0).then(|| "S".to_owned())
     }
 
     /// Review round-4 F5 (real OS reproduction): the NORMAL completion path
@@ -1828,17 +1865,11 @@ mod tests {
             "a stale generation has no report, which is not a claim of clean"
         );
         assert!(receipt.terminated, "{receipt:?}");
-        if std::fs::read_dir("/proc").is_ok() {
-            assert!(
-                !receipt.cleanup_uncertain,
-                "the group must be verified empty: {receipt:?}"
-            );
-        } else {
-            assert!(
-                receipt.cleanup_uncertain,
-                "an unobservable group is never reported as certain: {receipt:?}"
-            );
-        }
+        assert_eq!(
+            receipt.cleanup_uncertain,
+            !kernel_group_absent(pid),
+            "{receipt:?}"
+        );
 
         // Exactly the reproduction: drop the child handle and the
         // supervisor, then prove the descendant is dead rather than alive

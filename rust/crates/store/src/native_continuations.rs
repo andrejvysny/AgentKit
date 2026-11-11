@@ -353,17 +353,69 @@ impl crate::SqliteStore {
                 "continuation claim needs full scope and claimant".into(),
             ));
         }
+        let selected = self
+            .resumable_continuation(
+                conversation,
+                parent,
+                history_position,
+                backend,
+                executable,
+                config_identity,
+                system_prompt_revision,
+                claimant_attempt_id,
+            )
+            .await?;
+        let Some(selected) = selected else {
+            let task = claimant_task_id.to_owned();
+            let attempt = claimant_attempt_id.to_owned();
+            return self.call(move |db| {
+                if let Some(gap) = crate::native_exec::live_authority_gap(db, &task, &attempt, now)? {
+                    return Err(StoreError::InvalidInput(format!(
+                        "continuation claim refused: claiming attempt lacks current authority ({gap})"
+                    )));
+                }
+                Ok(None)
+            }).await;
+        };
+        self.claim_selected_continuation(&selected, claimant_task_id, claimant_attempt_id, now)
+            .await
+    }
+
+    /// Claim only the exact binding selected before asynchronous preflight.
+    /// A changed generation, session, or current scope candidate is a miss;
+    /// selecting again here could reserve a different vendor session.
+    pub async fn claim_selected_continuation(
+        &self,
+        selected: &NativeContinuationBinding,
+        claimant_task_id: &str,
+        claimant_attempt_id: &str,
+        now: i64,
+    ) -> Result<Option<NativeContinuationBinding>> {
+        if selected.conversation.trim().is_empty()
+            || selected.parent.trim().is_empty()
+            || selected.backend.trim().is_empty()
+            || selected.executable.trim().is_empty()
+            || selected.config_identity.trim().is_empty()
+            || claimant_task_id.trim().is_empty()
+            || claimant_attempt_id.trim().is_empty()
+            || selected.history_position < 0
+        {
+            return Err(StoreError::InvalidInput(
+                "continuation claim needs full scope and claimant".into(),
+            ));
+        }
         let key: ScopeKey = (
-            conversation.to_owned(),
-            parent.to_owned(),
-            history_position,
-            backend.to_owned(),
-            executable.to_owned(),
-            config_identity.to_owned(),
-            system_prompt_revision.map(str::to_owned),
+            selected.conversation.clone(),
+            selected.parent.clone(),
+            selected.history_position,
+            selected.backend.clone(),
+            selected.executable.clone(),
+            selected.config_identity.clone(),
+            selected.system_prompt_revision.clone(),
         );
         let (claimant_task_id, claimant_attempt_id) =
             (claimant_task_id.to_owned(), claimant_attempt_id.to_owned());
+        let selected = selected.clone();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             // Lease-fenced: an attempt without CURRENT authority cannot
@@ -383,6 +435,13 @@ impl crate::SqliteStore {
                 transaction.commit()?;
                 return Ok(None);
             };
+            if candidate.binding_id != selected.binding_id
+                || candidate.generation != selected.generation
+                || candidate.vendor_session_id != selected.vendor_session_id
+            {
+                transaction.commit()?;
+                return Ok(None);
+            }
             if candidate.state == "owned" {
                 // Re-entry: this attempt already holds the claim (the
                 // only `owned` row `find_resumable` returns).
@@ -609,6 +668,63 @@ impl crate::SqliteStore {
             Ok(())
         })
         .await
+    }
+
+    /// Persist an effect-start or terminal transition before acknowledging it.
+    /// A crash leaving effectStarted is durable evidence of an uncertain effect.
+    /// Identity never changes, and an uncertain cleanup cannot overwrite a
+    /// conclusive terminal receipt that won the race.
+    pub async fn record_call_lifecycle(&self, receipt: NativeCallReceipt) -> Result<()> {
+        if serde_json::to_vec(&receipt)?.len() > 2 * 1024 * 1024 {
+            return Err(StoreError::InvalidInput(
+                "call receipt exceeds 2 MiB".into(),
+            ));
+        }
+        let phase = receipt
+            .record
+            .get("lifecycleState")
+            .and_then(serde_json::Value::as_str);
+        if !matches!(phase, Some("effectStarted" | "terminal" | "uncertain"))
+            || receipt.attempt_id.is_empty()
+            || receipt.invocation_id.is_empty()
+            || receipt.tool_name.is_empty()
+            || receipt.content_hash.is_empty()
+        {
+            return Err(StoreError::InvalidInput(
+                "invalid call lifecycle identity or phase".into(),
+            ));
+        }
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            if let Some(prior) = read_receipt(&transaction, &receipt.attempt_id, &receipt.invocation_id)? {
+                if prior.task_id != receipt.task_id || prior.tool_name != receipt.tool_name
+                    || prior.content_hash != receipt.content_hash
+                {
+                    return Err(StoreError::InvalidInput("call lifecycle identity changed".into()));
+                }
+                if prior.record == receipt.record
+                    || (prior.record["lifecycleState"] == "terminal" && receipt.record["lifecycleState"] == "uncertain") {
+                    transaction.commit()?;
+                    return Ok(());
+                }
+                if prior.record["lifecycleState"] != "effectStarted" {
+                    return Err(StoreError::Duplicate("call lifecycle already settled".into()));
+                }
+                transaction.execute("UPDATE native_call_receipts SET record=?3, recorded_at=?4 WHERE attempt_id=?1 AND invocation_id=?2",
+                    params![receipt.attempt_id, receipt.invocation_id, serde_json::to_string(&receipt.record)?, receipt.recorded_at])?;
+            } else {
+                if receipt.record["lifecycleState"] == "effectStarted"
+                    && let Some(gap) = crate::native_exec::live_authority_gap(&transaction, &receipt.task_id, &receipt.attempt_id, receipt.recorded_at)?
+                {
+                    return Err(StoreError::InvalidInput(format!("effect start lacks live authority: {gap}")));
+                }
+                transaction.execute("INSERT INTO native_call_receipts VALUES(?,?,?,?,?,?,?,?)",
+                    params![format!("{}_{}", receipt.attempt_id, receipt.invocation_id), receipt.attempt_id, receipt.task_id, receipt.invocation_id,
+                        receipt.tool_name, receipt.content_hash, serde_json::to_string(&receipt.record)?, receipt.recorded_at])?;
+            }
+            transaction.commit()?;
+            Ok(())
+        }).await
     }
 
     /// The durable receipt for one invocation, if recorded.
@@ -1302,6 +1418,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selected_claim_refuses_changed_generation_and_identity() {
+        let store = store();
+        let selected = published_position(&store).await;
+        let attempt = running_task(&store, "task-a", "chat-turn-a").await;
+        {
+            let mut stale = selected.clone();
+            stale.vendor_session_id = "different-session".into();
+            assert!(
+                store
+                    .claim_selected_continuation(&stale, "task-a", &attempt, 2200)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let mut stale = selected.clone();
+        stale.generation += 1;
+        assert!(
+            store
+                .claim_selected_continuation(&stale, "task-a", &attempt, 2200)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        stale = selected.clone();
+        stale.binding_id = "different-binding".into();
+        assert!(
+            store
+                .claim_selected_continuation(&stale, "task-a", &attempt, 2200)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let claimed = store
+            .claim_selected_continuation(&selected, "task-a", &attempt, 2200)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .release_continuation_claim(&claimed.binding_id, &attempt)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .claim_selected_continuation(&selected, "task-a", &attempt, 2201)
+                .await
+                .unwrap()
+                .is_none(),
+            "release invalidates the selected generation"
+        );
+    }
+
+    #[tokio::test]
     async fn claim_is_atomic_single_winner_and_lease_fenced() {
         // Review round-4 F3-C reproduced: two current tasks for one
         // conversation position must never BOTH start from the same exact
@@ -1606,6 +1775,78 @@ mod tests {
         assert_eq!(
             won_b.claimed_attempt_id.as_deref(),
             Some(attempt_b.as_str())
+        );
+    }
+    #[tokio::test]
+    async fn lifecycle_start_survives_reopen_and_terminal_is_immutable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.db");
+        let receipt;
+        {
+            let store = SqliteStore::open(&path, 4).unwrap();
+            let attempt = running_task(&store, "effect-task", "effect-scope").await;
+            receipt = NativeCallReceipt {
+                attempt_id: attempt,
+                task_id: "effect-task".into(),
+                invocation_id: "effect-1".into(),
+                tool_name: "write".into(),
+                content_hash: "sha256:args".into(),
+                record: serde_json::json!({"lifecycleState":"effectStarted", "outcome":{"contentHash":"sha256:args"}}),
+                recorded_at: 1600,
+            };
+            store.record_call_lifecycle(receipt.clone()).await.unwrap();
+        }
+        let store = SqliteStore::open(&path, 4).unwrap();
+        let reopened = store
+            .get_call_receipt(&receipt.attempt_id, "effect-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reopened.record["lifecycleState"], "effectStarted",
+            "unfinished durable start proves possible execution after process loss"
+        );
+        let mut terminal = receipt.clone();
+        terminal.record = serde_json::json!({"lifecycleState":"terminal","outcome":{"ok":true}});
+        store.record_call_lifecycle(terminal.clone()).await.unwrap();
+        assert!(
+            store.record_call_lifecycle(receipt).await.is_err(),
+            "settled invocation cannot restart"
+        );
+        let mut conflict = terminal.clone();
+        conflict.record["outcome"] = serde_json::json!({"ok":false});
+        assert!(store.record_call_lifecycle(conflict).await.is_err());
+        let mut late = terminal.clone();
+        late.record = serde_json::json!({"lifecycleState":"uncertain"});
+        store.record_call_lifecycle(late).await.unwrap();
+        assert_eq!(
+            store
+                .get_call_receipt(&terminal.attempt_id, "effect-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .record,
+            terminal.record
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_start_requires_live_lease() {
+        let store = store();
+        submit_task(&store, "not-running").await;
+        assert!(
+            store
+                .record_call_lifecycle(NativeCallReceipt {
+                    attempt_id: "stale".into(),
+                    task_id: "not-running".into(),
+                    invocation_id: "inv-1".into(),
+                    tool_name: "write".into(),
+                    content_hash: "hash".into(),
+                    record: serde_json::json!({"lifecycleState":"effectStarted"}),
+                    recorded_at: 1600,
+                })
+                .await
+                .is_err()
         );
     }
 }

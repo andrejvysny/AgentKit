@@ -1,5 +1,78 @@
 # AGENTKIT-118 — Standalone Claude Code backend qualification evidence
 
+## Delivery checkpoint (2026-11-11)
+
+This commit records the native hardening below and incorporates master
+`7aed7009f959b153c021102ee2674414efe8e87e`. The uncommitted-candidate statements
+below describe the validation stage before this checkpoint. Committing the
+source does not close the live qualification or host-restricted test gates.
+OneMind can vendor this exact clean source commit; final merged-master
+provenance remains pending until AgentKit PR #3 is merged.
+
+## Current hardening candidate (2026-11-11)
+
+This section supersedes the historical host/prerequisite statements below.
+The uncommitted candidate combines PR head `5f6ca24` with master `7aed700`
+in the isolated `fix/claude-final` worktree. No commit, push, merge, or Plane
+write was performed. It is not a clean committed release candidate.
+
+The candidate fixes atomic broker redelivery reservation, acknowledged effect
+lifecycle recording, exact selected-continuation claims, cancellation during
+input delivery, documented deferred results, frozen CLI version checks,
+structured-result bounds, facade cleanup uncertainty, and Linux process-group
+observation. Lifecycle records preserve semantic effect evidence separately
+from bounded MCP responses. Complete receipt rows have a separate 2 MiB cap.
+A crash can retain `effectStarted`; that is unresolved effect evidence requiring
+reconciliation, never permission to execute again automatically.
+
+Executed checks on Rust 1.97.0: 32 broker tests, 42 executor tests, 10
+continuation-store tests, targeted durable receipt tests, 125 macOS and 126
+Linux driver/facade tests, and workspace Clippy passed. The broad workspace
+test run exposed additional process-observation failures; its overall gate
+must not be described as passing.
+
+Frozen dependency installation, full TypeScript checking/build, umbrella
+assembly, all 29 public API surfaces, composition (23 files, no violations),
+and the NAPI release build passed. Generated NAPI loader/type files did not
+change. NAPI/TypeScript parity passed seven lanes: 2,161 tests passed, 12 skipped.
+The broad Bun run recorded 3,003 passed, 16 skipped, and 35 failed. Targeted
+reruns resolved 20 npm-cache permission failures (22 fixture tests passed with
+a temporary npm cache) and 11 missing-build-fixture failures (18 tests passed
+using the built HTTP fixture). Four Code failures remain; the killed-process
+recovery failure reproduces unchanged on clean current master `7aed700` using
+its own separately built addon. It expected `ran\nran\n` and received `ran\n`.
+This establishes that failure predates these changes; it does not distinguish
+a Code defect from a host restriction. No failing tests were disabled.
+
+The final lifecycle port is `BrokerAuthority::record_lifecycle`; the store's
+`record_call_lifecycle` reuses the existing receipt table without a schema
+change. Terminal records retain `effectStarted` and `effectUncertain` apart
+from the bounded response. Shutdown gives all pending journal settlements one
+aggregate deadline, rather than multiplying the deadline by the call count.
+Any unfinished acknowledged start remains durable reconciliation evidence.
+
+The installed official CLI is 2.1.322 on macOS ARM64. A real request explicitly
+selected `claude-haiku-5-5` and failed with
+`401 OAuth access token has expired. Re-authenticate to continue.`
+No sign-in, model fallback, or retry was attempted. Fresh/resume, governed
+live-tool, and packaged consumer qualification remain blocked. Fixture replay
+and deterministic tests do not substitute for those gates.
+
+Local command logs: `/private/tmp/agentkit-final-workspace.log`,
+`/private/tmp/agentkit-final-clippy.log`,
+`/private/tmp/agentkit-final-broker-semantic.log`,
+`/private/tmp/agentkit-driver197-tests.log`,
+`/private/tmp/agentkit-driver-linux.log`, and
+`/private/tmp/agentkit-live-haiku55.log`. These logs are local evidence, not
+durable project tracking; AGENTKIT-118 remains the acceptance owner.
+The final addon was rebuilt again in a fresh target directory after the
+master-control build; its eight contract/admission tests passed and generated
+loader/type files remained unchanged. Logs:
+`/private/tmp/agentkit-final-node-refreeze.log` and
+`/private/tmp/agentkit-final-addon-contract.log`.
+
+## Historical qualification record
+
 Status: **LOCAL SUITES RECORDED; LIVE QUALIFICATION BLOCKED (no `claude` executable on this host); FINAL DIGEST PENDING.**
 
 Authority: this file records executed evidence only. Anything not executed here is

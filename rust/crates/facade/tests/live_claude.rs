@@ -2,7 +2,7 @@
 //!
 //! Skipped (returns early) unless `AGENTKIT_LIVE_CLAUDE=1`; additionally
 //! `#[ignore]`d so a plain `cargo test` never spends tokens. Each turn costs
-//! a fraction of a cent on the `haiku` model. Output never includes account
+//! subscription quota on the pinned Haiku 5.5 model. Output never includes account
 //! identity or credentials.
 //!
 //! ```text
@@ -15,6 +15,53 @@ use agentkit_facade::{
     NativeChat, NativeExecutionTarget, NativeProfile, NativeTerminalOutcome, TurnInput, TurnResume,
 };
 
+struct HaikuOnlySupervisor(agentkit_claude::transport::OwnedProcessSupervisor);
+
+#[async_trait::async_trait]
+impl agentkit_facade::ProcessSupervisor for HaikuOnlySupervisor {
+    async fn spawn(
+        &self,
+        plan: &agentkit_facade::LaunchPlan,
+        limits: &agentkit_facade::ResourceLimits,
+        cancel: &agentkit_facade::CancellationToken,
+    ) -> Result<Box<dyn agentkit_facade::OwnedChildHandle>, agentkit_facade::NativeError> {
+        let mut plan = plan.clone();
+        // The gate must prevent fallback, rather than detect it after spending quota.
+        plan.argv
+            .extend(["--fallback-model".into(), "claude-haiku-5-5".into()]);
+        std::fs::write(
+            plan.per_run_dir.join("settings.json"),
+            br#"{"fallbackModel":[],"availableModels":["claude-haiku-5-5"]}"#,
+        )
+        .expect("private gate settings writable");
+        self.0.spawn(&plan, limits, cancel).await
+    }
+
+    async fn drain_owned(
+        &self,
+        policy: agentkit_facade::InterruptPolicy,
+    ) -> Vec<agentkit_facade::InterruptReceipt> {
+        self.0.drain_owned(policy).await
+    }
+
+    async fn terminate_owned(
+        &self,
+        pid: u32,
+        generation: u64,
+        policy: agentkit_facade::InterruptPolicy,
+    ) -> Option<agentkit_facade::InterruptReceipt> {
+        self.0.terminate_owned(pid, generation, policy).await
+    }
+
+    fn descendant_cleanup(
+        &self,
+        pid: u32,
+        generation: u64,
+    ) -> Option<agentkit_facade::InterruptReceipt> {
+        self.0.descendant_cleanup(pid, generation)
+    }
+}
+
 fn target(evidence: &ExecutableEvidence) -> NativeExecutionTarget {
     NativeExecutionTarget {
         schema_version: EXECUTION_TARGET_SCHEMA_VERSION,
@@ -22,9 +69,9 @@ fn target(evidence: &ExecutableEvidence) -> NativeExecutionTarget {
         backend_version: Some(evidence.version.clone()),
         profile: NativeProfile::PlainChat,
         executable: evidence.path.display().to_string(),
-        requested_model: Some("haiku".into()),
+        requested_model: Some("claude-haiku-5-5".into()),
         requested_effort: None,
-        auth_expectation: AuthExpectation::AsConfigured,
+        auth_expectation: AuthExpectation::SubscriptionLogin,
         capabilities: ClaudeSupportMatrix::snapshot(Some(&evidence.version)),
         config_identity: "live-qualification".into(),
         system_prompt_revision: Some("r1".into()),
@@ -62,7 +109,9 @@ async fn live_fresh_turn_then_exact_resume() {
         return;
     }
     let run_root = tempfile::tempdir().unwrap();
-    let chat = NativeChat::new(None, run_root.path());
+    let chat = NativeChat::new(None, run_root.path()).with_supervisor(std::sync::Arc::new(
+        HaikuOnlySupervisor(agentkit_claude::transport::OwnedProcessSupervisor::new()),
+    ));
     let report = chat.preflight().await.expect("preflight succeeds");
     let target = target(&report.executable);
 
@@ -81,8 +130,12 @@ async fn live_fresh_turn_then_exact_resume() {
         .expect("fresh turn settles");
     let session_id = match fresh {
         NativeTerminalOutcome::Completed {
-            text, session_id, ..
+            text,
+            session_id,
+            observed_model,
+            ..
         } => {
+            assert_eq!(observed_model.as_deref(), Some("claude-haiku-5-5"));
             assert!(text.to_lowercase().contains("pong"), "reply: {text}");
             assert!(
                 is_hyphenated_uuid(&session_id),
@@ -110,8 +163,10 @@ async fn live_fresh_turn_then_exact_resume() {
         NativeTerminalOutcome::Completed {
             text,
             session_id: resumed_session,
+            observed_model,
             ..
         } => {
+            assert_eq!(observed_model.as_deref(), Some("claude-haiku-5-5"));
             assert_eq!(
                 resumed_session, session_id,
                 "exact resume keeps the session"
