@@ -13,7 +13,6 @@
     "R12 agentkit-sessions src/session/mod.rs",
     "R1b agentkit-agents -> agentkit-store",
     "R1b agentkit-chat -> agentkit-store",
-    "R1b agentkit-native-exec -> agentkit-native-broker",
     "R1b agentkit-native-exec -> agentkit-store",
     "R1b agentkit-sessions -> agentkit-store",
     "R5 agentkit-agents src/advisor/engine.rs static ATTEMPTS",

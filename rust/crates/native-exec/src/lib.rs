@@ -29,15 +29,15 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use agentkit_native::{
-    CapabilityViolation, ExecutableLocator, ExecutionTarget, FailureClass, FinishDisposition,
-    FrameLine, InterruptPolicy, NativeBackend, NativeError, NativeEvent, NativeExecutionTarget,
-    NativeProfile, NativeTerminalOutcome, PreflightReport, ProcessExit, ProcessSupervisor,
-    ResourceLimits, TransportFault, TurnInput, TurnResume, validate_execution_target,
+    AttemptBrokerHandle, BrokerLimits, BrokerToolDefinition, CapabilityViolation,
+    ExecutableLocator, ExecutionTarget, FailureClass, FinishDisposition, FrameLine,
+    InterruptPolicy, NativeBackend, NativeError, NativeEvent, NativeExecutionTarget, NativeProfile,
+    NativeTerminalOutcome, PreflightReport, ProcessExit, ProcessSupervisor, ResourceLimits,
+    TransportFault, TurnInput, TurnResume, validate_execution_target,
 };
 use agentkit_store::{BindNativeSession, NativeContinuationBinding, SqliteStore};
 
 use agentkit_engine::{ExecutionFailure, RetrySafety, TaskExecutor};
-use agentkit_native_broker::{AttemptBroker, BrokerLimits, BrokerToolDefinition};
 
 // Transitional bindings to the SQLite store (ADR 0021 amendment). Phase N1
 // replaces them with a repository port and a generic executor.
@@ -75,7 +75,10 @@ pub struct AttemptBrokerContext<'a> {
 /// validation — AGENTKIT-115) and the attempt's liveness view.
 #[async_trait]
 pub trait AttemptBrokerFactory: Send + Sync {
-    async fn start(&self, ctx: &AttemptBrokerContext<'_>) -> HostResult<Arc<AttemptBroker>>;
+    async fn start(
+        &self,
+        ctx: &AttemptBrokerContext<'_>,
+    ) -> HostResult<Arc<dyn AttemptBrokerHandle>>;
 }
 
 /// Tunables for the executor; defaults are the qualified bounds from
@@ -187,7 +190,7 @@ pub struct AttemptOwner {
     /// never the supervisor's other live children, which belong to other
     /// concurrent attempts sharing the runtime supervisor (AGENTKIT-110).
     child: std::sync::Mutex<Option<(u32, u64)>>,
-    broker: Option<Arc<AttemptBroker>>,
+    broker: Option<Arc<dyn AttemptBrokerHandle>>,
     per_run_dir: Option<std::path::PathBuf>,
     /// The exact-resume ledger claim, attached once taken (F3). Its
     /// discharge belongs to this owner: an aborted future must not strand
@@ -201,7 +204,7 @@ impl AttemptOwner {
         store: SqliteStore,
         attempt_id: &str,
         supervisor: Arc<dyn ProcessSupervisor>,
-        broker: Option<Arc<AttemptBroker>>,
+        broker: Option<Arc<dyn AttemptBrokerHandle>>,
         per_run_dir: Option<std::path::PathBuf>,
     ) -> Self {
         Self {
@@ -247,7 +250,7 @@ impl Drop for AttemptOwner {
         // Immediate synchronous revocation: tokens stop authenticating
         // the instant this frame unwinds, whatever happens next.
         if let Some(broker) = &self.broker {
-            broker.backend().revoke();
+            broker.revoke();
         }
         let store = self.store.clone();
         let attempt_id = self.attempt_id.clone();
@@ -291,7 +294,7 @@ impl Drop for AttemptOwner {
             // No runtime (sync drop outside async context): best effort,
             // still immediate for the authority bits.
             if let Some(broker) = broker {
-                broker.backend().revoke();
+                broker.revoke();
             }
             if let Some(dir) = per_run_dir {
                 let _ = std::fs::remove_dir_all(dir);
@@ -412,7 +415,7 @@ impl NativeAgentExecutor {
     async fn settle_cleanup(
         &self,
         context: &ExecutionContext,
-        broker: Option<&Arc<AttemptBroker>>,
+        broker: Option<&Arc<dyn AttemptBrokerHandle>>,
         per_run_dir: Option<&std::path::Path>,
     ) {
         let _ = self
@@ -1672,7 +1675,7 @@ mod tests {
         LaunchPlan, McpEndpointSpec, NativeRefusal, OwnedChildHandle, PermissionPromptPolicy,
         PolicyState, StreamFrameAdapter,
     };
-    use agentkit_native_broker::BrokerAuthority;
+    use agentkit_native_broker::{AttemptBroker, BrokerAuthority};
     use agentkit_store::{ClaimInput, SubmitTask};
     use std::collections::{BTreeMap, VecDeque};
     use std::sync::Mutex;
@@ -2245,7 +2248,10 @@ mod tests {
 
     #[async_trait]
     impl AttemptBrokerFactory for RecordingFactory {
-        async fn start(&self, ctx: &AttemptBrokerContext<'_>) -> HostResult<Arc<AttemptBroker>> {
+        async fn start(
+            &self,
+            ctx: &AttemptBrokerContext<'_>,
+        ) -> HostResult<Arc<dyn AttemptBrokerHandle>> {
             self.contexts.lock().unwrap().push((
                 ctx.task_id.to_string(),
                 ctx.attempt_id.to_string(),

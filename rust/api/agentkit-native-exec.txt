@@ -10,9 +10,9 @@ pub use agentkit_native_exec::TURN_INPUT_PAYLOAD_KEY
 pub struct agentkit_native_exec::AttemptBrokerContext<'a>
 pub agentkit_native_exec::AttemptBrokerContext::attempt_id: &'a str
 pub agentkit_native_exec::AttemptBrokerContext::cancellation: tokio_util::sync::cancellation_token::CancellationToken
-pub agentkit_native_exec::AttemptBrokerContext::catalog: alloc::vec::Vec<agentkit_native_broker::BrokerToolDefinition>
+pub agentkit_native_exec::AttemptBrokerContext::catalog: alloc::vec::Vec<agentkit_native::broker::BrokerToolDefinition>
 pub agentkit_native_exec::AttemptBrokerContext::dispatch_guard: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::dispatch::DispatchGuard>>
-pub agentkit_native_exec::AttemptBrokerContext::limits: agentkit_native_broker::BrokerLimits
+pub agentkit_native_exec::AttemptBrokerContext::limits: agentkit_native::broker::BrokerLimits
 pub agentkit_native_exec::AttemptBrokerContext::server_name: &'a str
 pub agentkit_native_exec::AttemptBrokerContext::target: &'a agentkit_native::target::NativeExecutionTarget
 pub agentkit_native_exec::AttemptBrokerContext::task_id: &'a str
@@ -39,10 +39,10 @@ pub fn agentkit_native_exec::NativeDispatchExecutor::handles_verification_for(&s
 pub fn agentkit_native_exec::NativeDispatchExecutor::resolves_provider_snapshots(&self) -> bool
 pub fn agentkit_native_exec::NativeDispatchExecutor::resolves_provider_snapshots_for(&self, &serde_json::value::Value) -> bool
 pub struct agentkit_native_exec::NativeExecutorOptions
-pub agentkit_native_exec::NativeExecutorOptions::broker_limits: agentkit_native_broker::BrokerLimits
+pub agentkit_native_exec::NativeExecutorOptions::broker_limits: agentkit_native::broker::BrokerLimits
 pub agentkit_native_exec::NativeExecutorOptions::kinds: alloc::vec::Vec<alloc::string::String>
 pub agentkit_native_exec::NativeExecutorOptions::limits: agentkit_native::ports::ResourceLimits
 impl core::default::Default for agentkit_native_exec::NativeExecutorOptions
 pub fn agentkit_native_exec::NativeExecutorOptions::default() -> Self
 pub trait agentkit_native_exec::AttemptBrokerFactory: core::marker::Send + core::marker::Sync
-pub fn agentkit_native_exec::AttemptBrokerFactory::start<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_native_exec::AttemptBrokerContext<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::rcs::arc::Arc<agentkit_native_broker::AttemptBroker>, agentkit_engine::error::EngineError<agentkit_store::StoreError>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native_exec::AttemptBrokerFactory::start<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_native_exec::AttemptBrokerContext<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::rcs::arc::Arc<dyn agentkit_native::broker::AttemptBrokerHandle>, agentkit_engine::error::EngineError<agentkit_store::StoreError>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait

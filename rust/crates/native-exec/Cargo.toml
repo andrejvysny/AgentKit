@@ -17,7 +17,6 @@ agentkit-core = { workspace = true }
 agentkit-engine = { workspace = true }
 agentkit-native = { workspace = true }
 # Transitional (ADR 0021 amendment): removed by phase N1.
-agentkit-native-broker = { workspace = true }
 agentkit-store = { workspace = true }
 async-trait.workspace = true
 serde_json.workspace = true
@@ -26,3 +25,5 @@ tokio-util = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 agentkit-mcp = { workspace = true }
+# The inline tests drive the real MCP broker.
+agentkit-native-broker = { workspace = true }

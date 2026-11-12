@@ -207,6 +207,14 @@ pub struct agentkit_native::AuthEvidence
 pub agentkit_native::AuthEvidence::config_directory: core::option::Option<alloc::string::String>
 pub agentkit_native::AuthEvidence::mode: agentkit_native::AuthMode
 pub agentkit_native::AuthEvidence::policy: agentkit_native::PolicyState
+pub struct agentkit_native::BrokerLimits
+pub agentkit_native::BrokerLimits::authorize_timeout_ms: i64
+pub agentkit_native::BrokerLimits::call_timeout_ms: i64
+pub agentkit_native::BrokerLimits::max_args_bytes: usize
+pub agentkit_native::BrokerLimits::max_calls: usize
+pub agentkit_native::BrokerLimits::max_result_bytes: usize
+impl core::default::Default for agentkit_native::BrokerLimits
+pub fn agentkit_native::BrokerLimits::default() -> Self
 pub struct agentkit_native::BrokerLimitsSpec
 pub agentkit_native::BrokerLimitsSpec::call_timeout_ms: i64
 pub agentkit_native::BrokerLimitsSpec::max_args_bytes: usize
@@ -217,6 +225,11 @@ pub agentkit_native::BrokerSpec::authorization_policy: core::option::Option<serd
 pub agentkit_native::BrokerSpec::limits: core::option::Option<agentkit_native::BrokerLimitsSpec>
 pub agentkit_native::BrokerSpec::server_name: alloc::string::String
 pub agentkit_native::BrokerSpec::tools: alloc::vec::Vec<agentkit_native::BrokerToolSpec>
+pub struct agentkit_native::BrokerToolDefinition
+pub agentkit_native::BrokerToolDefinition::description: alloc::string::String
+pub agentkit_native::BrokerToolDefinition::input_schema: serde_json::value::Value
+pub agentkit_native::BrokerToolDefinition::name: alloc::string::String
+pub agentkit_native::BrokerToolDefinition::writes: bool
 pub struct agentkit_native::BrokerToolSpec
 pub agentkit_native::BrokerToolSpec::description: alloc::string::String
 pub agentkit_native::BrokerToolSpec::input_schema: serde_json::value::Value
@@ -390,6 +403,7 @@ pub agentkit_native::TurnInput::system_prompt: core::option::Option<alloc::strin
 pub agentkit_native::TurnInput::system_prompt_revision: core::option::Option<alloc::string::String>
 pub agentkit_native::TurnInput::text: alloc::string::String
 pub agentkit_native::TurnInput::turn_deadline_ms: i64
+pub const agentkit_native::BROKER_AUTHORIZE_BUDGET_MS: i64
 pub const agentkit_native::BROKER_PAYLOAD_KEY: &str
 pub const agentkit_native::CONTENT_POLICY_VERSION: u32
 pub const agentkit_native::CONTENT_SCHEMA_VERSION: &str
@@ -398,6 +412,12 @@ pub const agentkit_native::EXECUTION_TARGET_PAYLOAD_KEY: &str
 pub const agentkit_native::EXECUTION_TARGET_SCHEMA_VERSION: u32
 pub const agentkit_native::STDERR_TAIL_MAX_BYTES: usize
 pub const agentkit_native::TURN_INPUT_PAYLOAD_KEY: &str
+pub trait agentkit_native::AttemptBrokerHandle: core::marker::Send + core::marker::Sync
+pub fn agentkit_native::AttemptBrokerHandle::live_calls(&self) -> usize
+pub fn agentkit_native::AttemptBrokerHandle::parked_ms(&self) -> u64
+pub fn agentkit_native::AttemptBrokerHandle::revoke(&self)
+pub fn agentkit_native::AttemptBrokerHandle::shutdown<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::AttemptBrokerHandle::spec(&self) -> agentkit_native::McpEndpointSpec
 pub trait agentkit_native::ExecutableLocator: core::marker::Send + core::marker::Sync
 pub fn agentkit_native::ExecutableLocator::auth_status<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::AuthEvidence, agentkit_native::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_native::ExecutableLocator::locate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ExecutableEvidence, agentkit_native::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
