@@ -117,7 +117,7 @@ fn records_json(records: &[ExecutionReceiptRecord]) -> Result<String> {
 
 #[napi]
 impl SessionService {
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_uncertain_executions(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -132,7 +132,7 @@ impl SessionService {
         records_json(&records)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn resolve_uncertain_execution(&self, input_json: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -160,7 +160,7 @@ impl SessionService {
     /// fast path) chat. Same outcomes and result rules as
     /// [`Self::resolve_uncertain_execution`], keyed by the receipt's chat;
     /// never executes, re-admits, or replays the effect.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn resolve_uncertain_execution_for_chat(&self, input_json: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard

@@ -65,7 +65,7 @@ impl NativeStore {
     /// default layer for profile resolution: provider id, model,
     /// permission mode, tool set, budget ceilings, environment digests,
     /// routing policy); an unsupported shape fails with `invalid_input`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create_teammates(&self, options_json: Option<String>) -> Result<NativeTeammates> {
         let store = self.handle()?;
         let defaults = parse_run_profile_defaults(options_json.as_deref())?;
@@ -86,7 +86,7 @@ impl NativeTeammates {
     /// Release every store clone this lane holds. Idempotent; later calls
     /// through this handle fail with `closed`, exactly like the store's
     /// own gate.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn close(&self) -> Result<()> {
         self.inner
             .lock()
@@ -102,7 +102,7 @@ impl NativeTeammates {
     /// unknown fields are refused (`deny_unknown_fields`), so a payload can
     /// never smuggle a secret value or a foreign scope. Returns the
     /// `AgentRecord` JSON at revision 1.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create_agent(
         &self,
         scope: String,
@@ -133,7 +133,7 @@ impl NativeTeammates {
 
     /// The live agents (active and archived) of one scope. Other scopes are
     /// absence, not an error: the listing never leaks them.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_agents(&self, scope: String) -> Result<String> {
         let s = self.services()?;
         if scope.trim().is_empty() {
@@ -152,7 +152,7 @@ impl NativeTeammates {
 
     /// One live agent; archived is readable, tombstoned and unknown are
     /// `not_found`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn get_agent(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let record = s.agents.get(&agent_id).await.map_err(map_host)?;
@@ -162,7 +162,7 @@ impl NativeTeammates {
     /// Replace the effective definition under optimistic concurrency: the
     /// caller must name the revision it read; a stale `expectedRevision`
     /// conflicts with code `revision_conflict` and applies NOTHING.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn update_agent(
         &self,
         agent_id: String,
@@ -184,7 +184,7 @@ impl NativeTeammates {
     /// scope, owner, and the whole ledger stay, and the append carries
     /// `model_change` provenance. Stale revisions conflict like
     /// [`Self::update_agent`].
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn set_agent_model(
         &self,
         agent_id: String,
@@ -204,7 +204,7 @@ impl NativeTeammates {
 
     /// Archive an agent: new admission refuses, history stays readable,
     /// the row and its ledger stay durable. Idempotent.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn archive_agent(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let record = s.agents.archive(&agent_id).await.map_err(map_host)?;
@@ -213,7 +213,7 @@ impl NativeTeammates {
 
     /// Restore an archived agent to active, recording a `restore` revision.
     /// Idempotent.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn restore_agent(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let record = s.agents.restore(&agent_id).await.map_err(map_host)?;
@@ -221,7 +221,7 @@ impl NativeTeammates {
     }
 
     /// The append-only configuration ledger of one agent, oldest first.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_agent_revisions(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let revisions = s
@@ -246,7 +246,7 @@ impl NativeTeammates {
     /// caller sent, and the pin rides the admission transaction. Returns
     /// `{ task, replayed }`: a duplicate `admissionKey` answers with the
     /// SAME logical task and `replayed: true`, creating nothing.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn submit_teammate_task(&self, admission_json: String) -> Result<String> {
         let s = self.services()?;
         let input: Value = parse_json(admission_json, "admission")?;
@@ -348,7 +348,7 @@ impl NativeTeammates {
     }
 
     /// The task records of one agent, in admission order.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_agent_tasks(&self, agent_id: String) -> Result<String> {
         let s = self.services()?;
         let tasks = s
@@ -366,7 +366,7 @@ impl NativeTeammates {
     /// derived event-window views. PURE and recomputed on every read, so
     /// it reconstructs identically after a store reopen. Unknown usage
     /// stays unknown: counters are `null`, never a reassuring `0`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn get_agent_task_projection(
         &self,
         task_id: String,
@@ -395,7 +395,7 @@ impl NativeTeammates {
     /// settles NOW; a running attempt observes the durable flag through
     /// its lease. Idempotent — a settled task answers with the same
     /// record, never an error.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn cancel_agent_task(&self, task_id: String) -> Result<String> {
         let s = self.services()?;
         let task = s.teammates.cancel(&task_id).await.map_err(map_host)?;
@@ -406,7 +406,7 @@ impl NativeTeammates {
     /// values and oversized tool text never cross the boundary; the
     /// durable record stays untouched. `after` is the numeric sequence
     /// cursor from a previous page's `nextCursor`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_agent_task_events(
         &self,
         task_id: String,
@@ -447,7 +447,7 @@ impl NativeTeammates {
     /// The explanation of one admitted task's sealed run profile — the
     /// SAME pinned value, never a re-resolution. Honest absence: a task
     /// admitted without a profile answers `null`, not an empty profile.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn get_agent_task_run_profile(&self, task_id: String) -> Result<Option<String>> {
         let s = self.services()?;
         let explained = s.profiles.explain(&task_id).await.map_err(map_host)?;

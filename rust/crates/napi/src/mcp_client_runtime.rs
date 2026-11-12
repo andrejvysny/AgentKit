@@ -340,7 +340,7 @@ impl NativeStore {
 
 #[napi]
 impl NativeStore {
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_configure_secrets(&self, deliver: ThreadsafeFunction<String>) -> Result<()> {
         self.mcp_config_ports().await?;
         let mut registry = self.mcp.lock().await;

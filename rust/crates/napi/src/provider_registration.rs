@@ -75,7 +75,7 @@ fn parse_restore(restore: &Value) -> Result<agentkit_store::ProviderContinuityRe
 /// Identity binds the store namespace, logical key, endpoint and account.
 /// Rotation fences existing work; only explicit confirmed restoration transfers
 /// compatible settled continuation state. API keys stay inside Rust memory.
-#[napi]
+#[napi(catch_unwind)]
 pub async fn register_provider_connection(
     base_url: String,
     api_key: Option<String>,
@@ -172,7 +172,7 @@ async fn install(id: String, mut replacement: Connection) -> Result<String> {
 }
 
 /// Revocation fences existing transports immediately and persists off-thread.
-#[napi]
+#[napi(catch_unwind)]
 pub async fn revoke_provider_connection(connection_id: String) -> Result<bool> {
     let existing = CONNECTIONS.lock().await.get(&connection_id).cloned();
     let Some(existing) = existing else {

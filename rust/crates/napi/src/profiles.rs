@@ -18,7 +18,7 @@ fn resolved(profile: agentkit_sessions::AgentProfile) -> Result<Value> {
     value["digest"] = digest.into();
     Ok(value)
 }
-#[napi]
+#[napi(catch_unwind)]
 pub fn list_native_profiles(overrides_json: Option<String>) -> Result<String> {
     let profiles = registry(overrides_json.as_deref())?
         .list()
@@ -28,7 +28,7 @@ pub fn list_native_profiles(overrides_json: Option<String>) -> Result<String> {
     serde_json::to_string(&profiles)
         .map_err(|_| crate::errors::internal("Profile serialization failed."))
 }
-#[napi]
+#[napi(catch_unwind)]
 pub fn resolve_native_profile(
     profile_id: String,
     overrides_json: Option<String>,

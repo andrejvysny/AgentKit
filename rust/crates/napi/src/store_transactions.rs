@@ -11,7 +11,7 @@ pub struct StoreTransactionHandle {
 
 #[napi]
 impl NativeStore {
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn begin_transaction(&self) -> Result<StoreTransactionHandle> {
         Ok(StoreTransactionHandle {
             inner: Mutex::new(Some(
@@ -94,7 +94,7 @@ impl StoreTransactionHandle {
 
 #[napi]
 impl StoreTransactionHandle {
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn call_store(&self, operation: String, input_json: String) -> Result<String> {
         let view = {
             let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
@@ -106,12 +106,12 @@ impl StoreTransactionHandle {
         super::ports::execute(view, &operation, &input_json).await
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn commit(&self) -> Result<()> {
         self.take()?.commit().await.map_err(errors::store)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn rollback(&self) -> Result<()> {
         self.take()?
             .rollback()

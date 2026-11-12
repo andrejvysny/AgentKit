@@ -26,7 +26,7 @@ struct StreamEntry {
 static STREAMS: LazyLock<Mutex<HashMap<String, StreamEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-#[napi]
+#[napi(catch_unwind)]
 pub async fn push_run_provider_event(call_id: String, event_json: String) -> Result<bool> {
     let event: Value = serde_json::from_str(&event_json)
         .map_err(|e| errors::stable("invalid_input", e.to_string(), None))?;
@@ -50,7 +50,7 @@ pub async fn push_run_provider_event(call_id: String, event_json: String) -> Res
         _ = entry.cancellation.cancelled() => Ok(false),
     }
 }
-#[napi]
+#[napi(catch_unwind)]
 pub async fn reserve_run_provider_request(call_id: String) -> Result<()> {
     let entry = STREAMS
         .lock()

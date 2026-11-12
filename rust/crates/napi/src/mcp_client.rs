@@ -368,12 +368,12 @@ impl NativeStore {
     /// `mcp_secret_missing` if referenced host-vault values are unavailable.
     /// Connecting an already-connected alias fails with `invalid_input`;
     /// durable disconnected aliases retain their declarations.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_connect(&self, config_json: String) -> Result<String> {
         self.connect_mcp(config_json, None, None).await
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_connect_with_callbacks(
         &self,
         config_json: String,
@@ -419,7 +419,7 @@ impl NativeStore {
     /// it from the `registerTool` run function so the durable guard and
     /// authority layers keep judging the call — this host method is for
     /// the JS tool lane, not a bypass around those checks.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_call_tool(
         &self,
         alias: String,
@@ -567,7 +567,7 @@ impl NativeStore {
     /// reconnect, backoff and the wire-last guard all observe the token);
     /// after the request left, the call aborts like any crate cancellation.
     /// Cancelling an unknown or already-settled key is a no-op success.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_cancel_call(&self, cancellation_key: String) -> Result<()> {
         let mut state = self.mcp.lock().await;
         if let Some(registry) = state.as_mut() {
@@ -588,11 +588,11 @@ impl NativeStore {
     /// immediately, its transport closed, and its declaration dropped.
     /// Idempotent — disconnecting an unknown or already-disconnected
     /// alias is a no-op success.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_disconnect(&self, alias: String) -> Result<()> {
         self.disconnect_mcp(alias, None).await
     }
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_disconnect_bound(&self, alias: String, expected_handle: String) -> Result<()> {
         self.disconnect_mcp(alias, Some(expected_handle)).await
     }
@@ -601,7 +601,7 @@ impl NativeStore {
     /// readOnly, connected, tools}`. `connected` is the crate manager's
     /// live-session view (a connected server whose transport dropped
     /// reports false and reconnects on the next host call).
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn mcp_list_servers(&self) -> Result<String> {
         let state = self.mcp.lock().await;
         let servers = state

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 #[napi]
 impl SessionService {
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn set_execution_mode(&self, session_id: String, mode: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -23,7 +23,7 @@ impl SessionService {
             .to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_approval_grants(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -39,7 +39,7 @@ impl SessionService {
         .to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn revoke_approval_grant(
         &self,
         session_id: String,
@@ -58,7 +58,7 @@ impl SessionService {
             .to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn compact(&self, session_id: String) -> Result<()> {
         let guard = self.core.lock().await;
         let core = guard
@@ -71,7 +71,7 @@ impl SessionService {
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn fork(&self, session_id: String, from_message_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -86,7 +86,7 @@ impl SessionService {
         Ok(session_state_json(&state))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn set_model(&self, session_id: String, input_json: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -113,7 +113,7 @@ impl SessionService {
         Ok(session_state_json(&state))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn cancel_queued_input(&self, session_id: String, input_id: String) -> Result<bool> {
         let guard = self.core.lock().await;
         let core = guard
@@ -126,7 +126,7 @@ impl SessionService {
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn clear_queue(&self, session_id: String) -> Result<u32> {
         let guard = self.core.lock().await;
         let core = guard
@@ -141,7 +141,7 @@ impl SessionService {
         u32::try_from(count).map_err(|_| errors::internal("queue count overflow"))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn configure(&self, session_id: String, input_json: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -172,7 +172,7 @@ impl SessionService {
     /// scope is non-terminal the engine refuses atomically with `chat_busy`
     /// (never a delete that silently cancels live work). The binding adds no
     /// policy of its own.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn delete_chat(&self, session_id: String) -> Result<()> {
         let guard = self.core.lock().await;
         let core = guard
@@ -183,7 +183,7 @@ impl SessionService {
 
     /// Hide the chat from the default listing; a named pass-through over the
     /// store's `archived` field, answering with the updated record JSON.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn archive_chat(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -194,7 +194,7 @@ impl SessionService {
 
     /// The inverse of `archiveChat`: un-hide the chat, answering with the
     /// updated record JSON. An unknown chat fails `not_found`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn unarchive_chat(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard

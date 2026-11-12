@@ -250,7 +250,7 @@ impl SessionService {
     /// Register a JS-executed tool. `definitionJson` is the portable tool
     /// definition: `{name, version?, effect?, capability?, description?,
     /// inputSchema, outputSchema?, timeoutMs?}`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn register_tool(&self, definition_json: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -284,7 +284,7 @@ impl SessionService {
     /// and the approval key)}`.
     /// One-shot: a second registration is refused; the descriptor set of a
     /// service is immutable once the worker can claim turns.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn register_coding_tools(&self, options_json: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -308,7 +308,7 @@ impl SessionService {
     /// partial tables keep the built-in defaults for any built-in role
     /// they name. Hot: applies to the next spawn.
     /// Disabled (the default) means no delegation tools exist at all.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn configure_subagents(&self, config_json: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -330,7 +330,7 @@ impl SessionService {
     }
 
     /// JSON view of the active subagent configuration.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn subagent_config(&self) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -349,7 +349,7 @@ impl SessionService {
     /// prompt, model, status, result, error, createdAt, updatedAt,
     /// turnTaskId, taskStatus, waiting, queuedInputs}` — the registry row
     /// joined with the live task state.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn subagents_list(&self, parent_chat_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -365,7 +365,7 @@ impl SessionService {
     }
 
     /// The state of one child session by id.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn subagent_status(&self, child_chat_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -390,7 +390,7 @@ impl SessionService {
     /// because running a binary that came with the repository is host
     /// code execution) — a missing server fails the tool call honestly;
     /// nothing is ever installed.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn register_lsp_tools(&self, options_json: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -413,7 +413,7 @@ impl SessionService {
     /// `model`/`watchdogModel` set the explicit-review and automatic-review
     /// models independently of the main agent's model. Hot: applies to the
     /// next review.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn configure_advisor(&self, config_json: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -430,7 +430,7 @@ impl SessionService {
     }
 
     /// JSON view of the active advisor configuration.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn advisor_config(&self) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -441,7 +441,7 @@ impl SessionService {
 
     /// Run one explicit advisory review of a session now (the `focus` is
     /// the reviewer's task framing). Returns the persisted report JSON.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn advisor_review(&self, session_id: String, focus: String) -> Result<String> {
         // Take only the lane handle. An explicit review is a full model
         // round-trip (seconds); holding the core mutex across it would
@@ -463,7 +463,7 @@ impl SessionService {
     }
 
     /// Persisted advisor findings for a session, newest first.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn advisor_findings(&self, session_id: String, limit: Option<f64>) -> Result<String> {
         let limit = match limit {
             None => 50,
@@ -482,7 +482,7 @@ impl SessionService {
         serde_json::to_string(&records).map_err(|error| errors::internal(&error.to_string()))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create_session(&self, input_json: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -498,7 +498,7 @@ impl SessionService {
         Ok(session_state_json(&state))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn send(&self, session_id: String, input_json: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -514,7 +514,7 @@ impl SessionService {
         Ok(send_result_json(result))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn follow_up(&self, session_id: String, input_json: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -530,7 +530,7 @@ impl SessionService {
         Ok(send_result_json(result))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn steer(&self, session_id: String, input_json: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -548,7 +548,7 @@ impl SessionService {
 
     /// Steer a LIVE turn only; an idle session answers `chat_idle` instead
     /// of starting a turn.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn steer_live(&self, session_id: String, input_json: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -564,7 +564,7 @@ impl SessionService {
         Ok(send_result_json(result))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn get_state(&self, session_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -579,7 +579,7 @@ impl SessionService {
         Ok(session_state_json(&state))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn get_execution(&self, session_id: String) -> Result<Option<String>> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -594,7 +594,7 @@ impl SessionService {
         Ok(execution.map(|value| value.to_string()))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_turns(&self, session_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -612,7 +612,7 @@ impl SessionService {
     /// The durable projection of one session (turns, messages, inputs,
     /// descriptor and execution metadata) — the reopened-history view.
     /// Private tool execution receipt rows are not included.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn export_session(&self, session_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -627,7 +627,7 @@ impl SessionService {
         Ok(exported.to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn get_usage(&self, session_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -644,7 +644,7 @@ impl SessionService {
 
     /// Answer a pending human request. `inputJson` is
     /// `{requestId, answerId, response}`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn answer(&self, input_json: String) -> Result<String> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -660,7 +660,7 @@ impl SessionService {
         Ok(receipt_json(&receipt))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn approve(
         &self,
         request_id: String,
@@ -681,7 +681,7 @@ impl SessionService {
         Ok(receipt_json(&receipt))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn deny(
         &self,
         request_id: String,
@@ -701,7 +701,7 @@ impl SessionService {
         Ok(receipt_json(&receipt))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn cancel(&self, session_id: String, turn_id: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -714,7 +714,7 @@ impl SessionService {
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn interrupt(&self, session_id: String, turn_id: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -727,7 +727,7 @@ impl SessionService {
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn resume(&self, session_id: String, turn_id: String) -> Result<()> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -740,7 +740,7 @@ impl SessionService {
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn flush_queue(&self, session_id: String) -> Result<Option<String>> {
         let core_guard = self.core.lock().await;
         let core = core_guard
@@ -759,7 +759,7 @@ impl SessionService {
     /// Events are handed out in `seq` order; a gap is impossible by
     /// construction because every poll continues from the last delivered
     /// cursor and each event's `seq` is returned to the caller.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn subscribe_turn(
         &self,
         task_id: String,
@@ -855,7 +855,7 @@ impl SessionService {
     ///   uncertain. Use the JS wrapper's `pendingCallbacks` to observe
     ///   dispatched, unsettled callbacks before relying on any stronger
     ///   shutdown claim.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn close(&self) -> Result<()> {
         loop {
             let mut waited = Box::pin(self.gate.wake.notified());
@@ -1234,7 +1234,7 @@ impl SubscriptionHandle {
     /// Drain up to `limit` (max 64) committed events, waiting up to
     /// `waitMs` for at least one when idle. `done` means the turn settled
     /// (or failed/closed) and no further events will arrive.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn poll(&self, limit: Option<f64>, wait_ms: Option<f64>) -> Result<String> {
         let limit = match limit {
             None => MAX_POLL_BATCH,

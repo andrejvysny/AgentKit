@@ -92,7 +92,7 @@ impl NativeStore {
     /// Connected MCP servers are torn down first: their handles are revoked
     /// and transports closed (stdio children killed) before the store is
     /// released, so a closed store never leaves a live MCP connection.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn close(&self) -> Result<()> {
         self.close_mcp().await;
         let store = self.take()?;
@@ -110,7 +110,7 @@ impl NativeStore {
     /// must already be registered via `registerProviderConnection` — API
     /// keys never travel in `optionsJson`); an unsupported value fails the
     /// call. See `SessionService::build`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create_service(
         &self,
         on_event: ThreadsafeFunction<String>,

@@ -529,7 +529,7 @@ impl SessionService {
     /// `closed` after `close()`. Every request is authenticated by the
     /// backend's bearer check; a REST-submitted turn is executed by this
     /// service's worker like any other durable task.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn start_http_server(&self, options_json: String) -> Result<String> {
         let options = parse_server_options(&options_json)?;
         let listener = ensure_bound_loopback(
@@ -664,7 +664,7 @@ impl SessionService {
     /// service's close deadline, and the accept loop is force-stopped
     /// after. Idempotent — stopping a service that never started, or was
     /// already stopped or closed, is a no-op success.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn stop_http_server(&self) -> Result<()> {
         let server = {
             let mut guard = self.core.lock().await;

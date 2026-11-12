@@ -494,7 +494,7 @@ impl SessionService {
     /// executes the same `JsTool::execute` bridge request a local tool
     /// call takes. Fails with `invalid_input` if an MCP server already
     /// runs on this service, and `closed` after `close()`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn start_mcp_server(&self, options_json: String) -> Result<String> {
         let config = parse_mcp_options(&options_json)?;
         let listener = ensure_bound_loopback(
@@ -561,7 +561,7 @@ impl SessionService {
     /// service that never started, or was already stopped or closed, is a
     /// no-op success. `close()` stops a live server itself, before the
     /// bridge begins Closing.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn stop_mcp_server(&self) -> Result<()> {
         let server = {
             let mut guard = self.core.lock().await;

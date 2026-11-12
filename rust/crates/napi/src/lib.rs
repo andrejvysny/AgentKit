@@ -109,7 +109,7 @@ pub fn binding_smoke() -> Result<String> {
 }
 
 /// The in-flight callback must still own the host's request authority.
-#[napi]
+#[napi(catch_unwind)]
 pub async fn assert_provider_authority(call_id: String) -> napi::Result<()> {
     jsbridge::check_provider_authority(&call_id)
         .await

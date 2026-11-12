@@ -207,7 +207,7 @@ async fn provider(
 
 #[napi]
 impl NativeStore {
-    #[napi(js_name = "mcpConnectWithOAuth")]
+    #[napi(js_name = "mcpConnectWithOAuth", catch_unwind)]
     pub async fn mcp_connect_with_oauth(
         &self,
         config_json: String,
@@ -232,7 +232,7 @@ impl NativeStore {
         }
         result
     }
-    #[napi(js_name = "mcpCompleteOAuth")]
+    #[napi(js_name = "mcpCompleteOAuth", catch_unwind)]
     pub async fn mcp_complete_oauth(
         &self,
         oauth_options_json: String,
@@ -242,7 +242,7 @@ impl NativeStore {
         self.oauth_operation(oauth_options_json, Some(callback_url), deliver)
             .await
     }
-    #[napi(js_name = "mcpRevokeOAuth")]
+    #[napi(js_name = "mcpRevokeOAuth", catch_unwind)]
     pub async fn mcp_revoke_oauth(
         &self,
         oauth_options_json: String,
