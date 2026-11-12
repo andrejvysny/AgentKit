@@ -61,7 +61,7 @@ impl CompletionGuard {
     }
 }
 
-impl agentkit_governance::CommandCompletion for CompletionGuard {
+impl crate::CommandCompletion for CompletionGuard {
     fn finish(self: Box<Self>, error: Option<String>) {
         CompletionGuard::finish(*self, error);
     }

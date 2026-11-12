@@ -33,7 +33,7 @@ pub fn agentkit_http::DesktopBackend::with_insecure_http(self, bool) -> Self
 pub fn agentkit_http::DesktopBackend::with_mcp_configuration(self, alloc::rcs::arc::Arc<dyn agentkit_http::McpConfigurationPort>) -> Self
 pub fn agentkit_http::DesktopBackend::with_pinned_provider(self, &str) -> Self
 pub fn agentkit_http::DesktopBackend::with_profiles(self, alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>) -> Self
-pub fn agentkit_http::DesktopBackend::with_proposals(self, alloc::rcs::arc::Arc<agentkit_chat::proposals::ProposalService>) -> Self
+pub fn agentkit_http::DesktopBackend::with_proposals(self, alloc::rcs::arc::Arc<agentkit_governance::proposals::ProposalService>) -> Self
 pub fn agentkit_http::DesktopBackend::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>) -> Self
 pub fn agentkit_http::DesktopBackend::with_provider_operations(self, alloc::rcs::arc::Arc<dyn agentkit_http::ProviderOperations>) -> Self
 pub fn agentkit_http::DesktopBackend::with_provider_secrets(self, agentkit_connections::secrets::SharedSecretStore) -> Self

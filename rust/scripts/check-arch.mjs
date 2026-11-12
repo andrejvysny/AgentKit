@@ -15,9 +15,9 @@ const LAYERS = {
   "agentkit-kernel": 1,
   "agentkit-contracts": 1,
   "agentkit-core": 2,
-  "agentkit-governance": 2,
   "agentkit-native": 2,
   "agentkit-engine": 3,
+  "agentkit-governance": 3,
   "agentkit-sessions": 3,
   "agentkit-chat": 3,
   "agentkit-agents": 3,
@@ -53,9 +53,19 @@ const BANNED_INNER = new Set([
 // R2: layer-3 package -> layer-3 packages it may depend on.
 const CONTEXT_DEPS = {
   "agentkit-engine": [],
-  "agentkit-sessions": ["agentkit-engine"],
-  "agentkit-chat": ["agentkit-engine", "agentkit-sessions"],
-  "agentkit-agents": ["agentkit-engine", "agentkit-sessions", "agentkit-chat"],
+  "agentkit-governance": ["agentkit-engine"],
+  "agentkit-sessions": ["agentkit-engine", "agentkit-governance"],
+  "agentkit-chat": [
+    "agentkit-engine",
+    "agentkit-sessions",
+    "agentkit-governance",
+  ],
+  "agentkit-agents": [
+    "agentkit-engine",
+    "agentkit-sessions",
+    "agentkit-chat",
+    "agentkit-governance",
+  ],
   "agentkit-memory": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-automation": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-remote": ["agentkit-engine", "agentkit-sessions"],

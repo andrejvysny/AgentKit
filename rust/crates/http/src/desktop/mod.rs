@@ -44,7 +44,7 @@ pub struct DesktopBackend {
     connections: agentkit_connections::AppConnections,
     native_connections: Option<Arc<agentkit_connections::NativeConnections>>,
     secrets: Option<agentkit_connections::SharedSecretStore>,
-    proposals: Option<Arc<agentkit_chat::ProposalService>>,
+    proposals: Option<Arc<agentkit_governance::ProposalService>>,
     write_policy: Option<Arc<dyn WritePolicyPort>>,
     mcp_configuration: Option<Arc<dyn McpConfigurationPort>>,
     tool_catalog: Option<Arc<dyn ToolCatalogPort>>,
@@ -237,7 +237,7 @@ impl DesktopBackend {
         self.provider_operations = Some(port);
         self
     }
-    pub fn with_proposals(mut self, service: Arc<agentkit_chat::ProposalService>) -> Self {
+    pub fn with_proposals(mut self, service: Arc<agentkit_governance::ProposalService>) -> Self {
         self.proposals = Some(service);
         self
     }

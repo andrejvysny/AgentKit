@@ -1,14 +1,15 @@
 use super::*;
 use agentkit_engine::{ExecutionErrorKind, classify_execution_error};
+use agentkit_governance::GovernanceError;
 use std::error::Error;
 
 #[test]
 fn typed_and_external_boundaries_preserve_classification_and_sources() {
     let cases = [
         (
-            ChatError::ToolNamespaceInvalid,
+            ChatError::Governance(GovernanceError::ToolNamespaceInvalid),
             ExecutionErrorKind::Terminal,
-            "rejected",
+            "unclassified",
         ),
         (
             ChatError::SessionContextInvalid,

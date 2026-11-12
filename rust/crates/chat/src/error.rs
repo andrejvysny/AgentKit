@@ -52,8 +52,6 @@ pub enum ChatError {
     InstructionReaderStopped,
     #[error("Workspace root contains a NUL byte.")]
     WorkspaceRootContainsANulByte,
-    #[error("applying proposal has no operation identity")]
-    ApplyingProposalHasNoOperationIdentity,
     #[error("assistant placeholder required")]
     AssistantPlaceholderRequired,
     #[error("chat scope mismatch")]
@@ -64,16 +62,12 @@ pub enum ChatError {
     CompactionTaskDisappeared,
     #[error("context snapshot failed")]
     ContextSnapshotFailed,
-    #[error("dispatch_fence_lost")]
-    DispatchFenceLost,
     #[error("invalid attachment reference")]
     InvalidAttachmentReference,
     #[error("invalid context binding")]
     InvalidContextBinding,
     #[error("invalid context provider result")]
     InvalidContextProviderResult,
-    #[error("invalid domain apply outcome; reconciliation required")]
-    InvalidDomainApplyOutcome,
     #[error("invalid resolved attachment")]
     InvalidResolvedAttachment,
     #[error("invalid runtime timestamp")]
@@ -84,28 +78,20 @@ pub enum ChatError {
     InvalidContextWindowSnapshot,
     #[error("invalid_max_output_tokens")]
     InvalidMaxOutputTokens,
-    #[error("invalid_proposal_build")]
-    InvalidProposalBuild,
+    #[error("{0}")]
+    Governance(#[from] agentkit_governance::GovernanceError),
     #[error("invalid_provider_connection")]
     InvalidProviderConnection,
     #[error("invalid_provider_context_window")]
     InvalidProviderContextWindow,
-    #[error("invalid_write_query")]
-    InvalidWriteQuery,
     #[error("profile_snapshot_required")]
     ProfileSnapshotRequired,
-    #[error("proposal_operation_mismatch")]
-    ProposalOperationMismatch,
-    #[error("proposal_outcome_unresolved")]
-    ProposalOutcomeUnresolved,
     #[error("provider_binding_mismatch")]
     ProviderBindingMismatch,
     #[error("provider_snapshot_required")]
     ProviderSnapshotRequired,
     #[error("receipt snapshot failed")]
     ReceiptSnapshotFailed,
-    #[error("revision_conflict")]
-    RevisionConflict,
     #[error("session disappeared")]
     SessionDisappeared,
     #[error("session not found")]
@@ -116,20 +102,6 @@ pub enum ChatError {
     SummarySourceHashFailed,
     #[error("summary source id missing")]
     SummarySourceIdMissing,
-    #[error("tool_effect_or_actor_mismatch")]
-    ToolEffectOrActorMismatch,
-    #[error("tool_name_collision")]
-    ToolNameCollision,
-    #[error("tool_namespace_invalid")]
-    ToolNamespaceInvalid,
-    #[error("tool_namespace_reserved")]
-    ToolNamespaceReserved,
-    #[error("write_policy_revoked")]
-    WritePolicyRevoked,
-    #[error("write_policy_unavailable")]
-    WritePolicyUnavailable,
-    #[error("write_tool_requires_chat")]
-    WriteToolRequiresChat,
     #[error("Instruction file changed during open.")]
     InstructionFileChangedDuringOpen,
     #[error("Instruction file is a symlink.")]
@@ -178,6 +150,15 @@ impl From<ChatError> for agentkit_engine::EngineError<StoreError> {
                 failure_code: None,
             },
             ChatError::Worker(error) => EngineError::Worker(error),
+            ChatError::Governance(agentkit_governance::GovernanceError::Store(error)) => {
+                EngineError::Store(error)
+            }
+            ChatError::Governance(agentkit_governance::GovernanceError::Core(error)) => {
+                EngineError::External {
+                    failure_code: Some(error.code.clone()),
+                    source: Box::new(error),
+                }
+            }
             ChatError::Json(error) => EngineError::External {
                 source: Box::new(error),
                 failure_code: None,
@@ -206,22 +187,19 @@ impl ChatError {
     fn context_classification(&self) -> agentkit_engine::ContextClassification {
         use agentkit_engine::ContextClassification::{Rejected, Unclassified};
         match self {
+            Self::Governance(error) => error.context_classification(),
             Self::InvalidReasoningEffort(_)
             | Self::InvalidBudget(_)
             | Self::InvalidAttachmentReference
             | Self::InvalidContextBinding
             | Self::InvalidContextProviderResult
-            | Self::InvalidDomainApplyOutcome
             | Self::InvalidResolvedAttachment
             | Self::InvalidRuntimeTimestamp
             | Self::InvalidVerificationStatus
             | Self::InvalidContextWindowSnapshot
             | Self::InvalidMaxOutputTokens
-            | Self::InvalidProposalBuild
             | Self::InvalidProviderConnection
             | Self::InvalidProviderContextWindow
-            | Self::InvalidWriteQuery
-            | Self::ToolNamespaceInvalid
             | Self::SessionContextInvalid => Rejected,
             _ => Unclassified,
         }

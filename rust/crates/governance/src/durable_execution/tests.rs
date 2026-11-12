@@ -69,7 +69,7 @@ fn definition(name: &str, effect: &str) -> ToolDefinition {
 async fn claimed_context() -> (SqliteStore, ExecutionContext) {
     let store = SqliteStore::memory(8).unwrap();
     // Wall-clock time so `SystemRuntime` never sees the lease as expired.
-    let now = crate::Runtime::now_ms(&crate::SystemRuntime);
+    let now = agentkit_engine::Runtime::now_ms(&agentkit_engine::SystemRuntime);
     store
         .create_chat("chat", None, json!({}), now)
         .await
@@ -112,7 +112,7 @@ async fn claimed_context() -> (SqliteStore, ExecutionContext) {
         suspension: Arc::new(Mutex::new(None)),
         store: store.clone(),
         fence: claimed.lease.fence(),
-        runtime: Arc::new(crate::SystemRuntime),
+        runtime: Arc::new(agentkit_engine::SystemRuntime),
         event_gate: Arc::new(Mutex::new(())),
     };
     (store, context)
@@ -290,7 +290,7 @@ async fn crash_with_uncertain_effect(
     context: &ExecutionContext,
     input: &Value,
 ) -> String {
-    let now = crate::Runtime::now_ms(&crate::SystemRuntime);
+    let now = agentkit_engine::Runtime::now_ms(&agentkit_engine::SystemRuntime);
     let execution = execution_id("run", "call-1", None);
     store
         .admit_execution(
@@ -344,7 +344,7 @@ async fn crash_with_uncertain_effect(
 /// The retry pass: a fresh run of the same chat, as the host re-asks after a
 /// crash. Returns its claimed execution context.
 async fn retry_context(store: &SqliteStore) -> ExecutionContext {
-    let now = crate::Runtime::now_ms(&crate::SystemRuntime);
+    let now = agentkit_engine::Runtime::now_ms(&agentkit_engine::SystemRuntime);
     store
         .submit(SubmitTask {
             task_id: "run2".into(),
@@ -383,7 +383,7 @@ async fn retry_context(store: &SqliteStore) -> ExecutionContext {
         suspension: Arc::new(Mutex::new(None)),
         store: store.clone(),
         fence: claimed.lease.fence(),
-        runtime: Arc::new(crate::SystemRuntime),
+        runtime: Arc::new(agentkit_engine::SystemRuntime),
         event_gate: Arc::new(Mutex::new(())),
     }
 }
@@ -467,12 +467,13 @@ async fn static_fast_path_uncertain_receipt_resolves_then_the_retry_proceeds() {
 
     // The session surface is not the static path's resolve route: this chat
     // was never created as a session, and resolution must not pretend it was.
-    let service = crate::AgentSessionService::new(crate::AgentSessionServiceDeps {
-        store: store.clone(),
-        runtime: Arc::new(crate::SystemRuntime),
-        plan_approval: None,
-        wake: None,
-    });
+    let service =
+        agentkit_sessions::AgentSessionService::new(agentkit_sessions::AgentSessionServiceDeps {
+            store: store.clone(),
+            runtime: Arc::new(agentkit_engine::SystemRuntime),
+            plan_approval: None,
+            wake: None,
+        });
     let dead_end = service
         .resolve_uncertain_execution(
             "chat",
@@ -491,7 +492,7 @@ async fn static_fast_path_uncertain_receipt_resolves_then_the_retry_proceeds() {
 
     // The host-owned resolve route: explicit, audited, and the only thing
     // that ever unblocks the effect.
-    let now = crate::Runtime::now_ms(&crate::SystemRuntime);
+    let now = agentkit_engine::Runtime::now_ms(&agentkit_engine::SystemRuntime);
     let record = agentkit_sessions::resolve_uncertain_execution(
         &store,
         "chat",

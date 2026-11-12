@@ -8,6 +8,7 @@ use agentkit_core::{
     ToolDefinition, ToolRegistry, ToolResult,
 };
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+use agentkit_governance::*;
 use agentkit_sessions::*;
 use agentkit_store::{
     ClaimInput, ExecutionReceiptAdmission, ExecutionReceiptStatus, MessageInput, ResolutionOutcome,
@@ -226,7 +227,7 @@ impl Fixture {
             .expect("queued run");
         assert_eq!(claimed.task.task_id, run_id);
         let fence = claimed.lease.fence();
-        let execution = agentkit_chat::execution_id(run_id, call, None);
+        let execution = agentkit_governance::execution_id(run_id, call, None);
         let args = serde_json::from_str::<Value>(ARGS).unwrap();
         self.store
             .admit_execution(

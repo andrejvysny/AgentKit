@@ -954,9 +954,11 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     // log decides - teardown never claims them.
     core.runtime.coding_lane().mark_disposed();
     core.runtime.coding_lane().dispose().await;
-    if let Err(error) =
-        agentkit_chat::drain_native_command_completions(core.runtime.host().store(), close_timeout)
-            .await
+    if let Err(error) = agentkit_governance::drain_native_command_completions(
+        core.runtime.host().store(),
+        close_timeout,
+    )
+    .await
     {
         uncertain.store(true, Ordering::SeqCst);
         if first_error.is_none() {

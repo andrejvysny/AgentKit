@@ -336,7 +336,7 @@ mod tests {
             _chat_id: Option<&str>,
             _plan_digest: &str,
         ) -> agentkit_governance::GovernanceResult<Option<bool>> {
-            Err(agentkit_governance::GovernanceError::Execution(
+            Err(agentkit_governance::GovernanceError::Port(
                 "session store unreachable".into(),
             ))
         }

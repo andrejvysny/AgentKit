@@ -13,11 +13,11 @@
 //! (dormant until the approval flow lands) authorization fields.
 
 use crate::ExecutionContext;
-use agentkit_core::{CoreError, ToolContext, ToolDefinition, ToolResult};
-use agentkit_governance::{
+use crate::{
     Admission, ApprovalGrant, CommandCompletion, DurableExecutionPort, PreGuard,
     StandingApprovalPolicy, ToolContributionContext, ToolGuardContext,
 };
+use agentkit_core::{CoreError, ToolContext, ToolDefinition, ToolResult};
 use agentkit_kernel::sha256_hex;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -994,7 +994,7 @@ mod tests;
 
 /// Wrap the write-effect tools of a static registry in [`ReceiptedTool`],
 /// leaving read tools (and definitions, ordering, and identity) untouched.
-pub(crate) fn wrap_static_writes(
+pub fn wrap_static_writes(
     registry: &agentkit_core::ToolRegistry,
     durable: Arc<DurableExecution>,
     contribution: &ToolContributionContext,

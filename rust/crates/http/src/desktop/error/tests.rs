@@ -56,7 +56,7 @@ fn proposal_transition_siblings_keep_proposal_context() {
             | StoreError::ReceiptTransition { message, .. } => message.clone(),
             _ => unreachable!(),
         };
-        let problem = proposal_error(ChatError::Store(error));
+        let problem = proposal_error(agentkit_governance::GovernanceError::Store(error));
         assert_eq!(
             (
                 problem.status,

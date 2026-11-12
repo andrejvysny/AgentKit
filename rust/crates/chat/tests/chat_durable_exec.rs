@@ -188,13 +188,13 @@ async fn seed_crashed_run(
             .admit_execution(
                 fence.clone(),
                 ExecutionReceiptAdmission {
-                    execution_id: agentkit_chat::execution_id(run_id, call, None),
+                    execution_id: agentkit_governance::execution_id(run_id, call, None),
                     run_id: run_id.into(),
                     chat_id: "chat".into(),
                     tool_call_id: (*call).into(),
                     tool_name: "mutate".into(),
-                    args_sha256: agentkit_chat::args_sha256(&json!({})),
-                    ts_args_sha256: Some(agentkit_chat::ts_args_sha256(&json!({}))),
+                    args_sha256: agentkit_governance::args_sha256(&json!({})),
+                    ts_args_sha256: Some(agentkit_governance::ts_args_sha256(&json!({}))),
                     args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
                     context_sha256: "0".repeat(64),
                     attempt_id: "1".into(),
@@ -209,7 +209,7 @@ async fn seed_crashed_run(
             store
                 .complete_execution(
                     fence.clone(),
-                    agentkit_chat::execution_id(run_id, call, None),
+                    agentkit_governance::execution_id(run_id, call, None),
                     result.clone(),
                     now_ms(),
                 )

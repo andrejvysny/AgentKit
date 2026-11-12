@@ -11,6 +11,7 @@ use agentkit_core::{
 use agentkit_engine::{
     SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook, VerificationReport,
 };
+use agentkit_governance::*;
 use agentkit_governance::{
     ApprovalAsk, ContributedTool, GovernanceResult, StandingApprovalPolicy,
     ToolContributionContext, ToolContributor, ToolGuard, ToolGuardContext, ToolGuardVerdict,
@@ -466,7 +467,7 @@ impl Fixture {
             .expect("the seeded run is queued");
         assert_eq!(claimed.task.task_id, run_id);
         let fence = claimed.lease.fence();
-        let execution = agentkit_chat::execution_id(run_id, "call-1", None);
+        let execution = agentkit_governance::execution_id(run_id, "call-1", None);
         self.store
             .admit_execution(
                 fence.clone(),
@@ -893,7 +894,7 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
     .await
     .expect("the first execution started");
     running.abort();
-    let first = agentkit_chat::execution_id(&turn, "call-1", None);
+    let first = agentkit_governance::execution_id(&turn, "call-1", None);
     assert_eq!(
         f.hits.load(Ordering::SeqCst),
         1,
@@ -941,7 +942,7 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
         "the generation-N answer opened exactly one execution"
     );
     running.abort();
-    let second = agentkit_chat::execution_id(&turn, "call-1", Some(&request_one.input_id));
+    let second = agentkit_governance::execution_id(&turn, "call-1", Some(&request_one.input_id));
     f.store
         .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
         .await
@@ -1071,7 +1072,7 @@ async fn two_answered_asks_for_one_call_resume_it_exactly_once() {
     .await
     .expect("the first execution started");
     running.abort();
-    let first = agentkit_chat::execution_id(&turn, "call-1", None);
+    let first = agentkit_governance::execution_id(&turn, "call-1", None);
     f.store
         .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
         .await
@@ -1099,7 +1100,7 @@ async fn two_answered_asks_for_one_call_resume_it_exactly_once() {
     .await
     .expect("the approved execution started");
     running.abort();
-    let second = agentkit_chat::execution_id(&turn, "call-1", Some(&request_one.input_id));
+    let second = agentkit_governance::execution_id(&turn, "call-1", Some(&request_one.input_id));
     f.store
         .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
         .await

@@ -1,3 +1,4 @@
+pub use agentkit_governance::{Authorization, MutationIdentity, ProposalApplier};
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -48,30 +49,9 @@ pub struct ResolvedAttachment {
 }
 
 #[async_trait]
-pub trait Authorization: Send + Sync {
-    async fn authorize(&self, actor: &Value, action: &str, resource: &Value) -> ChatResult<()>;
-}
-
-#[async_trait]
 pub trait UsageAuthorizer: Send + Sync {
     async fn authorize(&self, task_id: &str, usage: &Value) -> ChatResult<()>;
     async fn record(&self, _usage: &Value) -> ChatResult<()> {
         Ok(())
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct MutationIdentity {
-    pub proposal_id: String,
-    pub operation_id: String,
-    pub fingerprint: String,
-    pub execution_fence: Option<agentkit_core::DispatchFence>,
-}
-
-#[async_trait]
-pub trait ProposalApplier: Send + Sync {
-    /// When present, enforce execution_fence atomically with the mutation. A
-    /// local preflight cannot prevent a worker becoming stale during this await.
-    async fn apply(&self, identity: MutationIdentity, operations: Value) -> ChatResult<Value>;
-    async fn reconcile(&self, identity: MutationIdentity) -> ChatResult<Option<Value>>;
 }

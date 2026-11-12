@@ -1,6 +1,6 @@
 use super::support::*;
-use agentkit_chat::*;
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult};
+use agentkit_governance::*;
 use agentkit_governance::{
     ContributedTool, GovernanceError, GovernanceResult, ToolContributionContext, ToolContributor,
     ToolGuard, ToolGuardContext, ToolGuardVerdict,
@@ -69,9 +69,7 @@ impl ToolContributor for Contributor {
             std::future::pending::<()>().await;
         }
         if self.fail {
-            return Err(GovernanceError::Execution(
-                "private-contributor-detail".into(),
-            ));
+            return Err(GovernanceError::Port("private-contributor-detail".into()));
         }
         Ok(self.tools.clone())
     }
@@ -108,7 +106,7 @@ impl ToolGuard for Guard {
     }
     async fn can_execute(&self, _context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if self.broken {
-            return Err(GovernanceError::Execution("private-guard-detail".into()));
+            return Err(GovernanceError::Port("private-guard-detail".into()));
         }
         Ok(if self.allowed.load(Ordering::SeqCst) {
             ToolGuardVerdict::Allowed

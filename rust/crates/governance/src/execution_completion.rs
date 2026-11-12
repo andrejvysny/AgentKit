@@ -1,5 +1,5 @@
+use crate::DurableExecutionPort;
 use agentkit_core::{CoreError, Tool, ToolContext, ToolResult};
-use agentkit_governance::DurableExecutionPort;
 use serde_json::Value;
 use std::sync::Arc;
 

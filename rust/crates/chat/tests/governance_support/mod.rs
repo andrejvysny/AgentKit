@@ -3,6 +3,7 @@ use agentkit_chat::*;
 use agentkit_core::{ToolContext, ToolDefinition, ToolLimits};
 use agentkit_engine::Runtime;
 use agentkit_governance::ToolContributionContext;
+use agentkit_governance::*;
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -39,7 +40,7 @@ impl Authorization for Permission {
         _actor: &Value,
         action: &str,
         _resource: &Value,
-    ) -> agentkit_chat::ChatResult<()> {
+    ) -> agentkit_governance::GovernanceResult<()> {
         if action == "apply"
             && self.revoke_policy_on_claim
             && self.apply_checks.fetch_add(1, Ordering::SeqCst) >= 1
@@ -49,9 +50,9 @@ impl Authorization for Permission {
         if self.allowed.load(Ordering::SeqCst) {
             Ok(())
         } else {
-            Err(agentkit_chat::ChatError::External(Box::new(
-                std::io::Error::other("private-authorizer-detail"),
-            )))
+            Err(agentkit_governance::GovernanceError::Port(
+                "private-authorizer-detail".into(),
+            ))
         }
     }
 }
@@ -70,7 +71,7 @@ impl ProposalApplier for Domain {
         &self,
         identity: MutationIdentity,
         operations: Value,
-    ) -> agentkit_chat::ChatResult<Value> {
+    ) -> agentkit_governance::GovernanceResult<Value> {
         self.execution_fences
             .lock()
             .unwrap()
@@ -88,9 +89,9 @@ impl ProposalApplier for Domain {
             (identity.fingerprint, result.clone()),
         );
         if self.ambiguous.load(Ordering::SeqCst) {
-            Err(agentkit_chat::ChatError::External(Box::new(
-                std::io::Error::other("private-domain-detail"),
-            )))
+            Err(agentkit_governance::GovernanceError::Port(
+                "private-domain-detail".into(),
+            ))
         } else {
             Ok(result)
         }
@@ -98,7 +99,7 @@ impl ProposalApplier for Domain {
     async fn reconcile(
         &self,
         identity: MutationIdentity,
-    ) -> agentkit_chat::ChatResult<Option<Value>> {
+    ) -> agentkit_governance::GovernanceResult<Option<Value>> {
         Ok(self
             .receipts
             .lock()
@@ -120,7 +121,7 @@ impl ProposalBuilder for Builder {
         &self,
         _context: &ToolContext,
         input: &Value,
-    ) -> agentkit_chat::ChatResult<ProposalBuild> {
+    ) -> agentkit_governance::GovernanceResult<ProposalBuild> {
         *self.last_input.lock().unwrap() = Some(input.clone());
         Ok(ProposalBuild {
             scope_key: input["scope"].as_str().unwrap_or("document").into(),
@@ -147,7 +148,10 @@ impl ProposalBuilder for Builder {
             revision_at_create: Some("1".into()),
         })
     }
-    async fn current_revision(&self, _scope: &str) -> agentkit_chat::ChatResult<Option<String>> {
+    async fn current_revision(
+        &self,
+        _scope: &str,
+    ) -> agentkit_governance::GovernanceResult<Option<String>> {
         Ok(self.revision.lock().unwrap().clone())
     }
 }

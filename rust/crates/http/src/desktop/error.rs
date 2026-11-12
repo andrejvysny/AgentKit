@@ -64,12 +64,15 @@ pub(super) fn chat_error(error: ChatError) -> Problem {
         ChatError::Engine(error) => host_error(error),
         ChatError::Store(error) => store_error(error),
         ChatError::Sessions(error) => session_error(error),
+        ChatError::Governance(agentkit_governance::GovernanceError::Store(error)) => {
+            store_error(error)
+        }
         other => Problem::host("internal_error", other.to_string()),
     }
 }
-pub(super) fn proposal_error(error: ChatError) -> Problem {
+pub(super) fn proposal_error(error: agentkit_governance::GovernanceError) -> Problem {
     match error {
-        ChatError::Store(
+        agentkit_governance::GovernanceError::Store(
             StoreError::InvalidTransition(detail)
             | StoreError::AgentInputTransition(detail)
             | StoreError::AnswerStale(detail)
@@ -77,7 +80,7 @@ pub(super) fn proposal_error(error: ChatError) -> Problem {
                 message: detail, ..
             },
         ) => Problem::host("invalid_proposal_transition", detail),
-        other => chat_error(other),
+        other => chat_error(other.into()),
     }
 }
 pub(super) fn teammate_problem(error: impl Into<AgentsError>) -> Problem {

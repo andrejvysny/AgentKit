@@ -10,7 +10,7 @@
 mod runner_support;
 use runner_support::{scenarios, support};
 
-use agentkit_chat::{args_sha256, execution_id};
+use agentkit_governance::{args_sha256, execution_id};
 use agentkit_store::{
     ArgsHashProvenance, ExecutionReceiptAdmission, ExecutionReceiptStatus, SqliteStore,
 };

@@ -1,19 +1,21 @@
 use crate::*;
 use agentkit_store::{
-    ApplyOutcome, ProposalPatch, ProposalRecord, ProposalStatus, ReceiptRecord,
-    validate_apply_outcome,
+    ApplyOutcome, ProposalPatch, ProposalRecord, ProposalStatus, ReceiptRecord, SqliteStore,
+    StoreError, validate_apply_outcome,
 };
 use async_trait::async_trait;
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 #[async_trait]
 pub trait ProposalApplyGuard: Send + Sync {
     /// Check current authority and revision without mutating domain state.
-    async fn authorize(&self, proposal: &ProposalRecord) -> ChatResult<()>;
-    async fn authorize_dispatch(&self) -> ChatResult<()> {
+    async fn authorize(&self, proposal: &ProposalRecord) -> GovernanceResult<()>;
+    async fn authorize_dispatch(&self) -> GovernanceResult<()> {
         Ok(())
     }
     /// Recheck revocable local state after the final asynchronous preflight.
-    fn check_current(&self) -> ChatResult<()> {
+    fn check_current(&self) -> GovernanceResult<()> {
         Ok(())
     }
     fn fence(&self) -> Option<agentkit_core::DispatchFence> {
@@ -23,7 +25,7 @@ pub trait ProposalApplyGuard: Send + Sync {
 
 #[async_trait]
 pub trait ProposalRevisionSource: Send + Sync {
-    async fn current_revision(&self, scope_key: &str) -> ChatResult<Option<String>>;
+    async fn current_revision(&self, scope_key: &str) -> GovernanceResult<Option<String>>;
 }
 
 pub struct ProposalService {
@@ -62,7 +64,7 @@ impl ProposalService {
         id: &str,
         actor: &Value,
         action: &str,
-    ) -> ChatResult<ProposalRecord> {
+    ) -> GovernanceResult<ProposalRecord> {
         let proposal = self
             .store
             .get_proposal(id)
@@ -80,7 +82,7 @@ impl ProposalService {
         Ok(proposal)
     }
 
-    pub async fn approve(&self, id: &str, actor: &Value) -> ChatResult<ProposalRecord> {
+    pub async fn approve(&self, id: &str, actor: &Value) -> GovernanceResult<ProposalRecord> {
         self.approve_with_reason(id, actor, None).await
     }
 
@@ -89,7 +91,7 @@ impl ProposalService {
         id: &str,
         actor: &Value,
         reason: Option<String>,
-    ) -> ChatResult<ProposalRecord> {
+    ) -> GovernanceResult<ProposalRecord> {
         self.authorized(id, actor, "approve").await?;
         Ok(self
             .store
@@ -112,7 +114,7 @@ impl ProposalService {
         id: &str,
         actor: &Value,
         reason: Option<String>,
-    ) -> ChatResult<ProposalRecord> {
+    ) -> GovernanceResult<ProposalRecord> {
         self.authorized(id, actor, "reject").await?;
         Ok(self
             .store
@@ -135,7 +137,7 @@ impl ProposalService {
         id: &str,
         operation_id: &str,
         actor: &Value,
-    ) -> ChatResult<ReceiptRecord> {
+    ) -> GovernanceResult<ReceiptRecord> {
         self.apply_inner(id, operation_id, actor, None).await
     }
 
@@ -145,7 +147,7 @@ impl ProposalService {
         operation_id: &str,
         actor: &Value,
         guard: Arc<dyn ProposalApplyGuard>,
-    ) -> ChatResult<ReceiptRecord> {
+    ) -> GovernanceResult<ReceiptRecord> {
         self.apply_inner(id, operation_id, actor, Some(guard)).await
     }
 
@@ -155,18 +157,18 @@ impl ProposalService {
         operation_id: &str,
         actor: &Value,
         guard: Option<Arc<dyn ProposalApplyGuard>>,
-    ) -> ChatResult<ReceiptRecord> {
+    ) -> GovernanceResult<ReceiptRecord> {
         let proposal = self.authorized(id, actor, "apply").await?;
         if proposal
             .operation_id
             .as_deref()
             .is_some_and(|existing| existing != operation_id)
         {
-            return Err(ChatError::ProposalOperationMismatch);
+            return Err(GovernanceError::ProposalOperationMismatch);
         }
         if let Some(receipt) = self.store.receipt(operation_id).await? {
             if receipt.proposal_id != id {
-                return Err(ChatError::ProposalOperationMismatch);
+                return Err(GovernanceError::ProposalOperationMismatch);
             }
             return Ok(receipt);
         }
@@ -197,7 +199,7 @@ impl ProposalService {
         operation_id: &str,
         actor: &Value,
         guard: Option<&dyn ProposalApplyGuard>,
-    ) -> ChatResult<Option<ReceiptRecord>> {
+    ) -> GovernanceResult<Option<ReceiptRecord>> {
         if let Err(error) = self.authorize_claim(proposal, actor).await {
             self.record_guard_refusal(proposal, operation_id).await?;
             return Err(error);
@@ -223,7 +225,7 @@ impl ProposalService {
         Ok(None)
     }
 
-    async fn claim(&self, id: &str, operation_id: &str) -> ChatResult<()> {
+    async fn claim(&self, id: &str, operation_id: &str) -> GovernanceResult<()> {
         self.store
             .transition_proposal(
                 id,
@@ -239,11 +241,15 @@ impl ProposalService {
         Ok(())
     }
 
-    async fn authorize_claim(&self, proposal: &ProposalRecord, actor: &Value) -> ChatResult<()> {
+    async fn authorize_claim(
+        &self,
+        proposal: &ProposalRecord,
+        actor: &Value,
+    ) -> GovernanceResult<()> {
         if let (Some(source), Some(expected)) = (&self.revisions, &proposal.revision_at_create)
             && source.current_revision(&proposal.scope_key).await?.as_ref() != Some(expected)
         {
-            return Err(ChatError::RevisionConflict);
+            return Err(GovernanceError::RevisionConflict);
         }
         self.authorized(&proposal.id, actor, "apply").await?;
         Ok(())
@@ -254,7 +260,7 @@ impl ProposalService {
         proposal: &ProposalRecord,
         operation_id: &str,
         actor: &Value,
-    ) -> ChatResult<()> {
+    ) -> GovernanceResult<()> {
         // Awaited policy or revision guards may revoke host authority after the
         // claim check. The last authorization must precede domain dispatch.
         if let Err(error) = self.authorized(&proposal.id, actor, "apply").await {
@@ -268,7 +274,7 @@ impl ProposalService {
         &self,
         proposal: &ProposalRecord,
         operation: &str,
-    ) -> ChatResult<ReceiptRecord> {
+    ) -> GovernanceResult<ReceiptRecord> {
         let failed_ops = proposal.operations.iter().enumerate().map(|(index, _)| json!({
             "opIndex":index,"error":"Apply authorization or revision check refused before domain dispatch."
         })).collect();
@@ -285,7 +291,7 @@ impl ProposalService {
             .await?)
     }
 
-    pub async fn reconcile(&self) -> ChatResult<Vec<ReceiptRecord>> {
+    pub async fn reconcile(&self) -> GovernanceResult<Vec<ReceiptRecord>> {
         let proposals = self
             .store
             .proposals(None, Some(ProposalStatus::Applying))
@@ -295,7 +301,7 @@ impl ProposalService {
             let operation = proposal
                 .operation_id
                 .as_deref()
-                .ok_or_else(|| ChatError::ApplyingProposalHasNoOperationIdentity)?;
+                .ok_or_else(|| GovernanceError::ApplyingProposalHasNoOperationIdentity)?;
             let identity = mutation_identity(&proposal, operation);
             if let Some(outcome) = self.applier.reconcile(identity).await? {
                 receipts.push(self.complete(&proposal.id, operation, outcome).await?);
@@ -308,19 +314,24 @@ impl ProposalService {
         &self,
         proposal: &ProposalRecord,
         identity: MutationIdentity,
-    ) -> ChatResult<ReceiptRecord> {
+    ) -> GovernanceResult<ReceiptRecord> {
         let outcome = self
             .applier
             .reconcile(identity.clone())
             .await?
-            .ok_or_else(|| ChatError::ProposalOutcomeUnresolved)?;
+            .ok_or_else(|| GovernanceError::ProposalOutcomeUnresolved)?;
         self.complete(&proposal.id, &identity.operation_id, outcome)
             .await
     }
 
-    async fn complete(&self, id: &str, operation: &str, value: Value) -> ChatResult<ReceiptRecord> {
-        let outcome: ApplyOutcome =
-            serde_json::from_value(value).map_err(|_| ChatError::InvalidDomainApplyOutcome)?;
+    async fn complete(
+        &self,
+        id: &str,
+        operation: &str,
+        value: Value,
+    ) -> GovernanceResult<ReceiptRecord> {
+        let outcome: ApplyOutcome = serde_json::from_value(value)
+            .map_err(|_| GovernanceError::InvalidDomainApplyOutcome)?;
         let proposal = self
             .store
             .get_proposal(id)

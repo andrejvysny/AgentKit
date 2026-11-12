@@ -1,5 +1,5 @@
-use agentkit_chat::{Authorization, MutationIdentity, ProposalApplier};
 use agentkit_contracts::*;
+use agentkit_governance::{Authorization, MutationIdentity, ProposalApplier};
 use agentkit_http::{Actor, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort};
 use agentkit_store::{ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
@@ -79,18 +79,30 @@ impl ProviderOperations for FixturePorts {
 }
 #[async_trait]
 impl Authorization for FixturePorts {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
+    async fn authorize(
+        &self,
+        _: &Value,
+        _: &str,
+        _: &Value,
+    ) -> agentkit_governance::GovernanceResult<()> {
         Ok(())
     }
 }
 #[async_trait]
 impl ProposalApplier for FixturePorts {
-    async fn apply(&self, _: MutationIdentity, _: Value) -> agentkit_chat::ChatResult<Value> {
+    async fn apply(
+        &self,
+        _: MutationIdentity,
+        _: Value,
+    ) -> agentkit_governance::GovernanceResult<Value> {
         Ok(
             json!({"status":"applied","appliedOps":1,"failedOps":[],"resultJson":null,"revision":null}),
         )
     }
-    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        _: MutationIdentity,
+    ) -> agentkit_governance::GovernanceResult<Option<Value>> {
         Ok(None)
     }
 }

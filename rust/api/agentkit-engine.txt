@@ -25,10 +25,6 @@ pub agentkit_engine::EngineError::TaskNotFound
 pub agentkit_engine::EngineError::UnknownKind(alloc::string::String)
 pub agentkit_engine::EngineError::VerificationTimeout
 pub agentkit_engine::EngineError::Worker(tokio::runtime::task::error::JoinError)
-impl<E: core::error::Error> core::convert::From<agentkit_engine::EngineError<E>> for agentkit_governance::error::GovernanceError
-pub fn agentkit_governance::error::GovernanceError::from(agentkit_engine::EngineError<E>) -> Self
-impl<E: core::error::Error> core::convert::From<agentkit_governance::error::GovernanceError> for agentkit_engine::EngineError<E>
-pub fn agentkit_engine::EngineError<E>::from(agentkit_governance::error::GovernanceError) -> Self
 pub enum agentkit_engine::ExecutionErrorKind
 pub agentkit_engine::ExecutionErrorKind::Cancelled
 pub agentkit_engine::ExecutionErrorKind::Terminal

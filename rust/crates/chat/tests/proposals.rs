@@ -1,5 +1,6 @@
 use agentkit_chat::*;
 use agentkit_engine::SystemRuntime;
+use agentkit_governance::*;
 use agentkit_store::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -15,14 +16,19 @@ struct Permission {
 }
 #[async_trait]
 impl Authorization for Permission {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
+    async fn authorize(
+        &self,
+        _: &Value,
+        _: &str,
+        _: &Value,
+    ) -> agentkit_governance::GovernanceResult<()> {
         let check = self.checks.fetch_add(1, Ordering::SeqCst);
         if self.allowed.load(Ordering::SeqCst) && !(self.deny_after_claim && check >= 2) {
             Ok(())
         } else {
-            Err(agentkit_chat::ChatError::External(Box::new(
-                std::io::Error::other("forbidden"),
-            )))
+            Err(agentkit_governance::GovernanceError::Port(
+                "forbidden".into(),
+            ))
         }
     }
 }
@@ -33,16 +39,23 @@ struct Domain {
 }
 #[async_trait]
 impl ProposalApplier for Domain {
-    async fn apply(&self, _: MutationIdentity, _: Value) -> agentkit_chat::ChatResult<Value> {
+    async fn apply(
+        &self,
+        _: MutationIdentity,
+        _: Value,
+    ) -> agentkit_governance::GovernanceResult<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.ambiguous {
-            return Err(agentkit_chat::ChatError::External(Box::new(
-                std::io::Error::other("connection lost after domain commit"),
-            )));
+            return Err(agentkit_governance::GovernanceError::Port(
+                "connection lost after domain commit".into(),
+            ));
         }
         Ok(outcome())
     }
-    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        _: MutationIdentity,
+    ) -> agentkit_governance::GovernanceResult<Option<Value>> {
         Ok(None)
     }
 }

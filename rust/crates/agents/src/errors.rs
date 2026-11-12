@@ -130,7 +130,7 @@ pub type AgentsResult<T> = Result<T, AgentsError>;
 
 impl From<AgentsError> for agentkit_governance::GovernanceError {
     fn from(error: AgentsError) -> Self {
-        Self::Execution(error.to_string())
+        Self::Port(error.to_string())
     }
 }
 

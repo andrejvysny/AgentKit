@@ -23,6 +23,13 @@ pub(super) fn code(error: &ChatError) -> String {
         ChatError::InvalidBudget(_) => "invalid_budget".into(),
         ChatError::ExecutionBudgetExhaustedRetries => "execution_budget_exhausted".into(),
         ChatError::SessionSubmissionRequired => "session_submission_required".into(),
+        ChatError::Governance(agentkit_governance::GovernanceError::Store(error)) => {
+            store_code(error)
+        }
+        ChatError::Governance(agentkit_governance::GovernanceError::Core(error)) => {
+            error.code.clone()
+        }
+        ChatError::Governance(error) => error.to_string(),
         other => other.to_string(),
     }
 }

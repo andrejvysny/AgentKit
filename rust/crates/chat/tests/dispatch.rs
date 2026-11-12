@@ -2,6 +2,7 @@ mod governance_support;
 use agentkit_chat::*;
 use agentkit_core::{DispatchFence, Tool, ToolContext};
 use agentkit_engine::{Runtime, TaskExecutor};
+use agentkit_governance::*;
 use agentkit_sessions::*;
 use agentkit_store::SubmitTask;
 use async_trait::async_trait;
@@ -33,10 +34,13 @@ impl ProposalBuilder for Builder {
         &self,
         context: &ToolContext,
         input: &Value,
-    ) -> agentkit_chat::ChatResult<ProposalBuild> {
+    ) -> agentkit_governance::GovernanceResult<ProposalBuild> {
         self.inner.build(context, input).await
     }
-    async fn current_revision(&self, _: &str) -> agentkit_chat::ChatResult<Option<String>> {
+    async fn current_revision(
+        &self,
+        _: &str,
+    ) -> agentkit_governance::GovernanceResult<Option<String>> {
         if self.expire && self.checks.fetch_add(1, Ordering::SeqCst) == 1 {
             self.clock.0.store(10000, Ordering::SeqCst);
         }
@@ -55,7 +59,7 @@ impl ProposalApplier for Domain {
         &self,
         identity: MutationIdentity,
         _: Value,
-    ) -> agentkit_chat::ChatResult<Value> {
+    ) -> agentkit_governance::GovernanceResult<Value> {
         let fence = identity
             .execution_fence
             .expect("Durable tool must supply its trusted fence");
@@ -66,9 +70,9 @@ impl ProposalApplier for Domain {
         }
         let mut newest = self.newest_token.lock().unwrap();
         if fence.fencing_token < *newest {
-            return Err(agentkit_chat::ChatError::External(Box::new(
-                std::io::Error::other("domain_fence_superseded"),
-            )));
+            return Err(agentkit_governance::GovernanceError::Port(
+                "domain_fence_superseded".into(),
+            ));
         }
         *newest = fence.fencing_token;
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -76,7 +80,10 @@ impl ProposalApplier for Domain {
             json!({"status":"applied","appliedOps":1,"failedOps":[],"resultJson":null,"revision":"2"}),
         )
     }
-    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        _: MutationIdentity,
+    ) -> agentkit_governance::GovernanceResult<Option<Value>> {
         Ok(None)
     }
 }

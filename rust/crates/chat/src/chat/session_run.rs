@@ -381,7 +381,7 @@ pub(crate) async fn resolve_approved_calls(
     chat_id: &str,
     anchor: &str,
 ) -> ChatResult<(
-    HashMap<String, crate::governance::ApprovalGrant>,
+    HashMap<String, agentkit_governance::ApprovalGrant>,
     Vec<ToolCall>,
 )> {
     let requests = context
@@ -523,7 +523,7 @@ pub(crate) async fn resolve_approved_calls(
             {
                 continue;
             }
-            grant = Some(crate::governance::ApprovalGrant {
+            grant = Some(agentkit_governance::ApprovalGrant {
                 request_id: request.input_id.clone(),
                 args_sha256: approved_hash,
                 // An answer to an uncertain re-issue names the exact
@@ -610,8 +610,8 @@ async fn append_approval_mismatch(
 /// arguments under either canonicalizer (native or TypeScript-pipeline).
 fn matching_args_hash(arguments_json: &str, approved: &str) -> Option<String> {
     let arguments = agentkit_contracts::parse_javascript_json(arguments_json).ok()?;
-    let native = crate::governance::args_sha256(&arguments);
-    if native == approved || crate::governance::ts_args_sha256(&arguments) == approved {
+    let native = agentkit_governance::args_sha256(&arguments);
+    if native == approved || agentkit_governance::ts_args_sha256(&arguments) == approved {
         Some(native)
     } else {
         None
@@ -711,8 +711,8 @@ mod tests {
     fn approval_matches_on_native_or_ts_digest_only() {
         let args = r#"{"10":1,"9":2}"#;
         let parsed = agentkit_contracts::parse_javascript_json(args).unwrap();
-        let native = crate::governance::args_sha256(&parsed);
-        let ts = crate::governance::ts_args_sha256(&parsed);
+        let native = agentkit_governance::args_sha256(&parsed);
+        let ts = agentkit_governance::ts_args_sha256(&parsed);
         assert_ne!(native, ts, "integer-like keys canonicalize differently");
         assert_eq!(matching_args_hash(args, &native), Some(native.clone()));
         assert_eq!(matching_args_hash(args, &ts), Some(native.clone()));

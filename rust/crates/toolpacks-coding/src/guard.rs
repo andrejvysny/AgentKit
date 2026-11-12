@@ -376,7 +376,7 @@ mod tests {
             &self,
             _ctx: &PermissionContext,
         ) -> agentkit_governance::GovernanceResult<Option<CodingRole>> {
-            Err(agentkit_governance::GovernanceError::Execution(
+            Err(agentkit_governance::GovernanceError::Port(
                 "session store unreachable".into(),
             ))
         }

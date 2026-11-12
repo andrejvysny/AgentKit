@@ -1,7 +1,9 @@
 pub mod agentkit_chat
+pub use agentkit_chat::Authorization
+pub use agentkit_chat::MutationIdentity
+pub use agentkit_chat::ProposalApplier
 pub enum agentkit_chat::ChatError
 pub agentkit_chat::ChatError::ActorAllowanceRequiresExactScopeAndPayload
-pub agentkit_chat::ChatError::ApplyingProposalHasNoOperationIdentity
 pub agentkit_chat::ChatError::AssistantPlaceholderRequired
 pub agentkit_chat::ChatError::Cancelled
 pub agentkit_chat::ChatError::ChatScopeMismatch
@@ -10,11 +12,11 @@ pub agentkit_chat::ChatError::CompactionTaskDisappeared
 pub agentkit_chat::ChatError::ContextChangedDuringCompaction
 pub agentkit_chat::ChatError::ContextSnapshotFailed
 pub agentkit_chat::ChatError::Core(agentkit_core::types::CoreError)
-pub agentkit_chat::ChatError::DispatchFenceLost
 pub agentkit_chat::ChatError::Engine(agentkit_engine::error::EngineError<agentkit_store::StoreError>)
 pub agentkit_chat::ChatError::ExecutionBudgetExhaustedRetries
 pub agentkit_chat::ChatError::External(alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>)
 pub agentkit_chat::ChatError::Failure(agentkit_engine::retry::ExecutionFailure)
+pub agentkit_chat::ChatError::Governance(agentkit_governance::error::GovernanceError)
 pub agentkit_chat::ChatError::HookTimeout(alloc::string::String)
 pub agentkit_chat::ChatError::IdentifyInstructionFile(core::io::error::Error)
 pub agentkit_chat::ChatError::InspectInstructionFile(core::io::error::Error)
@@ -29,23 +31,18 @@ pub agentkit_chat::ChatError::InvalidBudget(alloc::string::String)
 pub agentkit_chat::ChatError::InvalidContextBinding
 pub agentkit_chat::ChatError::InvalidContextProviderResult
 pub agentkit_chat::ChatError::InvalidContextWindowSnapshot
-pub agentkit_chat::ChatError::InvalidDomainApplyOutcome
 pub agentkit_chat::ChatError::InvalidMaxOutputTokens
-pub agentkit_chat::ChatError::InvalidProposalBuild
 pub agentkit_chat::ChatError::InvalidProviderConnection
 pub agentkit_chat::ChatError::InvalidProviderContextWindow
 pub agentkit_chat::ChatError::InvalidReasoningEffort(serde_json::error::Error)
 pub agentkit_chat::ChatError::InvalidResolvedAttachment
 pub agentkit_chat::ChatError::InvalidRuntimeTimestamp
 pub agentkit_chat::ChatError::InvalidVerificationStatus
-pub agentkit_chat::ChatError::InvalidWriteQuery
 pub agentkit_chat::ChatError::Json(serde_json::error::Error)
 pub agentkit_chat::ChatError::OpenInstructionFile(core::io::error::Error)
 pub agentkit_chat::ChatError::OpenWorkspaceRoot(core::io::error::Error)
 pub agentkit_chat::ChatError::ProfileSnapshotRequired
 pub agentkit_chat::ChatError::ProjectInstructionsAreNotReadOnThisPlatform
-pub agentkit_chat::ChatError::ProposalOperationMismatch
-pub agentkit_chat::ChatError::ProposalOutcomeUnresolved
 pub agentkit_chat::ChatError::ProviderBindingMismatch
 pub agentkit_chat::ChatError::ProviderContinuationBranchMismatch
 pub agentkit_chat::ChatError::ProviderContinuationScopeMismatch
@@ -56,7 +53,6 @@ pub agentkit_chat::ChatError::ReadReceipts(agentkit_store::StoreError)
 pub agentkit_chat::ChatError::ReceiptSnapshotFailed
 pub agentkit_chat::ChatError::RequiredField(alloc::string::String)
 pub agentkit_chat::ChatError::ResolveWorkspaceRoot(core::io::error::Error)
-pub agentkit_chat::ChatError::RevisionConflict
 pub agentkit_chat::ChatError::SessionContextInvalid
 pub agentkit_chat::ChatError::SessionDisappeared
 pub agentkit_chat::ChatError::SessionNotFound
@@ -66,15 +62,8 @@ pub agentkit_chat::ChatError::StatInstructionFile(core::io::error::Error)
 pub agentkit_chat::ChatError::Store(agentkit_store::StoreError)
 pub agentkit_chat::ChatError::SummarySourceHashFailed
 pub agentkit_chat::ChatError::SummarySourceIdMissing
-pub agentkit_chat::ChatError::ToolEffectOrActorMismatch
-pub agentkit_chat::ChatError::ToolNameCollision
-pub agentkit_chat::ChatError::ToolNamespaceInvalid
-pub agentkit_chat::ChatError::ToolNamespaceReserved
 pub agentkit_chat::ChatError::Worker(tokio::runtime::task::error::JoinError)
 pub agentkit_chat::ChatError::WorkspaceRootContainsANulByte
-pub agentkit_chat::ChatError::WritePolicyRevoked
-pub agentkit_chat::ChatError::WritePolicyUnavailable
-pub agentkit_chat::ChatError::WriteToolRequiresChat
 pub agentkit_chat::ChatError::WriteToolRequiresWriteEffectAndTrustedActor
 impl core::convert::From<agentkit_chat::ChatError> for agentkit_engine::error::EngineError<agentkit_store::StoreError>
 pub fn agentkit_engine::error::EngineError<agentkit_store::StoreError>::from(agentkit_chat::ChatError) -> Self
@@ -82,20 +71,6 @@ impl core::convert::From<agentkit_engine::error::EngineError<agentkit_store::Sto
 pub fn agentkit_chat::ChatError::from(agentkit_engine::error::EngineError<agentkit_store::StoreError>) -> Self
 impl core::convert::From<agentkit_sessions::error::SessionsError> for agentkit_chat::ChatError
 pub fn agentkit_chat::ChatError::from(agentkit_sessions::error::SessionsError) -> Self
-pub enum agentkit_chat::WriteExecutionMode
-pub agentkit_chat::WriteExecutionMode::DirectWhenAuthorized
-pub agentkit_chat::WriteExecutionMode::ProposeOnly
-pub enum agentkit_chat::WritePolicyMode
-pub agentkit_chat::WritePolicyMode::AutoAll
-pub agentkit_chat::WritePolicyMode::AutoReadonlyConfirmWrites
-pub agentkit_chat::WritePolicyMode::ConfirmAllWrites
-pub enum agentkit_chat::WriteRisk
-pub agentkit_chat::WriteRisk::Destructive
-pub agentkit_chat::WriteRisk::High
-pub agentkit_chat::WriteRisk::Low
-pub agentkit_chat::WriteRisk::Medium
-impl agentkit_chat::WriteRisk
-pub fn agentkit_chat::WriteRisk::as_str(self) -> &'static str
 pub struct agentkit_chat::AttachmentBudgets
 pub agentkit_chat::AttachmentBudgets::max_bytes_per_image: usize
 pub agentkit_chat::AttachmentBudgets::max_images: usize
@@ -150,86 +125,20 @@ pub agentkit_chat::ChatHookTimeouts::usage_ms: u64
 pub agentkit_chat::ChatHookTimeouts::verify_ms: u64
 impl core::default::Default for agentkit_chat::ChatHookTimeouts
 pub fn agentkit_chat::ChatHookTimeouts::default() -> Self
-pub struct agentkit_chat::ContributorFailure
-pub agentkit_chat::ContributorFailure::namespace: alloc::string::String
-pub agentkit_chat::ContributorFailure::reason: alloc::string::String
-pub agentkit_chat::ContributorFailure::timed_out: bool
 pub struct agentkit_chat::CorrectionConfig
 pub agentkit_chat::CorrectionConfig::include_user_request: bool
 pub agentkit_chat::CorrectionConfig::max_passes: u32
 impl core::default::Default for agentkit_chat::CorrectionConfig
 pub fn agentkit_chat::CorrectionConfig::default() -> Self
-pub struct agentkit_chat::DurableExecution
-pub agentkit_chat::DurableExecution::approvals: alloc::rcs::arc::Arc<std::collections::hash::map::HashMap<alloc::string::String, agentkit_governance::approval::ApprovalGrant>>
-pub agentkit_chat::DurableExecution::chat_id: alloc::string::String
-pub agentkit_chat::DurableExecution::context: agentkit_sessions::store_aliases::ExecutionContext
-pub agentkit_chat::DurableExecution::is_mutating: core::option::Option<alloc::rcs::arc::Arc<agentkit_chat::MutatingPolicy>>
-pub agentkit_chat::DurableExecution::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
-impl agentkit_governance::durable::DurableExecutionPort for agentkit_chat::DurableExecution
-pub fn agentkit_chat::DurableExecution::admit<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 agentkit_governance::guard::ToolGuardContext, &'life3 agentkit_core::types::ToolDefinition, core::option::Option<&'life4 serde_json::value::Value>, &'life5 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_governance::durable::Admission, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
-pub fn agentkit_chat::DurableExecution::approval_grant(&self, &str) -> core::option::Option<agentkit_governance::approval::ApprovalGrant>
-pub fn agentkit_chat::DurableExecution::before_guards<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 agentkit_governance::guard::ToolGuardContext, &'life3 agentkit_core::types::ToolDefinition, core::option::Option<&'life4 serde_json::value::Value>, &'life5 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_governance::durable::PreGuard, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
-pub fn agentkit_chat::DurableExecution::complete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_core::types::ToolResult) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_chat::DurableExecution::complete_not_started<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_core::types::ToolResult) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_chat::DurableExecution::execution_context_sha256(&self, &agentkit_governance::contribution::ToolContributionContext, &agentkit_core::types::ToolDefinition, core::option::Option<&serde_json::value::Value>) -> alloc::string::String
-pub fn agentkit_chat::DurableExecution::has_active_standing_grant<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_chat::DurableExecution::record_schema_refusal<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 agentkit_governance::guard::ToolGuardContext, &'life3 agentkit_core::types::ToolDefinition, core::option::Option<&'life4 serde_json::value::Value>, &'life5 serde_json::value::Value, &'life6 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
-pub fn agentkit_chat::DurableExecution::register_command_completion(&self) -> alloc::boxed::Box<dyn agentkit_governance::durable::CommandCompletion>
-pub fn agentkit_chat::DurableExecution::standing_policy(&self) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
-impl core::fmt::Debug for agentkit_chat::DurableExecution
-pub fn agentkit_chat::DurableExecution::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct agentkit_chat::FileProjectInstructions
 impl agentkit_chat::ProjectInstructionsSource for agentkit_chat::FileProjectInstructions
 pub fn agentkit_chat::FileProjectInstructions::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub struct agentkit_chat::GovernedProposalTool
-impl agentkit_chat::GovernedProposalTool
-pub fn agentkit_chat::GovernedProposalTool::new(agentkit_core::types::ToolDefinition, agentkit_chat::ProposalToolOptions) -> agentkit_chat::ChatResult<Self>
-impl agentkit_core::types::Tool for agentkit_chat::GovernedProposalTool
-pub fn agentkit_chat::GovernedProposalTool::definition(&self) -> &agentkit_core::types::ToolDefinition
-pub fn agentkit_chat::GovernedProposalTool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::types::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::types::ToolResult, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl agentkit_governance::contribution::GovernedWriteTool for agentkit_chat::GovernedProposalTool
-pub fn agentkit_chat::GovernedProposalTool::matches_actor(&self, &serde_json::value::Value, core::option::Option<&str>) -> bool
-pub struct agentkit_chat::MutationIdentity
-pub agentkit_chat::MutationIdentity::execution_fence: core::option::Option<agentkit_core::dispatch::DispatchFence>
-pub agentkit_chat::MutationIdentity::fingerprint: alloc::string::String
-pub agentkit_chat::MutationIdentity::operation_id: alloc::string::String
-pub agentkit_chat::MutationIdentity::proposal_id: alloc::string::String
 pub struct agentkit_chat::ProjectInstructionsBlock
 pub agentkit_chat::ProjectInstructionsBlock::text: alloc::string::String
 pub agentkit_chat::ProjectInstructionsBlock::warnings: alloc::vec::Vec<alloc::string::String>
 pub struct agentkit_chat::ProjectInstructionsText
 pub agentkit_chat::ProjectInstructionsText::text: alloc::string::String
 pub agentkit_chat::ProjectInstructionsText::truncated: bool
-pub struct agentkit_chat::ProposalBuild
-pub agentkit_chat::ProposalBuild::envelope: serde_json::value::Value
-pub agentkit_chat::ProposalBuild::kind: alloc::string::String
-pub agentkit_chat::ProposalBuild::operations: alloc::vec::Vec<serde_json::value::Value>
-pub agentkit_chat::ProposalBuild::revision_at_create: core::option::Option<alloc::string::String>
-pub agentkit_chat::ProposalBuild::risk: agentkit_chat::WriteRisk
-pub agentkit_chat::ProposalBuild::scope_key: alloc::string::String
-pub agentkit_chat::ProposalBuild::truncated: bool
-pub agentkit_chat::ProposalBuild::warnings: alloc::vec::Vec<alloc::string::String>
-pub struct agentkit_chat::ProposalService
-impl agentkit_chat::ProposalService
-pub async fn agentkit_chat::ProposalService::apply(&self, &str, &str, &serde_json::value::Value) -> agentkit_chat::ChatResult<agentkit_store::proposals::ReceiptRecord>
-pub async fn agentkit_chat::ProposalService::apply_guarded(&self, &str, &str, &serde_json::value::Value, alloc::rcs::arc::Arc<dyn agentkit_chat::ProposalApplyGuard>) -> agentkit_chat::ChatResult<agentkit_store::proposals::ReceiptRecord>
-pub async fn agentkit_chat::ProposalService::approve(&self, &str, &serde_json::value::Value) -> agentkit_chat::ChatResult<agentkit_store::proposals::ProposalRecord>
-pub async fn agentkit_chat::ProposalService::approve_with_reason(&self, &str, &serde_json::value::Value, core::option::Option<alloc::string::String>) -> agentkit_chat::ChatResult<agentkit_store::proposals::ProposalRecord>
-pub fn agentkit_chat::ProposalService::new(agentkit_store::actor::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_chat::ProposalApplier>, alloc::rcs::arc::Arc<dyn agentkit_chat::Authorization>, agentkit_engine::ports::SharedRuntime) -> Self
-pub async fn agentkit_chat::ProposalService::reconcile(&self) -> agentkit_chat::ChatResult<alloc::vec::Vec<agentkit_store::proposals::ReceiptRecord>>
-pub async fn agentkit_chat::ProposalService::reject(&self, &str, &serde_json::value::Value, core::option::Option<alloc::string::String>) -> agentkit_chat::ChatResult<agentkit_store::proposals::ProposalRecord>
-pub fn agentkit_chat::ProposalService::with_revisions(self, alloc::rcs::arc::Arc<dyn agentkit_chat::ProposalRevisionSource>) -> Self
-pub struct agentkit_chat::ProposalToolOptions
-pub agentkit_chat::ProposalToolOptions::actor: serde_json::value::Value
-pub agentkit_chat::ProposalToolOptions::actor_id: core::option::Option<alloc::string::String>
-pub agentkit_chat::ProposalToolOptions::authorization: alloc::rcs::arc::Arc<dyn agentkit_chat::Authorization>
-pub agentkit_chat::ProposalToolOptions::builder: alloc::rcs::arc::Arc<dyn agentkit_chat::ProposalBuilder>
-pub agentkit_chat::ProposalToolOptions::mode: agentkit_chat::WriteExecutionMode
-pub agentkit_chat::ProposalToolOptions::policy: alloc::rcs::arc::Arc<dyn agentkit_chat::ToolWritePolicy>
-pub agentkit_chat::ProposalToolOptions::policy_id: alloc::string::String
-pub agentkit_chat::ProposalToolOptions::runtime: agentkit_engine::ports::SharedRuntime
-pub agentkit_chat::ProposalToolOptions::service: alloc::rcs::arc::Arc<agentkit_chat::ProposalService>
-pub agentkit_chat::ProposalToolOptions::store: agentkit_store::actor::SqliteStore
 pub struct agentkit_chat::ProviderRegistry
 impl agentkit_chat::ProviderRegistry
 pub fn agentkit_chat::ProviderRegistry::get(&self, &str) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>>
@@ -244,65 +153,17 @@ pub agentkit_chat::RoleTaskOverrides::max_tool_iterations: core::option::Option<
 pub agentkit_chat::RoleTaskOverrides::overall_timeout_ms: core::option::Option<u64>
 impl agentkit_chat::RoleTaskOverrides
 pub fn agentkit_chat::RoleTaskOverrides::apply(&self, agentkit_core::budget::BudgetLimits) -> agentkit_core::budget::BudgetLimits
-pub struct agentkit_chat::SessionWritePolicy
-impl agentkit_chat::SessionWritePolicy
-pub fn agentkit_chat::SessionWritePolicy::allow(&self, agentkit_chat::WriteAllowance) -> agentkit_chat::ChatResult<alloc::string::String>
-pub fn agentkit_chat::SessionWritePolicy::list(&self, &str) -> agentkit_chat::ChatResult<alloc::vec::Vec<(alloc::string::String, agentkit_chat::WriteAllowance)>>
-pub fn agentkit_chat::SessionWritePolicy::mode(&self) -> agentkit_chat::ChatResult<agentkit_chat::WritePolicyMode>
-pub fn agentkit_chat::SessionWritePolicy::new(agentkit_chat::WritePolicyMode) -> Self
-pub fn agentkit_chat::SessionWritePolicy::revoke(&self, &str, &str) -> agentkit_chat::ChatResult<()>
-pub fn agentkit_chat::SessionWritePolicy::revoke_actor(&self, &str) -> agentkit_chat::ChatResult<()>
-pub fn agentkit_chat::SessionWritePolicy::set_mode(&self, agentkit_chat::WritePolicyMode) -> agentkit_chat::ChatResult<()>
-impl agentkit_chat::ToolWritePolicy for agentkit_chat::SessionWritePolicy
-pub fn agentkit_chat::SessionWritePolicy::is_auto_apply_allowed(&self, &agentkit_chat::WriteQuery) -> bool
-impl core::default::Default for agentkit_chat::SessionWritePolicy
-pub fn agentkit_chat::SessionWritePolicy::default() -> Self
-pub struct agentkit_chat::StagedTools
-pub agentkit_chat::StagedTools::failed: alloc::vec::Vec<agentkit_chat::ContributorFailure>
-pub agentkit_chat::StagedTools::namespaces: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
-pub agentkit_chat::StagedTools::registry: alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>
-pub agentkit_chat::StagedTools::skipped: alloc::vec::Vec<alloc::string::String>
-pub struct agentkit_chat::StaticToolContributor
-impl agentkit_chat::StaticToolContributor
-pub fn agentkit_chat::StaticToolContributor::new(alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
-pub fn agentkit_chat::StaticToolContributor::proposal_only(alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
-pub fn agentkit_chat::StaticToolContributor::skipped_write_names(&self) -> alloc::vec::Vec<alloc::string::String>
-impl agentkit_governance::contribution::ToolContributor for agentkit_chat::StaticToolContributor
-pub fn agentkit_chat::StaticToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_chat::StaticToolContributor::namespace(&self) -> &str
 pub struct agentkit_chat::SubmitChat
 pub agentkit_chat::SubmitChat::chat_id: alloc::string::String
 pub agentkit_chat::SubmitChat::content: serde_json::value::Value
 pub agentkit_chat::SubmitChat::model: alloc::string::String
 pub agentkit_chat::SubmitChat::parent_message_id: core::option::Option<alloc::string::String>
 pub agentkit_chat::SubmitChat::task_id: alloc::string::String
-pub struct agentkit_chat::WriteAllowance
-pub agentkit_chat::WriteAllowance::actor_id: core::option::Option<alloc::string::String>
-pub agentkit_chat::WriteAllowance::chat_id: alloc::string::String
-pub agentkit_chat::WriteAllowance::max_risk: agentkit_chat::WriteRisk
-pub agentkit_chat::WriteAllowance::payload_fingerprint: core::option::Option<alloc::string::String>
-pub agentkit_chat::WriteAllowance::proposal_kind: alloc::string::String
-pub agentkit_chat::WriteAllowance::revision: core::option::Option<alloc::string::String>
-pub agentkit_chat::WriteAllowance::scope_key: core::option::Option<alloc::string::String>
-pub agentkit_chat::WriteAllowance::tool_name: alloc::string::String
-pub struct agentkit_chat::WriteQuery
-pub agentkit_chat::WriteQuery::actor_id: core::option::Option<alloc::string::String>
-pub agentkit_chat::WriteQuery::chat_id: alloc::string::String
-pub agentkit_chat::WriteQuery::payload_fingerprint: alloc::string::String
-pub agentkit_chat::WriteQuery::proposal_kind: alloc::string::String
-pub agentkit_chat::WriteQuery::revision: core::option::Option<alloc::string::String>
-pub agentkit_chat::WriteQuery::risk: agentkit_chat::WriteRisk
-pub agentkit_chat::WriteQuery::scope_key: alloc::string::String
-pub agentkit_chat::WriteQuery::tool_name: alloc::string::String
-pub const agentkit_chat::AUTO_APPLY_FAILED_MESSAGE: &str
 pub const agentkit_chat::EMULATED_TOOL_CALL_MESSAGE: &str
 pub const agentkit_chat::MAX_INSTRUCTION_BYTES: usize
-pub const agentkit_chat::NATIVE_GOVERNANCE_IDENTITY_VERSION: &str
 pub const agentkit_chat::PROJECT_INSTRUCTION_FILES: [&str; 2]
 pub trait agentkit_chat::AttachmentResolver: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::AttachmentResolver::resolve<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_chat::AttachmentResolveContext, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ResolvedAttachment>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub trait agentkit_chat::Authorization: core::marker::Send + core::marker::Sync
-pub fn agentkit_chat::Authorization::authorize<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 serde_json::value::Value, &'life2 str, &'life3 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub trait agentkit_chat::ChatHostExt
 pub fn agentkit_chat::ChatHostExt::resolves_provider_snapshots(&self) -> bool
 pub fn agentkit_chat::ChatHostExt::submit_chat<'life0, 'async_trait>(&'life0 self, agentkit_chat::SubmitChat) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_sessions::store_aliases::RunHandle>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
@@ -317,40 +178,14 @@ pub trait agentkit_chat::ProjectInstructionsSource: core::marker::Send + core::m
 pub fn agentkit_chat::ProjectInstructionsSource::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl agentkit_chat::ProjectInstructionsSource for agentkit_chat::FileProjectInstructions
 pub fn agentkit_chat::FileProjectInstructions::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub trait agentkit_chat::ProposalApplier: core::marker::Send + core::marker::Sync
-pub fn agentkit_chat::ProposalApplier::apply<'life0, 'async_trait>(&'life0 self, agentkit_chat::MutationIdentity, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<serde_json::value::Value>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn agentkit_chat::ProposalApplier::reconcile<'life0, 'async_trait>(&'life0 self, agentkit_chat::MutationIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<serde_json::value::Value>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub trait agentkit_chat::ProposalApplyGuard: core::marker::Send + core::marker::Sync
-pub fn agentkit_chat::ProposalApplyGuard::authorize<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_store::proposals::ProposalRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn agentkit_chat::ProposalApplyGuard::authorize_dispatch<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn agentkit_chat::ProposalApplyGuard::check_current(&self) -> agentkit_chat::ChatResult<()>
-pub fn agentkit_chat::ProposalApplyGuard::fence(&self) -> core::option::Option<agentkit_core::dispatch::DispatchFence>
-pub trait agentkit_chat::ProposalBuilder: core::marker::Send + core::marker::Sync
-pub fn agentkit_chat::ProposalBuilder::build<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::types::ToolContext, &'life2 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_chat::ProposalBuild>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn agentkit_chat::ProposalBuilder::current_revision<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<alloc::string::String>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub trait agentkit_chat::ProposalRevisionSource: core::marker::Send + core::marker::Sync
-pub fn agentkit_chat::ProposalRevisionSource::current_revision<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<alloc::string::String>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub trait agentkit_chat::ToolWritePolicy: core::marker::Send + core::marker::Sync
-pub fn agentkit_chat::ToolWritePolicy::is_auto_apply_allowed(&self, &agentkit_chat::WriteQuery) -> bool
-impl agentkit_chat::ToolWritePolicy for agentkit_chat::SessionWritePolicy
-pub fn agentkit_chat::SessionWritePolicy::is_auto_apply_allowed(&self, &agentkit_chat::WriteQuery) -> bool
 pub trait agentkit_chat::UsageAuthorizer: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::UsageAuthorizer::authorize<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_chat::UsageAuthorizer::record<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_chat::append_to_system_prompt(core::option::Option<&str>, &str) -> core::option::Option<alloc::string::String>
-pub fn agentkit_chat::args_sha256(&serde_json::value::Value) -> alloc::string::String
-pub async fn agentkit_chat::drain_native_command_completions(&agentkit_store::actor::SqliteStore, core::time::Duration) -> core::result::Result<(), agentkit_core::types::CoreError>
-pub fn agentkit_chat::execution_context_sha256(&agentkit_chat::DurableExecution, &agentkit_governance::contribution::ToolContributionContext, &agentkit_core::types::ToolDefinition, core::option::Option<&serde_json::value::Value>) -> alloc::string::String
-pub fn agentkit_chat::execution_id(&str, &str, core::option::Option<&str>) -> alloc::string::String
 pub fn agentkit_chat::is_mutating_subagent_tool(&str) -> bool
 pub async fn agentkit_chat::load_project_instructions(&dyn agentkit_chat::ProjectInstructionsSource, &str, bool) -> core::option::Option<agentkit_chat::ProjectInstructionsBlock>
 pub fn agentkit_chat::looks_like_emulated_tool_call(&str, &std::collections::hash::set::HashSet<alloc::string::String>) -> bool
-pub fn agentkit_chat::native_write_fingerprint(&serde_json::value::Value) -> alloc::string::String
 pub fn agentkit_chat::parse_budget_limits(core::option::Option<&serde_json::value::Value>) -> agentkit_chat::ChatResult<agentkit_core::budget::BudgetLimits>
 pub async fn agentkit_chat::restore_execution_budget(&agentkit_sessions::store_aliases::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
-pub async fn agentkit_chat::stage_tools(&[alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>], &[alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>], agentkit_governance::contribution::ToolContributionContext) -> agentkit_chat::ChatResult<agentkit_chat::StagedTools>
 pub async fn agentkit_chat::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_chat::ChatResult<agentkit_chat::RoleTaskOverrides>
-pub fn agentkit_chat::ts_args_sha256(&serde_json::value::Value) -> alloc::string::String
-pub fn agentkit_chat::ts_canonical_json(&serde_json::value::Value) -> alloc::string::String
 pub type agentkit_chat::ChatResult<T> = core::result::Result<T, agentkit_chat::ChatError>
-pub type agentkit_chat::MutatingPolicy = (dyn core::ops::function::Fn(&str) -> bool + core::marker::Send + core::marker::Sync)

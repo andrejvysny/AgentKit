@@ -2,6 +2,7 @@ use crate::*;
 use agentkit_core::{
     BudgetLimits, ChatMessage, ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream,
 };
+use agentkit_governance::{StaticToolContributor, stage_tools};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use serde::Deserialize;
@@ -31,7 +32,7 @@ pub struct ChatExecutorOptions {
     pub skip_untrusted_project_instructions: bool,
     /// Exact-call remembering for approvable refusals (the coding pack's
     /// shell policy wires this); absent, every approvable call asks.
-    pub standing: Option<Arc<dyn crate::governance::StandingApprovalPolicy>>,
+    pub standing: Option<Arc<dyn agentkit_governance::StandingApprovalPolicy>>,
     /// Delegation guidance appended to every session's resolved system
     /// prompt while subagents are enabled — the autonomous-delegation
     /// channel for BOTH Chat and Coding profiles. Consulted per turn so
@@ -400,12 +401,12 @@ pub(super) async fn stage_registry(
     chat_id: &str,
     static_registry: Arc<agentkit_core::ToolRegistry>,
     bindings: &[Value],
-    approvals: std::collections::HashMap<String, crate::governance::ApprovalGrant>,
+    approvals: std::collections::HashMap<String, agentkit_governance::ApprovalGrant>,
 ) -> ChatResult<Arc<agentkit_core::ToolRegistry>> {
     // Every host-served mutation carries a durable execution receipt
     // (ADR 0020): the fast path wraps static write tools, the staged path
     // governs them inside `GuardedTool`. There is no receipt-free chat path.
-    let durable = Arc::new(crate::governance::DurableExecution {
+    let durable = Arc::new(agentkit_governance::DurableExecution {
         context: context.clone(),
         chat_id: chat_id.into(),
         // Subagent coordination tools are `effect: read` for permission
@@ -430,7 +431,7 @@ pub(super) async fn stage_registry(
         durable: Some(durable.clone()),
     };
     if options.tool_contributors.is_empty() && options.tool_guards.is_empty() {
-        return Ok(Arc::new(crate::governance::wrap_static_writes(
+        return Ok(Arc::new(agentkit_governance::wrap_static_writes(
             &static_registry,
             durable.clone(),
             &contribution(),

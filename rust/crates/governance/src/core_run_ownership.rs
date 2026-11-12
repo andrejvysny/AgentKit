@@ -6,14 +6,14 @@ use tokio::task::{AbortHandle, JoinError, JoinHandle};
 /// Host-owned producer lifetime. Public core `run_chat` drop semantics remain
 /// unchanged; dropping this host scope aborts its producer and keeps the join
 /// registered until every producer-owned context has actually been released.
-pub(crate) struct OwnedCoreRun {
+pub struct OwnedCoreRun {
     producer: AbortHandle,
     join: JoinHandle<Result<RunResult, JoinError>>,
     finished: bool,
 }
 
 impl OwnedCoreRun {
-    pub(crate) fn new(store: &SqliteStore, producer: JoinHandle<RunResult>) -> Self {
+    pub fn new(store: &SqliteStore, producer: JoinHandle<RunResult>) -> Self {
         let abort = producer.abort_handle();
         let completion = CompletionGuard::register(store);
         let join = tokio::spawn(async move {
@@ -33,7 +33,7 @@ impl OwnedCoreRun {
         }
     }
 
-    pub(crate) async fn result(&mut self) -> Result<RunResult, JoinError> {
+    pub async fn result(&mut self) -> Result<RunResult, JoinError> {
         let result = (&mut self.join).await?;
         self.finished = true;
         result

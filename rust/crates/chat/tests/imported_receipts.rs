@@ -23,6 +23,7 @@ use agentkit_core::{
     ToolDefinition, ToolRegistry, ToolResult,
 };
 use agentkit_engine::{SystemRuntime, TaskExecutor};
+use agentkit_governance::*;
 use agentkit_sessions::*;
 use agentkit_store::{
     ArgsHashProvenance, ClaimInput, ExecutionReceiptAdmission, ExecutionReceiptStatus,
@@ -226,20 +227,20 @@ async fn canonicalizer_reproduces_the_typescript_pipeline_exactly() {
     let manifest = manifest();
     for sample in &manifest.samples {
         assert_eq!(
-            agentkit_chat::ts_canonical_json(&sample.input),
+            agentkit_governance::ts_canonical_json(&sample.input),
             sample.canonical,
             "canonical JSON mismatch for {}",
             sample.input
         );
         assert_eq!(
-            agentkit_chat::ts_args_sha256(&sample.input),
+            agentkit_governance::ts_args_sha256(&sample.input),
             sample.sha256,
             "digest mismatch for {}",
             sample.input
         );
     }
     assert_eq!(
-        agentkit_chat::ts_canonical_json(&manifest.args),
+        agentkit_governance::ts_canonical_json(&manifest.args),
         manifest.args_canonical
     );
     assert_eq!(ts_args_sha256(&manifest.args), manifest.args_sha256_ts);
@@ -247,7 +248,7 @@ async fn canonicalizer_reproduces_the_typescript_pipeline_exactly() {
     // this input — which is exactly why provenance-tagged matching is the
     // fix rather than silently rehashing.
     assert_ne!(
-        agentkit_chat::args_sha256(&manifest.args),
+        agentkit_governance::args_sha256(&manifest.args),
         manifest.args_sha256_ts
     );
 }
@@ -471,7 +472,11 @@ async fn native_created_receipts_keep_their_current_identity() {
             .admit_execution(
                 fence.clone(),
                 ExecutionReceiptAdmission {
-                    execution_id: agentkit_chat::execution_id("run-crashed", "call-crashed", None),
+                    execution_id: agentkit_governance::execution_id(
+                        "run-crashed",
+                        "call-crashed",
+                        None
+                    ),
                     run_id: "run-crashed".into(),
                     chat_id: "chat-1".into(),
                     tool_call_id: "call-crashed".into(),
@@ -523,7 +528,7 @@ async fn native_created_receipts_keep_their_current_identity() {
     assert_eq!(refusal["data"]["errorCode"], json!("tool_result_uncertain"));
     assert_eq!(
         refusal["data"]["approvalGeneration"],
-        json!(agentkit_chat::execution_id(
+        json!(agentkit_governance::execution_id(
             "run-crashed",
             "call-crashed",
             None

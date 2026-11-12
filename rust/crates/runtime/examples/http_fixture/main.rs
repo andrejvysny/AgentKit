@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let native_ports = Arc::new(ports::FixturePorts {
         store: store.clone(),
     });
-    let proposals = Arc::new(agentkit_chat::ProposalService::new(
+    let proposals = Arc::new(agentkit_governance::ProposalService::new(
         store.clone(),
         native_ports.clone(),
         native_ports.clone(),

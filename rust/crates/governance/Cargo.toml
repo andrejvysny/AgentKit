@@ -14,7 +14,18 @@ workspace = true
 
 [dependencies]
 agentkit-core = { workspace = true }
+agentkit-contracts = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-kernel = { workspace = true }
+agentkit-store = { workspace = true }
 async-trait.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+agentkit-sessions = { workspace = true }
+tempfile.workspace = true

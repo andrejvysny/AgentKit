@@ -1,5 +1,6 @@
 use agentkit_chat::*;
 use agentkit_engine::SystemRuntime;
+use agentkit_governance::*;
 
 use agentkit_store::{ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
@@ -9,7 +10,12 @@ use std::{path::Path, process::Command, sync::Arc};
 struct Permit;
 #[async_trait]
 impl Authorization for Permit {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
+    async fn authorize(
+        &self,
+        _: &Value,
+        _: &str,
+        _: &Value,
+    ) -> agentkit_governance::GovernanceResult<()> {
         Ok(())
     }
 }
@@ -24,7 +30,7 @@ impl ProposalApplier for DurableDomain {
         &self,
         identity: MutationIdentity,
         _: Value,
-    ) -> agentkit_chat::ChatResult<Value> {
+    ) -> agentkit_governance::GovernanceResult<Value> {
         assert_eq!(
             self.crash.as_deref(),
             Some("apply"),
@@ -43,7 +49,7 @@ impl ProposalApplier for DurableDomain {
     async fn reconcile(
         &self,
         identity: MutationIdentity,
-    ) -> agentkit_chat::ChatResult<Option<Value>> {
+    ) -> agentkit_governance::GovernanceResult<Option<Value>> {
         let receipt = self
             .ledger
             .get_setting("domain-receipt", &identity.operation_id)

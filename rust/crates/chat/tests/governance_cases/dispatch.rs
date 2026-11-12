@@ -1,6 +1,6 @@
 use super::support::*;
-use agentkit_chat::*;
 use agentkit_core::{CoreError, DispatchFence, DispatchGuard, Tool, ToolRegistry};
+use agentkit_governance::*;
 use agentkit_governance::{GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use async_trait::async_trait;
 use serde_json::json;

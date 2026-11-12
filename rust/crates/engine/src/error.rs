@@ -57,19 +57,4 @@ pub enum EngineError<E: std::error::Error> {
     },
 }
 
-impl<E: std::error::Error> From<agentkit_governance::GovernanceError> for EngineError<E> {
-    fn from(error: agentkit_governance::GovernanceError) -> Self {
-        Self::External {
-            source: Box::new(error),
-            failure_code: None,
-        }
-    }
-}
-
-impl<E: std::error::Error> From<EngineError<E>> for agentkit_governance::GovernanceError {
-    fn from(error: EngineError<E>) -> Self {
-        Self::Execution(error.to_string())
-    }
-}
-
 pub type EngineResult<T, E> = Result<T, EngineError<E>>;

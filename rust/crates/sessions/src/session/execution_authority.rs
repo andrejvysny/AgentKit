@@ -55,7 +55,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
                 }
             })
             .map_err(|error| {
-                GovernanceError::Execution(format!(
+                GovernanceError::Port(format!(
                     "Cannot read the session's execution state; permissions stay with the guard. ({:?})", crate::error::LegacySessionDebug(&error)
                 ))
             })?;
@@ -66,14 +66,14 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             .get("mode")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                GovernanceError::Execution(
+                GovernanceError::Port(
                 "The session's execution state carries no mode; permissions stay with the guard."
                     .into(),
             )
             })?;
-        CodingMode::parse(mode).map(Some).ok_or_else(|| {
-            GovernanceError::Execution(format!("unknown session execution mode {mode}"))
-        })
+        CodingMode::parse(mode)
+            .map(Some)
+            .ok_or_else(|| GovernanceError::Port(format!("unknown session execution mode {mode}")))
     }
 
     async fn role_of(&self, ctx: &PermissionContext) -> GovernanceResult<Option<CodingRole>> {
@@ -85,14 +85,14 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             Err(crate::SessionsError::SessionNotFound(_)) => {
                 return Ok(None);
             }
-            Err(error) => return Err(GovernanceError::Execution(error.to_string())),
+            Err(error) => return Err(GovernanceError::Port(error.to_string())),
         };
         match state.descriptor["profileSnapshot"]["role"].as_str() {
             Some("implementer") => Ok(Some(CodingRole::Implementer)),
             Some("reviewer") => Ok(Some(CodingRole::Reviewer)),
             Some("supervisor") => Ok(Some(CodingRole::Supervisor)),
             None => Ok(None),
-            Some(_) => Err(GovernanceError::Execution("invalid_profile_role".into())),
+            Some(_) => Err(GovernanceError::Port("invalid_profile_role".into())),
         }
     }
 
@@ -120,7 +120,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
                 return Ok(None);
             }
             Err(error) => {
-                return Err(GovernanceError::Execution(format!(
+                return Err(GovernanceError::Port(format!(
                     "Cannot read the session's execution state; the plan stays unjudged. ({:?})",
                     crate::error::LegacySessionDebug(&error)
                 )));
@@ -138,7 +138,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
                         .get("planDigest")
                         .and_then(Value::as_str)
                         .ok_or_else(|| {
-                            GovernanceError::Execution(
+                            GovernanceError::Port(
                             "The session's plan grant carries no planDigest; refusing to judge."
                                 .into(),
                         )

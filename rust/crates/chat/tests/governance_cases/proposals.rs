@@ -1,6 +1,6 @@
 use super::support::*;
-use agentkit_chat::*;
 use agentkit_core::Tool;
+use agentkit_governance::*;
 
 use agentkit_store::ProposalStatus;
 use serde_json::{Value, json};

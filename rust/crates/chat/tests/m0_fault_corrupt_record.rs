@@ -9,7 +9,7 @@
 mod runner_support;
 use runner_support::support;
 
-use agentkit_chat::{args_sha256, execution_id};
+use agentkit_governance::{args_sha256, execution_id};
 use agentkit_store::{ArgsHashProvenance, ExecutionReceiptAdmission, SqliteStore};
 use serde_json::json;
 use std::sync::atomic::Ordering;

@@ -1,7 +1,6 @@
 //! In-process native AgentKit server for the client's service suites: the real
 //! `AgentRuntime` + `DesktopBackend` + axum on an ephemeral loopback port, with
 //! a scripted provider and recording ports. No TypeScript runtime is involved.
-use agentkit_chat::{Authorization, MutationIdentity, ProposalApplier, ProposalService};
 use agentkit_connections::{
     AppId, ConnectionRepository, MemorySecretStore, NativeConnections, UnavailableNetwork,
 };
@@ -11,6 +10,7 @@ use agentkit_contracts::{
 };
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream};
 use agentkit_engine::SystemRuntime;
+use agentkit_governance::{Authorization, MutationIdentity, ProposalApplier, ProposalService};
 use agentkit_http::{
     Actor, Config, DesktopBackend, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort,
 };
@@ -189,21 +189,33 @@ impl ProviderOperations for Ports {
 
 #[async_trait]
 impl Authorization for Ports {
-    async fn authorize(&self, _: &Value, _: &str, _: &Value) -> agentkit_chat::ChatResult<()> {
+    async fn authorize(
+        &self,
+        _: &Value,
+        _: &str,
+        _: &Value,
+    ) -> agentkit_governance::GovernanceResult<()> {
         Ok(())
     }
 }
 
 #[async_trait]
 impl ProposalApplier for Ports {
-    async fn apply(&self, _: MutationIdentity, _: Value) -> agentkit_chat::ChatResult<Value> {
+    async fn apply(
+        &self,
+        _: MutationIdentity,
+        _: Value,
+    ) -> agentkit_governance::GovernanceResult<Value> {
         self.applied.fetch_add(1, Ordering::SeqCst);
         Ok(json!({
             "status": "applied", "appliedOps": 1, "failedOps": [],
             "resultJson": null, "revision": null,
         }))
     }
-    async fn reconcile(&self, _: MutationIdentity) -> agentkit_chat::ChatResult<Option<Value>> {
+    async fn reconcile(
+        &self,
+        _: MutationIdentity,
+    ) -> agentkit_governance::GovernanceResult<Option<Value>> {
         Ok(None)
     }
 }

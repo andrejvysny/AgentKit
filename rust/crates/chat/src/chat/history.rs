@@ -340,8 +340,8 @@ fn resolve_receipt(
             agentkit_store::args_match(
                 record.args_hash_provenance,
                 &record.args_sha256,
-                &crate::governance::args_sha256(&arguments),
-                Some(&crate::governance::ts_args_sha256(&arguments)),
+                &agentkit_governance::args_sha256(&arguments),
+                Some(&agentkit_governance::ts_args_sha256(&arguments)),
             )
         });
     if record.tool_name != call.name || !arguments_match {
@@ -739,7 +739,7 @@ mod tests {
             chat_id: "c1".into(),
             tool_call_id: call_id.into(),
             tool_name: tool.into(),
-            args_sha256: crate::governance::args_sha256(args),
+            args_sha256: agentkit_governance::args_sha256(args),
             args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
             context_sha256: "a".repeat(64),
             attempt_id: "attempt-1".into(),

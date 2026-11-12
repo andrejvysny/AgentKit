@@ -27,6 +27,7 @@ agentkit-connections = { workspace = true }
 agentkit-core = { workspace = true }
 agentkit-chat = { workspace = true }
 agentkit-engine = { workspace = true }
+agentkit-governance = { workspace = true }
 agentkit-sessions = { workspace = true }
 agentkit-http = { workspace = true }
 agentkit-mcp = { workspace = true }

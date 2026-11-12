@@ -29,7 +29,7 @@ impl ToolContributor for Contributor {
             .bearer_auth(&self.token)
             .json(&input)
             .send();
-        let response = tokio::select! {_=ctx.cancellation.cancelled()=>return Err(GovernanceError::Execution("execution cancelled".into())),result=request=>result.map_err(error)?};
+        let response = tokio::select! {_=ctx.cancellation.cancelled()=>return Err(GovernanceError::Port("execution cancelled".into())),result=request=>result.map_err(error)?};
         let definitions: Vec<ToolDefinition> = response
             .error_for_status()
             .map_err(error)?
@@ -83,7 +83,7 @@ impl Tool for CallbackTool {
     }
 }
 fn error(error: impl std::fmt::Display) -> GovernanceError {
-    GovernanceError::Execution(error.to_string())
+    GovernanceError::Port(error.to_string())
 }
 fn core_error(error: impl std::fmt::Display) -> CoreError {
     CoreError::new("test_tool_bridge", &error.to_string())

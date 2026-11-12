@@ -1,5 +1,5 @@
 use super::support::*;
-use agentkit_chat::*;
+use agentkit_governance::*;
 use serde_json::{Value, json};
 
 #[test]

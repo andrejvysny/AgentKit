@@ -1,9 +1,8 @@
-use crate::{ChatError, ChatResult};
-use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult};
-use agentkit_governance::{
-    ApprovalAsk, ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
-    ToolGuard, ToolGuardContext, ToolGuardVerdict,
+use crate::{
+    ApprovalAsk, ContributedTool, GovernanceError, GovernanceResult, ToolContributionContext,
+    ToolContributor, ToolGuard, ToolGuardContext, ToolGuardVerdict,
 };
+use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::{
@@ -17,7 +16,7 @@ mod execution_recheck;
 fn check_contribution(
     tool: &ContributedTool,
     context: &ToolContributionContext,
-) -> ChatResult<Arc<dyn Tool>> {
+) -> GovernanceResult<Arc<dyn Tool>> {
     match tool {
         ContributedTool::Read(tool) if tool.definition().effect == "read" => Ok(tool.clone()),
         ContributedTool::DirectWrite(tool) if tool.definition().effect == "write" => {
@@ -36,7 +35,7 @@ fn check_contribution(
         {
             Ok(tool.clone())
         }
-        _ => Err(ChatError::ToolEffectOrActorMismatch),
+        _ => Err(GovernanceError::ToolEffectOrActorMismatch),
     }
 }
 
@@ -132,7 +131,7 @@ pub async fn stage_tools(
     contributors: &[Arc<dyn ToolContributor>],
     guards: &[Arc<dyn ToolGuard>],
     context: ToolContributionContext,
-) -> ChatResult<StagedTools> {
+) -> GovernanceResult<StagedTools> {
     for contributor in contributors {
         validate_namespace(contributor.as_ref())?;
     }
@@ -145,7 +144,7 @@ pub async fn stage_tools(
             let tool = check_contribution(&tool, &context)?;
             let name = &tool.definition().name;
             if owners.get(name).is_some_and(|owner| *owner != index) {
-                return Err(ChatError::ToolNameCollision);
+                return Err(GovernanceError::ToolNameCollision);
             }
             owners.insert(name.clone(), index);
             collected.push((contributor.namespace().to_owned(), tool));
@@ -202,7 +201,7 @@ async fn register_tools(
     context: &ToolContributionContext,
     allowed: Option<BTreeSet<String>>,
     failed: Vec<ContributorFailure>,
-) -> ChatResult<StagedTools> {
+) -> GovernanceResult<StagedTools> {
     let mut registry = ToolRegistry::new();
     let mut namespaces = BTreeMap::new();
     let mut skipped = vec![];
@@ -325,20 +324,20 @@ impl Tool for GuardedTool {
                 )
                 .await?
             {
-                agentkit_governance::PreGuard::Replay(result) => return Ok(result),
+                crate::PreGuard::Replay(result) => return Ok(result),
                 // The operation is uncertain and no answer names this
                 // generation. Do NOT refuse yet: fold it into the approval
                 // flow below so the human can authorize the exact
                 // unresolved execution — a denial from any guard still
                 // wins, and a host that cannot park gets the honest
                 // uncertain refusal as before.
-                agentkit_governance::PreGuard::Uncertain {
+                crate::PreGuard::Uncertain {
                     refusal,
                     generation,
                 } => {
                     uncertainty = Some((refusal, generation));
                 }
-                agentkit_governance::PreGuard::Proceed => {}
+                crate::PreGuard::Proceed => {}
             }
         }
         // TS registry-staging rebuilds the guard context per call with the
@@ -417,11 +416,11 @@ impl Tool for GuardedTool {
                 )
                 .await?
             {
-                agentkit_governance::Admission::Skipped => {}
-                agentkit_governance::Admission::Granted { execution_id: id } => {
+                crate::Admission::Skipped => {}
+                crate::Admission::Granted { execution_id: id } => {
                     execution_id = Some(id);
                 }
-                agentkit_governance::Admission::Refused(result) => return Ok(*result),
+                crate::Admission::Refused(result) => return Ok(*result),
             }
         }
         if definition.capability == "process.exec" {
@@ -463,7 +462,7 @@ impl GuardedTool {
     ) -> Result<Option<ToolResult>, CoreError> {
         let definition = self.tool.definition();
         let durable = self.snapshot.contribution.durable.clone();
-        let args = crate::governance::args_sha256(input);
+        let args = crate::args_sha256(input);
         let context_hash = durable.as_ref().map(|durable| {
             durable.execution_context_sha256(
                 &self.snapshot.contribution,
@@ -710,17 +709,17 @@ fn guard_refusal(context: &ToolContext, reason: &str) -> ToolResult {
     }
 }
 
-fn validate_namespace(contributor: &dyn ToolContributor) -> ChatResult<()> {
+fn validate_namespace(contributor: &dyn ToolContributor) -> GovernanceResult<()> {
     let name = contributor.namespace();
     let valid = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && name.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
         });
     if !valid {
-        return Err(ChatError::ToolNamespaceInvalid);
+        return Err(GovernanceError::ToolNamespaceInvalid);
     }
     if !contributor.privileged() && ["agentkit", "chat", "mcp"].contains(&name) {
-        return Err(ChatError::ToolNamespaceReserved);
+        return Err(GovernanceError::ToolNamespaceReserved);
     }
     Ok(())
 }
