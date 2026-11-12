@@ -14,6 +14,7 @@
 - Layered crates per [ADR 0021](docs/adr/0021-layered-crate-architecture.md): `agentkit-kernel` (shared sha256 and canonical JSON), workspace-inherited metadata/lints, `check:arch` gate, `agentkit-runtime` composition root with `AgentRuntime::builder()` (the HTTP fixture and the egui host build through it), `transport-http` and `host::http` merged into `agentkit-http`.
 - `@agentkit/client` and `@agentkit/react` suites run only against the Rust HTTP fixture (`bun run build:fixture`).
 - Fix: `reasoningContent` is persisted into assistant message metadata.
+- Fix: an SSE run stream whose durable read fails mid-stream now ends the response — last frame flushed, terminating chunk written — instead of resetting the peer's socket, so the client's documented unmarked-EOF resume is what answers. The `client`/`react` gate no longer prints an unhandled `ECONNRESET` for `/v1/runs/<id>/stream`.
 - Security dependency upgrades: tokio 1.54.1 (RUSTSEC-2026-0386), rmcp 3.9.0 (RUSTSEC-2026-0457/0461/0462), rusqlite 0.41.1 / libsqlite3-sys 0.39.1 (RUSTSEC-2026-0459). `cargo-deny` now gates advisories, licenses, sources and layer bans.
 - Live TypeScript packages, examples and scripts no longer import the frozen backend; `native` and `testing` carry their own port types.
 - Public API reports re-baselined to the 13 remaining entry points (`docs/rust/api`).

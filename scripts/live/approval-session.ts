@@ -35,7 +35,7 @@
  *    no manual startWorker/stopWorker, and none is needed: this script never
  *    kills a process, so no lease ever expires — S7/S8 interrupt and resume
  *    inside the live worker. The binding does not expose the scheduler's
- *    lease TTL; the Rust default lives in rust/crates/host/src/runner.rs).
+ *    lease TTL; the Rust default lives in rust/crates/engine/src/runner.rs).
  *  - `providers.upsertProvider` + `settings.updateSettings` +
  *    `OpenAiCompatibleClient.fromConfig` → the Rust provider lane:
  *    `NativeSessionService.registerProviderConnection(BASE_URL, null)` plus

@@ -363,7 +363,7 @@ impl Watchdog {
                 {
                     let refusal = retryable_refusal(&error);
                     eprintln!(
-                        "agentkit-host: watchdog review for {trigger_name} failed: {}",
+                        "agentkit: watchdog review for {trigger_name} failed: {}",
                         refusal.unwrap_or("review_failed")
                     );
                     // These refusals land before any provider request.

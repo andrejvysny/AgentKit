@@ -49,7 +49,7 @@ authored in this file and executed by the **Rust host only**: each carries an
 empty `typescript` expectation list because the frozen
 `SingleProcessTaskRunner` has no admission gate, no execution receipt, no
 approval record, and no outbox claim lane to observe. They are driven by
-`rust/crates/host/tests/m0_fault_*.rs`, which reuse this suite's `Clock`,
+`rust/crates/chat/tests/m0_fault_*.rs`, which reuse this suite's `Clock`,
 `Witness`, `Environment`, `snapshot` and `Script` fixture; a profile missing
 from the schedule fails the test that names it rather than being skipped.
 
@@ -138,8 +138,8 @@ them to the drift-checked copy requires authoring the matching checkpoints in
 
 ```sh
 bun test scripts/tests/rust-runner-conformance.test.ts
-cargo test --manifest-path rust/Cargo.toml -p agentkit-host --test runner_conformance --locked --offline
-cargo test --manifest-path rust/Cargo.toml -p agentkit-host --test 'm0_fault_*' --locked --offline
+cargo test --manifest-path rust/Cargo.toml -p agentkit-chat --test runner_conformance --locked --offline
+cargo test --manifest-path rust/Cargo.toml -p agentkit-chat --test 'm0_fault_*' --locked --offline
 AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE=1 bun test scripts/tests/rust-runner-conformance.test.ts
 ```
 
