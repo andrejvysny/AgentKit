@@ -14,7 +14,17 @@
 //!   wall-clock — exhaustion is an in-band `is_error` result the model can
 //!   observe, never a silent drop;
 //! * revocation is immediate: at attempt settlement, cancellation or lease
-//! * loss, tokens stop authenticating and live calls are cancelled.
+//! * loss, tokens stop authenticating and live calls are cancelled;
+//! * an abandoned dispatch cleans up panic-safely (AGENTKIT-140): the
+//!   reservation guard publishes uncertainty IN MEMORY (uncertain memo +
+//!   authority record) BEFORE any optional async work, schedules the
+//!   durable `uncertain` refinement only through a checked live handle
+//!   (`tokio::runtime::Handle::try_current` at drop), and NEVER
+//!   constructs or blocks a runtime in Drop. With no runtime able to run
+//!   the refinement — a pending future dropped after `block_on` returned
+//!   or after runtime shutdown — the already-acknowledged `effectStarted`
+//!   row is the recovery fallback. See `ReservationGuard` for the full
+//!   Drop contract.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -240,6 +250,9 @@ pub struct BrokerBackend {
     /// replays a result it did not produce.
     memos: Mutex<HashMap<MemoKey, Memo>>,
     cancellation: CancellationToken,
+    /// Durable refinements scheduled by abandoned dispatches. Only ever
+    /// pushed through a checked live handle (see the Drop contract on
+    /// [`ReservationGuard`], AGENTKIT-140); drained at shutdown.
     settlements: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -601,10 +614,26 @@ impl Drop for ParkGuard<'_> {
 /// * the effect was NOT entered → the inflight reservation is released, so
 ///   a legitimate redelivery of the same key is not frozen out with
 ///   `duplicate_in_progress` for the life of the attempt;
-/// * the effect MAY have started → a durable UNCERTAIN memo is recorded,
-///   so a redelivery gets an explicit uncertain denial — never a silent
-///   duplicate refusal, never a re-execution of an effect whose fate the
-///   broker does not know.
+/// * the effect MAY have started → the guard publishes UNCERTAINTY in
+///   memory first (authority bookkeeping + an uncertain memo that denies
+///   any redelivery with `effect_uncertain`), and only then schedules the
+///   durable refinement that writes the `uncertain` lifecycle record.
+///
+/// The Drop contract (AGENTKIT-140) — code-coupled with `drop` below:
+/// * in-memory uncertainty is published BEFORE any optional async work,
+///   so redelivery safety holds even when no runtime can refine durably;
+/// * the durable refinement is scheduled ONLY through a checked live
+///   handle (`tokio::runtime::Handle::try_current` at drop). Outside an
+///   entered runtime — after `block_on` returned, or after the runtime
+///   was shut down, i.e. exactly when the host drops a pending future —
+///   it is skipped and the already-acknowledged `effectStarted` row
+///   remains as the recovery fallback;
+/// * Drop NEVER constructs or blocks a replacement runtime and never
+///   panics on runtime state (the unguarded `tokio::spawn` this replaced
+///   panicked 'there is no reactor running' and skipped the memo);
+/// * a disarmed guard (conclusive terminal receipt already recorded)
+///   drops as a no-op, so a terminal receipt always wins over a racing
+///   cleanup, whichever of the two runs first.
 struct ReservationGuard<'a> {
     backend: &'a BrokerBackend,
     key: Option<MemoKey>,
@@ -657,19 +686,11 @@ impl Drop for ReservationGuard<'_> {
                             it will never be re-executed automatically",
             });
             self.backend.authority.record(&self.invocation, &outcome);
-            let authority = self.backend.authority.clone();
-            let invocation = self.invocation.clone();
-            let durable = outcome.clone();
-            let settlement = tokio::spawn(async move {
-                let _ = authority
-                    .record_lifecycle(&invocation, "uncertain", &durable)
-                    .await;
-            });
-            self.backend
-                .settlements
-                .lock()
-                .expect("broker settlements")
-                .push(settlement);
+            // AGENTKIT-140: publish in-memory uncertainty FIRST — the
+            // authority bookkeeping just above and the uncertain memo
+            // below exist even when no runtime can run the durable
+            // refinement, so a redelivery of this key is denial-safe
+            // unconditionally.
             if let Some(key) = key {
                 self.backend.memos.lock().expect("broker memos").insert(
                     key,
@@ -679,6 +700,29 @@ impl Drop for ReservationGuard<'_> {
                         digest: std::mem::take(&mut self.digest),
                     },
                 );
+            }
+            // The durable refinement is OPTIONAL and runs only through a
+            // checked live handle: `try_current` fails once the future is
+            // dropped outside an entered runtime (after `block_on`
+            // returned, or after the runtime was shut down), and the
+            // acknowledged `effectStarted` row is then the recovery
+            // fallback. Drop NEVER constructs or blocks a replacement
+            // runtime — an unguarded `tokio::spawn` here panicked 'there
+            // is no reactor running' and skipped the memo (AGENTKIT-140).
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let authority = self.backend.authority.clone();
+                let invocation = self.invocation.clone();
+                let durable = outcome.clone();
+                let settlement = runtime.spawn(async move {
+                    let _ = authority
+                        .record_lifecycle(&invocation, "uncertain", &durable)
+                        .await;
+                });
+                self.backend
+                    .settlements
+                    .lock()
+                    .expect("broker settlements")
+                    .push(settlement);
             }
         } else if let Some(key) = key {
             self.backend
@@ -1079,6 +1123,7 @@ impl Drop for AttemptBroker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Review round-3 F4; extended review R4 F2: the R5 deadline chain —
@@ -2589,6 +2634,284 @@ mod tests {
             0,
             "the uncertain effect is never re-executed"
         );
+    }
+
+    /// AGENTKIT-140 reproduction shape: drive a freshly created
+    /// `call_tool` future until the authority is parked INSIDE `execute`
+    /// (the acknowledged `effectStarted` row exists, the effect may or may
+    /// not have run), then RETURN from `block_on` leaving the future
+    /// pending. The caller drops the future afterwards — outside any
+    /// entered runtime, exactly as the post-merge review did on master
+    /// 755df64, where the guard's unguarded `tokio::spawn` panicked
+    /// 'there is no reactor running' and skipped the uncertain memo.
+    fn drive_to_pending_execute<'a>(
+        backend: &'a Arc<BrokerBackend>,
+        authority: &Arc<GateAuthority>,
+        runtime: &tokio::runtime::Runtime,
+        scope: &'a SessionScope,
+    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, ErrorData>> + Send + 'a>> {
+        use std::task::Poll;
+        let mut args = JsonObject::new();
+        args.insert("q".into(), json!("hello"));
+        let mut calling = backend.call_tool("search_notes", args, scope);
+        // Register the execute-entry waiter BEFORE the first poll: the
+        // whole prefix up to the execute park runs inside that first
+        // poll, and `wait_gate` fires `notify_waiters` as it parks.
+        let entered = authority.in_execute.notified();
+        let mut entered = std::pin::pin!(entered);
+        runtime.block_on(async {
+            std::future::poll_fn(|cx| {
+                let entered = entered.as_mut().poll(cx);
+                match calling.as_mut().poll(cx) {
+                    Poll::Ready(_) => panic!("the call must still be gated inside execute"),
+                    Poll::Pending => entered,
+                }
+            })
+            .await;
+        });
+        calling
+    }
+
+    /// The shared post-drop assertions (AGENTKIT-140): the cleanup ran
+    /// with NO entered runtime, so it must have published uncertainty in
+    /// memory (authority record + uncertain memo) WITHOUT any durable
+    /// refinement running — the acknowledged `effectStarted` row is what
+    /// remains as the recovery evidence.
+    fn assert_uncertain_without_refinement(
+        backend: &Arc<BrokerBackend>,
+        authority: &Arc<GateAuthority>,
+        request_id: RpcId,
+    ) {
+        let records = authority.records.lock().unwrap();
+        assert!(
+            records.iter().any(|r| r["phase"] == "effectStarted"),
+            "durable start evidence survives: {records:?}"
+        );
+        assert!(
+            records.iter().any(|r| r["code"] == "effect_uncertain"),
+            "the in-memory uncertain bookkeeping was published: {records:?}"
+        );
+        assert!(
+            !records.iter().any(|r| r["phase"] == "uncertain"),
+            "no runtime was entered, so no durable refinement ran: {records:?}"
+        );
+        drop(records);
+        assert!(
+            backend.settlements.lock().unwrap().is_empty(),
+            "no settlement was scheduled without a checked live handle"
+        );
+        let key = MemoKey {
+            actor_id: "vendor-session-1".into(),
+            request_id,
+        };
+        let memos = backend.memos.lock().unwrap();
+        let memo = memos.get(&key).expect("the dropped effect left a memo");
+        let result = memo
+            .result
+            .as_ref()
+            .expect("the memo is settled as uncertain, not in-flight");
+        let denial = denial_of(result).expect("the memo denies redelivery");
+        assert_eq!(denial["code"], "effect_uncertain");
+    }
+
+    /// AGENTKIT-140 (acceptance 1/3/4): a call whose effect is pending is
+    /// dropped AFTER `block_on` returned — the runtime is alive but not
+    /// entered. Cleanup must not panic, must publish in-memory
+    /// uncertainty unconditionally, must skip the durable refinement
+    /// (checked-handle spawn), and a replay of the same invocation in a
+    /// NEW runtime can never execute the abandoned effect again.
+    #[test]
+    fn dropped_effect_outside_entered_runtime_never_panics_and_never_reexecutes() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(None, Some(rx));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let scope = scope_with("vendor-session-1", Some(RpcId::Number(31)));
+        let calling = drive_to_pending_execute(&backend, &authority, &runtime, &scope);
+        // block_on has returned: no entered runtime. The old code panicked
+        // here in `tokio::spawn`; now Drop publishes uncertainty in memory
+        // and skips the refinement.
+        drop(calling);
+        assert_uncertain_without_refinement(&backend, &authority, RpcId::Number(31));
+        // Replay in a fresh runtime: the in-memory uncertain memo denies
+        // any re-execution of the abandoned effect.
+        let replay_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let replay = replay_runtime
+            .block_on(async {
+                let mut args = JsonObject::new();
+                args.insert("q".into(), json!("hello"));
+                backend.call_tool("search_notes", args, &scope).await
+            })
+            .unwrap();
+        let denial = denial_of(&replay).expect("the replay is denied with uncertainty");
+        assert_eq!(denial["code"], "effect_uncertain");
+        assert_eq!(
+            authority.executions.load(Ordering::SeqCst),
+            0,
+            "the abandoned effect is never re-executed by a replay"
+        );
+        drop(tx);
+    }
+
+    /// AGENTKIT-140 (acceptance 1/4): the harsher ordering — drop the
+    /// Tokio runtime FIRST, then the pending future. Cleanup still must
+    /// not panic, still publishes in-memory uncertainty, and the
+    /// acknowledged `effectStarted` row remains as the durable evidence.
+    #[test]
+    fn dropped_effect_after_runtime_shutdown_never_panics() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(None, Some(rx));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let scope = scope_with("vendor-session-1", Some(RpcId::Number(32)));
+        let calling = drive_to_pending_execute(&backend, &authority, &runtime, &scope);
+        drop(runtime);
+        // No runtime exists at all anymore: the checked-handle refinement
+        // is skipped; the effectStarted row is the recovery fallback.
+        drop(calling);
+        assert_uncertain_without_refinement(&backend, &authority, RpcId::Number(32));
+        drop(tx);
+    }
+
+    /// AGENTKIT-140 (acceptance 2; drop-before-receipt ordering of the
+    /// racing cleanup): cancellation INSIDE a live runtime must attempt
+    /// the durable uncertain settlement through the checked handle AND
+    /// leave the in-memory uncertain result while the broker lives.
+    #[tokio::test]
+    async fn cancelled_effect_settles_durably_and_keeps_uncertain_memo() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(None, Some(rx));
+        let calling = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(33)),
+            "hello",
+        );
+        authority.in_execute.notified().await;
+        calling.abort();
+        let _ = calling.await;
+        // Cleanup ran inside a live runtime: the refinement was scheduled
+        // through the checked handle and settles when drained.
+        assert_eq!(
+            backend.settlements.lock().unwrap().len(),
+            1,
+            "a live runtime receives the durable refinement"
+        );
+        backend.drain_settlements(Duration::from_secs(5)).await;
+        {
+            let records = authority.records.lock().unwrap();
+            assert!(
+                records.iter().any(|r| r["phase"] == "uncertain"),
+                "the durable uncertain settlement ran: {records:?}"
+            );
+            assert!(records.iter().any(|r| r["phase"] == "effectStarted"));
+            assert!(records.iter().any(|r| r["code"] == "effect_uncertain"));
+            assert!(
+                !records.iter().any(|r| r["phase"] == "terminal"),
+                "cleanup ran BEFORE any receipt: no terminal record exists"
+            );
+        }
+        // The in-memory uncertain result is observable while the broker
+        // lives, and denies the replay without a second execution.
+        let key = MemoKey {
+            actor_id: "vendor-session-1".into(),
+            request_id: RpcId::Number(33),
+        };
+        {
+            let memos = backend.memos.lock().unwrap();
+            let memo = memos.get(&key).expect("uncertain memo while broker lives");
+            let result = memo
+                .result
+                .as_ref()
+                .expect("the memo carries the uncertain result");
+            assert_eq!(
+                denial_of(result).expect("denial")["code"],
+                "effect_uncertain"
+            );
+        }
+        drop(tx);
+        let replay = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(33)),
+            "hello",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            denial_of(&replay).expect("the replay is denied with uncertainty")["code"],
+            "effect_uncertain"
+        );
+        assert_eq!(authority.executions.load(Ordering::SeqCst), 0);
+    }
+
+    /// AGENTKIT-140 (acceptance 5, receipt-before-drop ordering): once the
+    /// conclusive terminal receipt is recorded the guard is disarmed, so
+    /// the cleanup drop that follows is a no-op — no uncertainty is
+    /// published anywhere, and the memo replays the REAL result without a
+    /// second execution.
+    #[tokio::test]
+    async fn conclusive_terminal_receipt_wins_over_the_cleanup_drop() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let (backend, authority) = gate_backend(None, Some(rx));
+        let calling = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(34)),
+            "hello",
+        );
+        authority.in_execute.notified().await;
+        tx.send(true).unwrap();
+        let result = calling.await.unwrap();
+        assert_eq!(denial_of(&result), None, "the call completed: {result:?}");
+        {
+            let records = authority.records.lock().unwrap();
+            assert!(records.iter().any(|r| r["phase"] == "terminal"));
+            assert!(records.iter().any(|r| r["phase"] == "effectStarted"));
+            assert!(
+                !records.iter().any(|r| r["phase"] == "uncertain"),
+                "a disarmed guard must not publish uncertainty: {records:?}"
+            );
+            assert!(
+                !records.iter().any(|r| r["code"] == "effect_uncertain"),
+                "a disarmed guard must not record uncertain bookkeeping: {records:?}"
+            );
+        }
+        assert!(
+            backend.settlements.lock().unwrap().is_empty(),
+            "a completed call schedules no uncertain refinement"
+        );
+        let key = MemoKey {
+            actor_id: "vendor-session-1".into(),
+            request_id: RpcId::Number(34),
+        };
+        {
+            let memos = backend.memos.lock().unwrap();
+            let memo = memos.get(&key).expect("terminal memo");
+            let result = memo
+                .result
+                .as_ref()
+                .expect("the terminal path settled the memo");
+            assert_eq!(denial_of(result), None, "the memo holds the REAL result");
+        }
+        // The replay gets the conclusive receipt, and never re-executes.
+        let replay = gated_call(
+            &backend,
+            "vendor-session-1",
+            Some(RpcId::Number(34)),
+            "hello",
+        )
+        .await
+        .unwrap();
+        assert_eq!(denial_of(&replay), None, "replay serves the receipt");
+        assert_eq!(authority.executions.load(Ordering::SeqCst), 1);
     }
 
     /// Review R4 F7(b): two calls parked in authorization OVERLAPPING in
