@@ -306,6 +306,23 @@ impl Harness {
     }
 }
 
+/// Frozen watchdog clock for cooldown-sensitive tests: the guards must
+/// answer from the clock, never from wall time the parallel suite load
+/// can stretch past the configured cooldown.
+#[derive(Default)]
+struct FrozenClock(std::sync::atomic::AtomicU64);
+impl agentkit_engine::Runtime for FrozenClock {
+    fn now_ms(&self) -> i64 {
+        1_700_000_000_000
+    }
+    fn id(&self) -> String {
+        format!(
+            "watchdog-test-{}",
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+}
+
 async fn wait_until<F, Fut>(mut probe: F, what: &str)
 where
     F: FnMut() -> Fut,
@@ -513,7 +530,13 @@ async fn watchdog_fires_a_bounded_review_on_repeated_failures() {
     let mut cfg = config();
     cfg.trigger_consecutive_tool_failures = 2;
     let h = Harness::start(vec![VALID_REPORT.into()], cfg.clone()).await;
-    let watchdog = Watchdog::new(h.engine.clone(), h.config.clone(), Arc::new(SystemRuntime));
+    // Frozen clock: the 1 s cooldown must not elapse under suite load
+    // while the loop-guard observations and assertions run.
+    let watchdog = Watchdog::new(
+        h.engine.clone(),
+        h.config.clone(),
+        Arc::new(FrozenClock::default()),
+    );
 
     // Two consecutive failures cross the threshold.
     watchdog.observe_tool_result("parent", "run-1", "write_file", "failed", Some("boom"));
