@@ -13,6 +13,7 @@ use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook};
 use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
+use agentkit_native_exec::{NativeAgentExecutor, NativeDispatchExecutor};
 use agentkit_providers::NativeProviderFactory;
 use agentkit_sessions::{
     AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ContentAuthority,
@@ -27,6 +28,7 @@ use crate::lanes::coding::{
     CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver,
 };
 use crate::lanes::lsp::{LspLane, LspLaneContributor};
+use crate::lanes::native::NativeLane;
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
 use crate::runtime::AgentRuntime;
 
@@ -57,6 +59,9 @@ pub struct AgentRuntimeBuilder {
     advisor_sink: Option<Arc<dyn AdvisorEventSink>>,
     lease_ttl_ms: i64,
     verification: Option<Arc<dyn VerificationHook<agentkit_store::SqliteStore>>>,
+    turn_kinds: Vec<String>,
+    extra_executors: Vec<(String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>)>,
+    native_lane: Option<NativeLane>,
 }
 
 impl AgentRuntimeBuilder {
@@ -82,6 +87,9 @@ impl AgentRuntimeBuilder {
             advisor_sink: None,
             lease_ttl_ms: HostOptions::default().lease_ttl_ms,
             verification: None,
+            turn_kinds: Vec::new(),
+            extra_executors: Vec::new(),
+            native_lane: None,
         }
     }
 
@@ -164,6 +172,35 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    /// Additional task kinds served by the turn executor (the chat executor,
+    /// or the native dispatch wrapper when a native lane is configured).
+    pub fn turn_kinds(mut self, kinds: Vec<String>) -> Self {
+        self.turn_kinds = kinds;
+        self
+    }
+
+    /// Register an executor for a task kind the runtime does not own.
+    /// A kind the builder already serves (the chat turn kind, or one listed
+    /// in `turn_kinds`, or registered twice) is refused at `build()`.
+    pub fn executor(
+        mut self,
+        kind: impl Into<String>,
+        executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
+    ) -> Self {
+        self.extra_executors.push((kind.into(), executor));
+        self
+    }
+
+    /// Route turns whose frozen execution target names a vendor runtime
+    /// through `agentkit-native-exec`: the turn executor becomes the
+    /// dispatch wrapper (native target on the native executor, everything
+    /// else on the model loop). The driver itself stays outside the runtime
+    /// (ADR 0025): the consumer supplies the concrete ports (ADR 0026).
+    pub fn native_lane(mut self, lane: NativeLane) -> Self {
+        self.native_lane = Some(lane);
+        self
+    }
+
     /// Build the runtime. Recovery runs before the worker claims any task,
     /// so restart reconciliation always precedes new modifying work.
     pub async fn build(self) -> Result<AgentRuntime, RuntimeError> {
@@ -183,6 +220,9 @@ impl AgentRuntimeBuilder {
             advisor_sink,
             lease_ttl_ms,
             verification,
+            turn_kinds,
+            extra_executors,
+            native_lane,
         } = self;
         let provider = default_provider
             .ok_or_else(|| RuntimeError::invalid("a default provider is required"))?;
@@ -244,7 +284,7 @@ impl AgentRuntimeBuilder {
             // unconfigured.
             Arc::new(SubagentLaneGuard::new(Arc::clone(&subagent_lane))) as Arc<dyn ToolGuard>,
         ]);
-        let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
+        let chat: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
                     providers: Some(Arc::clone(&registry)),
@@ -276,9 +316,39 @@ impl AgentRuntimeBuilder {
                 },
             ),
         );
+        // One execution owner per admitted turn (ADR 0025 decision 1):
+        // with a native lane the turn executor is the dispatch wrapper, so
+        // a native-target payload runs the durable native path and
+        // everything else keeps the model loop (AGENTKIT-107 §2).
+        let turn: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = match native_lane {
+            Some(lane) => Arc::new(NativeDispatchExecutor {
+                native: Arc::new(NativeAgentExecutor::new(
+                    store.clone(),
+                    lane.backend,
+                    lane.supervisor,
+                    lane.locator,
+                    lane.broker_factory,
+                    lane.options,
+                )),
+                fallback: Arc::clone(&chat),
+            }),
+            None => chat,
+        };
+        let mut executors: HashMap<String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>> =
+            HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), Arc::clone(&turn))]);
+        for kind in turn_kinds {
+            executors.insert(kind, Arc::clone(&turn));
+        }
+        for (kind, executor) in extra_executors {
+            if executors.insert(kind.clone(), executor).is_some() {
+                return Err(RuntimeError::invalid(format!(
+                    "executor kind registered twice: {kind}"
+                )));
+            }
+        }
         let host = AgentHost::new(
             store.clone(),
-            HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
+            executors,
             runtime.clone(),
             HostOptions {
                 // Delegation safety: a parent turn holds its worker slot

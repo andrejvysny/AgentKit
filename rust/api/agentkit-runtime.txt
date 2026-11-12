@@ -42,13 +42,16 @@ pub async fn agentkit_runtime::AgentRuntimeBuilder::build(self) -> core::result:
 pub fn agentkit_runtime::AgentRuntimeBuilder::clock(self, agentkit_engine::ports::SharedRuntime) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::default_provider(self, alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::executor(self, impl core::convert::Into<alloc::string::String>, alloc::rcs::arc::Arc<dyn agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::external_tools(self, agentkit_runtime::ExternalToolsPolicy) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::extra_contributors(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::lease_ttl_ms(self, i64) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::native_lane(self, agentkit_runtime::NativeLane) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::plan(self, agentkit_runtime::PlanConfiguration) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::profiles(self, alloc::vec::Vec<serde_json::value::Value>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::session_defaults(self, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::subagent_max_concurrency(self, i64) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::turn_kinds(self, alloc::vec::Vec<alloc::string::String>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::verification(self, alloc::rcs::arc::Arc<dyn agentkit_engine::ports::VerificationHook<agentkit_store::actor::SqliteStore>>) -> Self
 pub struct agentkit_runtime::CodingLane
 impl agentkit_runtime::CodingLane
@@ -62,6 +65,12 @@ pub struct agentkit_runtime::LspLane
 impl agentkit_runtime::LspLane
 pub async fn agentkit_runtime::LspLane::close(&self)
 pub async fn agentkit_runtime::LspLane::register(&self, &str) -> core::result::Result<(), agentkit_runtime::RuntimeError>
+pub struct agentkit_runtime::NativeLane
+pub agentkit_runtime::NativeLane::backend: alloc::rcs::arc::Arc<dyn agentkit_native::ports::NativeBackend>
+pub agentkit_runtime::NativeLane::broker_factory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_native_exec::AttemptBrokerFactory>>
+pub agentkit_runtime::NativeLane::locator: alloc::rcs::arc::Arc<dyn agentkit_native::ports::ExecutableLocator>
+pub agentkit_runtime::NativeLane::options: agentkit_native_exec::NativeExecutorOptions
+pub agentkit_runtime::NativeLane::supervisor: alloc::rcs::arc::Arc<dyn agentkit_native::ports::ProcessSupervisor>
 pub struct agentkit_runtime::PlanConfiguration
 pub agentkit_runtime::PlanConfiguration::granted_mode: agentkit_core::permission::CodingMode
 pub agentkit_runtime::PlanConfiguration::tool_names: alloc::vec::Vec<alloc::string::String>

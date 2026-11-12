@@ -7,10 +7,10 @@
 pub use agentkit_chat as chat;
 #[cfg(feature = "client")]
 pub use agentkit_client as client;
-#[cfg(feature = "runtime")]
+#[cfg(feature = "core")]
 pub use agentkit_connections as connections;
 pub use agentkit_contracts as contracts;
-#[cfg(feature = "runtime")]
+#[cfg(feature = "core")]
 pub use agentkit_core as core;
 #[cfg(feature = "durable")]
 pub use agentkit_engine as engine;
@@ -20,6 +20,8 @@ pub use agentkit_governance as governance;
 pub use agentkit_http as http;
 #[cfg(feature = "mcp")]
 pub use agentkit_mcp as mcp;
+#[cfg(feature = "runtime")]
+pub use agentkit_runtime as runtime;
 /// OPTIONAL standalone facade for driving one native Chat turn without the
 /// durable host (AGENTKIT-117). No task/attempt store, no leases, no
 /// approval governance, no MCP broker: those authorities stay in

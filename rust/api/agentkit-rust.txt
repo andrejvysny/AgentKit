@@ -9,6 +9,7 @@ pub use agentkit_rust::governance
 pub use agentkit_rust::http
 pub use agentkit_rust::mcp
 pub use agentkit_rust::providers
+pub use agentkit_rust::runtime
 pub use agentkit_rust::sessions
 pub use agentkit_rust::store
 pub use agentkit_rust::toolpacks_coding

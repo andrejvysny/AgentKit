@@ -28,6 +28,18 @@
 
 **Native lane ports (N1).** `NativeAgentExecutor` and `NativeDispatchExecutor` are generic over the repository: they name `agentkit_engine::TaskRepository` and `agentkit_native::NativeRunRepository` instead of `SqliteStore`. `AttemptBrokerFactory::start` returns `Arc<dyn AttemptBrokerHandle>` and an `agentkit_engine::ExecutionFailure`; the MCP broker reaches the executor only through the port. The four native persistence records (`NativeSessionBinding`, `BindNativeSession`, `NativeContinuationBinding`, `CommitContinuation`) and both ports (`AttemptBrokerHandle`, `NativeRunRepository`) live in `agentkit-native`. The executor crate's normal dependency graph no longer contains `agentkit-store`, `agentkit-native-broker`, `agentkit-mcp` or `axum`. `agentkit-facade` is gone: `NativeChat` now lives in the SDK facade as `agentkit_rust::native_chat` (feature `claude`) and the driver conformance harness in `agentkit_testkit::conformance::native_backend`.
 
+**Open composition root (C1).** `AgentRuntimeBuilder` gains three methods:
+`executor(kind, executor)` registers a task kind for the runtime (a kind the
+builder already owns is refused at `build()`), `turn_kinds(kinds)` adds kinds
+served by the turn executor, and `native_lane(lane)` runs the turn executor
+through `NativeDispatchExecutor` (native targets on `NativeAgentExecutor`,
+everything else on the model loop). `NativeLane` (in `agentkit-runtime`)
+takes the `backend`, `supervisor`, `locator`, optional `broker_factory` and
+`options` from the consumer: the runtime crate names `agentkit-native` and
+`agentkit-native-exec`, never a driver crate ([ADR 0026]). The SDK facade
+renames its `runtime` feature (core + connections) to `core`; `runtime` now
+brings in the composition root (`pub use agentkit_runtime as runtime`).
+
 **Removed (tooling).** `snapshot:release`, `qualify:package`, `source:digest` and the scripts behind them (`scripts/snapshot-release.mjs`, `scripts/release/{foundation.mjs,foundation/,fixture-projection.mjs,publication.mjs,qualify-candidates.mjs,source-proof.mjs}`, `scripts/qualify-package.mjs`, `scripts/source-digest.mjs`, `scripts/sqlite-durability.mjs`, `scripts/node-sqlite-conformance.mjs`, `scripts/qualification/{consumer.mjs,types.ts,electron-native.cjs,responses-openpcb-smoke.mjs,sqlite-fixture.mjs}`) and their tests. The native lockstep release lane and `qualify:local` / `qualify:cold` remain.
 
 ## Unreleased — Unified agent runtime M0–M7
