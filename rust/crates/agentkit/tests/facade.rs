@@ -11,7 +11,7 @@ use std::sync::{
 
 use async_trait::async_trait;
 
-use agentkit_facade::{
+use agentkit_rust::native_chat::{
     AuthEvidence, AuthExpectation, AuthMode, ContentPolicy, EXECUTION_TARGET_SCHEMA_VERSION,
     ExecutableEvidence, ExecutableLocator, FacadeError, FrameLine, InterruptPolicy,
     InterruptReceipt, LaunchPlan, NativeChat, NativeChatOptions, NativeExecutionTarget,
@@ -127,7 +127,7 @@ impl OwnedChildHandle for FakeChild {
         &mut self,
         bytes: &[u8],
         _close_stdin: bool,
-    ) -> Result<(), agentkit_facade::TransportFault> {
+    ) -> Result<(), agentkit_rust::native_chat::TransportFault> {
         self.shared
             .delivered
             .lock()
@@ -185,8 +185,8 @@ impl ProcessSupervisor for FakeSupervisor {
         &self,
         _plan: &LaunchPlan,
         _limits: &ResourceLimits,
-        _cancellation: &agentkit_facade::CancellationToken,
-    ) -> Result<Box<dyn OwnedChildHandle>, agentkit_facade::NativeError> {
+        _cancellation: &agentkit_rust::native_chat::CancellationToken,
+    ) -> Result<Box<dyn OwnedChildHandle>, agentkit_rust::native_chat::NativeError> {
         self.shared.spawn_calls.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeChild {
             frames: self.frames.iter().cloned().collect(),
@@ -450,7 +450,10 @@ async fn chat_turn_startup_timeout_interrupts_child() {
 
     match outcome {
         NativeTerminalOutcome::Failed { class, message, .. } => {
-            assert_eq!(class, agentkit_facade::FailureClass::StartupTimeout);
+            assert_eq!(
+                class,
+                agentkit_rust::native_chat::FailureClass::StartupTimeout
+            );
             assert!(message.contains("budget"), "{message}");
         }
         other => panic!("expected Failed(StartupTimeout), got {other:?}"),
@@ -487,7 +490,10 @@ async fn chat_turn_reports_protocol_violation_as_failed() {
 
     match outcome {
         NativeTerminalOutcome::Failed { class, message, .. } => {
-            assert_eq!(class, agentkit_facade::FailureClass::ProtocolViolation);
+            assert_eq!(
+                class,
+                agentkit_rust::native_chat::FailureClass::ProtocolViolation
+            );
             assert!(message.contains("malformed_json"), "{message}");
         }
         other => panic!("expected Failed(ProtocolViolation), got {other:?}"),
@@ -540,7 +546,7 @@ async fn chat_turn_cancellation_interrupts_and_reports_cancelled() {
     let tmp = tempfile::tempdir().unwrap();
     let supervisor = FakeSupervisor::new(vec![], true); // hangs: cancel mid-stream
     let shared = Arc::clone(&supervisor.shared);
-    let cancellation = agentkit_facade::CancellationToken::new();
+    let cancellation = agentkit_rust::native_chat::CancellationToken::new();
     let subject = chat(tmp.path(), supervisor).with_options(NativeChatOptions {
         limits: ResourceLimits {
             startup_timeout_ms: 5_000,

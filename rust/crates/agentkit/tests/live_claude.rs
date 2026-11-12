@@ -6,11 +6,11 @@
 //! identity or credentials.
 //!
 //! ```text
-//! AGENTKIT_LIVE_CLAUDE=1 cargo test -p agentkit-facade --test live_claude -- --ignored --nocapture
+//! AGENTKIT_LIVE_CLAUDE=1 cargo test -p agentkit-rust --features claude --test live_claude -- --ignored --nocapture
 //! ```
 
 use agentkit_claude::discovery::ClaudeSupportMatrix;
-use agentkit_facade::{
+use agentkit_rust::native_chat::{
     AuthExpectation, ContentPolicy, EXECUTION_TARGET_SCHEMA_VERSION, ExecutableEvidence,
     NativeChat, NativeExecutionTarget, NativeProfile, NativeTerminalOutcome, TurnInput, TurnResume,
 };
@@ -18,13 +18,16 @@ use agentkit_facade::{
 struct HaikuOnlySupervisor(agentkit_claude::transport::OwnedProcessSupervisor);
 
 #[async_trait::async_trait]
-impl agentkit_facade::ProcessSupervisor for HaikuOnlySupervisor {
+impl agentkit_rust::native_chat::ProcessSupervisor for HaikuOnlySupervisor {
     async fn spawn(
         &self,
-        plan: &agentkit_facade::LaunchPlan,
-        limits: &agentkit_facade::ResourceLimits,
-        cancel: &agentkit_facade::CancellationToken,
-    ) -> Result<Box<dyn agentkit_facade::OwnedChildHandle>, agentkit_facade::NativeError> {
+        plan: &agentkit_rust::native_chat::LaunchPlan,
+        limits: &agentkit_rust::native_chat::ResourceLimits,
+        cancel: &agentkit_rust::native_chat::CancellationToken,
+    ) -> Result<
+        Box<dyn agentkit_rust::native_chat::OwnedChildHandle>,
+        agentkit_rust::native_chat::NativeError,
+    > {
         let mut plan = plan.clone();
         // The gate must prevent fallback, rather than detect it after spending quota.
         plan.argv
@@ -39,8 +42,8 @@ impl agentkit_facade::ProcessSupervisor for HaikuOnlySupervisor {
 
     async fn drain_owned(
         &self,
-        policy: agentkit_facade::InterruptPolicy,
-    ) -> Vec<agentkit_facade::InterruptReceipt> {
+        policy: agentkit_rust::native_chat::InterruptPolicy,
+    ) -> Vec<agentkit_rust::native_chat::InterruptReceipt> {
         self.0.drain_owned(policy).await
     }
 
@@ -48,8 +51,8 @@ impl agentkit_facade::ProcessSupervisor for HaikuOnlySupervisor {
         &self,
         pid: u32,
         generation: u64,
-        policy: agentkit_facade::InterruptPolicy,
-    ) -> Option<agentkit_facade::InterruptReceipt> {
+        policy: agentkit_rust::native_chat::InterruptPolicy,
+    ) -> Option<agentkit_rust::native_chat::InterruptReceipt> {
         self.0.terminate_owned(pid, generation, policy).await
     }
 
@@ -57,7 +60,7 @@ impl agentkit_facade::ProcessSupervisor for HaikuOnlySupervisor {
         &self,
         pid: u32,
         generation: u64,
-    ) -> Option<agentkit_facade::InterruptReceipt> {
+    ) -> Option<agentkit_rust::native_chat::InterruptReceipt> {
         self.0.descendant_cleanup(pid, generation)
     }
 }
@@ -102,7 +105,7 @@ fn is_hyphenated_uuid(value: &str) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "live: needs a signed-in claude CLI; run with AGENTKIT_LIVE_CLAUDE=1 cargo test -p agentkit-facade --test live_claude -- --ignored"]
+#[ignore = "live: needs a signed-in claude CLI; run with AGENTKIT_LIVE_CLAUDE=1 cargo test -p agentkit-rust --features claude --test live_claude -- --ignored"]
 async fn live_fresh_turn_then_exact_resume() {
     if std::env::var("AGENTKIT_LIVE_CLAUDE").as_deref() != Ok("1") {
         eprintln!("skipped: AGENTKIT_LIVE_CLAUDE != 1");

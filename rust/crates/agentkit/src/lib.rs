@@ -20,6 +20,12 @@ pub use agentkit_governance as governance;
 pub use agentkit_http as http;
 #[cfg(feature = "mcp")]
 pub use agentkit_mcp as mcp;
+/// OPTIONAL standalone facade for driving one native Chat turn without the
+/// durable host (AGENTKIT-117). No task/attempt store, no leases, no
+/// approval governance, no MCP broker: those authorities stay in
+/// `agentkit-engine` / `agentkit-store`.
+#[cfg(feature = "claude")]
+pub mod native_chat;
 #[cfg(feature = "durable")]
 pub use agentkit_providers as providers;
 #[cfg(feature = "durable")]

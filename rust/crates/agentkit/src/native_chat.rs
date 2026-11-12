@@ -22,11 +22,10 @@
 //! authoritative terminal outcome — a clean exit without a root result can
 //! never produce `Completed` (AGENTKIT-107 §7).
 //!
-//! [`conformance`] hosts the driver conformance harness: stable case ids,
-//! a runner that exercises the [`NativeBackend`] / [`ExecutableLocator`]
-//! ports generically, and reports consumed by qualification.
-
-pub mod conformance;
+//! The driver conformance harness (stable case ids, a runner that
+//! exercises the [`NativeBackend`] / [`ExecutableLocator`] ports
+//! generically, reports consumed by qualification) lives in
+//! `agentkit-testkit::conformance::native_backend`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

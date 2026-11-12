@@ -216,21 +216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentkit-facade"
-version = "0.1.0"
-dependencies = [
- "agentkit-claude",
- "agentkit-native",
- "async-trait",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "agentkit-governance"
 version = "0.1.0"
 dependencies = [
@@ -465,6 +450,7 @@ name = "agentkit-rust"
 version = "0.1.0"
 dependencies = [
  "agentkit-chat",
+ "agentkit-claude",
  "agentkit-client",
  "agentkit-connections",
  "agentkit-contracts",
@@ -473,10 +459,19 @@ dependencies = [
  "agentkit-governance",
  "agentkit-http",
  "agentkit-mcp",
+ "agentkit-native",
  "agentkit-providers",
  "agentkit-sessions",
  "agentkit-store",
+ "agentkit-testkit",
  "agentkit-toolpacks-coding",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -542,10 +537,12 @@ name = "agentkit-testkit"
 version = "0.1.0"
 dependencies = [
  "agentkit-engine",
+ "agentkit-native",
  "async-trait",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

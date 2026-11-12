@@ -228,8 +228,8 @@ splits the workspace into six layers; dependencies point inward only:
 5. Composition: `agentkit-runtime` (`AgentRuntime::builder()`), the only crate
    naming concrete adapters.
 6. Driving adapters: `agentkit-napi`, `agentkit-http`, `agentkit-client`, the
-   `agentkit` facade, `agentkit-facade` (standalone one-turn facade and driver
-   conformance, temporarily).
+   `agentkit` facade (its `claude` feature carries the standalone one-turn
+   facade; the driver conformance harness is in `agentkit-testkit`).
 
 `agentkit-testkit` (dev-only) provides fakes, in-memory repositories and
 repository conformance suites. `agentkit-host` is removed once its modules have

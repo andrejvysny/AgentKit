@@ -92,7 +92,8 @@ Phases P0–P8 are tracked in Plane. Each extraction lands as a pure-move commit
   sessions only.
 - Layer 4 gains `agentkit-native-broker` and `agentkit-claude`. `agentkit-store` keeps its name;
   `agentkit-store-sqlite` and `agentkit-store-legacy-import` will not be created (ADR 0024).
-- Layer 6 temporarily holds `agentkit-facade`.
+- Layer 6 temporarily held `agentkit-facade`; phase N1 folded it into `agentkit`
+  (feature `claude`) and `agentkit-testkit`.
 - The allowlist only shrinks, with one exception: a merge from `master` may add the entries its
   commit message names. The merge of 2026-11 added four; phases N1 and G1 remove them.
 

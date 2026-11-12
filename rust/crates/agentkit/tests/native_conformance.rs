@@ -7,11 +7,13 @@ use async_trait::async_trait;
 
 use agentkit_claude::backend::default_backend;
 use agentkit_claude::discovery::ClaudeSupportMatrix;
-use agentkit_facade::conformance::{ConformanceReport, required_cases, run_driver_conformance};
 use agentkit_native::{
     AuthEvidence, AuthExpectation, AuthMode, ContentPolicy, EXECUTION_TARGET_SCHEMA_VERSION,
     ExecutableEvidence, ExecutableLocator, NativeExecutionTarget, NativeProfile, NativeRefusal,
     PolicyState,
+};
+use agentkit_testkit::conformance::native_backend::{
+    ConformanceReport, required_cases, run_driver_conformance,
 };
 
 /// Pid-unique fixture executable under the temp dir: a real regular file so
