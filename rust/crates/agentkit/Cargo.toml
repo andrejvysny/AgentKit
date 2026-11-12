@@ -14,13 +14,15 @@ workspace = true
 
 [features]
 default = []
-runtime = ["dep:agentkit-core", "dep:agentkit-connections"]
-durable = ["runtime", "dep:agentkit-engine", "dep:agentkit-sessions", "dep:agentkit-chat", "dep:agentkit-governance", "dep:agentkit-store", "dep:agentkit-providers"]
+core = ["dep:agentkit-core", "dep:agentkit-connections"]
+runtime = ["durable", "dep:agentkit-runtime"]
+durable = ["core", "dep:agentkit-engine", "dep:agentkit-sessions", "dep:agentkit-chat", "dep:agentkit-governance", "dep:agentkit-store", "dep:agentkit-providers"]
 client = ["dep:agentkit-client"]
 http = ["durable", "dep:agentkit-http"]
 mcp = ["dep:agentkit-mcp"]
 coding = ["durable", "dep:agentkit-toolpacks-coding"]
-keychain = ["runtime", "agentkit-connections/os-keychain"]
+keychain = ["core", "agentkit-connections/os-keychain"]
+claude = ["dep:agentkit-native", "dep:agentkit-claude", "dep:serde", "dep:thiserror", "dep:tokio", "dep:tokio-util"]
 
 [dependencies]
 agentkit-contracts = { workspace = true }
@@ -36,3 +38,28 @@ agentkit-client = { workspace = true, optional = true }
 agentkit-http = { workspace = true, optional = true }
 agentkit-mcp = { workspace = true, optional = true }
 agentkit-toolpacks-coding = { workspace = true, optional = true }
+agentkit-runtime = { workspace = true, optional = true }
+agentkit-native = { workspace = true, optional = true }
+agentkit-claude = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["fs"] }
+tokio-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+agentkit-testkit = { workspace = true }
+async-trait.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[[test]]
+name = "facade"
+required-features = ["claude"]
+
+[[test]]
+name = "live_claude"
+required-features = ["claude"]
+
+[[test]]
+name = "native_conformance"
+required-features = ["claude"]

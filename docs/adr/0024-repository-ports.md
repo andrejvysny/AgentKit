@@ -51,3 +51,22 @@ session staging) were reachable only through that type.
   `ts-import` feature instead of the separate `agentkit-store-legacy-import`
   crate listed in ADR 0021: it writes through schema, transaction and receipt
   internals that a separate crate could reach only by making them public.
+
+## Addendum (N1): native-lane ports (2026-11-12)
+
+The native lane declares both of its ports in `agentkit-native` (layer 2), next
+to `NativeBackend`: `AttemptBrokerHandle` (what the executor needs from a live
+per-attempt tool broker; the MCP implementation lives in
+`agentkit-native-broker`) and `NativeRunRepository` (the vendor-session lineage
+ledger and the scoped continuation ledger; implemented by the SQLite store).
+
+The ports deliberately do not live in `agentkit-native-exec`. The executor's
+unit tests run against the SQLite store and the real MCP broker. If the ports
+were declared in `agentkit-native-exec`, the store and the broker would have to
+depend on that crate, and the executor's unit tests would need a
+dev-dependency cycle that produces duplicate types (Consequences above). With
+the ports in `agentkit-native` the tests keep their concrete
+`SqliteStore`/`AttemptBroker` fixtures unchanged. `NativeAgentExecutor` and
+`NativeDispatchExecutor` are generic over the repository; the executor names
+neither `agentkit-store` nor `agentkit-native-broker` in its normal
+dependency graph.

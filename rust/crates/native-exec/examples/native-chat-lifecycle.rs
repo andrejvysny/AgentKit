@@ -20,7 +20,8 @@ use agentkit_native::{
     NativeExecutionTarget, NativeProfile, NativeRefusal, NativeTerminalOutcome, NativeUsage,
     OwnedChildHandle, PermissionPromptPolicy, PolicyState, PreflightReport, ProcessExit,
     ProcessSupervisor, ProtocolViolation, ResourceLimits, StreamFrameAdapter, TokenSet,
-    TransportFault, TurnInput, TurnResume, UsageProvenance,
+    TransportFault, TurnInput, TurnResume, UsageProvenance, parse_target,
+    validate_execution_target,
 };
 use agentkit_native_exec::{
     EXECUTION_TARGET_PAYLOAD_KEY, NativeAgentExecutor, NativeExecutorOptions,
@@ -422,8 +423,8 @@ async fn main() -> EngineResult<(), agentkit_store::StoreError> {
         NativeExecutorOptions::default(),
     ));
     assert!(
-        NativeAgentExecutor::capability_verdict(
-            &NativeAgentExecutor::parse_target(
+        validate_execution_target(
+            &parse_target(
                 &store
                     .get_task("native-turn-1")
                     .await

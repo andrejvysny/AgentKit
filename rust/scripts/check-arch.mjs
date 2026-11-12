@@ -26,8 +26,6 @@ const LAYERS = {
   "agentkit-remote": 3,
   "agentkit-native-exec": 3,
   "agentkit-store": 4,
-  "agentkit-store-sqlite": 4,
-  "agentkit-store-legacy-import": 4,
   "agentkit-providers": 4,
   "agentkit-toolpacks-coding": 4,
   "agentkit-lsp": 4,
@@ -41,7 +39,6 @@ const LAYERS = {
   "agentkit-http": 6,
   "agentkit-client": 6,
   "agentkit-rust": 6,
-  "agentkit-facade": 6,
 };
 const TESTKIT = "agentkit-testkit";
 const BANNED_INNER = new Set([
@@ -65,8 +62,28 @@ const CONTEXT_DEPS = {
   "agentkit-native-exec": ["agentkit-engine", "agentkit-sessions"],
 };
 const SKIP_DIRS = new Set(["tests", "benches", "examples", "target"]);
-const STATIC_RE =
-  /^\s*(pub(\([^)]*\))?\s+)?static\s+[A-Z_0-9]+\s*:\s*(std::sync::)?(Mutex|RwLock|LazyLock|OnceLock)</;
+// R5 (G1): a static is process-global mutable state when its type has
+// interior mutability (mutexes, atomics, cells, sync primitives), when it
+// is `static mut`, or when it sits in a `thread_local!` block. Immutable
+// lazy constants — a `LazyLock<X>` whose X is one of the whitelisted
+// value types — are not reported.
+const STATIC_DECL_RE =
+  /^\s*(pub(\([^)]*\))?\s+)?static\s+(mut\s+)?([A-Z_0-9]+)\s*:/;
+const MUTABLE_TYPE_RE =
+  /Mutex|RwLock|Atomic[A-Za-z0-9]*|OnceLock|OnceCell|\bOnce\b|Notify|RefCell|\bCell<|Condvar|Barrier|Semaphore|DashMap/;
+const LAZY_ALLOWED = new Set([
+  "Regex",
+  "regex::Regex",
+  "Vec<Regex>",
+  "Vec<regex::Regex>",
+  "String",
+  "Vec<String>",
+  "Option<String>",
+  "HashSet<&'staticstr>",
+  "BTreeSet<&'staticstr>",
+]);
+const THREAD_LOCAL_RE = /\bthread_local\s*!\s*\{/;
+const R12_LIMIT = 1000;
 
 function fail(message) {
   process.stderr.write(`check-arch: ${message}\n`);
@@ -109,6 +126,13 @@ function graphViolations(metadata, crates) {
       if (to === TESTKIT) violations.add(`R3 ${from} -> ${to}`);
       if (layer <= 3 && BANNED_INNER.has(to))
         violations.add(`R1 ${from} -> ${to}`);
+      // R11: among adapters, only napi may depend on the store.
+      if (
+        (layer === 4 || layer === 6) &&
+        from !== "agentkit-napi" &&
+        to === "agentkit-store"
+      )
+        violations.add(`R11 ${from} -> agentkit-store`);
       const toLayer = LAYERS[to];
       if (toLayer === undefined) continue; // external crate
       if (toLayer > layer) violations.add(`R1b ${from} -> ${to}`);
@@ -135,12 +159,115 @@ function* sourceFiles(directory) {
   }
 }
 
+// Type text of a declaration: after the first ':' up to the first '=' or
+// ';'. A type never contains '='. If the declaration line has neither
+// character, join up to five following lines first.
+function typeText(lines, index) {
+  let text = lines[index];
+  for (let extra = 0; extra < 6; extra += 1) {
+    const colon = text.indexOf(":");
+    const cut = text.slice(colon + 1).search(/[=;]/);
+    if (cut >= 0) return text.slice(colon + 1, colon + 1 + cut);
+    if (extra === 5 || index + extra + 1 >= lines.length) break;
+    text += "\n" + lines[index + extra + 1];
+  }
+  const colon = text.indexOf(":");
+  return text.slice(colon + 1);
+}
+
+// One boolean per line: the line sits inside a `thread_local! { ... }`
+// block, tracked by brace depth.
+function threadLocalLines(lines) {
+  const inside = new Array(lines.length).fill(false);
+  const stack = []; // true per brace level that belongs to a thread_local block
+  let depth = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const tl = THREAD_LOCAL_RE.exec(line);
+    // Depth at which the thread_local '{' opens (before this line's braces).
+    let tlDepth = -1;
+    if (tl) {
+      let d = depth;
+      for (let c = 0; c < tl.index + tl[0].length; c += 1) {
+        if (line[c] === "{") d += 1;
+        else if (line[c] === "}") d -= 1;
+      }
+      tlDepth = d - 1; // the block brace itself sits at depth d-1
+    }
+    let seenTlBrace = false;
+    for (let c = 0; c < line.length; c += 1) {
+      const ch = line[c];
+      if (ch === "{") {
+        const isTl = tlDepth >= 0 && !seenTlBrace && depth === tlDepth;
+        if (isTl) seenTlBrace = true;
+        stack.push(isTl);
+        depth += 1;
+      } else if (ch === "}") {
+        stack.pop();
+        depth -= 1;
+      }
+      if (stack.includes(true)) inside[i] = true;
+    }
+  }
+  return inside;
+}
+
+function staticViolations(crateName, rel, lines, violations) {
+  if (crateName === "agentkit-sys") return;
+  const insideThreadLocal = threadLocalLines(lines);
+  for (let i = 0; i < lines.length; i += 1) {
+    const text = lines[i].trim();
+    if (text.startsWith("//")) continue;
+    const decl = STATIC_DECL_RE.exec(lines[i]);
+    if (!decl) continue;
+    const isMut = decl[3] !== undefined;
+    const name = decl[4];
+    const prefix = `R5 ${crateName} ${rel}`;
+    if (isMut) {
+      violations.add(`${prefix} static mut ${name}`);
+      continue;
+    }
+    const type = typeText(lines, i);
+    if (insideThreadLocal[i] || MUTABLE_TYPE_RE.test(type)) {
+      violations.add(`${prefix} static ${name}`);
+      continue;
+    }
+    let t = type.replace(/\s+/g, "");
+    if (t.startsWith("std::sync::")) t = t.slice("std::sync::".length);
+    if (t.startsWith("LazyLock<") && t.endsWith(">")) {
+      const inner = t.slice("LazyLock<".length, -1);
+      if (!LAZY_ALLOWED.has(inner)) violations.add(`${prefix} static ${name}`);
+    }
+  }
+}
+
+// R8: #[napi] exports that neither run under catch_unwind nor decode a
+// derived object DTO. The measured count is part of the id, so the entry
+// goes stale the moment an export gains catch_unwind — it can only lower.
+function napiExportCount(crate) {
+  const root = dirname(crate.manifest_path);
+  const src = join(root, "src");
+  let count = 0;
+  for (const file of sourceFiles(src)) {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (
+        /^\s*#\[napi(\(|\])/.test(line) &&
+        !line.includes("catch_unwind") &&
+        !line.includes("object")
+      )
+        count += 1;
+    }
+  }
+  return count;
+}
+
 function sourceViolations(crates) {
   const violations = new Set();
   for (const crate of crates) {
     const root = dirname(crate.manifest_path);
     if (!root.startsWith(join(rustRoot, "crates") + sep)) continue;
     const src = join(root, "src");
+    const layer = LAYERS[crate.name];
     for (const file of sourceFiles(src)) {
       const rel = relative(root, file).split(sep).join("/");
       const lines = readFileSync(file, "utf8").split("\n");
@@ -153,14 +280,11 @@ function sourceViolations(crates) {
           violations.add(`${prefix} pub use ${glob[1]}::*`);
         const path = text.match(/#\[path\s*=\s*"([^"]*)"/);
         if (path) violations.add(`${prefix} #[path] ${path[1]}`);
-        if (crate.name === "agentkit-sys") continue;
-        if (/^(pub(\([^)]*\))?\s+)?static\s+mut\s/.test(text)) {
-          const name = text.match(/static\s+mut\s+(\w+)/)?.[1] ?? "?";
-          violations.add(`${prefix} static mut ${name}`);
-        } else if (STATIC_RE.test(line)) {
-          violations.add(`${prefix} static ${text.match(/static\s+(\w+)/)[1]}`);
-        }
       }
+      staticViolations(crate.name, rel, lines, violations);
+      // R12: file-size budget for layers 1-3 and 5.
+      if ([1, 2, 3, 5].includes(layer) && lines.length > R12_LIMIT)
+        violations.add(`R12 ${crate.name} ${rel}`);
     }
   }
   return violations;
@@ -187,6 +311,13 @@ const found = new Set([
   ...sourceViolations(checked),
 ]);
 
+const napiCrate = checked.find((pkg) => pkg.name === "agentkit-napi");
+if (napiCrate) {
+  const count = napiExportCount(napiCrate);
+  if (count > 0)
+    found.add(`R8 agentkit-napi exports-without-catch_unwind=${count}`);
+}
+
 if (update) {
   const comment =
     "Existing architecture violations (see docs/adr/0021). Only shrinks; remove entries as migration phases resolve them.";
@@ -210,6 +341,23 @@ if (added.length > 0 || stale.length > 0) {
   ];
   fail(`${lines.length} problem(s)\n  ${lines.join("\n  ")}`);
 }
+// Per-rule report, counted by id prefix.
+const RULES = ["R1b", "R5-glob", "R5-path", "R5-static", "R8", "R11", "R12"];
+const counts = new Map(RULES.map((rule) => [rule, 0]));
+for (const id of found) {
+  let key;
+  if (id.startsWith("R1b ")) key = "R1b";
+  else if (id.startsWith("R5 ") && id.includes(" pub use ")) key = "R5-glob";
+  else if (id.startsWith("R5 ") && id.includes(" #[path] ")) key = "R5-path";
+  else if (id.startsWith("R5 ") && id.includes(" static ")) key = "R5-static";
+  else if (id.startsWith("R8 ")) key = "R8";
+  else if (id.startsWith("R11 ")) key = "R11";
+  else if (id.startsWith("R12 ")) key = "R12";
+  if (key) counts.set(key, counts.get(key) + 1);
+}
+const report = RULES.filter((rule) => counts.get(rule) > 0).map(
+  (rule) => `${rule} ${counts.get(rule)}`,
+);
 process.stdout.write(
-  `check-arch: ok (${checked.length} crates, ${allowed.size} allowlisted violations)\n`,
+  `check-arch: ok (${checked.length} crates; ${report.join(", ")})\n`,
 );

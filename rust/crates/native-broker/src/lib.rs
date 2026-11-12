@@ -32,17 +32,10 @@ use agentkit_mcp::{
     Backend, BearerAuth, CatalogTool, McpServer, RpcId, ServerOptions, SessionScope,
 };
 
-/// One catalog entry frozen at attempt start.
-#[derive(Clone, Debug)]
-pub struct BrokerToolDefinition {
-    /// Server-local name; Claude sees `mcp__<server>__<name>`.
-    pub name: String,
-    pub description: String,
-    /// JSON Schema for arguments (validated by the authority).
-    pub input_schema: Value,
-    /// Host-owned effect classification; never inferred from vendor data.
-    pub writes: bool,
-}
+// Broker contracts now live in `agentkit-native` (phase N1); re-exported so
+// existing paths keep working.
+use agentkit_native::AttemptBrokerHandle;
+pub use agentkit_native::{BROKER_AUTHORIZE_BUDGET_MS, BrokerLimits, BrokerToolDefinition};
 
 /// Identity context of one broker call, bound to the live attempt.
 #[derive(Clone, Debug)]
@@ -127,32 +120,6 @@ pub trait BrokerAuthority: Send + Sync + 'static {
     fn record(&self, _invocation: &BrokerInvocation, _outcome: &Value) {}
 }
 
-/// Per-attempt resource bounds (AGENTKIT-116).
-#[derive(Clone, Copy, Debug)]
-pub struct BrokerLimits {
-    pub max_calls: usize,
-    pub max_args_bytes: usize,
-    /// Complete serialized MCP result and result-evidence payload limit.
-    /// Durable receipt identity/envelope has a separate complete-row cap
-    /// of 2 MiB, enforced by the store lifecycle API.
-    pub max_result_bytes: usize,
-    pub call_timeout_ms: i64,
-    /// Hard bound on `BrokerAuthority::authorize` (the human approval
-    /// gate). Review R5: the approval window a product advertises must be
-    /// COMPATIBLE with, and strictly below, the layers above it — the
-    /// vendor MCP request budget must exceed this gate plus the effect
-    /// timeout, and the consumer's displayed approval deadline must fit
-    /// inside this budget so an answered approval never races an outer
-    /// transport expiry.
-    pub authorize_timeout_ms: i64,
-}
-
-/// The bridge's default human-gate budget (review R5). OneMind clamps its
-/// advertised approval window under this minus a margin, and the vendor
-/// MCP request budget (claude launch) exceeds this plus the effect
-/// timeout — one coherent, compatible deadline chain.
-pub const BROKER_AUTHORIZE_BUDGET_MS: i64 = 360_000;
-
 /// Headroom the broker adds to the SERVER-side per-call deadline on top of
 /// (authorize budget + effect timeout) (review R4 F2). The `agentkit-mcp`
 /// handler wraps the ENTIRE `tools/call` — human approval park included —
@@ -179,18 +146,6 @@ fn broker_call_deadline(limits: &BrokerLimits) -> Duration {
             .saturating_add(BROKER_SERVER_DEADLINE_OVERHEAD_MS)
             .max(1) as u64,
     )
-}
-
-impl Default for BrokerLimits {
-    fn default() -> Self {
-        BrokerLimits {
-            max_calls: 64,
-            max_args_bytes: 256 * 1024,
-            max_result_bytes: 1024 * 1024,
-            call_timeout_ms: 120_000,
-            authorize_timeout_ms: BROKER_AUTHORIZE_BUDGET_MS,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -1086,6 +1041,25 @@ impl AttemptBroker {
         self.backend.drain_settlements(Duration::from_secs(5)).await;
         self.cancellation.cancel();
         self.serve.abort();
+    }
+}
+
+#[async_trait]
+impl AttemptBrokerHandle for AttemptBroker {
+    fn spec(&self) -> agentkit_native::McpEndpointSpec {
+        AttemptBroker::spec(self)
+    }
+    fn revoke(&self) {
+        self.backend().revoke();
+    }
+    fn live_calls(&self) -> usize {
+        AttemptBroker::live_calls(self)
+    }
+    fn parked_ms(&self) -> u64 {
+        AttemptBroker::parked_ms(self)
+    }
+    async fn shutdown(&self) {
+        AttemptBroker::shutdown(self).await;
     }
 }
 

@@ -18,6 +18,8 @@ agentkit-agents = { workspace = true }
 agentkit-chat = { workspace = true }
 agentkit-engine = { workspace = true }
 agentkit-sessions = { workspace = true }
+agentkit-native = { workspace = true }
+agentkit-native-exec = { workspace = true }
 agentkit-providers = { workspace = true }
 agentkit-store = { workspace = true }
 agentkit-lsp = { workspace = true }

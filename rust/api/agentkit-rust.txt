@@ -9,6 +9,80 @@ pub use agentkit_rust::governance
 pub use agentkit_rust::http
 pub use agentkit_rust::mcp
 pub use agentkit_rust::providers
+pub use agentkit_rust::runtime
 pub use agentkit_rust::sessions
 pub use agentkit_rust::store
 pub use agentkit_rust::toolpacks_coding
+pub mod agentkit_rust::native_chat
+pub use agentkit_rust::native_chat::AuthEvidence
+pub use agentkit_rust::native_chat::AuthExpectation
+pub use agentkit_rust::native_chat::AuthMode
+pub use agentkit_rust::native_chat::CancellationToken
+pub use agentkit_rust::native_chat::CapabilitySnapshot
+pub use agentkit_rust::native_chat::CapabilityState
+pub use agentkit_rust::native_chat::ClaudeLocator
+pub use agentkit_rust::native_chat::ContentPolicy
+pub use agentkit_rust::native_chat::ContextBlock
+pub use agentkit_rust::native_chat::EXECUTION_TARGET_SCHEMA_VERSION
+pub use agentkit_rust::native_chat::ExecutableEvidence
+pub use agentkit_rust::native_chat::ExecutableLocator
+pub use agentkit_rust::native_chat::FailureClass
+pub use agentkit_rust::native_chat::FinishDisposition
+pub use agentkit_rust::native_chat::FrameLine
+pub use agentkit_rust::native_chat::InterruptPolicy
+pub use agentkit_rust::native_chat::InterruptReceipt
+pub use agentkit_rust::native_chat::LaunchPlan
+pub use agentkit_rust::native_chat::McpServerStatus
+pub use agentkit_rust::native_chat::NativeBackend
+pub use agentkit_rust::native_chat::NativeError
+pub use agentkit_rust::native_chat::NativeEvent
+pub use agentkit_rust::native_chat::NativeExecutionTarget
+pub use agentkit_rust::native_chat::NativeProfile
+pub use agentkit_rust::native_chat::NativeRefusal
+pub use agentkit_rust::native_chat::NativeResult
+pub use agentkit_rust::native_chat::NativeTerminalOutcome
+pub use agentkit_rust::native_chat::OwnedChildHandle
+pub use agentkit_rust::native_chat::PermissionPromptPolicy
+pub use agentkit_rust::native_chat::PolicyState
+pub use agentkit_rust::native_chat::PreflightReport
+pub use agentkit_rust::native_chat::ProcessExit
+pub use agentkit_rust::native_chat::ProcessSupervisor
+pub use agentkit_rust::native_chat::ProtocolViolation
+pub use agentkit_rust::native_chat::ResourceLimits
+pub use agentkit_rust::native_chat::StreamFrameAdapter
+pub use agentkit_rust::native_chat::SupportMatrix
+pub use agentkit_rust::native_chat::TransportFault
+pub use agentkit_rust::native_chat::TurnInput
+pub use agentkit_rust::native_chat::TurnResume
+pub use agentkit_rust::native_chat::validate_execution_target
+pub enum agentkit_rust::native_chat::FacadeError
+pub agentkit_rust::native_chat::FacadeError::Cancelled
+pub agentkit_rust::native_chat::FacadeError::Protocol
+pub agentkit_rust::native_chat::FacadeError::Protocol::code: alloc::string::String
+pub agentkit_rust::native_chat::FacadeError::Protocol::message: alloc::string::String
+pub agentkit_rust::native_chat::FacadeError::Refusal
+pub agentkit_rust::native_chat::FacadeError::Refusal::refusal: agentkit_native::error::NativeRefusal
+pub agentkit_rust::native_chat::FacadeError::Transport
+pub agentkit_rust::native_chat::FacadeError::Transport::code: alloc::string::String
+pub agentkit_rust::native_chat::FacadeError::Transport::message: alloc::string::String
+impl agentkit_rust::native_chat::FacadeError
+pub fn agentkit_rust::native_chat::FacadeError::code(&self) -> &str
+pub fn agentkit_rust::native_chat::FacadeError::retryable(&self) -> bool
+impl core::convert::From<agentkit_native::error::NativeError> for agentkit_rust::native_chat::FacadeError
+pub fn agentkit_rust::native_chat::FacadeError::from(agentkit_native::error::NativeError) -> Self
+pub struct agentkit_rust::native_chat::NativeChat
+impl agentkit_rust::native_chat::NativeChat
+pub fn agentkit_rust::native_chat::NativeChat::backend_id(&self) -> &str
+pub async fn agentkit_rust::native_chat::NativeChat::chat_turn(&self, &agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput) -> agentkit_rust::native_chat::FacadeResult<agentkit_native::events::NativeTerminalOutcome>
+pub fn agentkit_rust::native_chat::NativeChat::new(core::option::Option<std::path::PathBuf>, impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn agentkit_rust::native_chat::NativeChat::options(&self) -> &agentkit_rust::native_chat::NativeChatOptions
+pub async fn agentkit_rust::native_chat::NativeChat::preflight(&self) -> agentkit_rust::native_chat::FacadeResult<agentkit_native::ports::PreflightReport>
+pub fn agentkit_rust::native_chat::NativeChat::with_locator(self, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ExecutableLocator>) -> Self
+pub fn agentkit_rust::native_chat::NativeChat::with_options(self, agentkit_rust::native_chat::NativeChatOptions) -> Self
+pub fn agentkit_rust::native_chat::NativeChat::with_supervisor(self, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ProcessSupervisor>) -> Self
+pub struct agentkit_rust::native_chat::NativeChatOptions
+pub agentkit_rust::native_chat::NativeChatOptions::cancellation: tokio_util::sync::cancellation_token::CancellationToken
+pub agentkit_rust::native_chat::NativeChatOptions::limits: agentkit_native::ports::ResourceLimits
+impl core::default::Default for agentkit_rust::native_chat::NativeChatOptions
+pub fn agentkit_rust::native_chat::NativeChatOptions::default() -> Self
+pub type agentkit_rust::native_chat::FacadeResult<T> = core::result::Result<T, agentkit_rust::native_chat::FacadeError>

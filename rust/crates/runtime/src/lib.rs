@@ -16,5 +16,6 @@ pub use error::RuntimeError;
 pub use lanes::advisor::AdvisorLane;
 pub use lanes::coding::CodingLane;
 pub use lanes::lsp::LspLane;
+pub use lanes::native::NativeLane;
 pub use lanes::subagent::SubagentLane;
 pub use runtime::AgentRuntime;

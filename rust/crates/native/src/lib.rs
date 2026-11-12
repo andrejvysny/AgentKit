@@ -20,6 +20,7 @@
 //! * Terminal outcome, process exit and pipe EOF are three distinct signals
 //!   ([`NativeTerminalOutcome`] vs [`ProcessExit`] vs EOF on the line stream).
 
+mod broker;
 mod canonical;
 mod capability;
 mod error;
@@ -27,8 +28,12 @@ mod events;
 mod frozen;
 mod interaction;
 mod ports;
+mod repository;
 mod target;
 
+pub use broker::{
+    AttemptBrokerHandle, BROKER_AUTHORIZE_BUDGET_MS, BrokerLimits, BrokerToolDefinition,
+};
 pub use canonical::canonical_digest;
 pub use capability::{
     CapabilityMatrix, CapabilitySnapshot, CapabilityState, CapabilityViolation,
@@ -55,6 +60,10 @@ pub use ports::{
     ProcessSupervisor, ProtocolViolation, ResourceLimits, STDERR_TAIL_MAX_BYTES,
     StreamFrameAdapter, TransportFault, TurnInput, TurnResume, bounded_stderr_tail, collect_frames,
     fingerprint, with_stderr_suffix,
+};
+pub use repository::{
+    BindNativeSession, CommitContinuation, NativeContinuationBinding, NativeRunRepository,
+    NativeSessionBinding,
 };
 pub use target::{
     AuthExpectation, CONTENT_POLICY_VERSION, CONTENT_SCHEMA_VERSION, ContentPolicy,

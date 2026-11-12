@@ -139,10 +139,10 @@ layered-crate ADR 0021 and this work were merged.
 | Claude Code driver | `agentkit-claude` | 4 |
 | Admission of frozen targets | `agentkit-sessions` | 3 |
 | Session bindings, interactions, continuation ledger (schema 17 to 19) | `agentkit-store` | 4 |
-| Standalone one-turn facade and driver conformance | `agentkit-facade`, to be folded into `agentkit` and `agentkit-testkit` | 6 |
+| Standalone one-turn facade and driver conformance | `agentkit` (feature `claude`) and `agentkit-testkit` (folded by phase N1) | 6, 5 |
 
 "The host never depends on any driver crate" now reads: no crate in layers 1 to 3 depends on
-`agentkit-claude`. `agentkit-native-exec` names `agentkit-native-broker` and `agentkit-store` for
-now; both edges are allowlisted and removed by phase N1. Session admission validates the frozen
+`agentkit-claude`. `agentkit-native-exec` named `agentkit-native-broker` and `agentkit-store`; both
+edges were removed by phase N1 (ports in `agentkit-native`, generic executor). Session admission validates the frozen
 stanza against the typed contract in every build. File paths in `docs/qualification/` predate this
 move and are kept as recorded evidence.
