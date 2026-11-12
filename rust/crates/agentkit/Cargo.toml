@@ -44,7 +44,7 @@ agentkit-claude = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["fs"] }
-tokio-util = { workspace = true, optional = true, features = ["rt"] }
+tokio-util = { workspace = true, optional = true }
 
 [dev-dependencies]
 agentkit-testkit = { workspace = true }
