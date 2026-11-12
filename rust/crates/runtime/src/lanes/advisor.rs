@@ -133,7 +133,7 @@ impl AdvisorLane {
         let engine = AdvisorEngine::new(
             provider,
             store.clone(),
-            Arc::new(CoreRuntimeAdapter(runtime.clone())),
+            runtime.clone(),
             config,
             tools,
             events,
@@ -199,25 +199,6 @@ impl AdvisorLane {
         let state = self.state().ok_or(AgentsError::AdvisorNotConfigured)?;
         let records = state.store.list_advisor_findings(chat_id, limit).await?;
         Ok(records)
-    }
-}
-
-/// Adapts the host's shared runtime to the core runtime trait for the
-/// advisor engine's clock.
-struct CoreRuntimeAdapter(SharedRuntime);
-impl agentkit_core::Runtime for CoreRuntimeAdapter {
-    fn timestamp(&self) -> String {
-        agentkit_store::ConversationTimestamp::from_epoch_millis(self.0.now_ms())
-            .expect("host clock must fit JavaScript Date range")
-            .wire_text()
-            .expect("validated host clock")
-            .into_owned()
-    }
-    fn id(&self, prefix: &str) -> String {
-        format!("{prefix}{}", self.0.id())
-    }
-    fn now_ms(&self) -> u64 {
-        self.0.now_ms().max(0) as u64
     }
 }
 

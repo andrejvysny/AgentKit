@@ -34,7 +34,7 @@ rules (R1–R13) over `cargo metadata`; violations live in
 
 | L | Crate | Responsibility |
 |---|---|---|
-| 1 | `agentkit-kernel` | SHA-256 hex and canonical JSON shared by every layer |
+| 1 | `agentkit-kernel` | SHA-256 hex, canonical JSON, and the single `Runtime` clock/identity port shared by every layer |
 | 1 | `agentkit-contracts` | Wire DTOs, JSON Schema bundle with offline validation, REST route table, identity hashing |
 | 2 | `agentkit-core` | Model/tool loop and its ports: provider streams, bounded tool execution, budgets |
 | 2 | `agentkit-governance` | Ports only: tool guards, approvals, execution authority, receipts, proposals |

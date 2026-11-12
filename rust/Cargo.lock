@@ -158,9 +158,9 @@ name = "agentkit-core"
 version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
+ "agentkit-kernel",
  "async-stream",
  "async-trait",
- "chrono",
  "futures-util",
  "http",
  "serde",
@@ -205,7 +205,6 @@ dependencies = [
  "agentkit-store",
  "agentkit-testkit",
  "async-trait",
- "chrono",
  "serde",
  "serde_json",
  "tempfile",
@@ -266,6 +265,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

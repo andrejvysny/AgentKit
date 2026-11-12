@@ -188,11 +188,11 @@ impl State {
         let run_id = options
             .run_id
             .clone()
-            .unwrap_or_else(|| options.runtime.id("run_"));
+            .unwrap_or_else(|| options.runtime.id_with_prefix("run_"));
         let messages = options.request.messages.clone();
         let initial_length = messages.len();
         let continuation = options.request.continuation.clone();
-        let last_emit_ms = options.runtime.now_ms();
+        let last_emit_ms = options.runtime.now_ms().max(0).cast_unsigned();
         Self {
             run_id,
             seq: options.first_seq,
@@ -210,7 +210,7 @@ impl State {
     }
     async fn emit(&mut self, kind: &str, data: Value) -> Result<(), CoreError> {
         let mut value = json!({"type":kind,"runId":self.run_id,"timestamp":self.options.runtime.timestamp(),
-            "contractVersion":agentkit_contracts::CONTRACT_VERSION,"eventId":self.options.runtime.id("evt_"),"seq":self.seq,"data":data});
+            "contractVersion":agentkit_contracts::CONTRACT_VERSION,"eventId":self.options.runtime.id_with_prefix("evt_"),"seq":self.seq,"data":data});
         if let Some(id) = &self.options.attempt_id {
             value["attemptId"] = id.clone().into();
         }
@@ -224,7 +224,7 @@ impl State {
         }
         self.seq += 1;
         self.pending_messages.clear();
-        self.last_emit_ms = self.options.runtime.now_ms();
+        self.last_emit_ms = self.options.runtime.now_ms().max(0).cast_unsigned();
         let sent = if matches!(
             kind,
             "run.cancelled" | "run.failed" | "run.completed" | "run.usage"
@@ -661,7 +661,7 @@ impl State {
         if id.is_empty() || name.is_empty() || turn.announced.contains(&id) {
             return Ok(());
         }
-        let now = self.options.runtime.now_ms();
+        let now = self.options.runtime.now_ms().max(0).cast_unsigned();
         if let Some((at, bytes)) = turn.preparing.get(&id)
             && (args_bytes <= *bytes || now.saturating_sub(*at) < PREPARING_INTERVAL_MS)
         {
@@ -685,6 +685,8 @@ impl State {
             .options
             .runtime
             .now_ms()
+            .max(0)
+            .cast_unsigned()
             .saturating_sub(self.last_emit_ms)
             >= PROGRESS_INTERVAL_MS;
         if turn.reported_phase == Some(phase) && !quiet {

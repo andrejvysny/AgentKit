@@ -390,7 +390,7 @@ impl AdvisorEngine {
         // Unique per attempt (clock + process-local counter): keeps repeat
         // reviews' finding ids from replaying the first attempt's rows.
         static ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let started_at = self.runtime.now_ms() as i64;
+        let started_at = self.runtime.now_ms();
         let nonce = format!(
             "{started_at}-{}",
             ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -571,7 +571,7 @@ impl AdvisorEngine {
                     } else {
                         model.clone()
                     },
-                    now: self.runtime.now_ms() as i64,
+                    now: self.runtime.now_ms(),
                 })
                 .await?;
             finding_ids.push(finding_id);

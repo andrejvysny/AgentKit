@@ -49,7 +49,7 @@ impl ExecutionBudget {
     ) -> Result<Self, CoreError> {
         let state = state.unwrap_or(BudgetSnapshot {
             version: 1,
-            started_at: runtime.now_ms(),
+            started_at: runtime.now_ms().max(0).cast_unsigned(),
             provider_requests: 0,
             tool_calls: 0,
             correction_passes: 0,
@@ -85,7 +85,7 @@ impl ExecutionBudget {
             self.snapshot()
                 .started_at
                 .saturating_add(limit)
-                .saturating_sub(self.runtime.now_ms())
+                .saturating_sub(self.runtime.now_ms().max(0).cast_unsigned())
         })
     }
     pub fn fail(&self, error: CoreError) {

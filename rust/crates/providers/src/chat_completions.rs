@@ -136,7 +136,7 @@ impl ChatCompletionsProvider {
                 call_id: input
                     .runtime
                     .as_ref()
-                    .map(|runtime| runtime.id("call_"))
+                    .map(|runtime| runtime.id_with_prefix("call_"))
                     .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4())),
                 ..ChatState::default()
             };

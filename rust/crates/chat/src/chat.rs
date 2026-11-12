@@ -105,24 +105,6 @@ impl ChatExecutor {
         }
     }
 }
-pub(crate) struct CoreRuntime(pub SharedRuntime);
-impl agentkit_core::Runtime for CoreRuntime {
-    fn timestamp(&self) -> String {
-        let timestamp = agentkit_store::ConversationTimestamp::from_epoch_millis(self.0.now_ms())
-            .expect("host clock must fit JavaScript Date range");
-        timestamp
-            .wire_text()
-            .expect("validated host clock")
-            .into_owned()
-    }
-    fn id(&self, prefix: &str) -> String {
-        format!("{prefix}{}", self.0.id())
-    }
-    fn now_ms(&self) -> u64 {
-        self.0.now_ms().max(0) as u64
-    }
-}
-
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
     fn handles_verification(&self) -> bool {
@@ -369,8 +351,7 @@ impl ChatExecutor {
         {
             elision::elide_stale_tool_results(&mut entries, &options);
         }
-        let runtime: Arc<dyn agentkit_core::Runtime> =
-            Arc::new(CoreRuntime(context.runtime.clone()));
+        let runtime: Arc<dyn agentkit_core::Runtime> = context.runtime.clone();
         // Subagent children carry per-role execution bounds on their chat
         // metadata; non-subagent sessions get defaults (no behavior change).
         let role_overrides = if session {
@@ -799,37 +780,5 @@ mod tool_gate_tests {
                 .to_string()
                 .contains("profile_snapshot_required")
         );
-    }
-}
-
-#[cfg(test)]
-mod runtime_tests {
-    use super::*;
-    struct Clock(i64);
-    impl crate::Runtime for Clock {
-        fn now_ms(&self) -> i64 {
-            self.0
-        }
-        fn id(&self) -> String {
-            "test".into()
-        }
-    }
-    #[test]
-    fn core_runtime_formats_entire_javascript_date_range_without_chrono_panics() {
-        for (epoch, expected) in [
-            (-8_640_000_000_000_000, "-271821-04-20T00:00:00.000Z"),
-            (8_640_000_000_000_000, "+275760-09-13T00:00:00.000Z"),
-            (253_402_300_800_000, "+010000-01-01T00:00:00.000Z"),
-            (-1, "1969-12-31T23:59:59.999Z"),
-        ] {
-            let runtime = CoreRuntime(Arc::new(Clock(epoch)));
-            assert_eq!(agentkit_core::Runtime::timestamp(&runtime), expected);
-        }
-    }
-    #[test]
-    #[should_panic(expected = "host clock must fit JavaScript Date range")]
-    fn core_runtime_rejects_clock_outside_explicit_precondition() {
-        let runtime = CoreRuntime(Arc::new(Clock(8_640_000_000_000_001)));
-        agentkit_core::Runtime::timestamp(&runtime);
     }
 }

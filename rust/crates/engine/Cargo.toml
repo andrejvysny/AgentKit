@@ -18,16 +18,15 @@ agentkit-core = { workspace = true }
 agentkit-governance = { workspace = true }
 agentkit-kernel = { workspace = true }
 async-trait.workspace = true
-chrono = { workspace = true, features = ["clock"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
-uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
 agentkit-store = { workspace = true }
 agentkit-testkit = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["fs"] }
+uuid.workspace = true

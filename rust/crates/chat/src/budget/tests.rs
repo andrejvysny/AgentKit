@@ -12,14 +12,6 @@ impl crate::Runtime for Clock {
     fn id(&self) -> String {
         uuid::Uuid::new_v4().to_string()
     }
-}
-impl Runtime for Clock {
-    fn now_ms(&self) -> u64 {
-        self.0.load(Ordering::SeqCst).max(0) as u64
-    }
-    fn id(&self, prefix: &str) -> String {
-        format!("{prefix}{}", uuid::Uuid::new_v4())
-    }
     fn timestamp(&self) -> String {
         "2026-10-22T12:00:00Z".into()
     }

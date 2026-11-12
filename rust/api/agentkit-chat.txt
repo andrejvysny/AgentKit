@@ -347,7 +347,7 @@ pub async fn agentkit_chat::load_project_instructions(&dyn agentkit_chat::Projec
 pub fn agentkit_chat::looks_like_emulated_tool_call(&str, &std::collections::hash::set::HashSet<alloc::string::String>) -> bool
 pub fn agentkit_chat::native_write_fingerprint(&serde_json::value::Value) -> alloc::string::String
 pub fn agentkit_chat::parse_budget_limits(core::option::Option<&serde_json::value::Value>) -> agentkit_chat::ChatResult<agentkit_core::budget::BudgetLimits>
-pub async fn agentkit_chat::restore_execution_budget(&agentkit_sessions::store_aliases::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_core::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
+pub async fn agentkit_chat::restore_execution_budget(&agentkit_sessions::store_aliases::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
 pub async fn agentkit_chat::stage_tools(&[alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>], &[alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>], agentkit_governance::contribution::ToolContributionContext) -> agentkit_chat::ChatResult<agentkit_chat::StagedTools>
 pub async fn agentkit_chat::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_chat::ChatResult<agentkit_chat::RoleTaskOverrides>
 pub fn agentkit_chat::ts_args_sha256(&serde_json::value::Value) -> alloc::string::String

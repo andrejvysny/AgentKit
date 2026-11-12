@@ -1,4 +1,6 @@
 pub mod agentkit_engine
+pub use agentkit_engine::Runtime
+pub use agentkit_engine::SystemRuntime
 pub enum agentkit_engine::ContextClassification
 pub agentkit_engine::ContextClassification::Rejected
 pub agentkit_engine::ContextClassification::Unclassified
@@ -229,11 +231,6 @@ pub agentkit_engine::SubmitTask::payload: serde_json::value::Value
 pub agentkit_engine::SubmitTask::priority: i32
 pub agentkit_engine::SubmitTask::scope_id: alloc::string::String
 pub agentkit_engine::SubmitTask::task_id: alloc::string::String
-pub struct agentkit_engine::SystemRuntime
-impl agentkit_engine::Runtime for agentkit_engine::SystemRuntime
-pub fn agentkit_engine::SystemRuntime::id(&self) -> alloc::string::String
-pub fn agentkit_engine::SystemRuntime::now_ms(&self) -> i64
-pub fn agentkit_engine::SystemRuntime::random(&self) -> f64
 pub struct agentkit_engine::TaskBinding
 pub agentkit_engine::TaskBinding::admission_key: alloc::string::String
 pub agentkit_engine::TaskBinding::agent_id: alloc::string::String
@@ -304,14 +301,6 @@ pub fn agentkit_engine::RepositoryFault::is_not_found(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_transient(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::session_conflict(&self) -> core::option::Option<&str>
 pub fn agentkit_engine::RepositoryFault::task_input_reason(&self) -> core::option::Option<agentkit_engine::TaskInputReason>
-pub trait agentkit_engine::Runtime: core::marker::Send + core::marker::Sync
-pub fn agentkit_engine::Runtime::id(&self) -> alloc::string::String
-pub fn agentkit_engine::Runtime::now_ms(&self) -> i64
-pub fn agentkit_engine::Runtime::random(&self) -> f64
-impl agentkit_engine::Runtime for agentkit_engine::SystemRuntime
-pub fn agentkit_engine::SystemRuntime::id(&self) -> alloc::string::String
-pub fn agentkit_engine::SystemRuntime::now_ms(&self) -> i64
-pub fn agentkit_engine::SystemRuntime::random(&self) -> f64
 pub trait agentkit_engine::SessionFlushPlanner<R: agentkit_engine::TaskRepository>: core::marker::Send + core::marker::Sync
 pub fn agentkit_engine::SessionFlushPlanner::settle_plan<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::TaskRecord, bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<<R as agentkit_engine::TaskRepository>::SessionSettle, <R as agentkit_engine::TaskRepository>::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_engine::SessionSettlement: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
@@ -356,4 +345,4 @@ pub fn agentkit_engine::VerificationHook::verify_pass<'life0, 'async_trait>(&'li
 pub fn agentkit_engine::classify_execution_error<E: agentkit_engine::RepositoryFault>(&agentkit_engine::EngineError<E>) -> agentkit_engine::ExecutionErrorClassification
 pub type agentkit_engine::EngineResult<T, E> = core::result::Result<T, agentkit_engine::EngineError<E>>
 pub type agentkit_engine::ObserverError = alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
-pub type agentkit_engine::SharedRuntime = alloc::rcs::arc::Arc<dyn agentkit_engine::Runtime>
+pub type agentkit_engine::SharedRuntime = alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>

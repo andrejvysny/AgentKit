@@ -2,25 +2,9 @@ use crate::{EngineResult, ExecutionContext, TaskRecord, TaskRepository};
 use async_trait::async_trait;
 use std::sync::Arc;
 
-pub trait Runtime: Send + Sync {
-    fn now_ms(&self) -> i64;
-    fn id(&self) -> String;
-    fn random(&self) -> f64 {
-        (uuid::Uuid::new_v4().as_u128() >> 75) as f64 / ((1u64 << 53) - 1) as f64
-    }
-}
-
-pub struct SystemRuntime;
-
-impl Runtime for SystemRuntime {
-    fn now_ms(&self) -> i64 {
-        chrono::Utc::now().timestamp_millis()
-    }
-
-    fn id(&self) -> String {
-        uuid::Uuid::now_v7().to_string()
-    }
-}
+/// The single clock/identity port lives in `agentkit-kernel` (ADR 0021);
+/// the engine re-exports it so workers and executors name one trait.
+pub use agentkit_kernel::{Runtime, SystemRuntime};
 
 #[async_trait]
 pub trait TaskExecutor<R: TaskRepository>: Send + Sync {

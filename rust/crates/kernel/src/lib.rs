@@ -6,8 +6,12 @@
 
 mod canonical;
 mod hash;
+mod runtime;
 mod timestamp;
 
 pub use canonical::{canonical_json, canonical_sha256};
 pub use hash::sha256_hex;
+pub use runtime::Runtime;
+#[cfg(not(target_arch = "wasm32"))]
+pub use runtime::SystemRuntime;
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};

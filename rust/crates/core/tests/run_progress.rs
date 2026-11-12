@@ -9,13 +9,16 @@ use std::sync::{
 
 struct Clock(AtomicU64);
 impl Runtime for Clock {
-    fn now_ms(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
+    fn now_ms(&self) -> i64 {
+        self.0.load(Ordering::SeqCst).cast_signed()
     }
     fn timestamp(&self) -> String {
         "2026-11-06T12:00:00.000Z".into()
     }
-    fn id(&self, prefix: &str) -> String {
+    fn id(&self) -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+    fn id_with_prefix(&self, prefix: &str) -> String {
         format!("{prefix}{}", uuid::Uuid::new_v4())
     }
 }

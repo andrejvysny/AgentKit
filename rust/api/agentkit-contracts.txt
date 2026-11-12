@@ -2130,17 +2130,6 @@ pub const agentkit_contracts::REGENERATE_TASK_ID_PREFIX: &str
 pub const agentkit_contracts::REST_API_VERSION: &str
 pub const agentkit_contracts::TOOL_NAME_PATTERN: &str
 pub static agentkit_contracts::REST_ROUTES: &[agentkit_contracts::RouteDef]
-pub trait agentkit_contracts::Clock: core::marker::Send + core::marker::Sync
-pub fn agentkit_contracts::Clock::now_iso(&self) -> alloc::string::String
-pub fn agentkit_contracts::Clock::now_millis(&self) -> i64
-pub trait agentkit_contracts::IdGenerator: core::marker::Send + core::marker::Sync
-pub fn agentkit_contracts::IdGenerator::attempt_id(&self) -> alloc::string::String
-pub fn agentkit_contracts::IdGenerator::chat_id(&self) -> alloc::string::String
-pub fn agentkit_contracts::IdGenerator::event_id(&self) -> alloc::string::String
-pub fn agentkit_contracts::IdGenerator::message_id(&self) -> alloc::string::String
-pub fn agentkit_contracts::IdGenerator::operation_id(&self) -> alloc::string::String
-pub fn agentkit_contracts::IdGenerator::proposal_id(&self) -> alloc::string::String
-pub fn agentkit_contracts::IdGenerator::task_id(&self) -> alloc::string::String
 pub trait agentkit_contracts::JsonDeserialize: core::marker::Sized
 pub fn agentkit_contracts::JsonDeserialize::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for ()
