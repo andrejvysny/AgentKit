@@ -95,3 +95,39 @@ Phases P0–P8 are tracked in Plane. Each extraction lands as a pure-move commit
 - Layer 6 temporarily holds `agentkit-facade`.
 - The allowlist only shrinks, with one exception: a merge from `master` may add the entries its
   commit message names. The merge of 2026-11 added four; phases N1 and G1 remove them.
+
+## Amendment (G1) — truthful gates (2026-11-12)
+
+R5 is reworded: **no glob re-exports at crate roots, no `#[path]`, no
+process-global mutable state outside `agentkit-sys`; immutable lazy constants
+are allowed.** `check-arch` now flags `static mut`, every declaration inside a
+`thread_local!` block, and any static whose type has interior mutability
+(`Mutex`, `RwLock`, atomics, `OnceLock`/`OnceCell`/`Once`, `Notify`,
+`RefCell`/`Cell`, `Condvar`, `Barrier`, `Semaphore`, `DashMap`). A
+`LazyLock<X>` is immutable — and no longer reported — when `X` is one of
+`Regex`, `Vec<Regex>`, `String`, `Vec<String>`, `Option<String>`,
+`HashSet<&'static str>`, `BTreeSet<&'static str>`. The rewrite drops 29 lazy
+regex/table entries from the allowlist and adds 11 real ones that the old
+pattern missed.
+
+Three rules join the set:
+
+- **R11** — Among adapters, only `agentkit-napi` may depend on `agentkit-store`.
+  With the layer rule for contexts, this leaves `runtime` and `napi` as the only
+  crates that name the store. Allowlisted at intake: `agentkit-http`, `agentkit-mcp`.
+- **R12** — No non-test source file over 1,000 lines in layers 1–3 and 5.
+  Eight files at intake.
+- **R13** — The allowlist shrinks. A merge from trunk may add entries that its
+  commit message names, each tagged with the phase that removes it.
+
+`check-arch` reports a count per rule on its success line.
+
+| Allowlisted group | Removed by |
+|---|---|
+| `R1b` | P5e (the two `agentkit-native-exec` edges by N1) |
+| `R11` | P5e |
+| `R5 static` in toolpacks-coding `process.rs` / `coordination.rs` | S1 |
+| `R5 static` in `agentkit-napi` | NAPI phase |
+| `R5 static` in `agentkit-mcp` | P5e |
+| `R12` | the phase that owns each file |
+| `R8` (napi exports without `catch_unwind`) | NAPI phase |
