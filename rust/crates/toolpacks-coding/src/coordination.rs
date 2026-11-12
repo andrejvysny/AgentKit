@@ -3803,7 +3803,29 @@ mod tests {
         }
         drop(_hold);
         // After the flock releases, the dead-only tombstone goes too.
-        assert!(sweep_retiring_tombstones_sync(dir.clone(), 0).contains(&held));
+        // A concurrent spawn in THIS process can transiently inherit the
+        // flock we just dropped: between fork and exec the child holds a
+        // second reference to the descriptor (exec closes it via
+        // O_CLOEXEC), so one sweep call can legitimately hit EWOULDBLOCK
+        // and defer. Production treats the sweep as best-effort hygiene
+        // repeated on every coordinator open; the test retries the same
+        // way instead of asserting one call succeeds under any load.
+        let mut swept_held = false;
+        for _ in 0..200 {
+            if sweep_retiring_tombstones_sync(dir.clone(), 0).contains(&held) {
+                swept_held = true;
+                break;
+            }
+            if !held.exists() {
+                swept_held = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(
+            swept_held,
+            "held tombstone must be swept once no flock holder survives"
+        );
         assert!(!held.exists());
         let _ = std::fs::remove_dir_all(dir);
     }
