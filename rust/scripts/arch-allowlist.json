@@ -26,7 +26,6 @@
     "R5 agentkit-connections src/lib.rs pub use repository::*",
     "R5 agentkit-connections src/lib.rs pub use secrets::*",
     "R5 agentkit-connections src/lib.rs pub use types::*",
-    "R5 agentkit-contracts src/ajv.rs static PATTERNS",
     "R5 agentkit-contracts src/lib.rs pub use ajv::*",
     "R5 agentkit-contracts src/lib.rs pub use dto::*",
     "R5 agentkit-contracts src/lib.rs pub use event::*",
@@ -36,17 +35,13 @@
     "R5 agentkit-contracts src/lib.rs pub use presence::*",
     "R5 agentkit-contracts src/lib.rs pub use routes::*",
     "R5 agentkit-contracts src/lib.rs pub use validation::*",
-    "R5 agentkit-contracts src/validation.rs static SCHEMAS",
-    "R5 agentkit-contracts src/validation.rs static VALIDATORS",
     "R5 agentkit-core src/lib.rs pub use types::*",
     "R5 agentkit-core src/run.rs #[path] run_cleanup.rs",
     "R5 agentkit-core src/run.rs #[path] run_hooks.rs",
-    "R5 agentkit-http src/routes.rs static ROUTES",
     "R5 agentkit-mcp src/configuration/state.rs static RUNTIMES",
     "R5 agentkit-mcp src/configuration/state.rs static STATES",
     "R5 agentkit-mcp src/manager/session.rs static REGISTRATIONS",
     "R5 agentkit-mcp src/oauth_store.rs static LOCKS",
-    "R5 agentkit-napi src/errors.rs static CONTRACT",
     "R5 agentkit-napi src/jsbridge.rs static CALLS",
     "R5 agentkit-napi src/mcp_client.rs #[path] mcp_client_oauth.rs",
     "R5 agentkit-napi src/mcp_client.rs #[path] mcp_client_ports.rs",
@@ -77,7 +72,6 @@
     "R5 agentkit-napi src/store.rs #[path] store_tasks.rs",
     "R5 agentkit-napi src/store.rs #[path] store_tool_executions.rs",
     "R5 agentkit-napi src/store.rs #[path] store_transactions.rs",
-    "R5 agentkit-providers src/presets.rs static PRESETS",
     "R5 agentkit-providers src/responses.rs static REJECTED",
     "R5 agentkit-store src/faults.rs static BOUND",
     "R5 agentkit-store src/lib.rs pub use advisor::*",
@@ -118,7 +112,6 @@
     "R5 agentkit-toolpacks-coding src/process.rs static RECOVERY",
     "R5 agentkit-toolpacks-coding src/process.rs static SIGNAL_LOG",
     "R5 agentkit-toolpacks-coding src/version_ledger.rs static LEDGER",
-    "R5 agentkit-toolpacks-coding src/version_ledger.rs static TEST_LOCK",
-    "R8 agentkit-napi exports-without-catch_unwind=115"
+    "R5 agentkit-toolpacks-coding src/version_ledger.rs static TEST_LOCK"
   ]
 }

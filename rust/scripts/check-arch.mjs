@@ -64,24 +64,28 @@ const CONTEXT_DEPS = {
 const SKIP_DIRS = new Set(["tests", "benches", "examples", "target"]);
 // R5 (G1): a static is process-global mutable state when its type has
 // interior mutability (mutexes, atomics, cells, sync primitives), when it
-// is `static mut`, or when it sits in a `thread_local!` block. Immutable
-// lazy constants — a `LazyLock<X>` whose X is one of the whitelisted
-// value types — are not reported.
+// is `static mut`, or when it sits in a `thread_local!` block. Write-once
+// caches — `LazyLock<T>`, `OnceLock<T>`, `OnceCell<T>`, `Once<T>` whose T
+// carries no interior mutability (regexes, lookup tables, parsed schemas) —
+// are immutable constants and are not reported. A wrapper whose inner type
+// is itself mutable (`LazyLock<Mutex<_>>`, `LazyLock<Arc<_>>`, a nested
+// `OnceCell`) stays a violation, and so does an aliased global whose
+// initializer still constructs a lock.
 const STATIC_DECL_RE =
   /^\s*(pub(\([^)]*\))?\s+)?static\s+(mut\s+)?([A-Z_0-9]+)\s*:/;
 const MUTABLE_TYPE_RE =
   /Mutex|RwLock|Atomic[A-Za-z0-9]*|OnceLock|OnceCell|\bOnce\b|Notify|RefCell|\bCell<|Condvar|Barrier|Semaphore|DashMap/;
-const LAZY_ALLOWED = new Set([
-  "Regex",
-  "regex::Regex",
-  "Vec<Regex>",
-  "Vec<regex::Regex>",
-  "String",
-  "Vec<String>",
-  "Option<String>",
-  "HashSet<&'staticstr>",
-  "BTreeSet<&'staticstr>",
-]);
+const WRITE_ONCE_RE =
+  /^(?:\w+::)*(LazyLock|OnceLock|OnceCell|Once)<([\s\S]*)>$/;
+// Inside a write-once wrapper a lazily-built shared handle is process-global
+// state too, so `Arc<` joins the interior-mutability set there.
+const WRITE_ONCE_INNER_RE = new RegExp(`${MUTABLE_TYPE_RE.source}|Arc<`);
+// Constructor calls that betray mutability hidden behind a type alias, as in
+// `static S: LazyLock<StartCache> = LazyLock::new(|| Mutex::new(..))`. The
+// wrapper's own `LazyLock::new` and the write-once `Once*::new` cells do not
+// count; `\b` keeps `OnceCell::new` from matching the `Cell::new` tail.
+const MUTABLE_INIT_RE =
+  /\b(?:\w+::)*(?:Mutex|RwLock|Notify|Condvar|Barrier|Semaphore|DashMap|RefCell|Cell|Atomic[A-Za-z0-9]*)\s*::\s*new\b/;
 const THREAD_LOCAL_RE = /\bthread_local\s*!\s*\{/;
 const R12_LIMIT = 1000;
 
@@ -175,6 +179,19 @@ function typeText(lines, index) {
   return text.slice(colon + 1);
 }
 
+// Initializer text of a declaration: everything after the first '=' in the
+// same up-to-six-line window typeText uses, or "" when the declaration has
+// no initializer.
+function initText(lines, index) {
+  let text = lines[index];
+  for (let extra = 0; extra < 6 && !text.includes(";"); extra += 1) {
+    if (index + extra + 1 >= lines.length) break;
+    text += "\n" + lines[index + extra + 1];
+  }
+  const eq = text.indexOf("=");
+  return eq < 0 ? "" : text.slice(eq + 1);
+}
+
 // One boolean per line: the line sits inside a `thread_local! { ... }`
 // block, tracked by brace depth.
 function threadLocalLines(lines) {
@@ -227,33 +244,66 @@ function staticViolations(crateName, rel, lines, violations) {
       violations.add(`${prefix} static mut ${name}`);
       continue;
     }
-    const type = typeText(lines, i);
-    if (insideThreadLocal[i] || MUTABLE_TYPE_RE.test(type)) {
+    if (insideThreadLocal[i]) {
       violations.add(`${prefix} static ${name}`);
       continue;
     }
-    let t = type.replace(/\s+/g, "");
-    if (t.startsWith("std::sync::")) t = t.slice("std::sync::".length);
-    if (t.startsWith("LazyLock<") && t.endsWith(">")) {
-      const inner = t.slice("LazyLock<".length, -1);
-      if (!LAZY_ALLOWED.has(inner)) violations.add(`${prefix} static ${name}`);
-    }
+    const type = typeText(lines, i);
+    const writeOnce = WRITE_ONCE_RE.exec(type.replace(/\s+/g, ""));
+    const innerMutable =
+      writeOnce !== null && WRITE_ONCE_INNER_RE.test(writeOnce[2]);
+    // Mutability hidden behind a type alias: `LazyLock<StartCache>` whose
+    // initializer constructs a `Mutex`.
+    const initMutable =
+      writeOnce !== null && MUTABLE_INIT_RE.test(initText(lines, i));
+    // A write-once cache of plain value types is an immutable constant.
+    if (writeOnce !== null && !innerMutable && !initMutable) continue;
+    if (MUTABLE_TYPE_RE.test(type) || innerMutable || initMutable)
+      violations.add(`${prefix} static ${name}`);
   }
 }
 
 // R8: #[napi] exports that neither run under catch_unwind nor decode a
 // derived object DTO. The measured count is part of the id, so the entry
 // goes stale the moment an export gains catch_unwind — it can only lower.
+// Only function/method exports are counted: napi-derive accepts
+// catch_unwind on functions alone ("#[napi(catch_unwind)] can only be
+// applied to a function or method"), so #[napi] attributes that decorate
+// declarations (class structs, enums, and the impl blocks that group
+// methods — each method carries its own #[napi]) run no code and are not
+// exports.
+function decoratedItemKind(lines, index) {
+  let j = index + 1;
+  while (
+    j < lines.length &&
+    (/^\s*\/\//.test(lines[j]) || /^\s*#\[/.test(lines[j]))
+  )
+    j += 1;
+  const next = (lines[j] ?? "").trim();
+  if (
+    next.startsWith("fn ") ||
+    next.startsWith("pub fn ") ||
+    next.startsWith("async fn ") ||
+    next.startsWith("pub async fn ")
+  )
+    return "fn";
+  if (next.startsWith("impl")) return "impl";
+  return "decl";
+}
+
 function napiExportCount(crate) {
   const root = dirname(crate.manifest_path);
   const src = join(root, "src");
   let count = 0;
   for (const file of sourceFiles(src)) {
-    for (const line of readFileSync(file, "utf8").split("\n")) {
+    const lines = readFileSync(file, "utf8").split("\n");
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
       if (
         /^\s*#\[napi(\(|\])/.test(line) &&
         !line.includes("catch_unwind") &&
-        !line.includes("object")
+        !line.includes("object") &&
+        decoratedItemKind(lines, i) === "fn"
       )
         count += 1;
     }
