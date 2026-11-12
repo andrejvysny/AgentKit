@@ -26,6 +26,8 @@
 - Session admission validates the frozen stanza against the typed contract in every build (no `http` feature gate).
 - `TaskExecutor` gains `handles_verification_for` and `resolves_provider_snapshots_for`; `ExecutionContext` gains `lease_fence()`. Store schema version is 19.
 
+**Native lane ports (N1).** `NativeAgentExecutor` and `NativeDispatchExecutor` are generic over the repository: they name `agentkit_engine::TaskRepository` and `agentkit_native::NativeRunRepository` instead of `SqliteStore`. `AttemptBrokerFactory::start` returns `Arc<dyn AttemptBrokerHandle>` and an `agentkit_engine::ExecutionFailure`; the MCP broker reaches the executor only through the port. The four native persistence records (`NativeSessionBinding`, `BindNativeSession`, `NativeContinuationBinding`, `CommitContinuation`) and both ports (`AttemptBrokerHandle`, `NativeRunRepository`) live in `agentkit-native`. The executor crate's normal dependency graph no longer contains `agentkit-store`, `agentkit-native-broker`, `agentkit-mcp` or `axum`.
+
 **Removed (tooling).** `snapshot:release`, `qualify:package`, `source:digest` and the scripts behind them (`scripts/snapshot-release.mjs`, `scripts/release/{foundation.mjs,foundation/,fixture-projection.mjs,publication.mjs,qualify-candidates.mjs,source-proof.mjs}`, `scripts/qualify-package.mjs`, `scripts/source-digest.mjs`, `scripts/sqlite-durability.mjs`, `scripts/node-sqlite-conformance.mjs`, `scripts/qualification/{consumer.mjs,types.ts,electron-native.cjs,responses-openpcb-smoke.mjs,sqlite-fixture.mjs}`) and their tests. The native lockstep release lane and `qualify:local` / `qualify:cold` remain.
 
 ## Unreleased — Unified agent runtime M0–M7

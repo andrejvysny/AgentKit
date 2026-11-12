@@ -17,41 +17,11 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use agentkit_native::{
-    AnswerDisposition, AnswerSubmission, Decision, InteractionKind, InteractionRejection,
-    PendingInteraction,
+    AnswerDisposition, AnswerSubmission, BindNativeSession, Decision, InteractionKind,
+    InteractionRejection, NativeSessionBinding, PendingInteraction,
 };
 
 use crate::{Result, StoreError};
-
-/// One row of the vendor-session lineage ledger.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeSessionBinding {
-    pub attempt_id: String,
-    pub task_id: String,
-    pub backend: String,
-    pub vendor_session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_vendor_session_id: Option<String>,
-    /// `assigned` (bound before spawn from the frozen plan), `observed`
-    /// (confirmed from the vendor init frame) or `retired`.
-    pub state: String,
-    pub assigned_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observed_at: Option<i64>,
-}
-
-/// Pre-spawn binding input: the identity the plan froze, recorded before
-/// any process exists (AGENTKIT-113 crash-mid-attempt lineage).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindNativeSession {
-    pub attempt_id: String,
-    pub task_id: String,
-    pub backend: String,
-    pub vendor_session_id: String,
-    pub parent_vendor_session_id: Option<String>,
-    pub assigned_at: i64,
-}
 
 /// A stored interaction with its settlement facts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

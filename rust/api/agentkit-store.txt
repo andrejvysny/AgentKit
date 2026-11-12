@@ -301,13 +301,6 @@ pub agentkit_store::ApplyOutcome::failed_ops: alloc::vec::Vec<serde_json::value:
 pub agentkit_store::ApplyOutcome::result_json: core::option::Option<alloc::string::String>
 pub agentkit_store::ApplyOutcome::revision: core::option::Option<alloc::string::String>
 pub agentkit_store::ApplyOutcome::status: alloc::string::String
-pub struct agentkit_store::BindNativeSession
-pub agentkit_store::BindNativeSession::assigned_at: i64
-pub agentkit_store::BindNativeSession::attempt_id: alloc::string::String
-pub agentkit_store::BindNativeSession::backend: alloc::string::String
-pub agentkit_store::BindNativeSession::parent_vendor_session_id: core::option::Option<alloc::string::String>
-pub agentkit_store::BindNativeSession::task_id: alloc::string::String
-pub agentkit_store::BindNativeSession::vendor_session_id: alloc::string::String
 pub struct agentkit_store::ChatRecord
 pub agentkit_store::ChatRecord::archived: bool
 pub agentkit_store::ChatRecord::created_at: agentkit_kernel::timestamp::ConversationTimestamp
@@ -317,18 +310,6 @@ pub agentkit_store::ChatRecord::title: core::option::Option<alloc::string::Strin
 pub agentkit_store::ChatRecord::updated_at: agentkit_kernel::timestamp::ConversationTimestamp
 impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ChatRecord
 pub fn agentkit_store::ChatRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
-pub struct agentkit_store::CommitContinuation
-pub agentkit_store::CommitContinuation::backend: alloc::string::String
-pub agentkit_store::CommitContinuation::committed_at: i64
-pub agentkit_store::CommitContinuation::config_identity: alloc::string::String
-pub agentkit_store::CommitContinuation::conversation: alloc::string::String
-pub agentkit_store::CommitContinuation::executable: alloc::string::String
-pub agentkit_store::CommitContinuation::history_position: i64
-pub agentkit_store::CommitContinuation::owning_attempt_id: alloc::string::String
-pub agentkit_store::CommitContinuation::owning_task_id: alloc::string::String
-pub agentkit_store::CommitContinuation::parent: alloc::string::String
-pub agentkit_store::CommitContinuation::system_prompt_revision: core::option::Option<alloc::string::String>
-pub agentkit_store::CommitContinuation::vendor_session_id: alloc::string::String
 pub struct agentkit_store::CreateAgent
 pub agentkit_store::CreateAgent::agent_id: core::option::Option<alloc::string::String>
 pub agentkit_store::CreateAgent::definition: agentkit_store::AgentDefinition
@@ -482,33 +463,6 @@ pub agentkit_store::NativeCallReceipt::record: serde_json::value::Value
 pub agentkit_store::NativeCallReceipt::recorded_at: i64
 pub agentkit_store::NativeCallReceipt::task_id: alloc::string::String
 pub agentkit_store::NativeCallReceipt::tool_name: alloc::string::String
-pub struct agentkit_store::NativeContinuationBinding
-pub agentkit_store::NativeContinuationBinding::backend: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::binding_id: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::claimed_at: core::option::Option<i64>
-pub agentkit_store::NativeContinuationBinding::claimed_attempt_id: core::option::Option<alloc::string::String>
-pub agentkit_store::NativeContinuationBinding::claimed_task_id: core::option::Option<alloc::string::String>
-pub agentkit_store::NativeContinuationBinding::committed_at: i64
-pub agentkit_store::NativeContinuationBinding::config_identity: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::conversation: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::executable: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::generation: i64
-pub agentkit_store::NativeContinuationBinding::history_position: i64
-pub agentkit_store::NativeContinuationBinding::owning_attempt_id: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::owning_task_id: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::parent: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::state: alloc::string::String
-pub agentkit_store::NativeContinuationBinding::system_prompt_revision: core::option::Option<alloc::string::String>
-pub agentkit_store::NativeContinuationBinding::vendor_session_id: alloc::string::String
-pub struct agentkit_store::NativeSessionBinding
-pub agentkit_store::NativeSessionBinding::assigned_at: i64
-pub agentkit_store::NativeSessionBinding::attempt_id: alloc::string::String
-pub agentkit_store::NativeSessionBinding::backend: alloc::string::String
-pub agentkit_store::NativeSessionBinding::observed_at: core::option::Option<i64>
-pub agentkit_store::NativeSessionBinding::parent_vendor_session_id: core::option::Option<alloc::string::String>
-pub agentkit_store::NativeSessionBinding::state: alloc::string::String
-pub agentkit_store::NativeSessionBinding::task_id: alloc::string::String
-pub agentkit_store::NativeSessionBinding::vendor_session_id: alloc::string::String
 pub struct agentkit_store::OutboxInput
 pub agentkit_store::OutboxInput::available_at: i64
 pub agentkit_store::OutboxInput::id: core::option::Option<alloc::string::String>
@@ -650,18 +604,18 @@ pub async fn agentkit_store::SqliteStore::mutate_chat<F, T>(&self, &str, i64, F)
 pub async fn agentkit_store::SqliteStore::search_messages(&self, &str, core::option::Option<alloc::string::String>, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::MessageSearchHit>>
 pub async fn agentkit_store::SqliteStore::update_chat(&self, &str, core::option::Option<alloc::string::String>, core::option::Option<serde_json::value::Value>, core::option::Option<bool>, i64) -> agentkit_store::Result<agentkit_store::ChatRecord>
 impl agentkit_store::SqliteStore
-pub async fn agentkit_store::SqliteStore::active_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
-pub async fn agentkit_store::SqliteStore::claim_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>, &str, &str, i64) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
-pub async fn agentkit_store::SqliteStore::claim_selected_continuation(&self, &agentkit_store::NativeContinuationBinding, &str, &str, i64) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
-pub async fn agentkit_store::SqliteStore::commit_continuation(&self, agentkit_store::CommitContinuation) -> agentkit_store::Result<agentkit_store::NativeContinuationBinding>
-pub async fn agentkit_store::SqliteStore::continuation_for_attempt(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::active_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::claim_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>, &str, &str, i64) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::claim_selected_continuation(&self, &agentkit_native::repository::NativeContinuationBinding, &str, &str, i64) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::commit_continuation(&self, agentkit_native::repository::CommitContinuation) -> agentkit_store::Result<agentkit_native::repository::NativeContinuationBinding>
+pub async fn agentkit_store::SqliteStore::continuation_for_attempt(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
 pub async fn agentkit_store::SqliteStore::get_call_receipt(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeCallReceipt>>
-pub async fn agentkit_store::SqliteStore::mark_continuation_uncertain(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
-pub async fn agentkit_store::SqliteStore::reconcile_continuation(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::mark_continuation_uncertain(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::reconcile_continuation(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
 pub async fn agentkit_store::SqliteStore::record_call_lifecycle(&self, agentkit_store::NativeCallReceipt) -> agentkit_store::Result<()>
 pub async fn agentkit_store::SqliteStore::record_call_receipt(&self, agentkit_store::NativeCallReceipt) -> agentkit_store::Result<()>
-pub async fn agentkit_store::SqliteStore::release_continuation_claim(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
-pub async fn agentkit_store::SqliteStore::resumable_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::release_continuation_claim(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::resumable_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
 pub async fn agentkit_store::SqliteStore::retire_continuations(&self, &str) -> agentkit_store::Result<usize>
 impl agentkit_store::SqliteStore
 pub fn agentkit_store::SqliteStore::actor_identity(&self) -> agentkit_store::StoreActorIdentity
@@ -699,15 +653,15 @@ pub async fn agentkit_store::SqliteStore::answer_human_request(&self, agentkit_s
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::answer_interaction(&self, &agentkit_native::interaction::AnswerSubmission, &str, &str, u64, &str, i64) -> agentkit_store::Result<agentkit_native::interaction::AnswerDisposition>
 pub async fn agentkit_store::SqliteStore::answer_interaction_fenced(&self, &agentkit_native::interaction::AnswerSubmission, &str, &str, u64, &str, i64) -> agentkit_store::Result<agentkit_native::interaction::AnswerDisposition>
-pub async fn agentkit_store::SqliteStore::bind_native_session(&self, agentkit_store::BindNativeSession) -> agentkit_store::Result<agentkit_store::NativeSessionBinding>
-pub async fn agentkit_store::SqliteStore::current_native_binding(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeSessionBinding>>
+pub async fn agentkit_store::SqliteStore::bind_native_session(&self, agentkit_native::repository::BindNativeSession) -> agentkit_store::Result<agentkit_native::repository::NativeSessionBinding>
+pub async fn agentkit_store::SqliteStore::current_native_binding(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeSessionBinding>>
 pub async fn agentkit_store::SqliteStore::expire_interactions(&self, &str, i64) -> agentkit_store::Result<usize>
 pub async fn agentkit_store::SqliteStore::get_interaction(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::InteractionRow>>
 pub async fn agentkit_store::SqliteStore::invalidate_interaction(&self, &str) -> agentkit_store::Result<bool>
 pub async fn agentkit_store::SqliteStore::invalidate_interactions(&self, &str, i64) -> agentkit_store::Result<usize>
 pub async fn agentkit_store::SqliteStore::is_observed_native_session(&self, &str) -> agentkit_store::Result<bool>
 pub async fn agentkit_store::SqliteStore::list_interactions(&self, &str, bool) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::InteractionRow>>
-pub async fn agentkit_store::SqliteStore::observe_native_session(&self, &str, &str, i64) -> agentkit_store::Result<agentkit_store::NativeSessionBinding>
+pub async fn agentkit_store::SqliteStore::observe_native_session(&self, &str, &str, i64) -> agentkit_store::Result<agentkit_native::repository::NativeSessionBinding>
 pub async fn agentkit_store::SqliteStore::open_interaction(&self, agentkit_native::interaction::PendingInteraction) -> agentkit_store::Result<()>
 pub async fn agentkit_store::SqliteStore::retire_native_binding(&self, &str) -> agentkit_store::Result<()>
 impl agentkit_store::SqliteStore
@@ -921,6 +875,18 @@ pub fn agentkit_store::SqliteStore::submit<'life0, 'async_trait>(&'life0 self, a
 pub fn agentkit_store::SqliteStore::submit_child<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_store::SqliteStore::update_progress<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_store::SqliteStore::wait_for_children<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_native::repository::NativeRunRepository for agentkit_store::SqliteStore
+pub type agentkit_store::SqliteStore::Error = agentkit_store::StoreError
+pub fn agentkit_store::SqliteStore::active_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
+pub fn agentkit_store::SqliteStore::bind_native_session<'life0, 'async_trait>(&'life0 self, agentkit_native::repository::BindNativeSession) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::repository::NativeSessionBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::claim_selected_continuation<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::repository::NativeContinuationBinding, &'life2 str, &'life3 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_store::SqliteStore::commit_continuation<'life0, 'async_trait>(&'life0 self, agentkit_native::repository::CommitContinuation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::repository::NativeContinuationBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::current_native_binding<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeSessionBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::invalidate_interactions<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<usize, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::mark_continuation_uncertain<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::observe_native_session<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::repository::NativeSessionBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::release_continuation_claim<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::resumable_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'life7, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>, &'life7 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait, 'life7: 'async_trait
 impl core::fmt::Debug for agentkit_store::SqliteStore
 pub fn agentkit_store::SqliteStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct agentkit_store::StageQueuedTurn

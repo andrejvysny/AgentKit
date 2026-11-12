@@ -29,21 +29,22 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use agentkit_native::{
-    AttemptBrokerHandle, BrokerLimits, BrokerToolDefinition, CapabilityViolation,
+    AttemptBrokerHandle, BindNativeSession, BrokerLimits, BrokerToolDefinition, CommitContinuation,
     ExecutableLocator, ExecutionTarget, FailureClass, FinishDisposition, FrameLine,
-    InterruptPolicy, NativeBackend, NativeError, NativeEvent, NativeExecutionTarget, NativeProfile,
-    NativeTerminalOutcome, PreflightReport, ProcessExit, ProcessSupervisor, ResourceLimits,
-    TransportFault, TurnInput, TurnResume, validate_execution_target,
+    InterruptPolicy, NativeBackend, NativeContinuationBinding, NativeError, NativeEvent,
+    NativeExecutionTarget, NativeProfile, NativeRunRepository, NativeTerminalOutcome,
+    PreflightReport, ProcessExit, ProcessSupervisor, ResourceLimits, TransportFault, TurnInput,
+    TurnResume, validate_execution_target,
 };
-use agentkit_store::{BindNativeSession, NativeContinuationBinding, SqliteStore};
 
-use agentkit_engine::{ExecutionFailure, RetrySafety, TaskExecutor};
+use agentkit_engine::{EngineError, ExecutionFailure, RetrySafety, TaskExecutor, TaskRepository};
 
-// Transitional bindings to the SQLite store (ADR 0021 amendment). Phase N1
-// replaces them with a repository port and a generic executor.
-type HostError = agentkit_engine::EngineError<agentkit_store::StoreError>;
-type HostResult<T> = Result<T, HostError>;
-type ExecutionContext = agentkit_engine::ExecutionContext<SqliteStore>;
+// The executor is generic over the repository (phase N1): every durable
+// fact comes through the engine's task port and the native lane's run port,
+// both closed over the same error type.
+type HostError<R> = agentkit_engine::EngineError<<R as TaskRepository>::Error>;
+type HostResult<R, T> = Result<T, HostError<R>>;
+type ExecutionContext<R> = agentkit_engine::ExecutionContext<R>;
 
 pub use agentkit_native::{
     BROKER_PAYLOAD_KEY, BrokerLimitsSpec, BrokerSpec, BrokerToolSpec,
@@ -78,7 +79,7 @@ pub trait AttemptBrokerFactory: Send + Sync {
     async fn start(
         &self,
         ctx: &AttemptBrokerContext<'_>,
-    ) -> HostResult<Arc<dyn AttemptBrokerHandle>>;
+    ) -> Result<Arc<dyn AttemptBrokerHandle>, agentkit_engine::ExecutionFailure>;
 }
 
 /// Tunables for the executor; defaults are the qualified bounds from
@@ -111,16 +112,19 @@ impl Default for NativeExecutorOptions {
 /// stays refused), and a completed turn settles it through the commit
 /// sweep. The owner's Drop discharges an undispositioned claim so an
 /// aborted future can never strand the position in `owned` forever.
-struct ContinuationClaim {
-    store: SqliteStore,
+struct ContinuationClaim<R> {
+    store: R,
     attempt_id: String,
     binding_id: String,
     input_accepted: std::sync::atomic::AtomicBool,
     settled: std::sync::atomic::AtomicBool,
 }
 
-impl ContinuationClaim {
-    fn new(store: &SqliteStore, attempt_id: &str, binding_id: &str) -> Self {
+impl<R> ContinuationClaim<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
+    fn new(store: &R, attempt_id: &str, binding_id: &str) -> Self {
         Self {
             store: store.clone(),
             attempt_id: attempt_id.to_owned(),
@@ -181,8 +185,11 @@ impl ContinuationClaim {
 /// path stays deterministic; the Drop path is the bounded safety net,
 /// which is what makes future cancellation safe (review §2.5: "adding
 /// more explicit cleanup calls will not cover future abortion").
-pub struct AttemptOwner {
-    store: SqliteStore,
+pub struct AttemptOwner<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
+    store: R,
     attempt_id: String,
     supervisor: Arc<dyn ProcessSupervisor>,
     /// Identity of the process THIS attempt spawned (pid + generation),
@@ -195,13 +202,16 @@ pub struct AttemptOwner {
     /// The exact-resume ledger claim, attached once taken (F3). Its
     /// discharge belongs to this owner: an aborted future must not strand
     /// the input position in `owned`.
-    continuation: std::sync::Mutex<Option<Arc<ContinuationClaim>>>,
+    continuation: std::sync::Mutex<Option<Arc<ContinuationClaim<R>>>>,
     settled: std::sync::atomic::AtomicBool,
 }
 
-impl AttemptOwner {
+impl<R> AttemptOwner<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
     fn new(
-        store: SqliteStore,
+        store: R,
         attempt_id: &str,
         supervisor: Arc<dyn ProcessSupervisor>,
         broker: Option<Arc<dyn AttemptBrokerHandle>>,
@@ -232,7 +242,7 @@ impl AttemptOwner {
     /// Attach the ledger claim taken for this attempt (F3): from this
     /// moment the owner owes its discharge on every exit path, including
     /// future abortion.
-    fn set_continuation(&self, claim: Option<Arc<ContinuationClaim>>) {
+    fn set_continuation(&self, claim: Option<Arc<ContinuationClaim<R>>>) {
         *self.continuation.lock().unwrap() = claim;
     }
 
@@ -242,7 +252,10 @@ impl AttemptOwner {
     }
 }
 
-impl Drop for AttemptOwner {
+impl<R> Drop for AttemptOwner<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
     fn drop(&mut self) {
         if self.settled.load(std::sync::atomic::Ordering::SeqCst) {
             return;
@@ -305,8 +318,8 @@ impl Drop for AttemptOwner {
 
 /// The generic durable executor. Stateless across attempts; all per-attempt
 /// state lives in the store, the child handle and the adapter.
-pub struct NativeAgentExecutor {
-    store: SqliteStore,
+pub struct NativeAgentExecutor<R> {
+    store: R,
     backend: Arc<dyn NativeBackend>,
     supervisor: Arc<dyn ProcessSupervisor>,
     locator: Arc<dyn ExecutableLocator>,
@@ -314,9 +327,12 @@ pub struct NativeAgentExecutor {
     options: NativeExecutorOptions,
 }
 
-impl NativeAgentExecutor {
+impl<R> NativeAgentExecutor<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
     pub fn new(
-        store: SqliteStore,
+        store: R,
         backend: Arc<dyn NativeBackend>,
         supervisor: Arc<dyn ProcessSupervisor>,
         locator: Arc<dyn ExecutableLocator>,
@@ -338,28 +354,8 @@ impl NativeAgentExecutor {
         &self.options.kinds
     }
 
-    pub fn parse_target(payload: &Value) -> Result<ExecutionTarget, String> {
-        agentkit_native::parse_target(payload)
-    }
-
-    /// Capability verdict for any target; `Ok(())` means admissible
-    /// (model-loop targets always pass — behavior unchanged).
-    pub fn capability_verdict(target: &ExecutionTarget) -> Result<(), Vec<CapabilityViolation>> {
-        validate_execution_target(target)
-    }
-
-    pub fn validate_frozen_semantics(
-        stanza: &serde_json::Map<String, Value>,
-    ) -> Result<(), String> {
-        agentkit_native::validate_frozen_semantics(stanza)
-    }
-
-    pub fn validate_frozen_stanza(stanza: &serde_json::Map<String, Value>) -> Result<(), String> {
-        agentkit_native::validate_frozen_stanza(stanza)
-    }
-
-    fn terminal(&self, code: &str, message: impl Into<String>) -> HostError {
-        HostError::Failure(ExecutionFailure {
+    fn terminal(&self, code: &str, message: impl Into<String>) -> HostError<R> {
+        HostError::<R>::Failure(ExecutionFailure {
             code: Some(code.to_string()),
             retryable: Some(false),
             retry_safety: RetrySafety::UnknownOutcome,
@@ -367,8 +363,8 @@ impl NativeAgentExecutor {
         })
     }
 
-    fn transient(&self, code: &str, message: impl Into<String>) -> HostError {
-        HostError::Failure(ExecutionFailure {
+    fn transient(&self, code: &str, message: impl Into<String>) -> HostError<R> {
+        HostError::<R>::Failure(ExecutionFailure {
             code: Some(code.to_string()),
             retryable: Some(true),
             retry_safety: RetrySafety::SafeToRetry,
@@ -381,11 +377,11 @@ impl NativeAgentExecutor {
     /// resumes may use.
     async fn bind_and_observe(
         &self,
-        context: &ExecutionContext,
+        context: &ExecutionContext<R>,
         backend: &str,
         vendor_session_id: &str,
         parent: Option<String>,
-    ) -> HostResult<()> {
+    ) -> HostResult<R, ()> {
         self.store
             .bind_native_session(BindNativeSession {
                 attempt_id: context.attempt_id.clone(),
@@ -395,14 +391,16 @@ impl NativeAgentExecutor {
                 parent_vendor_session_id: parent,
                 assigned_at: context.runtime.now_ms(),
             })
-            .await?;
+            .await
+            .map_err(EngineError::Store)?;
         self.store
             .observe_native_session(
                 &context.attempt_id,
                 vendor_session_id,
                 context.runtime.now_ms(),
             )
-            .await?;
+            .await
+            .map_err(EngineError::Store)?;
         Ok(())
     }
 
@@ -414,7 +412,7 @@ impl NativeAgentExecutor {
     /// those files while it lives, so removal belongs at settlement).
     async fn settle_cleanup(
         &self,
-        context: &ExecutionContext,
+        context: &ExecutionContext<R>,
         broker: Option<&Arc<dyn AttemptBrokerHandle>>,
         per_run_dir: Option<&std::path::Path>,
     ) {
@@ -430,17 +428,22 @@ impl NativeAgentExecutor {
         }
     }
 
-    async fn emit(&self, context: &ExecutionContext, kind: &str, payload: Value) -> HostResult<()> {
+    async fn emit(
+        &self,
+        context: &ExecutionContext<R>,
+        kind: &str,
+        payload: Value,
+    ) -> HostResult<R, ()> {
         context.emit(kind, payload).await
     }
 
     async fn emit_session(
         &self,
-        context: &ExecutionContext,
+        context: &ExecutionContext<R>,
         kind: &str,
         session_id: &str,
         fingerprint: &str,
-    ) -> HostResult<()> {
+    ) -> HostResult<R, ()> {
         context
             .emit(
                 kind,
@@ -451,10 +454,13 @@ impl NativeAgentExecutor {
 }
 
 #[async_trait]
-impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
+impl<R> TaskExecutor<R> for NativeAgentExecutor<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
+    async fn execute(&self, context: ExecutionContext<R>) -> HostResult<R, ()> {
         // 1. Typed dispatch: only native targets run here.
-        let target = match Self::parse_target(&context.task.payload) {
+        let target = match agentkit_native::parse_target(&context.task.payload) {
             Ok(ExecutionTarget::Native(target)) => target,
             Ok(ExecutionTarget::ModelLoop(_)) => {
                 return Err(self.terminal(
@@ -466,7 +472,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
         };
 
         // 2. Capability policy before any probe or spawn (AGENTKIT-112).
-        if let Err(violations) = Self::capability_verdict(&ExecutionTarget::Native(target.clone()))
+        if let Err(violations) = validate_execution_target(&ExecutionTarget::Native(target.clone()))
         {
             let structural = violations.iter().any(|v| v.code != "capability_unknown");
             let detail = violations
@@ -538,7 +544,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                 .payload
                 .as_object()
                 .expect("task payload is a JSON object");
-            if let Err(detail) = Self::validate_frozen_semantics(stanza) {
+            if let Err(detail) = agentkit_native::validate_frozen_semantics(stanza) {
                 return Err(self.terminal(
                     "continuation_scope_mismatch",
                     format!("frozen continuation scope contradicts the frozen target: {detail}"),
@@ -567,7 +573,8 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                 let observed = self
                     .store
                     .current_native_binding(&context.task.task_id)
-                    .await?
+                    .await
+                    .map_err(EngineError::Store)?
                     .filter(|binding| binding.vendor_session_id == *vendor_session_id);
                 if let Some(scope) = &continuation_scope {
                     let vouched = self
@@ -582,7 +589,8 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                             scope.system_prompt_revision.as_deref(),
                             &context.attempt_id,
                         )
-                        .await?
+                        .await
+                        .map_err(EngineError::Store)?
                         .filter(|binding| binding.vendor_session_id == *vendor_session_id);
                     match vouched {
                         Some(binding) => {
@@ -602,7 +610,8 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                                     &scope.config_identity,
                                     scope.system_prompt_revision.as_deref(),
                                 )
-                                .await?
+                                .await
+                                .map_err(EngineError::Store)?
                                 .map(|b| format!("bound to '{}'", b.vendor_session_id))
                                 .unwrap_or_else(|| "no active binding".to_owned());
                             let local_note = if observed.is_some() {
@@ -809,7 +818,8 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                             parent_vendor_session_id: lineage_parent.clone(),
                             assigned_at: context.runtime.now_ms(),
                         })
-                        .await?;
+                        .await
+                        .map_err(EngineError::Store)?;
                 }
             }
             bound_session = Some(session_id.clone());
@@ -830,7 +840,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
         // available again. The loser takes the fresh-session decision —
         // refusal here, from which the consumer falls back to Fresh with
         // seeded ancestry — and never consumes the binding.
-        let continuation_claim: Option<Arc<ContinuationClaim>> = match (
+        let continuation_claim: Option<Arc<ContinuationClaim<R>>> = match (
             &continuation_scope,
             &exact_binding,
         ) {
@@ -891,7 +901,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                     .await;
                 let (code, message) = native_error_code(&err);
                 // A spawn failure may have touched the OS; uncertain-safe.
-                return Err(HostError::Failure(ExecutionFailure {
+                return Err(HostError::<R>::Failure(ExecutionFailure {
                     code: Some(code),
                     retryable: Some(true),
                     retry_safety: RetrySafety::UnknownOutcome,
@@ -1106,11 +1116,19 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                                             // now attested the assigned
                                             // identity — only now does it
                                             // become an exact-resume target.
-                                            try_reap!(self.store.observe_native_session(
-                                                &context.attempt_id,
-                                                session_id,
-                                                context.runtime.now_ms(),
-                                            ));
+                                            let obs_attempt = context.attempt_id.clone();
+                                            let obs_session = session_id.clone();
+                                            let obs_now = context.runtime.now_ms();
+                                            try_reap!(async move {
+                                                self.store
+                                                    .observe_native_session(
+                                                        &obs_attempt,
+                                                        &obs_session,
+                                                        obs_now,
+                                                    )
+                                                    .await
+                                                    .map_err(EngineError::Store)
+                                            });
                                             observed_session = Some(session_id.clone());
                                             try_reap!(self.emit_session(
                                                 &context,
@@ -1350,7 +1368,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                 if let Some(scope) = &continuation_scope {
                     match self
                         .store
-                        .commit_continuation(agentkit_store::CommitContinuation {
+                        .commit_continuation(CommitContinuation {
                             conversation: scope.conversation.clone(),
                             parent: scope.commit_parent.clone(),
                             history_position: scope.commit_history_position,
@@ -1439,7 +1457,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                 if context.cancellation.is_cancelled() || context.task.cancel_requested {
                     // Host shutdown or durable stop: the runner settles the
                     // task Cancelled from this error class.
-                    return Err(HostError::Cancelled);
+                    return Err(HostError::<R>::Cancelled);
                 }
                 Err(self.terminal(
                     "native_interrupted",
@@ -1488,14 +1506,14 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                 );
                 let effect_free = target.profile == NativeProfile::PlainChat;
                 if pre_inference && effect_free {
-                    Err(HostError::Failure(ExecutionFailure {
+                    Err(HostError::<R>::Failure(ExecutionFailure {
                         code: Some(code),
                         retryable: Some(true),
                         retry_safety: RetrySafety::SafeToRetry,
                         ..ExecutionFailure::new(message)
                     }))
                 } else {
-                    Err(HostError::Failure(ExecutionFailure {
+                    Err(HostError::<R>::Failure(ExecutionFailure {
                         code: Some(code),
                         retryable: Some(false),
                         retry_safety: RetrySafety::UnknownOutcome,
@@ -1525,7 +1543,7 @@ impl TaskExecutor<SqliteStore> for NativeAgentExecutor {
                     payload["stderrTail"] = json!(stderr_tail);
                 }
                 self.emit(&context, "native.uncertain", payload).await?;
-                Err(HostError::Failure(ExecutionFailure {
+                Err(HostError::<R>::Failure(ExecutionFailure {
                     code: Some(format!("native_{}", class_code(class))),
                     retryable: Some(true),
                     // Unknown outcomes are never blindly replayed: with
@@ -1605,13 +1623,16 @@ fn native_error_code(error: &NativeError) -> (String, String) {
 /// run the durable native path; everything else (model-loop targets, and
 /// legacy tasks without any target) delegates untouched to the existing
 /// executor (AGENTKIT-107 §2 "one execution owner per turn", ONEMIND-340).
-pub struct NativeDispatchExecutor {
-    pub native: Arc<dyn TaskExecutor<SqliteStore>>,
-    pub fallback: Arc<dyn TaskExecutor<SqliteStore>>,
+pub struct NativeDispatchExecutor<R> {
+    pub native: Arc<dyn TaskExecutor<R>>,
+    pub fallback: Arc<dyn TaskExecutor<R>>,
 }
 
 #[async_trait]
-impl TaskExecutor<SqliteStore> for NativeDispatchExecutor {
+impl<R> TaskExecutor<R> for NativeDispatchExecutor<R>
+where
+    R: TaskRepository + NativeRunRepository<Error = <R as TaskRepository>::Error>,
+{
     fn handles_verification(&self) -> bool {
         // Host-level (kind-wide) queries ask about the lane this wrapper
         // serves: the model-loop route is the one whose verification and
@@ -1624,19 +1645,19 @@ impl TaskExecutor<SqliteStore> for NativeDispatchExecutor {
         self.fallback.resolves_provider_snapshots()
     }
     fn handles_verification_for(&self, payload: &Value) -> bool {
-        match NativeAgentExecutor::parse_target(payload) {
+        match agentkit_native::parse_target(payload) {
             Ok(ExecutionTarget::Native(_)) => self.native.handles_verification_for(payload),
             _ => self.fallback.handles_verification_for(payload),
         }
     }
     fn resolves_provider_snapshots_for(&self, payload: &Value) -> bool {
-        match NativeAgentExecutor::parse_target(payload) {
+        match agentkit_native::parse_target(payload) {
             Ok(ExecutionTarget::Native(_)) => self.native.resolves_provider_snapshots_for(payload),
             _ => self.fallback.resolves_provider_snapshots_for(payload),
         }
     }
-    async fn execute(&self, context: ExecutionContext) -> HostResult<()> {
-        match NativeAgentExecutor::parse_target(&context.task.payload) {
+    async fn execute(&self, context: ExecutionContext<R>) -> HostResult<R, ()> {
+        match agentkit_native::parse_target(&context.task.payload) {
             Ok(ExecutionTarget::Native(_)) => self.native.execute(context).await,
             Ok(ExecutionTarget::ModelLoop(_)) => self.fallback.execute(context).await,
             Err(error) => {
@@ -1652,7 +1673,7 @@ impl TaskExecutor<SqliteStore> for NativeDispatchExecutor {
                     // MUST NOT be silently billed/executed by another.
                     // Refuse terminally — only a legacy task with no
                     // frozen target may reach the model-loop fallback.
-                    return Err(HostError::Failure(ExecutionFailure {
+                    return Err(HostError::<R>::Failure(ExecutionFailure {
                         code: Some("execution_target_invalid".into()),
                         retryable: Some(false),
                         retry_safety: RetrySafety::UnknownOutcome,
@@ -1676,7 +1697,13 @@ mod tests {
         PolicyState, StreamFrameAdapter,
     };
     use agentkit_native_broker::{AttemptBroker, BrokerAuthority};
-    use agentkit_store::{ClaimInput, SubmitTask};
+    use agentkit_store::{ClaimInput, SqliteStore, SubmitTask};
+
+    // The tests run the generic executor against the concrete SQLite
+    // repository, which implements both ports.
+    type HostError = agentkit_engine::EngineError<agentkit_store::StoreError>;
+    type HostResult<T> = Result<T, HostError>;
+    type ExecutionContext = agentkit_engine::ExecutionContext<SqliteStore>;
     use std::collections::{BTreeMap, VecDeque};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -2251,7 +2278,7 @@ mod tests {
         async fn start(
             &self,
             ctx: &AttemptBrokerContext<'_>,
-        ) -> HostResult<Arc<dyn AttemptBrokerHandle>> {
+        ) -> Result<Arc<dyn AttemptBrokerHandle>, agentkit_engine::ExecutionFailure> {
             self.contexts.lock().unwrap().push((
                 ctx.task_id.to_string(),
                 ctx.attempt_id.to_string(),
@@ -2268,7 +2295,7 @@ mod tests {
                 authority,
             )
             .await
-            .map_err(|e| HostError::Failure(ExecutionFailure::new(e)))?;
+            .map_err(ExecutionFailure::new)?;
             self.started.lock().unwrap().push(broker.clone());
             Ok(broker)
         }
@@ -2377,7 +2404,7 @@ mod tests {
             }
         }
 
-        fn executor(&self) -> NativeAgentExecutor {
+        fn executor(&self) -> NativeAgentExecutor<SqliteStore> {
             self.executor_with(Arc::new(FakeSupervisor {
                 shared: self.shared.clone(),
             }))
@@ -2385,7 +2412,10 @@ mod tests {
 
         /// Round-4 F5: the same executor over a caller-chosen supervisor, so
         /// a test can vary only the supervisor's descendant-cleanup report.
-        fn executor_with(&self, supervisor: Arc<dyn ProcessSupervisor>) -> NativeAgentExecutor {
+        fn executor_with(
+            &self,
+            supervisor: Arc<dyn ProcessSupervisor>,
+        ) -> NativeAgentExecutor<SqliteStore> {
             let backend = Arc::new(FakeBackend {
                 shared: self.shared.clone(),
             });
@@ -4239,7 +4269,7 @@ mod tests {
         let replacement = h.claim("replacement").await;
         let y = h
             .store
-            .commit_continuation(agentkit_store::CommitContinuation {
+            .commit_continuation(CommitContinuation {
                 conversation: "stale-selection".into(),
                 parent: "msg-1".into(),
                 history_position: 1,

@@ -20,76 +20,9 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-use agentkit_native::canonical_digest;
+use agentkit_native::{CommitContinuation, NativeContinuationBinding, canonical_digest};
 
 use crate::{Result, StoreError};
-
-/// One row of the scoped continuation ledger.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeContinuationBinding {
-    pub binding_id: String,
-    /// Consumer-defined conversation identity (opaque to the host).
-    pub conversation: String,
-    /// Consumer-defined selected-parent reference (e.g. parent message id).
-    pub parent: String,
-    /// Acknowledged history position at commit (monotonic per conversation).
-    pub history_position: i64,
-    pub backend: String,
-    pub executable: String,
-    pub config_identity: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt_revision: Option<String>,
-    pub vendor_session_id: String,
-    pub owning_attempt_id: String,
-    pub owning_task_id: String,
-    /// `active` | `owned` | `uncertain` | `superseded` | `retired`
-    /// (review round-4 F3). `active` = available for one atomic claim at
-    /// the verified position; `owned` = claimed by exactly one attempt
-    /// (`claimed_attempt_id`) whose input may already have advanced the
-    /// vendor session — never selectable by another attempt; `uncertain` =
-    /// the claiming attempt was interrupted AFTER its input was accepted,
-    /// so exact resume from this pre-claim position is blocked until
-    /// reconciled (or the conversation moves on through a fresh session).
-    pub state: String,
-    pub committed_at: i64,
-    /// The attempt that holds (or held) the exclusive claim, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_attempt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_task_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_at: Option<i64>,
-    /// Monotonic compare-and-set counter: every claim/release/uncertain/
-    /// reconcile transition bumps it, so a claim keyed on a stale
-    /// generation loses the race instead of overwriting (F3-C: exactly
-    /// one winner).
-    pub generation: i64,
-}
-
-/// Commit input for one continuation binding (frozen facts from the
-/// completed attempt's target + payload scope).
-///
-/// `parent`/`history_position` are the COMMIT (completed-output) position:
-/// where the NEXT turn attaches when it resumes this session — never the
-/// input position the turn was admitted from. A vendor session is a mutable
-/// cursor through conversation history; committing it at its input position
-/// would let regeneration select the session that already contains the
-/// discarded answer (review §2.3 / AGENTKIT-113).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommitContinuation {
-    pub conversation: String,
-    pub parent: String,
-    pub history_position: i64,
-    pub backend: String,
-    pub executable: String,
-    pub config_identity: String,
-    pub system_prompt_revision: Option<String>,
-    pub vendor_session_id: String,
-    pub owning_attempt_id: String,
-    pub owning_task_id: String,
-    pub committed_at: i64,
-}
 
 /// One durable broker call receipt, keyed by attempt + invocation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

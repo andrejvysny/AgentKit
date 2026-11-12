@@ -16,28 +16,24 @@ pub agentkit_native_exec::AttemptBrokerContext::limits: agentkit_native::broker:
 pub agentkit_native_exec::AttemptBrokerContext::server_name: &'a str
 pub agentkit_native_exec::AttemptBrokerContext::target: &'a agentkit_native::target::NativeExecutionTarget
 pub agentkit_native_exec::AttemptBrokerContext::task_id: &'a str
-pub struct agentkit_native_exec::AttemptOwner
-impl core::ops::drop::Drop for agentkit_native_exec::AttemptOwner
-pub fn agentkit_native_exec::AttemptOwner::drop(&mut self)
-pub struct agentkit_native_exec::NativeAgentExecutor
-impl agentkit_native_exec::NativeAgentExecutor
-pub fn agentkit_native_exec::NativeAgentExecutor::capability_verdict(&agentkit_native::target::ExecutionTarget) -> core::result::Result<(), alloc::vec::Vec<agentkit_native::capability::CapabilityViolation>>
-pub fn agentkit_native_exec::NativeAgentExecutor::kinds(&self) -> &[alloc::string::String]
-pub fn agentkit_native_exec::NativeAgentExecutor::new(agentkit_store::actor::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_native::ports::NativeBackend>, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ProcessSupervisor>, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ExecutableLocator>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_native_exec::AttemptBrokerFactory>>, agentkit_native_exec::NativeExecutorOptions) -> Self
-pub fn agentkit_native_exec::NativeAgentExecutor::parse_target(&serde_json::value::Value) -> core::result::Result<agentkit_native::target::ExecutionTarget, alloc::string::String>
-pub fn agentkit_native_exec::NativeAgentExecutor::validate_frozen_semantics(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> core::result::Result<(), alloc::string::String>
-pub fn agentkit_native_exec::NativeAgentExecutor::validate_frozen_stanza(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> core::result::Result<(), alloc::string::String>
-impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_native_exec::NativeAgentExecutor
-pub fn agentkit_native_exec::NativeAgentExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::error::EngineError<agentkit_store::StoreError>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub struct agentkit_native_exec::NativeDispatchExecutor
-pub agentkit_native_exec::NativeDispatchExecutor::fallback: alloc::rcs::arc::Arc<dyn agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore>>
-pub agentkit_native_exec::NativeDispatchExecutor::native: alloc::rcs::arc::Arc<dyn agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore>>
-impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_native_exec::NativeDispatchExecutor
-pub fn agentkit_native_exec::NativeDispatchExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::error::EngineError<agentkit_store::StoreError>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn agentkit_native_exec::NativeDispatchExecutor::handles_verification(&self) -> bool
-pub fn agentkit_native_exec::NativeDispatchExecutor::handles_verification_for(&self, &serde_json::value::Value) -> bool
-pub fn agentkit_native_exec::NativeDispatchExecutor::resolves_provider_snapshots(&self) -> bool
-pub fn agentkit_native_exec::NativeDispatchExecutor::resolves_provider_snapshots_for(&self, &serde_json::value::Value) -> bool
+pub struct agentkit_native_exec::AttemptOwner<R> where R: agentkit_engine::repository::TaskRepository + agentkit_native::repository::NativeRunRepository<Error = <R as agentkit_engine::repository::TaskRepository>::Error>
+impl<R> core::ops::drop::Drop for agentkit_native_exec::AttemptOwner<R> where R: agentkit_engine::repository::TaskRepository + agentkit_native::repository::NativeRunRepository<Error = <R as agentkit_engine::repository::TaskRepository>::Error>
+pub fn agentkit_native_exec::AttemptOwner<R>::drop(&mut self)
+pub struct agentkit_native_exec::NativeAgentExecutor<R>
+impl<R> agentkit_native_exec::NativeAgentExecutor<R> where R: agentkit_engine::repository::TaskRepository + agentkit_native::repository::NativeRunRepository<Error = <R as agentkit_engine::repository::TaskRepository>::Error>
+pub fn agentkit_native_exec::NativeAgentExecutor<R>::kinds(&self) -> &[alloc::string::String]
+pub fn agentkit_native_exec::NativeAgentExecutor<R>::new(R, alloc::rcs::arc::Arc<dyn agentkit_native::ports::NativeBackend>, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ProcessSupervisor>, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ExecutableLocator>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_native_exec::AttemptBrokerFactory>>, agentkit_native_exec::NativeExecutorOptions) -> Self
+impl<R> agentkit_engine::ports::TaskExecutor<R> for agentkit_native_exec::NativeAgentExecutor<R> where R: agentkit_engine::repository::TaskRepository + agentkit_native::repository::NativeRunRepository<Error = <R as agentkit_engine::repository::TaskRepository>::Error>
+pub fn agentkit_native_exec::NativeAgentExecutor<R>::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<R>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::error::EngineError<<R as agentkit_engine::repository::TaskRepository>::Error>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_native_exec::NativeDispatchExecutor<R>
+pub agentkit_native_exec::NativeDispatchExecutor::fallback: alloc::rcs::arc::Arc<dyn agentkit_engine::ports::TaskExecutor<R>>
+pub agentkit_native_exec::NativeDispatchExecutor::native: alloc::rcs::arc::Arc<dyn agentkit_engine::ports::TaskExecutor<R>>
+impl<R> agentkit_engine::ports::TaskExecutor<R> for agentkit_native_exec::NativeDispatchExecutor<R> where R: agentkit_engine::repository::TaskRepository + agentkit_native::repository::NativeRunRepository<Error = <R as agentkit_engine::repository::TaskRepository>::Error>
+pub fn agentkit_native_exec::NativeDispatchExecutor<R>::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<R>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_engine::error::EngineError<<R as agentkit_engine::repository::TaskRepository>::Error>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native_exec::NativeDispatchExecutor<R>::handles_verification(&self) -> bool
+pub fn agentkit_native_exec::NativeDispatchExecutor<R>::handles_verification_for(&self, &serde_json::value::Value) -> bool
+pub fn agentkit_native_exec::NativeDispatchExecutor<R>::resolves_provider_snapshots(&self) -> bool
+pub fn agentkit_native_exec::NativeDispatchExecutor<R>::resolves_provider_snapshots_for(&self, &serde_json::value::Value) -> bool
 pub struct agentkit_native_exec::NativeExecutorOptions
 pub agentkit_native_exec::NativeExecutorOptions::broker_limits: agentkit_native::broker::BrokerLimits
 pub agentkit_native_exec::NativeExecutorOptions::kinds: alloc::vec::Vec<alloc::string::String>
@@ -45,4 +41,4 @@ pub agentkit_native_exec::NativeExecutorOptions::limits: agentkit_native::ports:
 impl core::default::Default for agentkit_native_exec::NativeExecutorOptions
 pub fn agentkit_native_exec::NativeExecutorOptions::default() -> Self
 pub trait agentkit_native_exec::AttemptBrokerFactory: core::marker::Send + core::marker::Sync
-pub fn agentkit_native_exec::AttemptBrokerFactory::start<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_native_exec::AttemptBrokerContext<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::rcs::arc::Arc<dyn agentkit_native::broker::AttemptBrokerHandle>, agentkit_engine::error::EngineError<agentkit_store::StoreError>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native_exec::AttemptBrokerFactory::start<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_native_exec::AttemptBrokerContext<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::rcs::arc::Arc<dyn agentkit_native::broker::AttemptBrokerHandle>, agentkit_engine::retry::ExecutionFailure>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait

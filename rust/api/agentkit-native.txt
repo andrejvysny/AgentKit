@@ -207,6 +207,13 @@ pub struct agentkit_native::AuthEvidence
 pub agentkit_native::AuthEvidence::config_directory: core::option::Option<alloc::string::String>
 pub agentkit_native::AuthEvidence::mode: agentkit_native::AuthMode
 pub agentkit_native::AuthEvidence::policy: agentkit_native::PolicyState
+pub struct agentkit_native::BindNativeSession
+pub agentkit_native::BindNativeSession::assigned_at: i64
+pub agentkit_native::BindNativeSession::attempt_id: alloc::string::String
+pub agentkit_native::BindNativeSession::backend: alloc::string::String
+pub agentkit_native::BindNativeSession::parent_vendor_session_id: core::option::Option<alloc::string::String>
+pub agentkit_native::BindNativeSession::task_id: alloc::string::String
+pub agentkit_native::BindNativeSession::vendor_session_id: alloc::string::String
 pub struct agentkit_native::BrokerLimits
 pub agentkit_native::BrokerLimits::authorize_timeout_ms: i64
 pub agentkit_native::BrokerLimits::call_timeout_ms: i64
@@ -250,6 +257,18 @@ pub fn agentkit_native::CapabilitySnapshot::supports(&self, &str) -> bool
 pub struct agentkit_native::CapabilityViolation
 pub agentkit_native::CapabilityViolation::code: &'static str
 pub agentkit_native::CapabilityViolation::detail: alloc::string::String
+pub struct agentkit_native::CommitContinuation
+pub agentkit_native::CommitContinuation::backend: alloc::string::String
+pub agentkit_native::CommitContinuation::committed_at: i64
+pub agentkit_native::CommitContinuation::config_identity: alloc::string::String
+pub agentkit_native::CommitContinuation::conversation: alloc::string::String
+pub agentkit_native::CommitContinuation::executable: alloc::string::String
+pub agentkit_native::CommitContinuation::history_position: i64
+pub agentkit_native::CommitContinuation::owning_attempt_id: alloc::string::String
+pub agentkit_native::CommitContinuation::owning_task_id: alloc::string::String
+pub agentkit_native::CommitContinuation::parent: alloc::string::String
+pub agentkit_native::CommitContinuation::system_prompt_revision: core::option::Option<alloc::string::String>
+pub agentkit_native::CommitContinuation::vendor_session_id: alloc::string::String
 pub struct agentkit_native::ContentPolicy
 pub agentkit_native::ContentPolicy::extracted_text: bool
 pub agentkit_native::ContentPolicy::files: bool
@@ -311,6 +330,24 @@ pub agentkit_native::ModelLoopTarget::model: alloc::string::String
 pub agentkit_native::ModelLoopTarget::provider_id: alloc::string::String
 pub agentkit_native::ModelLoopTarget::reasoning_effort: core::option::Option<alloc::string::String>
 pub agentkit_native::ModelLoopTarget::schema_version: u32
+pub struct agentkit_native::NativeContinuationBinding
+pub agentkit_native::NativeContinuationBinding::backend: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::binding_id: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::claimed_at: core::option::Option<i64>
+pub agentkit_native::NativeContinuationBinding::claimed_attempt_id: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeContinuationBinding::claimed_task_id: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeContinuationBinding::committed_at: i64
+pub agentkit_native::NativeContinuationBinding::config_identity: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::conversation: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::executable: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::generation: i64
+pub agentkit_native::NativeContinuationBinding::history_position: i64
+pub agentkit_native::NativeContinuationBinding::owning_attempt_id: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::owning_task_id: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::parent: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::state: alloc::string::String
+pub agentkit_native::NativeContinuationBinding::system_prompt_revision: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeContinuationBinding::vendor_session_id: alloc::string::String
 pub struct agentkit_native::NativeExecutionTarget
 pub agentkit_native::NativeExecutionTarget::auth_expectation: agentkit_native::AuthExpectation
 pub agentkit_native::NativeExecutionTarget::backend: alloc::string::String
@@ -335,6 +372,15 @@ pub fn agentkit_native::NativeRefusal::new(impl core::convert::Into<alloc::strin
 impl core::error::Error for agentkit_native::NativeRefusal
 impl core::fmt::Display for agentkit_native::NativeRefusal
 pub fn agentkit_native::NativeRefusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_native::NativeSessionBinding
+pub agentkit_native::NativeSessionBinding::assigned_at: i64
+pub agentkit_native::NativeSessionBinding::attempt_id: alloc::string::String
+pub agentkit_native::NativeSessionBinding::backend: alloc::string::String
+pub agentkit_native::NativeSessionBinding::observed_at: core::option::Option<i64>
+pub agentkit_native::NativeSessionBinding::parent_vendor_session_id: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeSessionBinding::state: alloc::string::String
+pub agentkit_native::NativeSessionBinding::task_id: alloc::string::String
+pub agentkit_native::NativeSessionBinding::vendor_session_id: alloc::string::String
 pub struct agentkit_native::NativeUsage
 pub agentkit_native::NativeUsage::api_equivalent_estimate_usd: core::option::Option<f64>
 pub agentkit_native::NativeUsage::billing_inclusion: agentkit_native::BillingInclusion
@@ -428,6 +474,18 @@ pub fn agentkit_native::NativeBackend::new_frame_adapter(&self) -> alloc::boxed:
 pub fn agentkit_native::NativeBackend::plan_turn(&self, &agentkit_native::NativeExecutionTarget, &agentkit_native::TurnInput, core::option::Option<&agentkit_native::McpEndpointSpec>) -> core::result::Result<agentkit_native::LaunchPlan, agentkit_native::NativeRefusal>
 pub fn agentkit_native::NativeBackend::preflight<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::NativeExecutionTarget, &'life2 dyn agentkit_native::ExecutableLocator, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::PreflightReport, agentkit_native::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn agentkit_native::NativeBackend::terminal_outcome(&self, &agentkit_native::ProcessExit, &[agentkit_native::NativeEvent], core::option::Option<&str>) -> agentkit_native::NativeTerminalOutcome
+pub trait agentkit_native::NativeRunRepository: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub type agentkit_native::NativeRunRepository::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+pub fn agentkit_native::NativeRunRepository::active_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
+pub fn agentkit_native::NativeRunRepository::bind_native_session<'life0, 'async_trait>(&'life0 self, agentkit_native::BindNativeSession) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::NativeSessionBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::NativeRunRepository::claim_selected_continuation<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::NativeContinuationBinding, &'life2 str, &'life3 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_native::NativeRunRepository::commit_continuation<'life0, 'async_trait>(&'life0 self, agentkit_native::CommitContinuation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::NativeContinuationBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::NativeRunRepository::current_native_binding<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::NativeSessionBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_native::NativeRunRepository::invalidate_interactions<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<usize, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_native::NativeRunRepository::mark_continuation_uncertain<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native::NativeRunRepository::observe_native_session<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::NativeSessionBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native::NativeRunRepository::release_continuation_claim<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native::NativeRunRepository::resumable_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'life7, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>, &'life7 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait, 'life7: 'async_trait
 pub trait agentkit_native::OwnedChildHandle: core::marker::Send
 pub fn agentkit_native::OwnedChildHandle::deliver_input<'life0, 'life1, 'async_trait>(&'life0 mut self, &'life1 [u8], bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_native::TransportFault>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_native::OwnedChildHandle::generation(&self) -> u64
