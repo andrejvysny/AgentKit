@@ -19,6 +19,7 @@
 - Security dependency upgrades: tokio 1.54.1 (RUSTSEC-2026-0386), rmcp 3.9.0 (RUSTSEC-2026-0457/0461/0462), rusqlite 0.41.1 / libsqlite3-sys 0.39.1 (RUSTSEC-2026-0459). `cargo-deny` now gates advisories, licenses, sources and layer bans.
 - Live TypeScript packages, examples and scripts no longer import the frozen backend; `native` and `testing` carry their own port types.
 - Public API reports re-baselined to the 13 remaining entry points (`docs/rust/api`).
+- **Committed CI.** `scripts/gates.mjs` runs the full battery (fmt, clippy `-D`, workspace tests with a passing-count floor, machete, deny, `check:arch`, public-API baselines, then the Bun half with `check:api` and the node smoke after `build`), and `.github/workflows/ci.yml` runs it on every PR and on pushes to `master`/`arch/cleanup`. Logs land in `.gate-logs/` (ignored, uploaded as an artifact on CI failure).
 
 **Merged: Claude Code native backend (AGENTKIT-107 to 118) onto the layered crates.** Behaviour is unchanged from `master`; crate paths moved ([ADR 0025](docs/adr/0025-claude-code-native-backend-contracts.md)).
 

@@ -20,3 +20,6 @@ packages/native/generated/*.node
 
 # Claude session-local artifacts (worktrees, agent memory)
 .claude/
+
+# Gate battery logs (scripts/gates.mjs)
+.gate-logs/
