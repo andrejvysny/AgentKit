@@ -15,6 +15,8 @@ agentkit-engine = { workspace = true }
 agentkit-sessions = { workspace = true }
 agentkit-store = { workspace = true }
 agentkit-http = { workspace = true }
+# The composition root the consumer builds its host through (AGENTKIT-132).
+agentkit-runtime = { workspace = true }
 axum.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -382,6 +382,7 @@ dependencies = [
  "agentkit-native",
  "agentkit-native-broker",
  "agentkit-store",
+ "agentkit-testkit",
  "async-trait",
  "serde_json",
  "tokio",
@@ -430,6 +431,7 @@ dependencies = [
  "agentkit-providers",
  "agentkit-sessions",
  "agentkit-store",
+ "agentkit-testkit",
  "agentkit-toolpacks-coding",
  "async-trait",
  "axum",
@@ -526,6 +528,7 @@ version = "0.1.0"
 dependencies = [
  "agentkit-engine",
  "agentkit-http",
+ "agentkit-runtime",
  "agentkit-sessions",
  "agentkit-store",
  "axum",
@@ -539,9 +542,11 @@ dependencies = [
 name = "agentkit-testkit"
 version = "0.1.0"
 dependencies = [
+ "agentkit-core",
  "agentkit-engine",
  "agentkit-native",
  "async-trait",
+ "futures",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

@@ -13,9 +13,11 @@ readme = "../../../README.md"
 workspace = true
 
 [dependencies]
+agentkit-core = { workspace = true }
 agentkit-engine = { workspace = true }
 agentkit-native = { workspace = true }
 async-trait.workspace = true
+futures.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -14,6 +14,66 @@ pub async fn agentkit_testkit::conformance::native_backend::run_driver_conforman
 pub mod agentkit_testkit::conformance::task_repository
 pub const agentkit_testkit::conformance::task_repository::CASES: &[&str]
 pub async fn agentkit_testkit::conformance::task_repository::run<R, F, Fut>(F) where R: agentkit_engine::repository::TaskRepository, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = R>
+pub mod agentkit_testkit::scripted
+pub struct agentkit_testkit::scripted::ScriptedAdapter
+impl agentkit_testkit::scripted::ScriptedAdapter
+pub fn agentkit_testkit::scripted::ScriptedAdapter::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_native::ports::StreamFrameAdapter for agentkit_testkit::scripted::ScriptedAdapter
+pub fn agentkit_testkit::scripted::ScriptedAdapter::finish(&mut self) -> agentkit_native::ports::FinishDisposition
+pub fn agentkit_testkit::scripted::ScriptedAdapter::push_line(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<agentkit_native::events::NativeEvent>, agentkit_native::ports::ProtocolViolation>
+pub fn agentkit_testkit::scripted::ScriptedAdapter::terminal_outcome(&self, &agentkit_native::ports::ProcessExit) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_testkit::scripted::ScriptedBackend
+impl agentkit_testkit::scripted::ScriptedBackend
+pub fn agentkit_testkit::scripted::ScriptedBackend::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_testkit::scripted::ScriptedBackend::planned(&self) -> bool
+pub fn agentkit_testkit::scripted::ScriptedBackend::with_fingerprint(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_testkit::scripted::ScriptedBackend::with_run_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
+impl agentkit_native::ports::NativeBackend for agentkit_testkit::scripted::ScriptedBackend
+pub fn agentkit_testkit::scripted::ScriptedBackend::backend_id(&self) -> &str
+pub fn agentkit_testkit::scripted::ScriptedBackend::encode_input(&self, &agentkit_native::ports::TurnInput) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::error::NativeRefusal>
+pub fn agentkit_testkit::scripted::ScriptedBackend::new_frame_adapter(&self) -> alloc::boxed::Box<dyn agentkit_native::ports::StreamFrameAdapter>
+pub fn agentkit_testkit::scripted::ScriptedBackend::plan_turn(&self, &agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput, core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<agentkit_native::ports::LaunchPlan, agentkit_native::error::NativeRefusal>
+pub fn agentkit_testkit::scripted::ScriptedBackend::preflight<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::target::NativeExecutionTarget, &'life2 dyn agentkit_native::ports::ExecutableLocator, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::PreflightReport, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedBackend::terminal_outcome(&self, &agentkit_native::ports::ProcessExit, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_testkit::scripted::ScriptedChatProvider
+impl agentkit_testkit::scripted::ScriptedChatProvider
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::completing(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<agentkit_core::types::ProviderEvent>) -> Self
+impl agentkit_core::types::ChatProvider for agentkit_testkit::scripted::ScriptedChatProvider
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::id(&self) -> &str
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::stream_chat(&self, agentkit_core::types::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::types::ProviderStream
+pub struct agentkit_testkit::scripted::ScriptedChild
+impl agentkit_native::ports::OwnedChildHandle for agentkit_testkit::scripted::ScriptedChild
+pub fn agentkit_testkit::scripted::ScriptedChild::deliver_input<'life0, 'life1, 'async_trait>(&'life0 mut self, &'life1 [u8], bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_native::ports::TransportFault>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedChild::generation(&self) -> u64
+pub fn agentkit_testkit::scripted::ScriptedChild::interrupt<'life0, 'async_trait>(&'life0 mut self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_native::ports::InterruptReceipt> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedChild::next_frame<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::FrameLine>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedChild::pid(&self) -> u32
+pub fn agentkit_testkit::scripted::ScriptedChild::stderr_tail(&self) -> alloc::vec::Vec<u8>
+pub fn agentkit_testkit::scripted::ScriptedChild::wait<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_native::ports::ProcessExit> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_testkit::scripted::ScriptedLocator
+impl agentkit_testkit::scripted::ScriptedLocator
+pub fn agentkit_testkit::scripted::ScriptedLocator::with_evidence(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_native::ports::ExecutableLocator for agentkit_testkit::scripted::ScriptedLocator
+pub fn agentkit_testkit::scripted::ScriptedLocator::auth_status<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::AuthEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedLocator::locate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::ExecutableEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::default::Default for agentkit_testkit::scripted::ScriptedLocator
+pub fn agentkit_testkit::scripted::ScriptedLocator::default() -> Self
+pub struct agentkit_testkit::scripted::ScriptedSupervisor
+impl agentkit_testkit::scripted::ScriptedSupervisor
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::emit(&self, &serde_json::value::Value)
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::emit_frame(&self, agentkit_native::ports::FrameLine)
+impl agentkit_native::ports::ProcessSupervisor for agentkit_testkit::scripted::ScriptedSupervisor
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::drain_owned<'life0, 'async_trait>(&'life0 self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::ports::LaunchPlan, &'life2 agentkit_native::ports::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::ports::OwnedChildHandle>, agentkit_native::error::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub const agentkit_testkit::scripted::SCRIPTED_BACKEND_ID: &str
+pub const agentkit_testkit::scripted::SCRIPTED_OBSERVED_MODEL: &str
+pub const agentkit_testkit::scripted::SCRIPTED_VERSION: &str
+pub fn agentkit_testkit::scripted::plain_chat_target(&str) -> agentkit_native::target::NativeExecutionTarget
+pub fn agentkit_testkit::scripted::scripted_turn_input() -> agentkit_native::ports::TurnInput
+pub fn agentkit_testkit::scripted::supported() -> agentkit_native::capability::CapabilityState
+pub fn agentkit_testkit::scripted::unsupported(&str) -> agentkit_native::capability::CapabilityState
 pub enum agentkit_testkit::InMemoryRepositoryError
 pub agentkit_testkit::InMemoryRepositoryError::Duplicate(alloc::string::String)
 pub agentkit_testkit::InMemoryRepositoryError::InvalidInput(alloc::string::String)
@@ -68,3 +128,62 @@ pub fn agentkit_testkit::InMemoryTaskRepository::submit<'life0, 'async_trait>(&'
 pub fn agentkit_testkit::InMemoryTaskRepository::submit_child<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::InMemoryTaskRepository::update_progress<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::InMemoryTaskRepository::wait_for_children<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_testkit::ScriptedAdapter
+impl agentkit_testkit::scripted::ScriptedAdapter
+pub fn agentkit_testkit::scripted::ScriptedAdapter::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_native::ports::StreamFrameAdapter for agentkit_testkit::scripted::ScriptedAdapter
+pub fn agentkit_testkit::scripted::ScriptedAdapter::finish(&mut self) -> agentkit_native::ports::FinishDisposition
+pub fn agentkit_testkit::scripted::ScriptedAdapter::push_line(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<agentkit_native::events::NativeEvent>, agentkit_native::ports::ProtocolViolation>
+pub fn agentkit_testkit::scripted::ScriptedAdapter::terminal_outcome(&self, &agentkit_native::ports::ProcessExit) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_testkit::ScriptedBackend
+impl agentkit_testkit::scripted::ScriptedBackend
+pub fn agentkit_testkit::scripted::ScriptedBackend::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_testkit::scripted::ScriptedBackend::planned(&self) -> bool
+pub fn agentkit_testkit::scripted::ScriptedBackend::with_fingerprint(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_testkit::scripted::ScriptedBackend::with_run_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
+impl agentkit_native::ports::NativeBackend for agentkit_testkit::scripted::ScriptedBackend
+pub fn agentkit_testkit::scripted::ScriptedBackend::backend_id(&self) -> &str
+pub fn agentkit_testkit::scripted::ScriptedBackend::encode_input(&self, &agentkit_native::ports::TurnInput) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::error::NativeRefusal>
+pub fn agentkit_testkit::scripted::ScriptedBackend::new_frame_adapter(&self) -> alloc::boxed::Box<dyn agentkit_native::ports::StreamFrameAdapter>
+pub fn agentkit_testkit::scripted::ScriptedBackend::plan_turn(&self, &agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput, core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<agentkit_native::ports::LaunchPlan, agentkit_native::error::NativeRefusal>
+pub fn agentkit_testkit::scripted::ScriptedBackend::preflight<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::target::NativeExecutionTarget, &'life2 dyn agentkit_native::ports::ExecutableLocator, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::PreflightReport, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedBackend::terminal_outcome(&self, &agentkit_native::ports::ProcessExit, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_testkit::ScriptedChatProvider
+impl agentkit_testkit::scripted::ScriptedChatProvider
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::completing(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<agentkit_core::types::ProviderEvent>) -> Self
+impl agentkit_core::types::ChatProvider for agentkit_testkit::scripted::ScriptedChatProvider
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::id(&self) -> &str
+pub fn agentkit_testkit::scripted::ScriptedChatProvider::stream_chat(&self, agentkit_core::types::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::types::ProviderStream
+pub struct agentkit_testkit::ScriptedChild
+impl agentkit_native::ports::OwnedChildHandle for agentkit_testkit::scripted::ScriptedChild
+pub fn agentkit_testkit::scripted::ScriptedChild::deliver_input<'life0, 'life1, 'async_trait>(&'life0 mut self, &'life1 [u8], bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_native::ports::TransportFault>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedChild::generation(&self) -> u64
+pub fn agentkit_testkit::scripted::ScriptedChild::interrupt<'life0, 'async_trait>(&'life0 mut self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_native::ports::InterruptReceipt> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedChild::next_frame<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::FrameLine>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedChild::pid(&self) -> u32
+pub fn agentkit_testkit::scripted::ScriptedChild::stderr_tail(&self) -> alloc::vec::Vec<u8>
+pub fn agentkit_testkit::scripted::ScriptedChild::wait<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_native::ports::ProcessExit> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_testkit::ScriptedLocator
+impl agentkit_testkit::scripted::ScriptedLocator
+pub fn agentkit_testkit::scripted::ScriptedLocator::with_evidence(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_native::ports::ExecutableLocator for agentkit_testkit::scripted::ScriptedLocator
+pub fn agentkit_testkit::scripted::ScriptedLocator::auth_status<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::AuthEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedLocator::locate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::ExecutableEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::default::Default for agentkit_testkit::scripted::ScriptedLocator
+pub fn agentkit_testkit::scripted::ScriptedLocator::default() -> Self
+pub struct agentkit_testkit::ScriptedSupervisor
+impl agentkit_testkit::scripted::ScriptedSupervisor
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::emit(&self, &serde_json::value::Value)
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::emit_frame(&self, agentkit_native::ports::FrameLine)
+impl agentkit_native::ports::ProcessSupervisor for agentkit_testkit::scripted::ScriptedSupervisor
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::drain_owned<'life0, 'async_trait>(&'life0 self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::ports::LaunchPlan, &'life2 agentkit_native::ports::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::ports::OwnedChildHandle>, agentkit_native::error::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::scripted::ScriptedSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub const agentkit_testkit::SCRIPTED_BACKEND_ID: &str
+pub const agentkit_testkit::SCRIPTED_OBSERVED_MODEL: &str
+pub const agentkit_testkit::SCRIPTED_VERSION: &str
+pub fn agentkit_testkit::plain_chat_target(&str) -> agentkit_native::target::NativeExecutionTarget
+pub fn agentkit_testkit::scripted_turn_input() -> agentkit_native::ports::TurnInput
+pub fn agentkit_testkit::supported() -> agentkit_native::capability::CapabilityState
+pub fn agentkit_testkit::unsupported(&str) -> agentkit_native::capability::CapabilityState

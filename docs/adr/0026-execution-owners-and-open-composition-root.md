@@ -62,9 +62,25 @@ re-exported as `pub use agentkit_runtime as runtime`.
 * A duplicate kind is a build-time refusal, not a silent shadow: the host's
   executor map is built once, before recovery.
 
-## Open question
+## Open question — resolved (review finding F3)
 
-Whether a host with only a native lane can omit the default provider: today
-`build()` still requires one even though the native branch never calls it.
-Removing the requirement needs a statement that a chat-turn payload can never
-reach the fallback of a dispatch wrapper that has no model loop behind it.
+Whether a host with only a native lane can omit the default provider. It
+now can: `build()` accepts a providerless runtime when the model loop can
+never be the execution owner of an admitted turn — either a native lane is
+configured, or the consumer registered its own executor for every turn kind
+the builder would serve (the chat turn kind and each `turn_kinds` entry).
+The statement the removal needed is the fallback's: behind a dispatch wrapper
+with no model loop, the fallback is a typed `RefusingExecutor` that settles
+every turn it is handed failed with the deterministic `no_model_provider`
+code, so a chat-turn payload can never reach an absent model loop, and a
+providerless runtime is never billed for one. With no provider, no lane and
+no consumer owner for those kinds, the missing provider stays a build-time
+refusal that names them.
+
+The scripted ports this was proven with — scripted backend, supervisor,
+child, frame adapter and locator, and the scripted chat provider — live in
+`agentkit-testkit::scripted` (dev-only, ADR 0021 R10), which the runtime's
+native-lane tests and the `native-chat-lifecycle` example both replay;
+the workspace holds no second copy. `rust/examples/teammate-consumer` now
+composes its host through `AgentRuntime::builder` rather than constructing an
+`AgentHost` by hand (AGENTKIT-132).

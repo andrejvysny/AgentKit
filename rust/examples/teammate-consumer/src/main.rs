@@ -10,6 +10,11 @@
 //! own postcondition, so the example doubles as an executable
 //! specification for consumers integrating the supported REST surface.
 //!
+//! The host is the composition root's, never a hand-built one (AGENTKIT-132):
+//! `AgentRuntime::builder` with no model provider — the chat turn kind is
+//! held by the composition root's typed refusal — and its worker parked, so
+//! the walkthrough below owns every claim.
+//!
 //! The ONLY non-HTTP calls are role wiring, never a consumer agent API:
 //! * operator wiring — seeding the `native` provider registration
 //!   (`upsert_provider`/`save_provider_capabilities`/
@@ -25,7 +30,8 @@
 
 use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_http::{Actor, Config, DesktopBackend};
-use agentkit_sessions::{AgentHost, HostOptions};
+use agentkit_runtime::{AgentRuntime, RefusingExecutor};
+use agentkit_sessions::CHAT_TURN_TASK_KIND;
 use agentkit_store::{AgentDefinition, ClaimInput, SqliteStore, TaskStatus};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
@@ -51,18 +57,33 @@ fn definition(name: &str) -> AgentDefinition {
 struct Fixture {
     base: String,
     servers: Vec<tokio::task::JoinHandle<()>>,
+    /// The composition root this host was built by; kept for the life of the
+    /// servers so its composed services outlive every request.
+    _runtime: AgentRuntime,
 }
 
-/// One host, one store, one backend: the token's backend stamps the
-/// scope onto the actor server-side — scope is never a caller argument.
+/// One composition root, one store, one backend: the token's backend stamps
+/// the scope onto the actor server-side — scope is never a caller argument
+/// (AGENTKIT-132: a consumer builds the runtime, never a host by hand).
 async fn serve(store: SqliteStore) -> Fixture {
-    let host = AgentHost::new(
-        store.clone(),
-        Default::default(),
-        Arc::new(SystemRuntime),
-        HostOptions::default(),
-    )
-    .expect("host starts");
+    // This consumer admits `review.diff` teammate turns and plays the runner
+    // role itself; it runs no model loop and admits no chat turn, so the
+    // chat turn kind is held by the composition root's typed refusal rather
+    // than by a provider it does not have.
+    let mut runtime = AgentRuntime::builder(store.clone())
+        .executor(
+            CHAT_TURN_TASK_KIND,
+            Arc::new(RefusingExecutor::no_model_provider()),
+        )
+        .build()
+        .await
+        .expect("runtime builds");
+    // Deterministic walkthrough: the durable events are appended by the
+    // runner lane below, so the composition root's worker stays parked.
+    if let Some(worker) = runtime.take_worker() {
+        worker.shutdown().await.expect("worker parks");
+    }
+    let host = runtime.host().clone();
     let mut metadata = BTreeMap::new();
     metadata.insert("scope".to_owned(), Value::String(SCOPE.to_owned()));
     let backend = DesktopBackend::open(
@@ -86,7 +107,11 @@ async fn serve(store: SqliteStore) -> Fixture {
             .await
             .expect("server");
     })];
-    Fixture { base, servers }
+    Fixture {
+        base,
+        servers,
+        _runtime: runtime,
+    }
 }
 
 /// Operator wiring, not a consumer API: register the `native` provider

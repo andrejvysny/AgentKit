@@ -11,7 +11,7 @@ mod runtime;
 mod workspace;
 
 pub use authority::{PlanConfiguration, effective_class};
-pub use builder::{AgentRuntimeBuilder, ExternalToolsPolicy};
+pub use builder::{AgentRuntimeBuilder, ExternalToolsPolicy, RefusingExecutor};
 pub use error::RuntimeError;
 pub use lanes::advisor::AdvisorLane;
 pub use lanes::coding::CodingLane;

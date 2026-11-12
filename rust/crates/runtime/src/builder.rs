@@ -3,15 +3,27 @@
 //! profile registries, the executor, the host, the session service, the
 //! late binding of the authority and lanes, recovery, and only then the
 //! worker.
+//!
+//! A model provider is optional, but never silently (ADR 0026, the open
+//! question on a native-lane-only embedder): `build()` accepts a runtime
+//! with no provider only when the model loop can never be the execution
+//! owner of an admitted turn — a native lane is configured, so the dispatch
+//! wrapper owns the turns it accepts, or the consumer registered its own
+//! executor for every turn kind the builder would otherwise serve. Every
+//! other configuration is refused by name, and a turn that nevertheless
+//! reaches the model loop of a providerless runtime settles failed with the
+//! [`RefusingExecutor`]'s deterministic code — never a panic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use agentkit_agents::AdvisorEventSink;
 use agentkit_chat::{ChatExecutor, ChatExecutorOptions, ProviderRegistry};
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
-use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook};
+use agentkit_engine::{
+    ExecutionFailure, RetrySafety, SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
+};
 use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
 use agentkit_native_exec::{NativeAgentExecutor, NativeDispatchExecutor};
 use agentkit_providers::NativeProviderFactory;
@@ -19,6 +31,7 @@ use agentkit_sessions::{
     AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ContentAuthority,
     HostOptions, ProfileRegistry,
 };
+use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};
@@ -98,7 +111,9 @@ impl AgentRuntimeBuilder {
         self
     }
 
-    /// The provider that serves turns when a session pins none (required).
+    /// The provider that serves turns when a session pins none. Optional: a
+    /// runtime with no model loop at all is legal — [`AgentRuntimeBuilder::build`]
+    /// states when, and what happens to a turn that then needs one.
     pub fn default_provider(mut self, provider: Arc<dyn ChatProvider>) -> Self {
         self.default_provider = Some(provider);
         self
@@ -181,7 +196,10 @@ impl AgentRuntimeBuilder {
 
     /// Register an executor for a task kind the runtime does not own.
     /// A kind the builder already serves (the chat turn kind, or one listed
-    /// in `turn_kinds`, or registered twice) is refused at `build()`.
+    /// in `turn_kinds`, or registered twice) is refused at `build()` —
+    /// except in one case: with no provider and no native lane, every turn
+    /// kind the builder would serve is a refusal stand-in, and taking it
+    /// over is exactly what a model-loop-less consumer is meant to do.
     pub fn executor(
         mut self,
         kind: impl Into<String>,
@@ -203,6 +221,20 @@ impl AgentRuntimeBuilder {
 
     /// Build the runtime. Recovery runs before the worker claims any task,
     /// so restart reconciliation always precedes new modifying work.
+    ///
+    /// A `default_provider` is required unless the model loop can never be
+    /// the execution owner of an admitted turn (ADR 0026):
+    ///
+    /// * with a [`Self::native_lane`], the dispatch wrapper owns every turn
+    ///   whose frozen target names a vendor runtime; a turn that carries no
+    ///   native target reaches a [`RefusingExecutor`] behind the fallback
+    ///   and settles failed with `no_model_provider`, so a providerless
+    ///   runtime can never be billed for a model loop it does not have;
+    /// * otherwise, every turn kind the builder would serve — the chat turn
+    ///   kind and each [`Self::turn_kinds`] entry — must have a consumer
+    ///   [`Self::executor`], which then owns those turns outright.
+    ///
+    /// With neither, the missing provider is refused by name.
     pub async fn build(self) -> Result<AgentRuntime, RuntimeError> {
         let Self {
             store,
@@ -224,8 +256,44 @@ impl AgentRuntimeBuilder {
             extra_executors,
             native_lane,
         } = self;
-        let provider = default_provider
-            .ok_or_else(|| RuntimeError::invalid("a default provider is required"))?;
+        let has_model_loop = default_provider.is_some();
+        let has_native_lane = native_lane.is_some();
+        // Every kind the builder itself serves with the turn executor, in a
+        // deterministic order: the chat turn kind, then `turn_kinds`.
+        let mut builder_kinds: Vec<String> = Vec::new();
+        for kind in
+            std::iter::once(CHAT_TURN_TASK_KIND.to_owned()).chain(turn_kinds.iter().cloned())
+        {
+            if !builder_kinds.contains(&kind) {
+                builder_kinds.push(kind);
+            }
+        }
+        // Kinds whose builder-owned executor is a refusal stand-in, and may
+        // therefore be taken over by a consumer executor (below).
+        let mut takeover_allowed: HashSet<String> = if has_model_loop || has_native_lane {
+            HashSet::new()
+        } else {
+            builder_kinds.iter().cloned().collect()
+        };
+        if !has_model_loop && !has_native_lane {
+            let unowned: Vec<&str> = builder_kinds
+                .iter()
+                .map(String::as_str)
+                .filter(|kind| {
+                    !extra_executors
+                        .iter()
+                        .any(|(registered, _)| registered.as_str() == *kind)
+                })
+                .collect();
+            if !unowned.is_empty() {
+                return Err(RuntimeError::invalid(format!(
+                    "a default provider is required: no model loop is configured and no executor \
+                     is registered for {}; supply `default_provider`, `native_lane`, or \
+                     `executor(kind, ..)` for every admitted turn kind",
+                    unowned.join(", ")
+                )));
+            }
+        }
         let authority = Arc::new(BindingAuthority::new());
         let coding_authority = Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>;
         let lane = Arc::new(CodingLane::new(
@@ -242,7 +310,8 @@ impl AgentRuntimeBuilder {
         let lanes_store = store.clone();
         let external_guard = external_tools
             .map(|policy| JsToolGuard::new(coding_authority, policy.configured_mode, policy.plan));
-        let mut routable = vec![Arc::clone(&provider)];
+        let mut routable: Vec<Arc<dyn ChatProvider>> =
+            default_provider.clone().into_iter().collect();
         routable.extend(additional_providers);
         // Immutable for the service lifetime: a durable payload's providerId
         // must resolve identically before and after a restart.
@@ -252,7 +321,6 @@ impl AgentRuntimeBuilder {
                 .with_static_provider_ids(registry.ids().map(str::to_owned).collect()),
         );
         let profiles = Arc::new(ProfileRegistry::new(&profiles)?);
-        let advisor_provider = Arc::clone(&provider);
         let mut tool_contributors = extra_contributors;
         tool_contributors.extend([
             // The Rust coding toolpack, once registered, joins the SAME
@@ -284,8 +352,12 @@ impl AgentRuntimeBuilder {
             // unconfigured.
             Arc::new(SubagentLaneGuard::new(Arc::clone(&subagent_lane))) as Arc<dyn ToolGuard>,
         ]);
-        let chat: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-            ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
+        // The model loop, when there is a provider to run it. Without one
+        // the composition root has no model loop at all: the kinds the
+        // builder would serve are held by a typed refusal, so a turn that
+        // needs a model settles failed instead of running or panicking.
+        let model_loop = default_provider.as_ref().map(|provider| {
+            ChatExecutor::new(Arc::clone(provider), Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
                     providers: Some(Arc::clone(&registry)),
                     provider_factory: Some(native_provider_factory.clone()),
@@ -314,12 +386,17 @@ impl AgentRuntimeBuilder {
                     run_hooks: Some(Arc::clone(&advisor_lane) as Arc<dyn RunHooks>),
                     ..Default::default()
                 },
-            ),
-        );
+            )
+        });
+        let chat: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = match model_loop {
+            Some(executor) => Arc::new(executor),
+            None => Arc::new(RefusingExecutor::no_model_provider()),
+        };
         // One execution owner per admitted turn (ADR 0025 decision 1):
         // with a native lane the turn executor is the dispatch wrapper, so
         // a native-target payload runs the durable native path and
-        // everything else keeps the model loop (AGENTKIT-107 §2).
+        // everything else keeps the model loop (AGENTKIT-107 §2) — or, with
+        // no provider behind it, the refusal that says so.
         let turn: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = match native_lane {
             Some(lane) => Arc::new(NativeDispatchExecutor {
                 native: Arc::new(NativeAgentExecutor::new(
@@ -340,7 +417,12 @@ impl AgentRuntimeBuilder {
             executors.insert(kind, Arc::clone(&turn));
         }
         for (kind, executor) in extra_executors {
-            if executors.insert(kind.clone(), executor).is_some() {
+            // One execution owner per kind: a collision is a build-time
+            // refusal, never a silent shadow — except where the builder's
+            // own executor for that kind was only the refusal stand-in,
+            // which the consumer is entitled to replace with a real owner.
+            if executors.insert(kind.clone(), executor).is_some() && !takeover_allowed.remove(&kind)
+            {
                 return Err(RuntimeError::invalid(format!(
                     "executor kind registered twice: {kind}"
                 )));
@@ -407,18 +489,24 @@ impl AgentRuntimeBuilder {
             )
             .with_routable_providers(registry.ids().map(str::to_owned).collect()),
         )?;
-        advisor_lane.bind(
-            advisor_provider,
-            Arc::clone(&registry),
-            lanes_store,
-            runtime.clone(),
-            Arc::new(LaneAdvisorTools {
-                coding: Arc::clone(&lane),
-                lsp: Arc::clone(&lsp_lane),
-            }),
-            advisor_sink,
-            service.clone(),
-        )?;
+        // The advisor advises with the default provider. With no provider
+        // there is nothing to advise with, so the lane stays unconfigured —
+        // it contributes nothing, judges nothing, and hooks nothing, exactly
+        // as before any configuration call.
+        if let Some(advisor_provider) = default_provider {
+            advisor_lane.bind(
+                advisor_provider,
+                Arc::clone(&registry),
+                lanes_store,
+                runtime.clone(),
+                Arc::new(LaneAdvisorTools {
+                    coding: Arc::clone(&lane),
+                    lsp: Arc::clone(&lsp_lane),
+                }),
+                advisor_sink,
+                service.clone(),
+            )?;
+        }
         // Crash-reconcile interrupted turns BEFORE the worker can claim work.
         host.recover().await?;
         // This process's previous life may have died mid-child: children
@@ -439,5 +527,60 @@ impl AgentRuntimeBuilder {
             lsp: lsp_lane,
             worker: Some(worker),
         })
+    }
+}
+
+/// The turn executor of a runtime with no model loop: it settles every turn
+/// it is handed failed with a fixed, deterministic code, and never runs,
+/// bills, or panics. A providerless composition root registers it for the
+/// turn kinds it still owns — behind the native dispatch wrapper's fallback,
+/// or as the takeover target a consumer replaces with its own executor — so
+/// a turn admitted under a kind the runtime cannot execute produces a durable
+/// refusal instead of a surprise.
+pub struct RefusingExecutor {
+    code: String,
+    message: String,
+}
+
+impl RefusingExecutor {
+    /// The code of the refusal the composition root installs for a turn that
+    /// would need a model loop the runtime does not have.
+    pub const NO_MODEL_PROVIDER: &'static str = "no_model_provider";
+
+    /// The stand-in the builder registers when no provider was configured.
+    pub fn no_model_provider() -> Self {
+        Self::new(
+            Self::NO_MODEL_PROVIDER,
+            "this runtime has no model loop: no default provider was configured",
+        )
+    }
+
+    /// A refusal with a consumer-chosen code and message. The code leads the
+    /// message so the durable task record names it whatever the runner does
+    /// with the structured failure.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        let code = code.into();
+        Self {
+            message: format!("{code}: {}", message.into()),
+            code,
+        }
+    }
+}
+
+#[async_trait]
+impl TaskExecutor<agentkit_store::SqliteStore> for RefusingExecutor {
+    async fn execute(
+        &self,
+        _context: agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>,
+    ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
+        // Nothing ran, so nothing can have landed: replay is provably safe,
+        // and the refusal is terminal because no retry can supply a provider.
+        Err(agentkit_engine::EngineError::Failure(ExecutionFailure {
+            message: self.message.clone(),
+            code: Some(self.code.clone()),
+            retryable: Some(false),
+            http_status: None,
+            retry_safety: RetrySafety::SafeToRetry,
+        }))
     }
 }

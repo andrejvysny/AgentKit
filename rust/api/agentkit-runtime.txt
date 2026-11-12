@@ -74,6 +74,13 @@ pub agentkit_runtime::NativeLane::supervisor: alloc::rcs::arc::Arc<dyn agentkit_
 pub struct agentkit_runtime::PlanConfiguration
 pub agentkit_runtime::PlanConfiguration::granted_mode: agentkit_core::permission::CodingMode
 pub agentkit_runtime::PlanConfiguration::tool_names: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_runtime::RefusingExecutor
+impl agentkit_runtime::RefusingExecutor
+pub const agentkit_runtime::RefusingExecutor::NO_MODEL_PROVIDER: &'static str
+pub fn agentkit_runtime::RefusingExecutor::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_runtime::RefusingExecutor::no_model_provider() -> Self
+impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_runtime::RefusingExecutor
+pub fn agentkit_runtime::RefusingExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct agentkit_runtime::SubagentLane
 impl agentkit_runtime::SubagentLane
 pub fn agentkit_runtime::SubagentLane::configure(&self, agentkit_agents::subagents::config::SubagentConfig)

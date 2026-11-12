@@ -32,6 +32,8 @@ async-trait.workspace = true
 
 [dev-dependencies]
 uuid.workspace = true
+# The scripted native ports and the scripted chat provider (ADR 0021 R10).
+agentkit-testkit = { workspace = true }
 # http_fixture example (TypeScript client/react test server)
 agentkit-http = { workspace = true }
 agentkit-mcp = { workspace = true }

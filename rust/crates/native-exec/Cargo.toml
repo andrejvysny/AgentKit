@@ -27,3 +27,5 @@ agentkit-mcp = { workspace = true }
 agentkit-native-broker = { workspace = true }
 # The inline tests run the generic executor against the SQLite repository.
 agentkit-store = { workspace = true }
+# The example replays the shared scripted native ports (ADR 0021 R10).
+agentkit-testkit = { workspace = true }
