@@ -61,7 +61,17 @@ pub(crate) async fn response(
         let mut cursor = start;
         let mut settled = false;
         loop {
-            let batch = backend.events(&actor,&run_id,cursor,batch_size).await.map_err(failure)?;
+            // A page or status read can fail for a reason the protocol already
+            // answers: the store is locked, the read hook is down. Past the
+            // response headers there is no status line left for a `Problem`, and
+            // an `Err` here only resets the peer's socket mid-write — which a
+            // client cannot distinguish from this break anyway, since both are
+            // an EOF without the settlement marker, and both clients resume from
+            // `Last-Event-ID` on one (see `streamRun`). Stopping lets hyper
+            // flush the last frame and write the terminating chunk.
+            // A backend that BREAKS an invariant below is a server bug, not a
+            // bad moment, and still aborts.
+            let batch = match backend.events(&actor,&run_id,cursor,batch_size).await { Ok(batch) => batch, Err(_) => break };
             if batch.len() > batch_size { Err(io::Error::other("Backend exceeded event page limit"))?; }
             let count = batch.len();
             for event in batch {
@@ -76,7 +86,7 @@ pub(crate) async fn response(
             }
             if count == batch_size { continue; }
             if settled { yield Event::default().event("agentkit.stream.settled").data("{}"); break; }
-            let status = backend.run_status(&actor,&run_id).await.map_err(failure)?;
+            let status = match backend.run_status(&actor,&run_id).await { Ok(status) => status, Err(_) => break };
             settled = status.is_none_or(|s| matches!(s.as_str(), "completed"|"failed"|"cancelled"|"interrupted"));
             if !settled { tokio::time::sleep(options.poll_interval).await; }
         }

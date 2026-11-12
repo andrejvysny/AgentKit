@@ -90,11 +90,14 @@ has no event ID or sequence and is not a durable run event. It confirms that
 the log was exhausted; it does not mean the task succeeded. Read task status
 to distinguish completed, failed, cancelled and interrupted outcomes.
 
-A pump error still rejects the response body. Bun 1.3.14 can serialize that
-error as clean HTTP EOF, so EOF alone is never authoritative. `streamRun`
-requires the settlement frame and reconnects from its last delivered cursor
-when EOF lacks it, within the existing retry budgets. `drainRun` rejects an
-unmarked EOF rather than returning a partial tail. Deploy matching client and
+A transient pump read failure stops the stream without the marker, ending the
+response — last frame flushed, terminating chunk written — rather than resetting
+the socket mid-write; a backend that BREAKS a log invariant still aborts it.
+Either way the client sees an EOF without the frame, and a transport error can
+be serialized as a clean EOF too, so EOF alone is never authoritative.
+`streamRun` requires the settlement frame and reconnects from its last delivered
+cursor when EOF lacks it, within the existing retry budgets. `drainRun` rejects
+an unmarked EOF rather than returning a partial tail. Deploy matching client and
 transport versions: older servers without this frame fail closed with the new
 client. The frame is part of the coordinated, unpublished 0.6/0.7 candidates.
 Headless hooks also reconcile task status and final verification.

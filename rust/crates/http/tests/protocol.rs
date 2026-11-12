@@ -454,14 +454,27 @@ async fn provider_terminal_does_not_settle_and_read_failure_cannot_settle() {
     fake.fail_after.store(1, Ordering::SeqCst);
     *fake.log.lock().unwrap() = vec![event(0)];
     let (base, task) = serve(fake, Config::default()).await;
-    let result = reqwest::Client::new()
+    // A failed page read lands after the response headers, so it cannot be
+    // answered with a problem body: the stream must simply STOP. What was
+    // durable got out, and the settlement marker — the client's cue to trust
+    // the tail it holds — is not written for a log that was never drained.
+    // That the response ENDED, rather than the socket being reset with bytes
+    // in flight, is what `text()` proves: a truncated chunked body is an error
+    // to reqwest.
+    let response = reqwest::Client::new()
         .get(format!("{base}/v1/runs/r/stream"))
         .header("authorization", "one")
         .send()
-        .await;
-    if let Ok(response) = result {
-        assert!(response.text().await.is_err());
-    }
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let text = response.text().await.unwrap();
+    assert!(text.contains("retry: "), "the stream never opened: {text}");
+    assert!(text.contains("id: e0\n"), "the read page was lost: {text}");
+    assert!(
+        !text.contains("agentkit.stream.settled"),
+        "a failed read cannot claim settlement: {text}"
+    );
     task.abort();
 }
 
