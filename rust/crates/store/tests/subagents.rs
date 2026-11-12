@@ -361,7 +361,7 @@ async fn a_version_nine_database_upgrades_to_current() {
     // them) disappears and user_version goes back.
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch(
-        "DROP TABLE subagents; DROP TABLE advisor_findings; DROP TABLE advisor_reviews; DROP TABLE agents; DROP TABLE agent_config_revisions; DROP TABLE agent_admissions; DROP INDEX agent_inputs_agent; ALTER TABLE agent_inputs DROP COLUMN agent_id; DROP INDEX tasks_agent; DROP INDEX tasks_status; DROP INDEX tasks_parent;",
+        "DROP TABLE subagents; DROP TABLE advisor_findings; DROP TABLE advisor_reviews; DROP TABLE agents; DROP TABLE agent_config_revisions; DROP TABLE agent_admissions; DROP INDEX agent_inputs_agent; ALTER TABLE agent_inputs DROP COLUMN agent_id; DROP INDEX tasks_agent; DROP INDEX tasks_status; DROP INDEX tasks_parent; DROP INDEX native_session_bindings_task; DROP TABLE native_session_bindings; DROP INDEX native_interactions_task; DROP TABLE native_interactions; DROP INDEX native_call_receipts_invocation; DROP TABLE native_call_receipts; DROP INDEX native_continuations_scope; DROP INDEX native_continuations_attempt; DROP TABLE native_continuations;",
     )
     .unwrap();
     support::downgrade_provider_authority(&db);

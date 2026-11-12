@@ -3,9 +3,13 @@
   "violations": [
     "R1b agentkit-agents -> agentkit-store",
     "R1b agentkit-chat -> agentkit-store",
+    "R1b agentkit-native-exec -> agentkit-native-broker",
+    "R1b agentkit-native-exec -> agentkit-store",
     "R1b agentkit-sessions -> agentkit-store",
     "R5 agentkit-chat src/emulated_tool_call.rs static BLOCKS",
     "R5 agentkit-chat src/governance/native_command_drain.rs static PENDING",
+    "R5 agentkit-claude src/backend.rs static GOOD_PATH",
+    "R5 agentkit-claude src/discovery.rs static RECORDED_QUALIFICATIONS",
     "R5 agentkit-client src/lib.rs pub use presentation::*",
     "R5 agentkit-connections src/lib.rs pub use credentials::*",
     "R5 agentkit-connections src/lib.rs pub use discovery::*",

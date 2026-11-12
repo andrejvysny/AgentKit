@@ -1433,6 +1433,16 @@ fn parse_object(text: &str, what: &str) -> Result<Value> {
         .ok_or_else(|| errors::invalid(format!("{what} must be a JSON object")))
 }
 
+/// The per-turn frozen native stanza (`frozen`): a JSON object when present,
+/// carried verbatim onto the durable input envelope by the host.
+fn optional_frozen(object: &Value) -> Result<Option<serde_json::Map<String, Value>>> {
+    match object.get("frozen") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => Ok(Some(map.clone())),
+        Some(_) => Err(errors::invalid("frozen must be a JSON object when present")),
+    }
+}
+
 fn optional_string(object: &Value, key: &str) -> Result<Option<String>> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -1906,6 +1916,7 @@ fn parse_send_input(text: &str, default_busy: WhenBusy) -> Result<SendInput> {
         when_busy,
         turn_id: optional_string(&object, "turnId")?,
         on_settled: parse_on_settled(&object, "onSettled")?,
+        frozen_payload: optional_frozen(&object)?,
     })
 }
 
@@ -1914,6 +1925,7 @@ fn parse_follow_up(text: &str) -> Result<FollowUpInput> {
     Ok(FollowUpInput {
         content: required_content(&object)?,
         input_id: optional_string(&object, "inputId")?,
+        frozen_payload: optional_frozen(&object)?,
     })
 }
 
@@ -1924,6 +1936,7 @@ fn parse_steer(text: &str) -> Result<SteerInput> {
         input_id: optional_string(&object, "inputId")?,
         turn_id: optional_string(&object, "turnId")?,
         on_settled: parse_on_settled(&object, "onSettled")?,
+        frozen_payload: optional_frozen(&object)?,
     })
 }
 

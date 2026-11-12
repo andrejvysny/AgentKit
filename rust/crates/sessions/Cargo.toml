@@ -17,6 +17,7 @@ agentkit-core = { workspace = true }
 agentkit-engine = { workspace = true }
 agentkit-governance = { workspace = true }
 agentkit-kernel = { workspace = true }
+agentkit-native = { workspace = true }
 # Transitional: the session service still drives SqliteStore directly (ADR 0024).
 agentkit-store = { workspace = true }
 async-trait.workspace = true

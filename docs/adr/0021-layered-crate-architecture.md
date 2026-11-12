@@ -84,3 +84,14 @@ only shrinks; each migration phase removes the entries it resolves.
 
 Phases P0–P8 are tracked in Plane. Each extraction lands as a pure-move commit
 (unchanged test totals and behaviour) followed by separate behaviour commits.
+
+## Amendment (2026-11-11)
+
+- Layer 2 gains `agentkit-native`: ports and contracts for vendor agent runtimes (ADR 0025).
+- Layer 3 gains `agentkit-native-exec`. Like the future Hybrid contexts it may depend on engine and
+  sessions only.
+- Layer 4 gains `agentkit-native-broker` and `agentkit-claude`. `agentkit-store` keeps its name;
+  `agentkit-store-sqlite` and `agentkit-store-legacy-import` will not be created (ADR 0024).
+- Layer 6 temporarily holds `agentkit-facade`.
+- The allowlist only shrinks, with one exception: a merge from `master` may add the entries its
+  commit message names. The merge of 2026-11 added four; phases N1 and G1 remove them.

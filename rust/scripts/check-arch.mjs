@@ -16,6 +16,7 @@ const LAYERS = {
   "agentkit-contracts": 1,
   "agentkit-core": 2,
   "agentkit-governance": 2,
+  "agentkit-native": 2,
   "agentkit-engine": 3,
   "agentkit-sessions": 3,
   "agentkit-chat": 3,
@@ -23,6 +24,7 @@ const LAYERS = {
   "agentkit-memory": 3,
   "agentkit-automation": 3,
   "agentkit-remote": 3,
+  "agentkit-native-exec": 3,
   "agentkit-store": 4,
   "agentkit-store-sqlite": 4,
   "agentkit-store-legacy-import": 4,
@@ -32,11 +34,14 @@ const LAYERS = {
   "agentkit-mcp": 4,
   "agentkit-connections": 4,
   "agentkit-sys": 4,
+  "agentkit-native-broker": 4,
+  "agentkit-claude": 4,
   "agentkit-runtime": 5,
   "agentkit-napi": 6,
   "agentkit-http": 6,
   "agentkit-client": 6,
   "agentkit-rust": 6,
+  "agentkit-facade": 6,
 };
 const TESTKIT = "agentkit-testkit";
 const BANNED_INNER = new Set([
@@ -57,6 +62,7 @@ const CONTEXT_DEPS = {
   "agentkit-memory": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-automation": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-remote": ["agentkit-engine", "agentkit-sessions"],
+  "agentkit-native-exec": ["agentkit-engine", "agentkit-sessions"],
 };
 const SKIP_DIRS = new Set(["tests", "benches", "examples", "target"]);
 const STATIC_RE =

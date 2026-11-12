@@ -123,6 +123,7 @@ pub agentkit_engine::ExecutionContext::task: agentkit_engine::TaskRecord
 impl<R: agentkit_engine::TaskRepository> agentkit_engine::ExecutionContext<R>
 pub fn agentkit_engine::ExecutionContext<R>::check_cancelled(&self) -> agentkit_engine::EngineResult<(), <R as agentkit_engine::TaskRepository>::Error>
 pub async fn agentkit_engine::ExecutionContext<R>::emit(&self, &str, serde_json::value::Value) -> agentkit_engine::EngineResult<(), <R as agentkit_engine::TaskRepository>::Error>
+pub fn agentkit_engine::ExecutionContext<R>::lease_fence(&self) -> agentkit_engine::LeaseFence
 pub async fn agentkit_engine::ExecutionContext<R>::park_on_children(&self) -> agentkit_engine::EngineResult<bool, <R as agentkit_engine::TaskRepository>::Error>
 pub async fn agentkit_engine::ExecutionContext<R>::report_progress(&self, serde_json::value::Value) -> agentkit_engine::EngineResult<(), <R as agentkit_engine::TaskRepository>::Error>
 pub async fn agentkit_engine::ExecutionContext<R>::spawn_child(&self, agentkit_engine::SubmitTask) -> agentkit_engine::EngineResult<agentkit_engine::TaskRecord, <R as agentkit_engine::TaskRepository>::Error>
@@ -319,7 +320,9 @@ pub fn agentkit_engine::SessionSettlement::without_promotion(self) -> Self
 pub trait agentkit_engine::TaskExecutor<R: agentkit_engine::TaskRepository>: core::marker::Send + core::marker::Sync
 pub fn agentkit_engine::TaskExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::ExecutionContext<R>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<(), <R as agentkit_engine::TaskRepository>::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_engine::TaskExecutor::handles_verification(&self) -> bool
+pub fn agentkit_engine::TaskExecutor::handles_verification_for(&self, &serde_json::value::Value) -> bool
 pub fn agentkit_engine::TaskExecutor::resolves_provider_snapshots(&self) -> bool
+pub fn agentkit_engine::TaskExecutor::resolves_provider_snapshots_for(&self, &serde_json::value::Value) -> bool
 pub trait agentkit_engine::TaskRepository: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub type agentkit_engine::TaskRepository::Error: agentkit_engine::RepositoryFault
 pub type agentkit_engine::TaskRepository::SessionSettle: agentkit_engine::SessionSettlement

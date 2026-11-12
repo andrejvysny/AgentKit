@@ -207,6 +207,7 @@ pub agentkit_sessions::CreateSessionInput::turn_kind: core::option::Option<alloc
 pub agentkit_sessions::CreateSessionInput::workspace: core::option::Option<serde_json::value::Value>
 pub struct agentkit_sessions::FollowUpInput
 pub agentkit_sessions::FollowUpInput::content: serde_json::value::Value
+pub agentkit_sessions::FollowUpInput::frozen_payload: core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
 pub agentkit_sessions::FollowUpInput::input_id: core::option::Option<alloc::string::String>
 pub struct agentkit_sessions::FrozenRunContent
 pub agentkit_sessions::FrozenRunContent::authority_identity: serde_json::value::Value
@@ -271,6 +272,7 @@ pub agentkit_sessions::SelectedSource::kind: agentkit_sessions::SelectedSourceKi
 pub agentkit_sessions::SelectedSource::units: alloc::vec::Vec<agentkit_sessions::ContextUnit>
 pub struct agentkit_sessions::SendInput
 pub agentkit_sessions::SendInput::content: serde_json::value::Value
+pub agentkit_sessions::SendInput::frozen_payload: core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
 pub agentkit_sessions::SendInput::input_id: core::option::Option<alloc::string::String>
 pub agentkit_sessions::SendInput::on_settled: core::option::Option<agentkit_sessions::OnSettled>
 pub agentkit_sessions::SendInput::turn_id: core::option::Option<alloc::string::String>
@@ -292,6 +294,7 @@ pub agentkit_sessions::SkillSelection::id: alloc::string::String
 pub agentkit_sessions::SkillSelection::revision: alloc::string::String
 pub struct agentkit_sessions::SteerInput
 pub agentkit_sessions::SteerInput::content: serde_json::value::Value
+pub agentkit_sessions::SteerInput::frozen_payload: core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
 pub agentkit_sessions::SteerInput::input_id: core::option::Option<alloc::string::String>
 pub agentkit_sessions::SteerInput::on_settled: core::option::Option<agentkit_sessions::OnSettled>
 pub agentkit_sessions::SteerInput::turn_id: core::option::Option<alloc::string::String>

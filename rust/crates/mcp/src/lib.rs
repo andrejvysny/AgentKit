@@ -19,7 +19,7 @@ mod oauth_store;
 mod server;
 mod stdio_client;
 
-pub use backend::{Backend, CatalogTool, Features, SessionScope};
+pub use backend::{Backend, CatalogTool, Features, RpcId, SessionScope};
 pub use bridge::{BridgeError, McpToolSet, aliases_are_one_step, resolve_original};
 pub use client::{ClientOptions, McpClient, McpClientError};
 pub use configuration::{
@@ -36,6 +36,7 @@ pub use model_content::{ModelContentCapabilities, ModelContentProjection, projec
 pub use oauth::{ManagedOAuthOptions, ManagedOAuthProvider, OAuthBrowser, OAuthSecrets};
 pub use rmcp::model;
 pub use rmcp::transport::auth as oauth_protocol;
+pub use rmcp::{ErrorData, RmcpError};
 pub use server::{Authenticator, BearerAuth, McpServer, ServerOptions};
 
 /// Frozen from @modelcontextprotocol/sdk 1.30.0 dist/esm/types.js.

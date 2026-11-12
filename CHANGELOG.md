@@ -18,6 +18,14 @@
 - Live TypeScript packages, examples and scripts no longer import the frozen backend; `native` and `testing` carry their own port types.
 - Public API reports re-baselined to the 13 remaining entry points (`docs/rust/api`).
 
+**Merged: Claude Code native backend (AGENTKIT-107 to 118) onto the layered crates.** Behaviour is unchanged from `master`; crate paths moved ([ADR 0025](docs/adr/0025-claude-code-native-backend-contracts.md)).
+
+- `agentkit_host::native_executor::*` -> `agentkit_native_exec::*` (`NativeAgentExecutor`, `NativeDispatchExecutor`, `AttemptBrokerFactory`, `NativeExecutorOptions`).
+- `agentkit_host::native_bridge::*` -> `agentkit_native_broker::*` (`AttemptBroker`, `BrokerAuthority`, `BrokerBackend`, `BrokerLimits`).
+- The frozen admission contract (the four payload keys, `ContinuationScope`, `BrokerSpec`, `validate_frozen_stanza`) lives in `agentkit-native`; `agentkit-native-exec` re-exports the types.
+- Session admission validates the frozen stanza against the typed contract in every build (no `http` feature gate).
+- `TaskExecutor` gains `handles_verification_for` and `resolves_provider_snapshots_for`; `ExecutionContext` gains `lease_fence()`. Store schema version is 19.
+
 **Removed (tooling).** `snapshot:release`, `qualify:package`, `source:digest` and the scripts behind them (`scripts/snapshot-release.mjs`, `scripts/release/{foundation.mjs,foundation/,fixture-projection.mjs,publication.mjs,qualify-candidates.mjs,source-proof.mjs}`, `scripts/qualify-package.mjs`, `scripts/source-digest.mjs`, `scripts/sqlite-durability.mjs`, `scripts/node-sqlite-conformance.mjs`, `scripts/qualification/{consumer.mjs,types.ts,electron-native.cjs,responses-openpcb-smoke.mjs,sqlite-fixture.mjs}`) and their tests. The native lockstep release lane and `qualify:local` / `qualify:cold` remain.
 
 ## Unreleased — Unified agent runtime M0–M7

@@ -33,7 +33,7 @@ mod service;
 mod store;
 mod tool;
 
-/// `cargo test` links this crate outside a Node process, so the three
+/// `cargo test` links this crate outside a Node process, so the four
 /// libnode symbols the napi rlib genuinely references are missing. These
 /// stubs exist only in the test binary; they are never reached by the unit
 /// tests below (which exercise pure payload logic), and shipping builds
@@ -60,6 +60,14 @@ mod napi_test_stubs {
     pub unsafe extern "C" fn napi_call_threadsafe_function(
         _tsfn: *mut c_void,
         _data: *mut c_void,
+        _mode: i32,
+    ) -> i32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn napi_release_threadsafe_function(
+        _tsfn: *mut c_void,
         _mode: i32,
     ) -> i32 {
         0

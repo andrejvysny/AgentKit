@@ -138,6 +138,7 @@ async fn a_symlinked_agents_md_skips_with_a_durable_warning_and_never_leaks() {
         .send(
             "s1",
             &SendInput {
+                frozen_payload: None,
                 content: json!("hi"),
                 input_id: Some("in1".into()),
                 when_busy: WhenBusy::Reject,

@@ -24,7 +24,7 @@ wildcards = "deny"
 allow-wildcard-paths = true
 # Layer rules (ADR 0021 R1): inner crates must not pull outer frameworks.
 deny = [
-  { crate = "axum", wrappers = ["agentkit-mcp", "agentkit-napi", "agentkit-runtime", "agentkit-http", "agentkit-teammate-consumer", "agentkit-client", "tower-http"] },
+  { crate = "axum", wrappers = ["agentkit-mcp", "agentkit-napi", "agentkit-runtime", "agentkit-http", "agentkit-teammate-consumer", "agentkit-client", "tower-http", "agentkit-native-broker"] },
   { crate = "rusqlite", wrappers = ["agentkit-store", "agentkit-store-sqlite", "agentkit-store-legacy-import", "agentkit-mcp", "agentkit-chat", "agentkit-http", "agentkit-toolpacks-coding", "agentkit-napi"] },
 ]
 

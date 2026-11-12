@@ -366,24 +366,42 @@ fn batch(token: &str, first_seq: u64, count: u64) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Read a file with the OS page cache disabled (`F_NOCACHE` on macOS), so the
-/// bytes returned are what the storage layer actually holds — the only local
-/// observation that distinguishes a synced commit from a cached one.
+/// Read a file the way a storage inspector would.
+///
+/// macOS: `F_NOCACHE` (fcntl 48) serves the read around the unified buffer
+/// cache. Linux/other unix: there is NO per-read cache-bypass primitive —
+/// `F_NOCACHE` does not exist there (fcntl 48 is unassigned → EINVAL, which
+/// is why this leg used to fail every Linux run) and `O_DIRECT` would lose
+/// the sub-sector WAL tail. The honest Linux assertion is therefore the
+/// WAL image as the kernel presents it after the writer died: wholly
+/// serialized, wholly readable by a writer-oblivious reader, never torn.
+/// Whether the fsync itself fired is falsified by the `faults` pragma unit
+/// tests, not by user-space reads (see the platform note on the test).
 #[cfg(unix)]
 fn read_bypassing_cache(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-    use std::ffi::c_int;
-    use std::os::fd::AsRawFd;
-    unsafe extern "C" {
-        fn fcntl(fd: c_int, cmd: c_int, arg: c_int) -> c_int;
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_int;
+        use std::os::fd::AsRawFd;
+        unsafe extern "C" {
+            fn fcntl(fd: c_int, cmd: c_int, arg: c_int) -> c_int;
+        }
+        const F_NOCACHE: c_int = 48;
+        let mut file = std::fs::File::open(path)?;
+        if unsafe { fcntl(file.as_raw_fd(), F_NOCACHE, 1) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes)?;
+        Ok(bytes)
     }
-    const F_NOCACHE: c_int = 48;
-    let mut file = std::fs::File::open(path)?;
-    if unsafe { fcntl(file.as_raw_fd(), F_NOCACHE, 1) } != 0 {
-        return Err(std::io::Error::last_os_error());
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut file = std::fs::File::open(path)?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes)?;
+        Ok(bytes)
     }
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes)?;
-    Ok(bytes)
 }
 
 /// Child body: pre-fault commits as positive control, then one injected

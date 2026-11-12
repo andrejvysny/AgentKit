@@ -1,4 +1,6 @@
 pub mod agentkit_mcp
+pub use agentkit_mcp::ErrorData
+pub use agentkit_mcp::RmcpError
 pub use agentkit_mcp::model
 pub use agentkit_mcp::oauth_protocol
 pub enum agentkit_mcp::BridgeError
@@ -33,6 +35,13 @@ pub agentkit_mcp::McpConfigError::NotFound
 pub agentkit_mcp::McpConfigError::Runtime
 pub agentkit_mcp::McpConfigError::SecretStore
 pub agentkit_mcp::McpConfigError::Store(agentkit_store::StoreError)
+pub enum agentkit_mcp::RpcId
+pub agentkit_mcp::RpcId::Number(i64)
+pub agentkit_mcp::RpcId::Other(alloc::string::String)
+pub agentkit_mcp::RpcId::String(alloc::string::String)
+impl agentkit_mcp::RpcId
+pub fn agentkit_mcp::RpcId::from_json(&serde_json::value::Value) -> Self
+pub fn agentkit_mcp::RpcId::from_request_id(&rmcp::model::NumberOrString) -> Self
 pub enum agentkit_mcp::TransportConfig
 pub agentkit_mcp::TransportConfig::Http
 pub agentkit_mcp::TransportConfig::Http::headers: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
@@ -147,6 +156,7 @@ pub async fn agentkit_mcp::McpServer::close(&self)
 pub async fn agentkit_mcp::McpServer::handle(&self, http::request::Request<axum_core::body::Body>) -> axum_core::response::Response
 pub fn agentkit_mcp::McpServer::new(alloc::rcs::arc::Arc<dyn agentkit_mcp::Backend>, alloc::rcs::arc::Arc<dyn agentkit_mcp::Authenticator>, agentkit_mcp::ServerOptions) -> core::result::Result<Self, &'static str>
 pub fn agentkit_mcp::McpServer::router(&self) -> axum::routing::Router
+pub fn agentkit_mcp::McpServer::router_at(&self, &str) -> axum::routing::Router
 pub struct agentkit_mcp::McpToolSet
 impl agentkit_mcp::McpToolSet
 pub async fn agentkit_mcp::McpToolSet::contribute(&self, tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>>, agentkit_mcp::BridgeError>
@@ -200,6 +210,7 @@ pub agentkit_mcp::SessionScope::actor_id: alloc::string::String
 pub agentkit_mcp::SessionScope::cancellation: tokio_util::sync::cancellation_token::CancellationToken
 pub agentkit_mcp::SessionScope::chat_id: core::option::Option<alloc::string::String>
 pub agentkit_mcp::SessionScope::principal: serde_json::value::Value
+pub agentkit_mcp::SessionScope::request_id: core::option::Option<agentkit_mcp::RpcId>
 pub struct agentkit_mcp::SystemClock
 impl agentkit_mcp::ManagerClock for agentkit_mcp::SystemClock
 pub fn agentkit_mcp::SystemClock::now_ms(&self) -> u64

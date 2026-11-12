@@ -1,0 +1,438 @@
+pub mod agentkit_native
+pub enum agentkit_native::AnswerDisposition
+pub agentkit_native::AnswerDisposition::Accepted
+pub agentkit_native::AnswerDisposition::Accepted::answered_at_ms: i64
+pub agentkit_native::AnswerDisposition::Duplicate
+pub agentkit_native::AnswerDisposition::Rejected
+pub agentkit_native::AnswerDisposition::Rejected::reason: agentkit_native::InteractionRejection
+pub enum agentkit_native::AuthExpectation
+pub agentkit_native::AuthExpectation::ApiAuth
+pub agentkit_native::AuthExpectation::AsConfigured
+pub agentkit_native::AuthExpectation::SubscriptionLogin
+pub enum agentkit_native::AuthMode
+pub agentkit_native::AuthMode::ApiKey
+pub agentkit_native::AuthMode::ApiKeyHelper
+pub agentkit_native::AuthMode::None
+pub agentkit_native::AuthMode::Subscription
+pub agentkit_native::AuthMode::Subscription::account_scope: alloc::string::String
+pub agentkit_native::AuthMode::ThirdParty
+pub agentkit_native::AuthMode::ThirdParty::provider: alloc::string::String
+pub agentkit_native::AuthMode::Unknown
+pub enum agentkit_native::BillingInclusion
+pub agentkit_native::BillingInclusion::Included
+pub agentkit_native::BillingInclusion::Included::evidence: alloc::string::String
+pub agentkit_native::BillingInclusion::NotIncluded
+pub agentkit_native::BillingInclusion::NotIncluded::evidence: alloc::string::String
+pub agentkit_native::BillingInclusion::Unknown
+pub enum agentkit_native::CapabilityState
+pub agentkit_native::CapabilityState::Capable
+pub agentkit_native::CapabilityState::Capable::reason: alloc::string::String
+pub agentkit_native::CapabilityState::Supported
+pub agentkit_native::CapabilityState::Supported::evidence: alloc::string::String
+pub agentkit_native::CapabilityState::Supported::qualified_version: alloc::string::String
+pub agentkit_native::CapabilityState::Unknown
+pub agentkit_native::CapabilityState::Unsupported
+pub agentkit_native::CapabilityState::Unsupported::reason: alloc::string::String
+impl agentkit_native::CapabilityState
+pub fn agentkit_native::CapabilityState::is_capable(&self) -> bool
+pub fn agentkit_native::CapabilityState::is_supported(&self) -> bool
+pub enum agentkit_native::Decision
+pub agentkit_native::Decision::Allow
+pub agentkit_native::Decision::Deny
+pub agentkit_native::Decision::Respond
+pub agentkit_native::Decision::Respond::value: serde_json::value::Value
+pub enum agentkit_native::ExecutionTarget
+pub agentkit_native::ExecutionTarget::ModelLoop(agentkit_native::ModelLoopTarget)
+pub agentkit_native::ExecutionTarget::Native(agentkit_native::NativeExecutionTarget)
+impl agentkit_native::ExecutionTarget
+pub fn agentkit_native::ExecutionTarget::digest(&self) -> alloc::string::String
+pub fn agentkit_native::ExecutionTarget::is_native(&self) -> bool
+pub fn agentkit_native::ExecutionTarget::model_loop(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub enum agentkit_native::FailureClass
+pub agentkit_native::FailureClass::AuthExpired
+pub agentkit_native::FailureClass::BillingBlocked
+pub agentkit_native::FailureClass::CleanupUncertain
+pub agentkit_native::FailureClass::DeferredUnsupported
+pub agentkit_native::FailureClass::ExecutableMissing
+pub agentkit_native::FailureClass::ExecutableReplaced
+pub agentkit_native::FailureClass::ExitWithoutResult
+pub agentkit_native::FailureClass::IdleTimeout
+pub agentkit_native::FailureClass::Internal
+pub agentkit_native::FailureClass::ManagedPolicyConflict
+pub agentkit_native::FailureClass::McpBridgeUnavailable
+pub agentkit_native::FailureClass::ModelNotEntitled
+pub agentkit_native::FailureClass::NotSignedIn
+pub agentkit_native::FailureClass::ProcessLost
+pub agentkit_native::FailureClass::ProtocolViolation
+pub agentkit_native::FailureClass::QuotaExhausted
+pub agentkit_native::FailureClass::SpawnFailed
+pub agentkit_native::FailureClass::StartupTimeout
+pub agentkit_native::FailureClass::TurnDeadline
+pub agentkit_native::FailureClass::UncertainOutcome
+pub agentkit_native::FailureClass::UnsupportedCapability
+pub agentkit_native::FailureClass::UnsupportedContent
+pub agentkit_native::FailureClass::UnsupportedVersion
+impl agentkit_native::FailureClass
+pub fn agentkit_native::FailureClass::retryable(&self) -> bool
+pub enum agentkit_native::FinishDisposition
+pub agentkit_native::FinishDisposition::NoResult
+pub agentkit_native::FinishDisposition::NoResult::partial_text: core::option::Option<alloc::string::String>
+pub enum agentkit_native::FrameLine
+pub agentkit_native::FrameLine::Fault(agentkit_native::TransportFault)
+pub agentkit_native::FrameLine::Line(alloc::vec::Vec<u8>)
+pub enum agentkit_native::InteractionKind
+pub agentkit_native::InteractionKind::Approval
+pub agentkit_native::InteractionKind::Question
+pub enum agentkit_native::InteractionRejection
+pub agentkit_native::InteractionRejection::AlreadyAnswered
+pub agentkit_native::InteractionRejection::AuthorityRevoked
+pub agentkit_native::InteractionRejection::CrossTask
+pub agentkit_native::InteractionRejection::Expired
+pub agentkit_native::InteractionRejection::InputChanged
+pub agentkit_native::InteractionRejection::Invalidated
+pub agentkit_native::InteractionRejection::NotFound
+pub agentkit_native::InteractionRejection::StaleAttempt
+pub agentkit_native::InteractionRejection::StaleGeneration
+pub enum agentkit_native::InterruptPolicy
+pub agentkit_native::InterruptPolicy::HostShutdown
+pub agentkit_native::InterruptPolicy::Quarantine
+pub agentkit_native::InterruptPolicy::UserStop
+pub enum agentkit_native::NativeError
+pub agentkit_native::NativeError::Cancelled
+pub agentkit_native::NativeError::Protocol
+pub agentkit_native::NativeError::Protocol::code: alloc::string::String
+pub agentkit_native::NativeError::Protocol::message: alloc::string::String
+pub agentkit_native::NativeError::Refusal
+pub agentkit_native::NativeError::Refusal::refusal: agentkit_native::NativeRefusal
+pub agentkit_native::NativeError::StaleAttempt
+pub agentkit_native::NativeError::StaleAttempt::attempt_id: alloc::string::String
+pub agentkit_native::NativeError::Transport
+pub agentkit_native::NativeError::Transport::code: alloc::string::String
+pub agentkit_native::NativeError::Transport::message: alloc::string::String
+pub enum agentkit_native::NativeEvent
+pub agentkit_native::NativeEvent::CompactBoundary
+pub agentkit_native::NativeEvent::CompactBoundary::trigger: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::Init
+pub agentkit_native::NativeEvent::Init::capabilities: alloc::vec::Vec<alloc::string::String>
+pub agentkit_native::NativeEvent::Init::mcp_servers: alloc::vec::Vec<agentkit_native::McpServerStatus>
+pub agentkit_native::NativeEvent::Init::observed_effort: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::Init::observed_model: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::Init::observed_version: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::Init::session_id: alloc::string::String
+pub agentkit_native::NativeEvent::MessageCompleted
+pub agentkit_native::NativeEvent::MessageCompleted::text: alloc::string::String
+pub agentkit_native::NativeEvent::PermissionDenied
+pub agentkit_native::NativeEvent::PermissionDenied::tool_name: alloc::string::String
+pub agentkit_native::NativeEvent::RateLimit
+pub agentkit_native::NativeEvent::RateLimit::rate_limit_type: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::RateLimit::resets_at: core::option::Option<f64>
+pub agentkit_native::NativeEvent::RateLimit::status: alloc::string::String
+pub agentkit_native::NativeEvent::RateLimit::utilization: core::option::Option<f64>
+pub agentkit_native::NativeEvent::ReasoningDelta
+pub agentkit_native::NativeEvent::ReasoningDelta::text: alloc::string::String
+pub agentkit_native::NativeEvent::Retry
+pub agentkit_native::NativeEvent::Retry::attempt: u32
+pub agentkit_native::NativeEvent::Retry::error_class: core::option::Option<agentkit_native::FailureClass>
+pub agentkit_native::NativeEvent::Retry::max_retries: u32
+pub agentkit_native::NativeEvent::Status
+pub agentkit_native::NativeEvent::Status::status: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::TextDelta
+pub agentkit_native::NativeEvent::TextDelta::text: alloc::string::String
+pub agentkit_native::NativeEvent::ToolObservation
+pub agentkit_native::NativeEvent::ToolObservation::input: core::option::Option<serde_json::value::Value>
+pub agentkit_native::NativeEvent::ToolObservation::is_error: core::option::Option<bool>
+pub agentkit_native::NativeEvent::ToolObservation::name: alloc::string::String
+pub agentkit_native::NativeEvent::ToolObservation::parent_tool_use_id: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::ToolObservation::phase: agentkit_native::VendorToolPhase
+pub agentkit_native::NativeEvent::ToolObservation::result: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeEvent::ToolObservation::vendor_tool_use_id: alloc::string::String
+pub agentkit_native::NativeEvent::Usage(agentkit_native::NativeUsage)
+pub agentkit_native::NativeEvent::Warning
+pub agentkit_native::NativeEvent::Warning::code: alloc::string::String
+pub agentkit_native::NativeEvent::Warning::message: alloc::string::String
+pub enum agentkit_native::NativeProfile
+pub agentkit_native::NativeProfile::OwnedMcpChat
+pub agentkit_native::NativeProfile::PlainChat
+pub enum agentkit_native::NativeTerminalOutcome
+pub agentkit_native::NativeTerminalOutcome::Completed
+pub agentkit_native::NativeTerminalOutcome::Completed::observed_effort: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeTerminalOutcome::Completed::observed_model: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeTerminalOutcome::Completed::permission_denials: alloc::vec::Vec<alloc::string::String>
+pub agentkit_native::NativeTerminalOutcome::Completed::session_id: alloc::string::String
+pub agentkit_native::NativeTerminalOutcome::Completed::text: alloc::string::String
+pub agentkit_native::NativeTerminalOutcome::Completed::usage: core::option::Option<agentkit_native::NativeUsage>
+pub agentkit_native::NativeTerminalOutcome::DeferredBlocked
+pub agentkit_native::NativeTerminalOutcome::DeferredBlocked::partial_text: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeTerminalOutcome::DeferredBlocked::reason: alloc::string::String
+pub agentkit_native::NativeTerminalOutcome::Failed
+pub agentkit_native::NativeTerminalOutcome::Failed::class: agentkit_native::FailureClass
+pub agentkit_native::NativeTerminalOutcome::Failed::message: alloc::string::String
+pub agentkit_native::NativeTerminalOutcome::Failed::partial_text: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeTerminalOutcome::Interrupted
+pub agentkit_native::NativeTerminalOutcome::Interrupted::partial_text: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeTerminalOutcome::Uncertain
+pub agentkit_native::NativeTerminalOutcome::Uncertain::class: agentkit_native::FailureClass
+pub agentkit_native::NativeTerminalOutcome::Uncertain::detail: alloc::string::String
+pub agentkit_native::NativeTerminalOutcome::Uncertain::partial_text: core::option::Option<alloc::string::String>
+pub enum agentkit_native::PermissionPromptPolicy
+pub agentkit_native::PermissionPromptPolicy::None
+pub agentkit_native::PermissionPromptPolicy::PreapprovedBroker
+pub agentkit_native::PermissionPromptPolicy::PreapprovedBroker::broker_tool_names: alloc::vec::Vec<alloc::string::String>
+pub enum agentkit_native::PolicyState
+pub agentkit_native::PolicyState::Conflicting
+pub agentkit_native::PolicyState::None
+pub agentkit_native::PolicyState::PresentCompatible
+pub agentkit_native::PolicyState::Unknown
+pub enum agentkit_native::TurnResume
+pub agentkit_native::TurnResume::Exact
+pub agentkit_native::TurnResume::Exact::vendor_session_id: alloc::string::String
+pub agentkit_native::TurnResume::Fork
+pub agentkit_native::TurnResume::Fork::expected_parent: alloc::string::String
+pub agentkit_native::TurnResume::Fork::vendor_session_id: alloc::string::String
+pub agentkit_native::TurnResume::Fresh
+pub agentkit_native::TurnResume::Fresh::seed_history: alloc::vec::Vec<agentkit_native::ContextBlock>
+pub enum agentkit_native::UsageProvenance
+pub agentkit_native::UsageProvenance::Estimated
+pub agentkit_native::UsageProvenance::Unknown
+pub agentkit_native::UsageProvenance::VendorReported
+pub enum agentkit_native::VendorToolPhase
+pub agentkit_native::VendorToolPhase::Requested
+pub agentkit_native::VendorToolPhase::Result
+pub struct agentkit_native::AnswerSubmission
+pub agentkit_native::AnswerSubmission::answer_id: alloc::string::String
+pub agentkit_native::AnswerSubmission::decision: agentkit_native::Decision
+pub agentkit_native::AnswerSubmission::interaction_id: alloc::string::String
+pub agentkit_native::AnswerSubmission::note: core::option::Option<alloc::string::String>
+pub struct agentkit_native::AuthEvidence
+pub agentkit_native::AuthEvidence::config_directory: core::option::Option<alloc::string::String>
+pub agentkit_native::AuthEvidence::mode: agentkit_native::AuthMode
+pub agentkit_native::AuthEvidence::policy: agentkit_native::PolicyState
+pub struct agentkit_native::BrokerLimitsSpec
+pub agentkit_native::BrokerLimitsSpec::call_timeout_ms: i64
+pub agentkit_native::BrokerLimitsSpec::max_args_bytes: usize
+pub agentkit_native::BrokerLimitsSpec::max_calls: usize
+pub agentkit_native::BrokerLimitsSpec::max_result_bytes: usize
+pub struct agentkit_native::BrokerSpec
+pub agentkit_native::BrokerSpec::authorization_policy: core::option::Option<serde_json::value::Value>
+pub agentkit_native::BrokerSpec::limits: core::option::Option<agentkit_native::BrokerLimitsSpec>
+pub agentkit_native::BrokerSpec::server_name: alloc::string::String
+pub agentkit_native::BrokerSpec::tools: alloc::vec::Vec<agentkit_native::BrokerToolSpec>
+pub struct agentkit_native::BrokerToolSpec
+pub agentkit_native::BrokerToolSpec::description: alloc::string::String
+pub agentkit_native::BrokerToolSpec::input_schema: serde_json::value::Value
+pub agentkit_native::BrokerToolSpec::name: alloc::string::String
+pub agentkit_native::BrokerToolSpec::writes: bool
+pub struct agentkit_native::CapabilityMatrix
+pub agentkit_native::CapabilityMatrix::backend: alloc::string::String
+pub agentkit_native::CapabilityMatrix::matrix_version: u32
+pub agentkit_native::CapabilityMatrix::versions: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_native::CapabilityState>>
+pub struct agentkit_native::CapabilitySnapshot
+pub agentkit_native::CapabilitySnapshot::backend: alloc::string::String
+pub agentkit_native::CapabilitySnapshot::flags: alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_native::CapabilityState>
+pub agentkit_native::CapabilitySnapshot::matrix_version: u32
+pub agentkit_native::CapabilitySnapshot::qualified_version: alloc::string::String
+impl agentkit_native::CapabilitySnapshot
+pub fn agentkit_native::CapabilitySnapshot::state(&self, &str) -> agentkit_native::CapabilityState
+pub fn agentkit_native::CapabilitySnapshot::supports(&self, &str) -> bool
+pub struct agentkit_native::CapabilityViolation
+pub agentkit_native::CapabilityViolation::code: &'static str
+pub agentkit_native::CapabilityViolation::detail: alloc::string::String
+pub struct agentkit_native::ContentPolicy
+pub agentkit_native::ContentPolicy::extracted_text: bool
+pub agentkit_native::ContentPolicy::files: bool
+pub agentkit_native::ContentPolicy::images: bool
+pub agentkit_native::ContentPolicy::policy_version: u32
+pub agentkit_native::ContentPolicy::schema_version: alloc::string::String
+pub agentkit_native::ContentPolicy::text: bool
+impl core::default::Default for agentkit_native::ContentPolicy
+pub fn agentkit_native::ContentPolicy::default() -> Self
+pub struct agentkit_native::ContextBlock
+pub agentkit_native::ContextBlock::content_identity: alloc::string::String
+pub agentkit_native::ContextBlock::kind: alloc::string::String
+pub agentkit_native::ContextBlock::text: alloc::string::String
+pub struct agentkit_native::ContinuationScope
+pub agentkit_native::ContinuationScope::backend: alloc::string::String
+pub agentkit_native::ContinuationScope::commit_history_position: i64
+pub agentkit_native::ContinuationScope::commit_parent: alloc::string::String
+pub agentkit_native::ContinuationScope::config_identity: alloc::string::String
+pub agentkit_native::ContinuationScope::conversation: alloc::string::String
+pub agentkit_native::ContinuationScope::executable: alloc::string::String
+pub agentkit_native::ContinuationScope::history_position: i64
+pub agentkit_native::ContinuationScope::parent: alloc::string::String
+pub agentkit_native::ContinuationScope::system_prompt_revision: core::option::Option<alloc::string::String>
+impl agentkit_native::ContinuationScope
+pub fn agentkit_native::ContinuationScope::agrees_with(&self, &agentkit_native::NativeExecutionTarget) -> core::option::Option<alloc::string::String>
+pub fn agentkit_native::ContinuationScope::validate(&self) -> core::result::Result<(), alloc::string::String>
+pub struct agentkit_native::ExecutableEvidence
+pub agentkit_native::ExecutableEvidence::digest: core::option::Option<alloc::string::String>
+pub agentkit_native::ExecutableEvidence::path: std::path::PathBuf
+pub agentkit_native::ExecutableEvidence::version: alloc::string::String
+pub struct agentkit_native::InterruptReceipt
+pub agentkit_native::InterruptReceipt::cleanup_uncertain: bool
+pub agentkit_native::InterruptReceipt::detail: core::option::Option<alloc::string::String>
+pub agentkit_native::InterruptReceipt::escalated_to_sigkill: bool
+pub agentkit_native::InterruptReceipt::escalated_to_sigterm: bool
+pub agentkit_native::InterruptReceipt::terminated: bool
+pub struct agentkit_native::LaunchPlan
+pub agentkit_native::LaunchPlan::argv: alloc::vec::Vec<alloc::string::String>
+pub agentkit_native::LaunchPlan::cwd: std::path::PathBuf
+pub agentkit_native::LaunchPlan::env: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub agentkit_native::LaunchPlan::fingerprint: alloc::string::String
+pub agentkit_native::LaunchPlan::max_vendor_turns: core::option::Option<u32>
+pub agentkit_native::LaunchPlan::native_session_id: core::option::Option<alloc::string::String>
+pub agentkit_native::LaunchPlan::per_run_dir: std::path::PathBuf
+pub agentkit_native::LaunchPlan::permission_policy: agentkit_native::PermissionPromptPolicy
+impl agentkit_native::LaunchPlan
+pub fn agentkit_native::LaunchPlan::redacted_argv(&self) -> alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_native::McpEndpointSpec
+pub agentkit_native::McpEndpointSpec::auth_token: core::option::Option<alloc::string::String>
+pub agentkit_native::McpEndpointSpec::broker_tool_names: alloc::vec::Vec<alloc::string::String>
+pub agentkit_native::McpEndpointSpec::http_url: core::option::Option<alloc::string::String>
+pub agentkit_native::McpEndpointSpec::server_name: alloc::string::String
+pub agentkit_native::McpEndpointSpec::stdio_command: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub struct agentkit_native::McpServerStatus
+pub agentkit_native::McpServerStatus::name: alloc::string::String
+pub agentkit_native::McpServerStatus::status: alloc::string::String
+pub struct agentkit_native::ModelLoopTarget
+pub agentkit_native::ModelLoopTarget::model: alloc::string::String
+pub agentkit_native::ModelLoopTarget::provider_id: alloc::string::String
+pub agentkit_native::ModelLoopTarget::reasoning_effort: core::option::Option<alloc::string::String>
+pub agentkit_native::ModelLoopTarget::schema_version: u32
+pub struct agentkit_native::NativeExecutionTarget
+pub agentkit_native::NativeExecutionTarget::auth_expectation: agentkit_native::AuthExpectation
+pub agentkit_native::NativeExecutionTarget::backend: alloc::string::String
+pub agentkit_native::NativeExecutionTarget::backend_version: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeExecutionTarget::capabilities: agentkit_native::CapabilitySnapshot
+pub agentkit_native::NativeExecutionTarget::config_identity: alloc::string::String
+pub agentkit_native::NativeExecutionTarget::content: agentkit_native::ContentPolicy
+pub agentkit_native::NativeExecutionTarget::executable: alloc::string::String
+pub agentkit_native::NativeExecutionTarget::profile: agentkit_native::NativeProfile
+pub agentkit_native::NativeExecutionTarget::requested_effort: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeExecutionTarget::requested_model: core::option::Option<alloc::string::String>
+pub agentkit_native::NativeExecutionTarget::schema_version: u32
+pub agentkit_native::NativeExecutionTarget::system_prompt_revision: core::option::Option<alloc::string::String>
+impl agentkit_native::NativeExecutionTarget
+pub fn agentkit_native::NativeExecutionTarget::digest(&self) -> alloc::string::String
+pub struct agentkit_native::NativeRefusal
+pub agentkit_native::NativeRefusal::code: alloc::string::String
+pub agentkit_native::NativeRefusal::message: alloc::string::String
+pub agentkit_native::NativeRefusal::retryable: bool
+impl agentkit_native::NativeRefusal
+pub fn agentkit_native::NativeRefusal::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, bool) -> Self
+impl core::error::Error for agentkit_native::NativeRefusal
+impl core::fmt::Display for agentkit_native::NativeRefusal
+pub fn agentkit_native::NativeRefusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_native::NativeUsage
+pub agentkit_native::NativeUsage::api_equivalent_estimate_usd: core::option::Option<f64>
+pub agentkit_native::NativeUsage::billing_inclusion: agentkit_native::BillingInclusion
+pub agentkit_native::NativeUsage::cumulative: core::option::Option<agentkit_native::TokenSet>
+pub agentkit_native::NativeUsage::estimate_provenance: agentkit_native::UsageProvenance
+pub agentkit_native::NativeUsage::per_turn: core::option::Option<agentkit_native::TokenSet>
+pub struct agentkit_native::PendingInteraction
+pub agentkit_native::PendingInteraction::actor_id: alloc::string::String
+pub agentkit_native::PendingInteraction::attempt_id: alloc::string::String
+pub agentkit_native::PendingInteraction::content: serde_json::value::Value
+pub agentkit_native::PendingInteraction::content_hash: alloc::string::String
+pub agentkit_native::PendingInteraction::expires_at_ms: i64
+pub agentkit_native::PendingInteraction::interaction_id: alloc::string::String
+pub agentkit_native::PendingInteraction::invocation_id: alloc::string::String
+pub agentkit_native::PendingInteraction::issued_at_ms: i64
+pub agentkit_native::PendingInteraction::kind: agentkit_native::InteractionKind
+pub agentkit_native::PendingInteraction::process_generation: u64
+pub agentkit_native::PendingInteraction::task_id: alloc::string::String
+pub struct agentkit_native::PreflightReport
+pub agentkit_native::PreflightReport::auth: agentkit_native::AuthEvidence
+pub agentkit_native::PreflightReport::blocking_issues: alloc::vec::Vec<alloc::string::String>
+pub agentkit_native::PreflightReport::executable: agentkit_native::ExecutableEvidence
+pub agentkit_native::PreflightReport::readiness_notes: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_native::ProcessExit
+pub agentkit_native::ProcessExit::after_interrupt: bool
+pub agentkit_native::ProcessExit::exit_code: core::option::Option<i32>
+pub agentkit_native::ProcessExit::generation: u64
+pub agentkit_native::ProcessExit::pid: u32
+pub agentkit_native::ProcessExit::signal: core::option::Option<i32>
+impl agentkit_native::ProcessExit
+pub fn agentkit_native::ProcessExit::terminal_evidence(&self, bool) -> agentkit_native::ProcessTerminalEvidence
+pub struct agentkit_native::ProcessTerminalEvidence
+pub agentkit_native::ProcessTerminalEvidence::exit_code: core::option::Option<i32>
+pub agentkit_native::ProcessTerminalEvidence::interrupt_requested: bool
+pub agentkit_native::ProcessTerminalEvidence::saw_root_result: bool
+pub agentkit_native::ProcessTerminalEvidence::signal: core::option::Option<i32>
+pub struct agentkit_native::ProtocolViolation
+pub agentkit_native::ProtocolViolation::code: alloc::string::String
+pub agentkit_native::ProtocolViolation::message: alloc::string::String
+pub struct agentkit_native::ResourceLimits
+pub agentkit_native::ResourceLimits::cleanup_timeout_ms: i64
+pub agentkit_native::ResourceLimits::idle_timeout_ms: i64
+pub agentkit_native::ResourceLimits::interrupt_grace_ms: i64
+pub agentkit_native::ResourceLimits::max_frame_bytes: usize
+pub agentkit_native::ResourceLimits::max_pending_events: usize
+pub agentkit_native::ResourceLimits::max_stderr_bytes: usize
+pub agentkit_native::ResourceLimits::max_stdin_bytes: usize
+pub agentkit_native::ResourceLimits::startup_timeout_ms: i64
+pub agentkit_native::ResourceLimits::terminate_grace_ms: i64
+impl core::default::Default for agentkit_native::ResourceLimits
+pub fn agentkit_native::ResourceLimits::default() -> Self
+pub struct agentkit_native::TokenSet
+pub agentkit_native::TokenSet::cache_read_tokens: core::option::Option<u64>
+pub agentkit_native::TokenSet::cache_write_tokens: core::option::Option<u64>
+pub agentkit_native::TokenSet::input_tokens: core::option::Option<u64>
+pub agentkit_native::TokenSet::output_tokens: core::option::Option<u64>
+pub struct agentkit_native::TransportFault
+pub agentkit_native::TransportFault::code: alloc::string::String
+pub agentkit_native::TransportFault::message: alloc::string::String
+pub struct agentkit_native::TurnInput
+pub agentkit_native::TurnInput::context_blocks: alloc::vec::Vec<agentkit_native::ContextBlock>
+pub agentkit_native::TurnInput::input_id: alloc::string::String
+pub agentkit_native::TurnInput::max_vendor_turns: core::option::Option<u32>
+pub agentkit_native::TurnInput::resume: agentkit_native::TurnResume
+pub agentkit_native::TurnInput::system_prompt: core::option::Option<alloc::string::String>
+pub agentkit_native::TurnInput::system_prompt_revision: core::option::Option<alloc::string::String>
+pub agentkit_native::TurnInput::text: alloc::string::String
+pub agentkit_native::TurnInput::turn_deadline_ms: i64
+pub const agentkit_native::BROKER_PAYLOAD_KEY: &str
+pub const agentkit_native::CONTENT_POLICY_VERSION: u32
+pub const agentkit_native::CONTENT_SCHEMA_VERSION: &str
+pub const agentkit_native::CONTINUATION_SCOPE_PAYLOAD_KEY: &str
+pub const agentkit_native::EXECUTION_TARGET_PAYLOAD_KEY: &str
+pub const agentkit_native::EXECUTION_TARGET_SCHEMA_VERSION: u32
+pub const agentkit_native::STDERR_TAIL_MAX_BYTES: usize
+pub const agentkit_native::TURN_INPUT_PAYLOAD_KEY: &str
+pub trait agentkit_native::ExecutableLocator: core::marker::Send + core::marker::Sync
+pub fn agentkit_native::ExecutableLocator::auth_status<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::AuthEvidence, agentkit_native::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::ExecutableLocator::locate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ExecutableEvidence, agentkit_native::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_native::NativeBackend: core::marker::Send + core::marker::Sync
+pub fn agentkit_native::NativeBackend::backend_id(&self) -> &str
+pub fn agentkit_native::NativeBackend::encode_input(&self, &agentkit_native::TurnInput) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::NativeRefusal>
+pub fn agentkit_native::NativeBackend::new_frame_adapter(&self) -> alloc::boxed::Box<dyn agentkit_native::StreamFrameAdapter>
+pub fn agentkit_native::NativeBackend::plan_turn(&self, &agentkit_native::NativeExecutionTarget, &agentkit_native::TurnInput, core::option::Option<&agentkit_native::McpEndpointSpec>) -> core::result::Result<agentkit_native::LaunchPlan, agentkit_native::NativeRefusal>
+pub fn agentkit_native::NativeBackend::preflight<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::NativeExecutionTarget, &'life2 dyn agentkit_native::ExecutableLocator, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::PreflightReport, agentkit_native::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_native::NativeBackend::terminal_outcome(&self, &agentkit_native::ProcessExit, &[agentkit_native::NativeEvent], core::option::Option<&str>) -> agentkit_native::NativeTerminalOutcome
+pub trait agentkit_native::OwnedChildHandle: core::marker::Send
+pub fn agentkit_native::OwnedChildHandle::deliver_input<'life0, 'life1, 'async_trait>(&'life0 mut self, &'life1 [u8], bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_native::TransportFault>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_native::OwnedChildHandle::generation(&self) -> u64
+pub fn agentkit_native::OwnedChildHandle::interrupt<'life0, 'async_trait>(&'life0 mut self, agentkit_native::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_native::InterruptReceipt> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::OwnedChildHandle::next_frame<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::FrameLine>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::OwnedChildHandle::pid(&self) -> u32
+pub fn agentkit_native::OwnedChildHandle::stderr_tail(&self) -> alloc::vec::Vec<u8>
+pub fn agentkit_native::OwnedChildHandle::wait<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_native::ProcessExit> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_native::ProcessSupervisor: core::marker::Send + core::marker::Sync
+pub fn agentkit_native::ProcessSupervisor::descendant_cleanup(&self, u32, u64) -> core::option::Option<agentkit_native::InterruptReceipt>
+pub fn agentkit_native::ProcessSupervisor::drain_owned<'life0, 'async_trait>(&'life0 self, agentkit_native::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_native::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native::ProcessSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::LaunchPlan, &'life2 agentkit_native::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::OwnedChildHandle>, agentkit_native::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_native::ProcessSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_native::StreamFrameAdapter: core::marker::Send
+pub fn agentkit_native::StreamFrameAdapter::finish(&mut self) -> agentkit_native::FinishDisposition
+pub fn agentkit_native::StreamFrameAdapter::push_line(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<agentkit_native::NativeEvent>, agentkit_native::ProtocolViolation>
+pub fn agentkit_native::StreamFrameAdapter::terminal_outcome(&self, &agentkit_native::ProcessExit) -> agentkit_native::NativeTerminalOutcome
+pub fn agentkit_native::bounded_stderr_tail(&[u8]) -> alloc::string::String
+pub fn agentkit_native::canonical_digest(&serde_json::value::Value) -> alloc::string::String
+pub async fn agentkit_native::collect_frames(&mut dyn agentkit_native::OwnedChildHandle, &mut dyn agentkit_native::StreamFrameAdapter) -> core::result::Result<(alloc::vec::Vec<agentkit_native::NativeEvent>, core::option::Option<agentkit_native::TransportFault>), agentkit_native::NativeError>
+pub fn agentkit_native::fingerprint(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_native::parse_target(&serde_json::value::Value) -> core::result::Result<agentkit_native::ExecutionTarget, alloc::string::String>
+pub fn agentkit_native::validate_execution_target(&agentkit_native::ExecutionTarget) -> core::result::Result<(), alloc::vec::Vec<agentkit_native::CapabilityViolation>>
+pub fn agentkit_native::validate_frozen_semantics(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> core::result::Result<(), alloc::string::String>
+pub fn agentkit_native::validate_frozen_stanza(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> core::result::Result<(), alloc::string::String>
+pub fn agentkit_native::well_known_flags() -> &'static [&'static str]
+pub fn agentkit_native::with_stderr_suffix(agentkit_native::FailureClass, alloc::string::String, &str) -> alloc::string::String
+pub type agentkit_native::NativeResult<T> = core::result::Result<T, agentkit_native::NativeError>

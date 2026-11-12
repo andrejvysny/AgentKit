@@ -79,6 +79,11 @@ pub(crate) fn save_message(db: &Connection, message: &MessageRecord) -> Result<(
     Ok(())
 }
 
+/// Chat-lane projection (arch/cleanup semantics, kept verbatim): the
+/// placeholder is only lowered when the projection itself does not assert
+/// one (`entry.or_insert`), and no `projection` marker is written. A retry
+/// stays idempotent because the retried projection re-asserts its own
+/// placeholder.
 pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<MessageRecord> {
     let existing = input
         .id
@@ -92,7 +97,14 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
     if message.chat_id != input.chat_id
         || message.run_id != input.run_id
         || message.role != input.role
-        || message.metadata.get("placeholder") != Some(&Value::Bool(true))
+        || !(message.metadata.get("placeholder") == Some(&Value::Bool(true))
+            // A row a prior projection of this task already settled: the
+            // marker-free shape is exactly `{"placeholder": false}` — a
+            // human/legacy append never carries the key, so it stays
+            // untouchable while a retry may replace its own output.
+            || message.metadata.as_object().is_some_and(|metadata| {
+                metadata.len() == 1 && metadata.get("placeholder") == Some(&Value::Bool(false))
+            }))
     {
         return Err(StoreError::InvalidInput(
             "projection may only replace its own placeholder".into(),
@@ -105,6 +117,60 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
         .as_object_mut()
         .ok_or_else(|| StoreError::InvalidInput("message metadata must be an object".into()))?;
     metadata.entry("placeholder").or_insert(Value::Bool(false));
+    message.tool_call_id = input.tool_call_id;
+    message.tool_calls = input.tool_calls;
+    message.model_result_json = input.model_result_json;
+    save_message(db, &message)?;
+    let mut chat: ChatRecord = required(db, "chats", "id", &message.chat_id)?;
+    chat.updated_at = ConversationTimestamp::from_epoch_millis(now)?;
+    db.execute(
+        "UPDATE chats SET record=? WHERE id=?",
+        params![json(db, &chat)?, chat.id],
+    )?;
+    Ok(message)
+}
+
+/// Native-lane projection (ADR 0021, master's contract, kept verbatim):
+/// the row is claimed with `projection: true` and the placeholder is forced
+/// down, so a retry of the same task may replace its own provisional output.
+/// The lease fence plus `validate_projection` keep ownership task-scoped.
+pub(crate) fn project_native(
+    db: &Connection,
+    input: MessageInput,
+    now: i64,
+) -> Result<MessageRecord> {
+    let existing = input
+        .id
+        .as_deref()
+        .map(|id| get::<MessageRecord>(db, "messages", "id", id))
+        .transpose()?
+        .flatten();
+    let Some(mut message) = existing else {
+        return append(db, input, now);
+    };
+    // A fenced projection owns the row it wrote: its own placeholder, or a
+    // row an earlier attempt of the same task already settled (a retry must
+    // be able to replace a provisional failure output). Rows never written
+    // by a projection — human or legacy content — are untouchable, and the
+    // lease fence plus validate_projection keep ownership task-scoped.
+    let projected_before = message.metadata.get("projection") == Some(&Value::Bool(true));
+    if message.chat_id != input.chat_id
+        || message.run_id != input.run_id
+        || message.role != input.role
+        || !(message.metadata.get("placeholder") == Some(&Value::Bool(true)) || projected_before)
+    {
+        return Err(StoreError::InvalidInput(
+            "projection may only replace its own placeholder or a row it already projected".into(),
+        ));
+    }
+    message.content = input.content;
+    message.metadata = input.metadata;
+    let metadata = message
+        .metadata
+        .as_object_mut()
+        .ok_or_else(|| StoreError::InvalidInput("message metadata must be an object".into()))?;
+    metadata.insert("placeholder".into(), Value::Bool(false));
+    metadata.insert("projection".into(), Value::Bool(true));
     message.tool_call_id = input.tool_call_id;
     message.tool_calls = input.tool_calls;
     message.model_result_json = input.model_result_json;

@@ -79,6 +79,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-claude"
+version = "0.1.0"
+dependencies = [
+ "agentkit-native",
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "agentkit-client"
 version = "0.1.0"
 dependencies = [
@@ -197,6 +213,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "agentkit-facade"
+version = "0.1.0"
+dependencies = [
+ "agentkit-claude",
+ "agentkit-native",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -328,6 +359,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-native"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio-util",
+]
+
+[[package]]
+name = "agentkit-native-broker"
+version = "0.1.0"
+dependencies = [
+ "agentkit-claude",
+ "agentkit-mcp",
+ "agentkit-native",
+ "async-trait",
+ "axum",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "agentkit-native-exec"
+version = "0.1.0"
+dependencies = [
+ "agentkit-core",
+ "agentkit-engine",
+ "agentkit-mcp",
+ "agentkit-native",
+ "agentkit-native-broker",
+ "agentkit-store",
+ "async-trait",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "agentkit-providers"
 version = "0.1.0"
 dependencies = [
@@ -411,6 +487,7 @@ dependencies = [
  "agentkit-engine",
  "agentkit-governance",
  "agentkit-kernel",
+ "agentkit-native",
  "agentkit-store",
  "agentkit-testkit",
  "async-trait",
@@ -430,6 +507,7 @@ dependencies = [
  "agentkit-contracts",
  "agentkit-engine",
  "agentkit-kernel",
+ "agentkit-native",
  "agentkit-testkit",
  "async-trait",
  "chrono",

@@ -1,5 +1,5 @@
 use crate::json_fields::JsonFields;
-use crate::{Backend, SessionScope};
+use crate::{Backend, RpcId, SessionScope};
 use rmcp::{ErrorData, RoleServer, ServerHandler, model::*, service::RequestContext};
 use std::{
     borrow::Cow,
@@ -248,7 +248,14 @@ impl ServerHandler for NativeHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let scope = self.scope()?;
+        let mut scope = self.scope()?;
+        // The exact JSON-RPC id travels to the backend TYPED (review R7)
+        // so a governed consumer can tell a proven client redelivery
+        // (same session, same typed id) apart from an independent new
+        // call. The conversion must match the wire variant directly:
+        // `serde_json::to_value` + `to_string` here once collapsed
+        // numeric 1 and string "1" into one identity — never stringify.
+        scope.request_id = Some(RpcId::from_request_id(&context.id));
         self.bounded(&context, &scope, async {
             let entries = self.backend.list_tools(&scope).await.map_err(redact)?;
             let tool = entries

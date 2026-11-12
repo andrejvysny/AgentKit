@@ -213,17 +213,23 @@ tool envelope.
 splits the workspace into six layers; dependencies point inward only:
 
 1. Foundation: `agentkit-kernel`, `agentkit-contracts`.
-2. Agent loop and governance: `agentkit-core`, `agentkit-governance`.
+2. Agent loop and governance: `agentkit-core`, `agentkit-governance`,
+   `agentkit-native` (ports and contracts for vendor agent runtimes,
+   [ADR 0025](adr/0025-claude-code-native-backend-contracts.md)).
 3. Application contexts, each owning its repository traits:
    `agentkit-engine` ← `agentkit-sessions` ← `agentkit-chat` ←
-   `agentkit-agents`; future Hybrid contexts depend on engine and sessions only.
+   `agentkit-agents`, `agentkit-native-exec` (generic `NativeAgentExecutor`,
+   `NativeDispatchExecutor`); future Hybrid contexts depend on engine and sessions only.
 4. Driven adapters: `agentkit-store-sqlite`, `agentkit-store-legacy-import`,
    `agentkit-providers`, `agentkit-toolpacks-coding`, `agentkit-lsp`,
-   `agentkit-mcp`, `agentkit-connections`, `agentkit-sys`.
+   `agentkit-mcp`, `agentkit-connections`, `agentkit-sys`,
+   `agentkit-native-broker` (task-bound governed MCP broker),
+   `agentkit-claude` (Claude Code driver).
 5. Composition: `agentkit-runtime` (`AgentRuntime::builder()`), the only crate
    naming concrete adapters.
 6. Driving adapters: `agentkit-napi`, `agentkit-http`, `agentkit-client`, the
-   `agentkit` facade.
+   `agentkit` facade, `agentkit-facade` (standalone one-turn facade and driver
+   conformance, temporarily).
 
 `agentkit-testkit` (dev-only) provides fakes, in-memory repositories and
 repository conformance suites. `agentkit-host` is removed once its modules have

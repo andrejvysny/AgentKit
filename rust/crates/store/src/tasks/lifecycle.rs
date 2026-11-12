@@ -158,7 +158,20 @@ impl SqliteStore {
             append(&transaction, &task.task_id, input.events, input.now)?;
             for message in input.messages {
                 validate_projection(&task, &message)?;
-                crate::conversations::project(&transaction, message, input.now)?;
+                // Native-lane projection (ADR 0021): a task whose payload
+                // carries a frozen execution target is owned by the native
+                // executor, and its retries must be able to replace their
+                // own provisional output. Chat and legacy tasks keep the
+                // placeholder-only shape.
+                if task
+                    .payload
+                    .get(agentkit_native::EXECUTION_TARGET_PAYLOAD_KEY)
+                    .is_some()
+                {
+                    crate::conversations::project_native(&transaction, message, input.now)?;
+                } else {
+                    crate::conversations::project(&transaction, message, input.now)?;
+                }
             }
             save(&transaction, &task)?;
             let status = json(&transaction, &task.status)?

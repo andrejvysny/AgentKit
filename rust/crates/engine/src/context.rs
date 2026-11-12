@@ -104,4 +104,13 @@ impl<R: TaskRepository> ExecutionContext<R> {
         }
         Ok(parked)
     }
+
+    /// The attempt's live lease proof. Lane-side executors use it with the
+    /// store's fenced task APIs to settle durable rows under the SAME fence
+    /// the runner's claim published; a replaced attempt is refused like
+    /// everywhere else.
+    #[must_use]
+    pub fn lease_fence(&self) -> LeaseFence {
+        self.fence.clone()
+    }
 }

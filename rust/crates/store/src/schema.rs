@@ -22,7 +22,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
 /// full scans.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 19;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -156,19 +156,64 @@ fn lock_file(path: &Path, tag: Option<&Path>) -> std::result::Result<File, LockE
         .truncate(false)
         .open(path)
         .map_err(LockError::Io)?;
+    lock.try_lock().map_err(|_| LockError::Owned)?;
     // AGENTKIT-74 cleanup sweep support: record WHICH database this inode
-    // keys (written once, under the lock). A later sweep may only remove a
-    // lock it can prove nothing references any more — a lock whose recorded
+    // keys (written under the lock). A later sweep may only remove a lock
+    // it can prove nothing references any more - a lock whose recorded
     // database is gone or has moved to a different inode. Un-tagged legacy
     // files (empty) are never swept: nothing can prove they are orphaned.
-    if let Some(tag) = tag
-        && std::fs::metadata(path).is_ok_and(|meta| meta.len() == 0)
-    {
-        use std::io::Write;
-        let _ = writeln!(lock, "{}", tag.display());
-        let _ = lock.flush();
+    // Under the acquired flock we may also REPAIR a provably-stale tag:
+    // the file name keys {dev}-{ino}, so a recorded path that no longer
+    // lives at that pair can only belong to a dead database whose inode
+    // has been recycled to us. Leaving the stale tag would make the sweep
+    // misclassify OUR live lock as orphaned once its age passes.
+    if let Some(tag) = tag {
+        use std::io::{Seek, Write};
+        let stale = std::fs::metadata(path).is_ok_and(|meta| {
+            if meta.len() == 0 {
+                return true; // fresh file: it needs its tag
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let Some(stem) = name.strip_suffix(".lock") else {
+                return false; // not an inode-keyed lock: leave content alone
+            };
+            let Some((dev, ino)) = stem.split_once('-') else {
+                return false;
+            };
+            let (Ok(dev), Ok(ino)) = (dev.parse::<u64>(), ino.parse::<u64>()) else {
+                return false;
+            };
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                std::fs::read_to_string(path).ok().and_then(|text| {
+                    text.lines()
+                        .next()
+                        .filter(|line| !line.is_empty())
+                        .map(|recorded| {
+                            // Provably stale only when the recorded path is
+                            // gone or moved off this dev:ino pair.
+                            !std::fs::metadata(recorded)
+                                .is_ok_and(|db| db.dev() == dev && db.ino() == ino)
+                        })
+                }) == Some(true)
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        });
+        if stale {
+            let bytes = format!("{}\n", tag.display());
+            let _ = lock.rewind();
+            let _ = lock.write_all(bytes.as_bytes());
+            let _ = lock.flush();
+            let _ = lock.set_len(bytes.len() as u64);
+        }
     }
-    lock.try_lock().map_err(|_| LockError::Owned)?;
     Ok(lock)
 }
 
@@ -265,6 +310,15 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         }
         if version < 16 {
             migrate_agent_task_index(&mut connection)?;
+        }
+        if version < 17 {
+            migrate_native_exec(&mut connection)?;
+        }
+        if version < 18 {
+            migrate_native_continuations(&mut connection)?;
+        }
+        if version < 19 {
+            migrate_continuation_claims(&mut connection)?;
         }
     }
     if path != Path::new(":memory:") {
@@ -377,6 +431,14 @@ fn schema_sql(version: i64) -> String {
     if version >= 16 {
         sql.push_str(AGENT_TASK_INDEX_SCHEMA);
     }
+    if version >= 17 {
+        sql.push_str(NATIVE_EXEC_SCHEMA);
+    }
+    if version >= 19 {
+        sql.push_str(CONTINUATION_CLAIM_SCHEMA);
+    } else if version >= 18 {
+        sql.push_str(NATIVE_CONTINUATION_SCHEMA);
+    }
     sql
 }
 
@@ -429,6 +491,110 @@ fn migrate_agent_task_index(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(AGENT_TASK_INDEX_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 16)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Native execution authority (AGENTKIT-112/115), additive at schema
+/// version 17. `native_session_bindings` is the vendor-session lineage
+/// ledger: one row per attempt records the vendor session identity the
+/// host bound BEFORE spawn (assigned) and confirms from the vendor's own
+/// init frame (observed). Exact resume reads only the latest observed row
+/// for the task — there is no "continue latest" guess (AGENTKIT-107 §5):
+/// an attempt without a confirmed identity is resumed from, never
+/// continued into. `parent_vendor_session_id` records fork/seed lineage
+/// when a vendor later qualifies it.
+/// `native_interactions` is the durable pending-interaction ledger
+/// (AGENTKIT-115): the full `PendingInteraction` record JSON plus a status
+/// so answers are compare-and-set in one transaction — a running attempt
+/// keeps its lease while a human decides, and answers bound to a replaced
+/// attempt, a different content hash, a different actor, or a dead clock
+/// are refused with the durable rejection recorded, never silently
+/// dropped.
+const NATIVE_EXEC_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS native_session_bindings(attempt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, backend TEXT NOT NULL, vendor_session_id TEXT NOT NULL, parent_vendor_session_id TEXT, state TEXT NOT NULL CHECK(state IN ('assigned','observed','retired')), assigned_at INTEGER NOT NULL, observed_at INTEGER);
+CREATE INDEX IF NOT EXISTS native_session_bindings_task ON native_session_bindings(task_id, assigned_at);
+CREATE TABLE IF NOT EXISTS native_interactions(interaction_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, attempt_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','answered','expired','invalidated')), record TEXT NOT NULL, answer TEXT, expires_at_ms INTEGER NOT NULL, answered_at_ms INTEGER);
+CREATE INDEX IF NOT EXISTS native_interactions_task ON native_interactions(task_id, status);
+"#;
+
+fn migrate_native_exec(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(NATIVE_EXEC_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 17)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Scoped continuation bindings and durable broker call receipts (review
+/// §2.3 / §2.7), additive at schema version 18. `native_continuations`
+/// pins the FULL provenance scope an exact vendor-session resume was
+/// proven against (conversation, selected parent, acknowledged history
+/// position, backend, executable, config identity, system-prompt revision)
+/// with the owning attempt: a vendor session id alone is mutable state,
+/// not an immutable transcript snapshot. The index keys the actual scoped
+/// lookup, never a global session scan. `native_call_receipts` gives every
+/// governed broker call a per-invocation durable receipt — argument digests
+/// are integrity, never identity.
+const NATIVE_CONTINUATION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS native_continuations(binding_id TEXT PRIMARY KEY, conversation TEXT NOT NULL, parent TEXT NOT NULL, history_position INTEGER NOT NULL, backend TEXT NOT NULL, executable TEXT NOT NULL, config_identity TEXT NOT NULL, system_prompt_revision TEXT, vendor_session_id TEXT NOT NULL, owning_attempt_id TEXT NOT NULL, owning_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, state TEXT NOT NULL CHECK(state IN ('active','superseded','retired')), committed_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS native_continuations_scope ON native_continuations(conversation,parent,history_position,backend,executable,config_identity,state);
+CREATE INDEX IF NOT EXISTS native_continuations_attempt ON native_continuations(owning_attempt_id);
+CREATE TABLE IF NOT EXISTS native_call_receipts(receipt_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, invocation_id TEXT NOT NULL, tool_name TEXT NOT NULL, content_hash TEXT NOT NULL, record TEXT NOT NULL, recorded_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS native_call_receipts_invocation ON native_call_receipts(attempt_id,invocation_id);
+"#;
+
+fn migrate_native_continuations(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(NATIVE_CONTINUATION_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 18)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Review round-4 F3: a continuation binding is a CLAIMABLE resource, not
+/// only a commit record. Additive at schema version 19: `state` gains
+/// `'owned'` (atomically claimed by one attempt before its input is sent)
+/// and `'uncertain'` (interrupted after input was accepted — exact resume
+/// from the pre-claim position is blocked until reconciled), plus the
+/// claimant columns and a per-row `generation` the compare-and-set fences
+/// on. Purely additive: existing rows keep their state and gain
+/// `claimed_*=NULL, generation=0`; the rebuild (same scratch-copy pattern
+/// as `migrate_free_receipts`, because the CHECK constraint cannot be
+/// altered in place) preserves every column byte-for-byte.
+const CONTINUATION_CLAIM_SCHEMA: &str = r#"
+CREATE TABLE native_continuations(binding_id TEXT PRIMARY KEY, conversation TEXT NOT NULL, parent TEXT NOT NULL, history_position INTEGER NOT NULL, backend TEXT NOT NULL, executable TEXT NOT NULL, config_identity TEXT NOT NULL, system_prompt_revision TEXT, vendor_session_id TEXT NOT NULL, owning_attempt_id TEXT NOT NULL, owning_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, state TEXT NOT NULL CHECK(state IN ('active','owned','uncertain','superseded','retired')), committed_at INTEGER NOT NULL, claimed_attempt_id TEXT, claimed_task_id TEXT, claimed_at INTEGER, generation INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS native_continuations_scope ON native_continuations(conversation,parent,history_position,backend,executable,config_identity,state);
+CREATE INDEX IF NOT EXISTS native_continuations_attempt ON native_continuations(owning_attempt_id);
+CREATE TABLE IF NOT EXISTS native_call_receipts(receipt_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, invocation_id TEXT NOT NULL, tool_name TEXT NOT NULL, content_hash TEXT NOT NULL, record TEXT NOT NULL, recorded_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS native_call_receipts_invocation ON native_call_receipts(attempt_id,invocation_id);
+"#;
+
+fn migrate_continuation_claims(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('native_continuations') WHERE name='claimed_attempt_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_column {
+        // The table predates the claim model: park the rows in a plain
+        // scratch table, rebuild with the extended state CHECK, restore.
+        // A failure below rolls the whole transaction (user_version
+        // included) back, leaving `native_continuations` exactly as it was.
+        transaction.execute_batch(
+            "CREATE TABLE native_continuations_copy(binding_id TEXT, conversation TEXT, parent TEXT, history_position INTEGER, backend TEXT, executable TEXT, config_identity TEXT, system_prompt_revision TEXT, vendor_session_id TEXT, owning_attempt_id TEXT, owning_task_id TEXT, state TEXT, committed_at INTEGER);",
+        )?;
+        transaction.execute_batch(
+            "INSERT INTO native_continuations_copy SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at FROM native_continuations;",
+        )?;
+        transaction.execute_batch("DROP TABLE native_continuations;")?;
+        transaction.execute_batch(CONTINUATION_CLAIM_SCHEMA)?;
+        transaction.execute_batch(
+            "INSERT INTO native_continuations SELECT binding_id, conversation, parent, history_position, backend, executable, config_identity, system_prompt_revision, vendor_session_id, owning_attempt_id, owning_task_id, state, committed_at, NULL, NULL, NULL, 0 FROM native_continuations_copy; DROP TABLE native_continuations_copy;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", 19)?;
     transaction.commit()?;
     Ok(())
 }

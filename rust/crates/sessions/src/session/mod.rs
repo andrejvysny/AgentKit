@@ -132,12 +132,20 @@ pub struct SendInput {
     pub when_busy: WhenBusy,
     pub turn_id: Option<String>,
     pub on_settled: Option<OnSettled>,
+    /// Per-turn frozen native admission stanza (`executionTarget`,
+    /// `turnInput`, `broker`, `continuationScope`). Validated BEFORE any row
+    /// lands — a malformed stanza is refused at SEND, never discovered at
+    /// claim (AGENTKIT-112: no native validation after queueing). Queued
+    /// with the input, so flush/settlement promotion carry the identical
+    /// bytes.
+    pub frozen_payload: Option<Map<String, Value>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FollowUpInput {
     pub content: Value,
     pub input_id: Option<String>,
+    pub frozen_payload: Option<Map<String, Value>>,
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +154,7 @@ pub struct SteerInput {
     pub input_id: Option<String>,
     pub turn_id: Option<String>,
     pub on_settled: Option<OnSettled>,
+    pub frozen_payload: Option<Map<String, Value>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -409,6 +418,13 @@ impl AgentSessionService {
                 return Err(SessionsError::invalid_input("metadata must be an object."));
             }
         };
+        // The session-frozen native stanza arrives through caller metadata
+        // under a host-namespaced key and is MOVED into the descriptor —
+        // the descriptor is the only durable home, and normalization keeps
+        // it verbatim (AGENTKIT-112: public normalization must not drop
+        // native fields). Grammar (record, non-empty, never turnInput) is
+        // enforced by the descriptor reader below.
+        let native_execution = metadata.remove("agentkit.nativeExecution");
         for key in [SESSION_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY] {
             if metadata.contains_key(key) {
                 // Grants are written only by an answered approval; a
@@ -489,6 +505,9 @@ impl AgentSessionService {
             if let Some(value) = value {
                 raw.insert(key.into(), value.clone());
             }
+        }
+        if let Some(native) = native_execution {
+            raw.insert("nativeExecution".into(), native);
         }
         metadata.insert(SESSION_METADATA_KEY.into(), Value::Object(raw));
         if read_session_descriptor(&Value::Object(metadata.clone())).is_none() {
@@ -655,6 +674,11 @@ impl AgentSessionService {
                     &descriptor,
                     &input.content,
                     input.input_id.as_deref(),
+                    input.frozen_payload.as_ref(),
+                    // A direct (reject) turn is a follow-up in admission
+                    // terms: the replay digest must be computed under the
+                    // same kind a follow-up replay would use (F8-a).
+                    QueueKind::FollowUp,
                 )
                 .await;
         }
@@ -673,6 +697,7 @@ impl AgentSessionService {
                 turn_id: input.turn_id.clone(),
                 on_settled: input.on_settled,
             },
+            input.frozen_payload.as_ref(),
         )
         .await
     }
@@ -693,6 +718,7 @@ impl AgentSessionService {
                 turn_id: None,
                 on_settled: None,
             },
+            input.frozen_payload.as_ref(),
         )
         .await
     }
@@ -714,6 +740,7 @@ impl AgentSessionService {
                 turn_id: input.turn_id.clone(),
                 on_settled: input.on_settled,
             },
+            input.frozen_payload.as_ref(),
         )
         .await
     }
@@ -734,7 +761,13 @@ impl AgentSessionService {
             .clone()
             .ok_or_else(|| SessionsError::invalid_input("inputId is required to steer."))?;
         if let Some(prior) = self
-            .prior_receipt(session_id, QueueKind::Steer, &input_id, &input.content)
+            .prior_receipt(
+                session_id,
+                QueueKind::Steer,
+                &input_id,
+                &input.content,
+                None,
+            )
             .await?
         {
             return Ok(prior);
@@ -750,7 +783,7 @@ impl AgentSessionService {
                     session_id: session_id.to_owned(),
                     kind: AgentInputKind::Steer,
                     content: envelope.clone(),
-                    content_hash: self.hash_of(QueueKind::Steer, &envelope["content"]),
+                    content_hash: self.hash_of(QueueKind::Steer, &envelope),
                     target_task_id: None,
                     on_settled: Some(AgentInputSettlePolicy::Cancel),
                     attempt_id: None,
@@ -1584,6 +1617,13 @@ impl AgentSessionService {
         kind: AgentInputKind,
         content: &Value,
     ) -> SessionsResult<Option<StagedCandidate>> {
+        // Capture the frozen stanza from the durable envelope BEFORE the
+        // content shadow below (read_input_content unwraps the envelope).
+        let frozen = content
+            .get("frozen")
+            .and_then(Value::as_object)
+            .cloned()
+            .filter(|frozen| !frozen.is_empty());
         let Some(content) = read_input_content(content) else {
             return Ok(None);
         };
@@ -1595,6 +1635,15 @@ impl AgentSessionService {
         let assistant_message_id = format!("msg_a:{input_id}");
         let task_id = turn_id_for(input_id);
         let mut payload = self.turn_payload_base(session_id, descriptor).await?;
+        // A queued input's frozen native stanza (from the durable envelope)
+        // lands verbatim — the flushed turn carries exactly the bytes the
+        // sender submitted, validated against the same admission contract.
+        if let Some(frozen) = &frozen {
+            self.check_frozen(Some(frozen), descriptor)?;
+            for (key, value) in frozen {
+                payload.insert(key.clone(), value.clone());
+            }
+        }
         payload.insert(
             "assistantMessageId".into(),
             assistant_message_id.clone().into(),
@@ -1768,6 +1817,15 @@ impl AgentSessionService {
                 payload.insert("providerSnapshot".into(), snapshot);
             }
         }
+        // The session-frozen native stanza is inherited verbatim by EVERY
+        // turn — submission, queue flush, settlement promotion and recovery
+        // all build from this base, so the dispatch decision cannot drift
+        // between a live send and its queued sibling (AGENTKIT-112).
+        if let Some(native) = descriptor.get("nativeExecution").and_then(Value::as_object) {
+            for (key, value) in native {
+                payload.insert(key.clone(), value.clone());
+            }
+        }
         payload.insert(
             "sessionContext".into(),
             descriptor.get("context").cloned().unwrap_or(Value::Null),
@@ -1819,16 +1877,25 @@ impl AgentSessionService {
         kind: QueueKind,
         content: Value,
         intent: QueueIntent,
+        frozen: Option<&Map<String, Value>>,
     ) -> SessionsResult<AgentSendResult> {
+        self.check_frozen(frozen, descriptor)?;
         if let Some(existing) = &intent.input_id
             && let Some(prior) = self
-                .prior_receipt(session_id, kind, existing, &content)
+                .prior_receipt(session_id, kind, existing, &content, frozen)
                 .await?
         {
             return Ok(prior);
         }
         match self
-            .submit_turn(session_id, descriptor, &content, intent.input_id.as_deref())
+            .submit_turn(
+                session_id,
+                descriptor,
+                &content,
+                intent.input_id.as_deref(),
+                frozen,
+                kind,
+            )
             .await
         {
             Ok(result) => {
@@ -1839,7 +1906,7 @@ impl AgentSessionService {
             | Err(SessionsError::SessionStore(crate::SessionStoreError(
                 agentkit_store::StoreError::ScopeBusy(_),
             ))) => {
-                self.enqueue_input(session_id, descriptor, kind, content, intent)
+                self.enqueue_input(session_id, descriptor, kind, content, intent, frozen)
                     .await
             }
             Err(error) => Err(error),
@@ -1861,6 +1928,7 @@ impl AgentSessionService {
         kind: QueueKind,
         content: Value,
         intent: QueueIntent,
+        frozen: Option<&Map<String, Value>>,
     ) -> SessionsResult<AgentSendResult> {
         // The queue-or-stage transaction admits input+task+messages as ONE
         // batch, so the registry check runs before it: a refused admission
@@ -1894,8 +1962,10 @@ impl AgentSessionService {
         };
         // The durable envelope is what the staging filter reads too, so the
         // turn an admission can start is staged from exactly the bytes the
-        // input stores (`queue_content` / `read_input_content` shape).
-        let envelope = json!({"content": content});
+        // input stores (`queue_content` / `read_input_content` shape). The
+        // frozen native stanza rides the same durable envelope: a queued
+        // input flushes with the identical admission bytes it was sent with.
+        let envelope = self.admission_envelope(&content, frozen);
         let candidate = self
             .stage_candidate(
                 session_id,
@@ -1905,7 +1975,7 @@ impl AgentSessionService {
                 &envelope,
             )
             .await?;
-        let content_hash = self.hash_of(kind, &envelope["content"]);
+        let content_hash = self.hash_of(kind, &envelope);
         let admission = self
             .store()
             .queue_or_stage_turn(QueueOrStage {
@@ -1951,10 +2021,12 @@ impl AgentSessionService {
         kind: QueueKind,
         input_id: &str,
         content: &Value,
+        frozen: Option<&Map<String, Value>>,
     ) -> SessionsResult<Option<AgentSendResult>> {
         if let Some(existing) = self.store().get_input(input_id.to_owned()).await? {
-            // createInput is the idempotency check: same input replays, a
-            // different one is `input_conflict`.
+            // createInput is the idempotency check: same input (content AND
+            // frozen stanza) replays, a different one is `input_conflict`.
+            let envelope = self.admission_envelope(content, frozen);
             let (record, _) = self
                 .store()
                 .create_input(
@@ -1962,8 +2034,8 @@ impl AgentSessionService {
                         input_id: input_id.to_owned(),
                         session_id: session_id.to_owned(),
                         kind: kind.input_kind(),
-                        content: json!({"content": content.clone()}),
-                        content_hash: self.hash_of(kind, content),
+                        content: envelope.clone(),
+                        content_hash: self.hash_of(kind, &envelope),
                         target_task_id: existing.target_task_id.clone(),
                         on_settled: existing.on_settled,
                         attempt_id: None,
@@ -1975,12 +2047,33 @@ impl AgentSessionService {
                 .await?;
             return Ok(Some(self.receipt_of(record).await?));
         }
+        // No input row: an IMMEDIATE admission is its own idempotency
+        // record — the turn itself (review round-4 F8-a). The digest
+        // persisted at submit is the SAME queued-path digest over the
+        // SAME envelope; a replay under one input id with swapped content
+        // or frozen bytes conflicts, never silently returns the old turn.
         let turn = self
             .store()
             .get_task(&turn_id_for(input_id))
             .await?
             .filter(|task| task.scope_id == session_id);
-        Ok(turn.map(turn_result))
+        match turn {
+            Some(task) => {
+                if let Some(recorded) = task.payload.get("admissionDigest").and_then(Value::as_str)
+                {
+                    let digest = self.admission_digest(kind, content, frozen);
+                    if digest != recorded {
+                        return Err(SessionsError::from(agentkit_store::StoreError::Duplicate(
+                            format!(
+                                "input {input_id} is already admitted under different content or frozen bytes"
+                            ),
+                        )));
+                    }
+                }
+                Ok(Some(turn_result(task)))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn receipt_of(&self, record: AgentInputRecord) -> SessionsResult<AgentSendResult> {
@@ -1995,9 +2088,116 @@ impl AgentSessionService {
         })
     }
 
-    fn hash_of(&self, kind: QueueKind, content: &Value) -> String {
-        let envelope = json!({"kind": kind.as_str(), "content": content});
-        sha256_hex(serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into()))
+    /// The idempotency digest covers the WHOLE durable envelope, including
+    /// any frozen native stanza: a replay that silently swaps the execution
+    /// target or turn input under the same `inputId` is an
+    /// `input_conflict`, not a silent replay of the original bytes
+    /// (AGENTKIT-112).
+    fn hash_of(&self, kind: QueueKind, envelope: &Value) -> String {
+        let hashed = json!({"kind": kind.as_str(), "envelope": envelope});
+        sha256_hex(serde_json::to_string(&hashed).unwrap_or_else(|_| "{}".into()))
+    }
+
+    /// The admission envelope — the ONE field set idempotency digests:
+    /// the input content plus the frozen native stanza (review round-4
+    /// F8-a). The queued path stores it on the input row; the immediate
+    /// turn path digests it into the task payload. Both compare through
+    /// `hash_of` over this same builder — one field list, no drift
+    /// between the two admission shapes.
+    fn admission_envelope(&self, content: &Value, frozen: Option<&Map<String, Value>>) -> Value {
+        let mut envelope = json!({"content": content.clone()});
+        if let Some(frozen) = frozen {
+            envelope["frozen"] = Value::Object(frozen.clone());
+        }
+        envelope
+    }
+
+    /// The idempotency digest of one admission, shared by the queued and
+    /// the immediate path (F8-a): same input id, different bytes (content
+    /// OR frozen target) is a conflict under both shapes.
+    fn admission_digest(
+        &self,
+        kind: QueueKind,
+        content: &Value,
+        frozen: Option<&Map<String, Value>>,
+    ) -> String {
+        self.hash_of(kind, &self.admission_envelope(content, frozen))
+    }
+
+    /// Validate native admission BEFORE it becomes durable (AGENTKIT-112,
+    /// review R9): the contract is checked on the MERGED view the
+    /// executor will actually see — the per-send frozen stanza plus the
+    /// session-frozen `nativeExecution` block it inherits — so an
+    /// inherited target cannot hide a missing per-turn input, and a
+    /// per-turn input cannot hide a missing target. An admission that is
+    /// native at all (either half present) must carry the COMPLETE
+    /// executable identity: `executionTarget` and `turnInput` somewhere
+    /// in the merge, and `continuationScope` whenever the turn asks for
+    /// an EXACT resume (R3 retired the unscoped fallback at dispatch —
+    /// admission must not queue an attempt that can only fail there).
+    fn check_frozen(
+        &self,
+        frozen: Option<&Map<String, Value>>,
+        descriptor: &Value,
+    ) -> SessionsResult<()> {
+        let native = descriptor.get("nativeExecution").and_then(Value::as_object);
+        if frozen.is_none() && native.is_none() {
+            return Ok(());
+        }
+        let merged_has = |key: &str| {
+            frozen.is_some_and(|stanza| stanza.contains_key(key))
+                || native.is_some_and(|block| block.contains_key(key))
+        };
+        let mut detail: Vec<String> = ["executionTarget", "turnInput"]
+            .into_iter()
+            .filter(|key| !merged_has(key))
+            .map(|key| {
+                format!("native admission is missing required key '{key}' in the merged stanza")
+            })
+            .collect();
+        // Exact resume without its complete scoped binding is refused at
+        // the door (mirror of the executor's `continuation_scope_missing`).
+        let exact_resume = frozen
+            .as_ref()
+            .and_then(|stanza| stanza.get("turnInput"))
+            .or_else(|| native.and_then(|block| block.get("turnInput")))
+            .and_then(|input| input.get("resume"))
+            .and_then(|resume| resume.get("mode"))
+            .and_then(Value::as_str)
+            == Some("exact");
+        if exact_resume && !merged_has("continuationScope") {
+            detail.push(
+                "exact resume requires a frozen 'continuationScope' in the merged stanza"
+                    .to_owned(),
+            );
+        }
+        {
+            // Review round-3 F5: the typed contract is checked on the
+            // MERGED stanza the executor will actually see — an inherited
+            // descriptor half that merely PRESENTS `executionTarget` must
+            // still parse against the executor's own types, or a garbage
+            // target queues a task+messages pair that only dies at claim
+            // (the exact AGENTKIT-112 outcome this gate exists to stop).
+            let mut merged = native.cloned().unwrap_or_default();
+            if let Some(stanza) = frozen {
+                for (key, value) in stanza {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+            if !merged.is_empty() {
+                detail.extend(
+                    agentkit_native::validate_frozen_stanza(&merged)
+                        .err()
+                        .map(|e| vec![e])
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        if detail.is_empty() {
+            Ok(())
+        } else {
+            Err(SessionsError::invalid_input(detail.join("; ")))
+        }
     }
 
     async fn submit_turn(
@@ -2006,7 +2206,13 @@ impl AgentSessionService {
         descriptor: &Value,
         content: &Value,
         input_id: Option<&str>,
+        frozen: Option<&Map<String, Value>>,
+        kind: QueueKind,
     ) -> SessionsResult<AgentSendResult> {
+        // Native admission is validated BEFORE the first mint: a malformed
+        // or incomplete stanza is refused at send time, never discovered
+        // after the task was queued and claimed (AGENTKIT-112).
+        self.check_frozen(frozen, descriptor)?;
         // Refused before the first mint: a turn whose kind no executor
         // handles would be a task+messages batch the worker can never
         // claim. Nothing above this line writes.
@@ -2016,7 +2222,7 @@ impl AgentSessionService {
         let task_id = input_id
             .map(turn_id_for)
             .unwrap_or_else(|| self.mint("task_"));
-        let payload = self
+        let mut payload = self
             .turn_payload(
                 session_id,
                 descriptor,
@@ -2025,6 +2231,22 @@ impl AgentSessionService {
                 None,
             )
             .await?;
+        if let (Some(frozen), Some(map)) = (frozen, payload.as_object_mut()) {
+            for (key, value) in frozen {
+                map.insert(key.clone(), value.clone());
+            }
+        }
+        // The immediate path creates no input row, so the turn itself
+        // carries the admission digest — the SAME digest the queued path
+        // hashes (F8-a): `prior_receipt` compares against it on replay.
+        if input_id.is_some()
+            && let Some(map) = payload.as_object_mut()
+        {
+            map.insert(
+                "admissionDigest".into(),
+                self.admission_digest(kind, content, frozen).into(),
+            );
+        }
         let task = SubmitTask {
             task_id: task_id.clone(),
             kind: session_turn_kind(descriptor),

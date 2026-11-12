@@ -60,6 +60,11 @@ agentkit-toolpacks-coding = { path = "crates/toolpacks-coding", version = "0.1.0
 agentkit-runtime = { path = "crates/runtime", version = "0.1.0" }
 agentkit-napi = { path = "crates/napi", version = "0.1.0" }
 agentkit-rust = { path = "crates/agentkit", version = "0.1.0" }
+agentkit-native = { path = "crates/native", version = "0.1.0" }
+agentkit-native-exec = { path = "crates/native-exec", version = "0.1.0" }
+agentkit-native-broker = { path = "crates/native-broker", version = "0.1.0" }
+agentkit-claude = { path = "crates/claude", version = "0.1.0" }
+agentkit-facade = { path = "crates/facade", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
