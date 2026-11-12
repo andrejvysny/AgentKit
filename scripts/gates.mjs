@@ -33,14 +33,28 @@ const steps = [
   {
     name: "clippy",
     cmd: [
-      "cargo", "clippy", "--locked", "--workspace", "--all-targets",
-      "--all-features", "--", "-D", "warnings",
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--all-features",
+      "--",
+      "-D",
+      "warnings",
     ],
     cwd: RUST,
   },
   {
     name: "test",
-    cmd: ["cargo", "test", "--locked", "--workspace", "--all-features", "--no-fail-fast"],
+    cmd: [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace",
+      "--all-features",
+      "--no-fail-fast",
+    ],
     cwd: RUST,
     audit: auditCargoTest,
   },
@@ -53,7 +67,10 @@ const steps = [
   { name: "arch", cmd: ["node", "rust/scripts/check-arch.mjs"] },
   { name: "api", cmd: ["node", "rust/scripts/public-api.mjs"] },
   { name: "buildfix", cmd: ["bun", "run", "build:fixture"] },
-  { name: "clientreact", cmd: ["bun", "test", "packages/client/tests", "packages/react/tests"] },
+  {
+    name: "clientreact",
+    cmd: ["bun", "test", "packages/client/tests", "packages/react/tests"],
+  },
   { name: "contracts", cmd: ["bun", "run", "contracts:check"] },
   { name: "typecheck", cmd: ["bun", "run", "typecheck"] },
   { name: "lint", cmd: ["bun", "run", "lint"] },
@@ -69,8 +86,10 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--only") opts.only = argv[++i]?.split(",") ?? [];
     else if (arg.startsWith("--only=")) opts.only = arg.slice(7).split(",");
-    else if (arg === "--skip") for (const s of (argv[++i] ?? "").split(",")) opts.skip.add(s);
-    else if (arg.startsWith("--skip=")) for (const s of arg.slice(7).split(",")) opts.skip.add(s);
+    else if (arg === "--skip")
+      for (const s of (argv[++i] ?? "").split(",")) opts.skip.add(s);
+    else if (arg.startsWith("--skip="))
+      for (const s of arg.slice(7).split(",")) opts.skip.add(s);
     else if (arg.startsWith("--floor=")) opts.floor = Number(arg.slice(8));
     else {
       console.error(`gates: unknown argument ${arg}`);
@@ -97,7 +116,8 @@ function auditCargoTest(output, floor) {
     }
     if (/^test result: FAILED/.test(line)) failedBinaries += 1;
   }
-  if (failedBinaries > 0) problems.push(`${failedBinaries} test binary(ies) FAILED`);
+  if (failedBinaries > 0)
+    problems.push(`${failedBinaries} test binary(ies) FAILED`);
   if (binaries === 0) problems.push("no test binaries reported");
   if (passed < floor) problems.push(`passing tests ${passed} < floor ${floor}`);
   return { problems, detail: `${passed} passed across ${binaries} binaries` };
@@ -108,7 +128,8 @@ rmSync(LOGS, { recursive: true, force: true });
 mkdirSync(LOGS, { recursive: true });
 
 const selected = steps.filter(
-  (s) => (opts.only ? opts.only.includes(s.name) : true) && !opts.skip.has(s.name),
+  (s) =>
+    (opts.only ? opts.only.includes(s.name) : true) && !opts.skip.has(s.name),
 );
 if (selected.length === 0) {
   console.error("gates: no steps selected");
@@ -139,7 +160,9 @@ for (const step of selected) {
   if (failures.length > 0) {
     overall = 1;
     const tail = out.trimEnd().split("\n").slice(-20).join("\n");
-    console.log(`FAIL ${step.name} (${seconds}s): ${failures.join("; ")} — .gate-logs/${step.name}.log`);
+    console.log(
+      `FAIL ${step.name} (${seconds}s): ${failures.join("; ")} — .gate-logs/${step.name}.log`,
+    );
     console.log(tail);
   } else {
     console.log(`PASS ${step.name} (${seconds}s)`);
@@ -147,5 +170,7 @@ for (const step of selected) {
   results.push({ status, name: step.name });
 }
 
-console.log(`OVERALL=${overall} (${results.filter((r) => r.status === "PASS").length}/${results.length} passed)`);
+console.log(
+  `OVERALL=${overall} (${results.filter((r) => r.status === "PASS").length}/${results.length} passed)`,
+);
 process.exit(overall);
