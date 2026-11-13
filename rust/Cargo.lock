@@ -586,6 +586,7 @@ dependencies = [
  "agentkit-kernel",
  "agentkit-sessions",
  "agentkit-store",
+ "agentkit-sys",
  "async-trait",
  "futures",
  "libc",

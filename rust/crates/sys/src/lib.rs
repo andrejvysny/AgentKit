@@ -11,6 +11,7 @@ pub mod process;
 
 pub use private_fs::{create_private_dir, create_private_file};
 pub use process::{
-    ProcessGroup, Signal, SignalOutcome, SysError, own_process_group, pid_alive,
+    ChildExit, KillProbe, ProcessGroup, Signal, SignalOutcome, SysError, effective_uid, kill_probe,
+    own_parent_pid, own_process_group, peek_child_exit, pid_alive, signal_process,
     spawn_in_new_group, spawn_in_new_group_tokio,
 };

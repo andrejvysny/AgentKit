@@ -7,9 +7,14 @@ platform `unsafe`.
 - `process`: `spawn_in_new_group` / `spawn_in_new_group_tokio` put a child
   in its own process group; `ProcessGroup` signals, probes and adopts only
   caller-owned groups (privileged, self-pid and self-group targets are
-  refused); `pid_alive` probes a single pid.
-- `private_fs`: `create_private_dir` (0700) and `create_private_file`
-  (0600) for state directories holding secret material.
+  refused); `signal_process` signals one pid (privileged and self pids
+  refused); `kill_probe` wraps `kill(target, 0)` (pid, group and own-group
+  addressing); `peek_child_exit` reports a child's exit without reaping it
+  (`waitid` WNOWAIT|WNOHANG); `own_process_group`, `own_parent_pid` and
+  `effective_uid` answer identity questions; `pid_alive` probes a single
+  pid.
+- `private_fs`: `create_private_dir` (0700) and `create_private_file` (0600)
+  for state directories holding secret material.
 
 Non-Unix platforms compile and refuse explicitly
 (`SysError::Unsupported` / `io::ErrorKind::Unsupported`).

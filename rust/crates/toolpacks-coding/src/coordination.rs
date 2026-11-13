@@ -943,8 +943,9 @@ pub(crate) fn intent_journal_dir() -> std::path::PathBuf {
 
 #[cfg(unix)]
 pub(crate) fn current_uid() -> u32 {
-    // SAFETY: `geteuid` takes no arguments, touches no memory and cannot fail.
-    unsafe { libc::geteuid() }
+    // `geteuid(2)` has no failure path; `Unsupported` exists only for
+    // non-POSIX platforms, where this `#[cfg(unix)]` helper never builds.
+    agentkit_sys::effective_uid().expect("geteuid never fails on unix")
 }
 
 fn journal_io_error(error: &std::io::Error) -> CodingError {
@@ -2590,7 +2591,7 @@ mod tests {
                 .parse()
                 .expect("survivor pid")
         };
-        unsafe { libc::kill(owner_pid as i32, libc::SIGKILL) };
+        let _ = agentkit_sys::signal_process(owner_pid as u32, agentkit_sys::Signal::Kill);
         let _ = owner.wait();
 
         // Reopen: a fresh instance reconciles the durable journal and finds
@@ -2626,7 +2627,7 @@ mod tests {
 
         // Positive evidence: the whole recorded group is gone — the block
         // lifts on its own, no operator recovery needed.
-        unsafe { libc::kill(survivor_pid, libc::SIGKILL) };
+        let _ = agentkit_sys::signal_process(survivor_pid as u32, agentkit_sys::Signal::Kill);
         let mut lease = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 match reopened

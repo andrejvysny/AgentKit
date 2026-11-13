@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
+use agentkit_sys::{ChildExit, KillProbe, Signal, signal_process};
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -38,27 +39,6 @@ use crate::process_tree::{
     EXEC_ID_ENV, TreeTracker, crate_platform, find_marked_processes_outcome, scan_marked_outcome,
 };
 use crate::truncate::{TruncationLimits, format_size, truncate_tail};
-
-/// POSIX signal numbers the teardown sequence speaks. On Windows there are
-/// no POSIX signals: the constants are distinct sentinels and every send
-/// resolves to a no-op, so teardown discovers "cannot kill", reports the
-/// group as still alive, and the workspace quarantines instead of pretending
-/// cleanup happened. Fail-closed, never fake-success.
-#[cfg(unix)]
-mod sig {
-    pub(super) const SIGSTOP: i32 = libc::SIGSTOP;
-    pub(super) const SIGTERM: i32 = libc::SIGTERM;
-    pub(super) const SIGCONT: i32 = libc::SIGCONT;
-    pub(super) const SIGKILL: i32 = libc::SIGKILL;
-}
-
-#[cfg(not(unix))]
-mod sig {
-    pub(super) const SIGSTOP: i32 = 0;
-    pub(super) const SIGTERM: i32 = 1;
-    pub(super) const SIGCONT: i32 = 2;
-    pub(super) const SIGKILL: i32 = 9;
-}
 
 /// Compatibility helper; a numeric PID alone never authorizes signaling a
 /// group (TS `killProcessTree`). The leader must be observably present with
@@ -118,13 +98,12 @@ fn protected_pid(pid: i32) -> Option<&'static str> {
     if u32::try_from(pid).is_ok_and(|pid| pid == std::process::id()) {
         return Some("it is this process");
     }
-    #[cfg(unix)]
+    // `own_parent_pid` refuses platforms without a POSIX parent pid, so
+    // there the check is skipped exactly like the old `#[cfg(unix)]` gate.
+    if u32::try_from(pid)
+        .is_ok_and(|pid| agentkit_sys::own_parent_pid().is_ok_and(|parent| pid == parent))
     {
-        // SAFETY: `getppid` takes no arguments, touches no memory and
-        // cannot fail.
-        if pid == unsafe { libc::getppid() } {
-            return Some("it is this process's parent");
-        }
+        return Some("it is this process's parent");
     }
     None
 }
@@ -473,17 +452,26 @@ const POLL_MS: u64 = 25;
 static REAP_GATE: StdMutex<()> = StdMutex::new(());
 
 #[cfg(unix)]
-fn signal_pid(pid: i32, sig: i32) {
+fn signal_pid(pid: i32, sig: Signal) {
     #[cfg(test)]
     SIGNAL_LOG.with(|log| {
         if let Ok(mut log) = log.lock() {
-            log.push((pid, sig));
+            log.push((pid, sig.number()));
         }
     });
-    // SAFETY: `kill` only reads its arguments; signaling a pid that is
-    // already gone answers ESRCH, which this fire-and-forget helper
-    // intentionally ignores (callers observe liveness separately).
-    unsafe { libc::kill(pid, sig) };
+    // `pid < 0` keeps `kill(2)` group addressing (the blanket group
+    // signal for a `GroupHandle`); positives are individual marked pids.
+    // `agentkit-sys` refuses privileged and self targets — unreachable
+    // here, where every target is a group we spawned or an observed
+    // marked child. A pid already gone answers ESRCH, which this
+    // fire-and-forget helper intentionally ignores (callers observe
+    // liveness separately).
+    let _ = if pid > 0 {
+        signal_process(pid as u32, sig)
+    } else {
+        agentkit_sys::ProcessGroup::from_leader_pid(pid.unsigned_abs())
+            .and_then(|group| group.signal(sig))
+    };
 }
 
 // Test-only observation seam for every signal `terminate` would deliver,
@@ -509,82 +497,41 @@ fn signal_log_reset() {
 }
 
 #[cfg(not(unix))]
-fn signal_pid(_pid: i32, _sig: i32) {}
+fn signal_pid(_pid: i32, _sig: Signal) {}
 
-/// Non-reaping exit-status probe for the driver pump. `waitid(P_PID,
-/// WNOWAIT | WEXITED | WNOHANG)` reports the child's exit while LEAVING it
-/// a zombie, so the driver keeps the child unreaped — and therefore the
-/// process-group number unrecyclable — until teardown has finished
-/// signalling the group. WNOHANG is load-bearing: without it `waitid`
-/// BLOCKS until the child changes state, freezing the driver task inside a
-/// syscall so timeouts and cancellation never reach the poll loop.
-/// Polling (not signal-driven) keeps this clear of tokio's internal reaper;
-/// the final `Child::wait` after teardown does the actual reap.
+/// Non-reaping exit-status probe for the driver pump, backed by
+/// [`agentkit_sys::peek_child_exit`] (`waitid(P_PID, WNOWAIT | WEXITED |
+/// WNOHANG)`): it reports the child's exit while LEAVING it a zombie, so
+/// the driver keeps the child unreaped — and therefore the process-group
+/// number unrecyclable — until teardown has finished signalling the
+/// group. Polling (not signal-driven) keeps this clear of tokio's internal
+/// reaper; the final `Child::wait` after teardown does the actual reap.
 #[cfg(unix)]
 async fn pump_wait(child: &mut tokio::process::Child) -> Option<std::process::ExitStatus> {
     use std::os::unix::process::ExitStatusExt;
-    let pid = child.id()? as libc::id_t;
+    let pid = child.id()?;
     loop {
-        // `siginfo_t` carries a raw pointer and is not `Send`, so it must
-        // never live across the poll sleep: status and errno are extracted
-        // inside a block that drops the struct before any await.
-        let (outcome, errno) = {
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            // SAFETY: `info` is a writable local owned by this block;
-            // WNOWAIT|WEXITED|WNOHANG only reports our own un-reaped
-            // child's status, never reaps it, and never blocks.
-            let rc = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    pid,
-                    std::ptr::addr_of_mut!(info),
-                    libc::WNOWAIT | libc::WEXITED | libc::WNOHANG,
-                )
-            };
-            if rc != 0 {
-                (
-                    None,
-                    std::io::Error::last_os_error()
-                        .raw_os_error()
-                        .unwrap_or_default(),
-                )
-            } else if matches!(
-                info.si_code,
-                libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
-            ) {
-                // SAFETY: on success waitid filled si_code with the exit
-                // classification and si_status with the raw exit code or
-                // terminating signal of this child.
-                (Some(unsafe { (info.si_code, info.si_status()) }), 0)
-            } else {
-                // No exit yet. Also covers XNU, which reports CLD_STOPPED /
-                // CLD_CONTINUED despite the WEXITED-only filter — teardown
-                // SIGSTOPs the group before SIGKILL, so treating a stop as
-                // an exit would settle a live child with an unknown status.
-                // WNOHANG with no state change yet: success with a zeroed
-                // siginfo. Never read errno here — it is stale on success.
-                (None, 0)
-            }
-        };
-        if let Some((code, status)) = outcome {
+        match agentkit_sys::peek_child_exit(pid) {
             // Rebuild the wait(2) raw status ExitStatus expects from the
             // siginfo fields: exit codes live in bits 8..16, signals in
             // bits 0..7 (core-dumped adds the 0x80 bit).
-            return if code == libc::CLD_EXITED {
-                Some(std::process::ExitStatus::from_raw((status & 0xff) << 8))
-            } else if code == libc::CLD_KILLED {
-                Some(std::process::ExitStatus::from_raw(status & 0x7f))
-            } else {
-                // CLD_DUMPED (the only other code admitted above).
-                Some(std::process::ExitStatus::from_raw((status & 0x7f) | 0x80))
-            };
-        }
-        if errno == libc::ECHILD {
+            Ok(ChildExit::Exited { code }) => {
+                return Some(std::process::ExitStatus::from_raw((code & 0xff) << 8));
+            }
+            Ok(ChildExit::Killed { signal }) => {
+                return Some(std::process::ExitStatus::from_raw(signal & 0x7f));
+            }
+            Ok(ChildExit::Dumped { signal }) => {
+                return Some(std::process::ExitStatus::from_raw((signal & 0x7f) | 0x80));
+            }
+            // No exit yet (a bare stop/continue never reads as one).
+            Ok(ChildExit::Running) => {}
             // No child to report (should not happen: the driver is its only
             // reaper) — indistinguishable from a failed wait, like before.
-            return None;
+            Ok(ChildExit::NoSuchChild) => return None,
+            // EINTR/transient: keep polling.
+            Err(_) => {}
         }
-        // EINTR/transient: keep polling.
         sleep(POLL_MS).await;
     }
 }
@@ -598,12 +545,10 @@ async fn pump_wait(child: &mut tokio::process::Child) -> Option<std::process::Ex
 
 #[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
-    // SAFETY: `kill(pid, 0)` performs error checking only, sends no signal.
-    let rc = unsafe { libc::kill(pid, 0) };
-    if rc == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    // `kill(pid, 0)` via `agentkit-sys`: only a definite ESRCH reads as
+    // gone; EPERM means the process exists but is not ours, and `0`/
+    // negative targets keep their `kill(2)` group semantics.
+    !matches!(agentkit_sys::kill_probe(pid), KillProbe::Gone)
 }
 
 /// No portable liveness probe exists; claiming "dead" would retire leases
@@ -637,13 +582,10 @@ pub(crate) fn group_alive(pgid: i32) -> bool {
 /// exists but belongs to someone else — conservatively alive.
 #[cfg(unix)]
 fn group_populated(pgid: i32) -> bool {
-    // SAFETY: kill(-pgid, 0) performs error checking only, sends no signal.
-    unsafe {
-        if libc::kill(-pgid, 0) == 0 {
-            return true;
-        }
-        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    }
+    // `kill(-pgid, 0)` via `agentkit-sys`: ESRCH (all members gone) is
+    // the only negative answer; EPERM (group is not ours) stays
+    // conservatively populated.
+    !matches!(agentkit_sys::kill_probe(-pgid), KillProbe::Gone)
 }
 
 /// No group probe exists; assume populated (fail-closed, see `pid_alive`).
@@ -1098,7 +1040,7 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
     let mut known: Vec<i32> = Vec::new();
     let mut suspects: Vec<i32> = Vec::new();
     let mut scan = TeardownScan::Ok;
-    let signal_all = |sig: i32, known: &[i32]| {
+    let signal_all = |sig: Signal, known: &[i32]| {
         if let Some(group) = &group {
             // Ownership re-check AT SIGNAL TIME: once the driver has reaped
             // its child, the group number is kernel-recyclable and a
@@ -1137,15 +1079,15 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
     // until the set stops growing. A stopped process only sees SIGTERM once
     // continued, hence the SIGCONT.
     for _ in 0..3 {
-        signal_all(sig::SIGSTOP, &known);
+        signal_all(Signal::Stop, &known);
         let before = known.len();
         absorb(&mut known, &mut suspects, &mut scan, find().await);
         if known.len() == before {
             break;
         }
     }
-    signal_all(sig::SIGTERM, &known);
-    signal_all(sig::SIGCONT, &known);
+    signal_all(Signal::Term, &known);
+    signal_all(Signal::Cont, &known);
     let deadline = Instant::now() + Duration::from_millis(grace_ms);
     while remaining(&known, &group).await && Instant::now() < deadline {
         sleep(POLL_MS).await;
@@ -1165,7 +1107,7 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
             .map(|found| found.marked.clone())
             .unwrap_or_default();
         absorb(&mut known, &mut suspects, &mut scan, fresh);
-        signal_all(sig::SIGKILL, &verified);
+        signal_all(Signal::Kill, &verified);
         let end = Instant::now() + Duration::from_millis(SURVIVOR_WAIT_MS);
         while remaining(&known, &group).await && Instant::now() < end {
             sleep(POLL_MS).await;
@@ -1904,8 +1846,7 @@ pub(crate) const SURVIVOR_RECHECK_MS: u64 = 2000;
 /// not ours to wait on.
 #[cfg(unix)]
 pub(crate) fn is_alive(pid: i32) -> bool {
-    // SAFETY: `kill(pid, 0)` performs error checking only, sends no signal.
-    unsafe { libc::kill(pid, 0) == 0 }
+    matches!(agentkit_sys::kill_probe(pid), KillProbe::Alive)
 }
 
 /// Assume alive: a false "gone" would stop a wait early and declare
@@ -2958,7 +2899,7 @@ mod tests {
         wait_until_marked(&exec_id, pid).await;
         sweep_orphans(Some(200)).await;
         assert!(pid_alive(pid));
-        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let _ = signal_process(pid as u32, Signal::Kill);
         let _ = child.wait().await;
     }
 
@@ -3036,7 +2977,7 @@ mod tests {
         assert!(!outcome.is_clean());
         // Not killed, not even signalled: still alive after teardown.
         assert!(pid_alive(pid));
-        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let _ = signal_process(pid as u32, Signal::Kill);
         let _ = child.wait().await;
     }
 
@@ -3128,8 +3069,8 @@ mod tests {
                 );
             }
             // Teardown TERM'd the group/member; sweep both sentinels.
-            unsafe { libc::kill(pgid, libc::SIGKILL) };
-            unsafe { libc::kill(member_pid, libc::SIGKILL) };
+            let _ = signal_process(pgid as u32, Signal::Kill);
+            let _ = signal_process(member_pid as u32, Signal::Kill);
             let _ = leader.wait().await;
             let _ = member.wait().await;
         }
@@ -3247,8 +3188,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn kill_process_tree_refuses_protected_pids() {
-        // SAFETY: `getppid` takes no arguments and cannot fail.
-        let parent = unsafe { libc::getppid() };
+        let parent = i32::try_from(agentkit_sys::own_parent_pid().expect("unix has a parent pid"))
+            .expect("parent pid fits i32");
         for pid in [-5, 0, 1, process_id() as i32, parent] {
             let error = kill_process_tree(pid)
                 .await

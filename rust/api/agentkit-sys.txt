@@ -3,16 +3,35 @@ pub mod agentkit_sys::private_fs
 pub fn agentkit_sys::private_fs::create_private_dir(&std::path::Path) -> core::io::error::Result<()>
 pub fn agentkit_sys::private_fs::create_private_file(&std::path::Path) -> core::io::error::Result<std::fs::File>
 pub mod agentkit_sys::process
+pub enum agentkit_sys::process::ChildExit
+pub agentkit_sys::process::ChildExit::Dumped
+pub agentkit_sys::process::ChildExit::Dumped::signal: i32
+pub agentkit_sys::process::ChildExit::Exited
+pub agentkit_sys::process::ChildExit::Exited::code: i32
+pub agentkit_sys::process::ChildExit::Killed
+pub agentkit_sys::process::ChildExit::Killed::signal: i32
+pub agentkit_sys::process::ChildExit::NoSuchChild
+pub agentkit_sys::process::ChildExit::Running
+pub enum agentkit_sys::process::KillProbe
+pub agentkit_sys::process::KillProbe::Alive
+pub agentkit_sys::process::KillProbe::Gone
+pub agentkit_sys::process::KillProbe::NotPermitted
 pub enum agentkit_sys::process::Signal
+pub agentkit_sys::process::Signal::Cont
 pub agentkit_sys::process::Signal::Int
 pub agentkit_sys::process::Signal::Kill
+pub agentkit_sys::process::Signal::Stop
 pub agentkit_sys::process::Signal::Term
+impl agentkit_sys::process::Signal
+pub fn agentkit_sys::process::Signal::number(self) -> i32
 pub enum agentkit_sys::process::SignalOutcome
 pub agentkit_sys::process::SignalOutcome::AlreadyGone
 pub agentkit_sys::process::SignalOutcome::Delivered
 pub enum agentkit_sys::process::SysError
 pub agentkit_sys::process::SysError::Refused
 pub agentkit_sys::process::SysError::Refused::pgid: u32
+pub agentkit_sys::process::SysError::RefusedPid
+pub agentkit_sys::process::SysError::RefusedPid::pid: u32
 pub agentkit_sys::process::SysError::Signal
 pub agentkit_sys::process::SysError::Signal::pgid: u32
 pub agentkit_sys::process::SysError::Signal::signal: i32
@@ -23,20 +42,44 @@ impl agentkit_sys::process::ProcessGroup
 pub fn agentkit_sys::process::ProcessGroup::from_leader_pid(u32) -> core::result::Result<Self, agentkit_sys::process::SysError>
 pub fn agentkit_sys::process::ProcessGroup::is_gone(&self) -> bool
 pub fn agentkit_sys::process::ProcessGroup::signal(&self, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
+pub fn agentkit_sys::process::effective_uid() -> core::result::Result<u32, agentkit_sys::process::SysError>
+pub fn agentkit_sys::process::kill_probe(i32) -> agentkit_sys::process::KillProbe
+pub fn agentkit_sys::process::own_parent_pid() -> core::result::Result<u32, agentkit_sys::process::SysError>
 pub fn agentkit_sys::process::own_process_group() -> u32
+pub fn agentkit_sys::process::peek_child_exit(u32) -> core::result::Result<agentkit_sys::process::ChildExit, core::io::error::Error>
 pub fn agentkit_sys::process::pid_alive(u32) -> bool
+pub fn agentkit_sys::process::signal_process(u32, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
 pub fn agentkit_sys::process::spawn_in_new_group(&mut std::process::Command)
 pub fn agentkit_sys::process::spawn_in_new_group_tokio(&mut tokio::process::Command)
+pub enum agentkit_sys::ChildExit
+pub agentkit_sys::ChildExit::Dumped
+pub agentkit_sys::ChildExit::Dumped::signal: i32
+pub agentkit_sys::ChildExit::Exited
+pub agentkit_sys::ChildExit::Exited::code: i32
+pub agentkit_sys::ChildExit::Killed
+pub agentkit_sys::ChildExit::Killed::signal: i32
+pub agentkit_sys::ChildExit::NoSuchChild
+pub agentkit_sys::ChildExit::Running
+pub enum agentkit_sys::KillProbe
+pub agentkit_sys::KillProbe::Alive
+pub agentkit_sys::KillProbe::Gone
+pub agentkit_sys::KillProbe::NotPermitted
 pub enum agentkit_sys::Signal
+pub agentkit_sys::Signal::Cont
 pub agentkit_sys::Signal::Int
 pub agentkit_sys::Signal::Kill
+pub agentkit_sys::Signal::Stop
 pub agentkit_sys::Signal::Term
+impl agentkit_sys::process::Signal
+pub fn agentkit_sys::process::Signal::number(self) -> i32
 pub enum agentkit_sys::SignalOutcome
 pub agentkit_sys::SignalOutcome::AlreadyGone
 pub agentkit_sys::SignalOutcome::Delivered
 pub enum agentkit_sys::SysError
 pub agentkit_sys::SysError::Refused
 pub agentkit_sys::SysError::Refused::pgid: u32
+pub agentkit_sys::SysError::RefusedPid
+pub agentkit_sys::SysError::RefusedPid::pid: u32
 pub agentkit_sys::SysError::Signal
 pub agentkit_sys::SysError::Signal::pgid: u32
 pub agentkit_sys::SysError::Signal::signal: i32
@@ -49,7 +92,12 @@ pub fn agentkit_sys::process::ProcessGroup::is_gone(&self) -> bool
 pub fn agentkit_sys::process::ProcessGroup::signal(&self, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
 pub fn agentkit_sys::create_private_dir(&std::path::Path) -> core::io::error::Result<()>
 pub fn agentkit_sys::create_private_file(&std::path::Path) -> core::io::error::Result<std::fs::File>
+pub fn agentkit_sys::effective_uid() -> core::result::Result<u32, agentkit_sys::process::SysError>
+pub fn agentkit_sys::kill_probe(i32) -> agentkit_sys::process::KillProbe
+pub fn agentkit_sys::own_parent_pid() -> core::result::Result<u32, agentkit_sys::process::SysError>
 pub fn agentkit_sys::own_process_group() -> u32
+pub fn agentkit_sys::peek_child_exit(u32) -> core::result::Result<agentkit_sys::process::ChildExit, core::io::error::Error>
 pub fn agentkit_sys::pid_alive(u32) -> bool
+pub fn agentkit_sys::signal_process(u32, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
 pub fn agentkit_sys::spawn_in_new_group(&mut std::process::Command)
 pub fn agentkit_sys::spawn_in_new_group_tokio(&mut tokio::process::Command)
