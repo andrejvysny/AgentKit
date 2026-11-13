@@ -11,7 +11,7 @@ import { dirname } from "node:path";
 import type { AiProviderConfig } from "@agentkit/contracts";
 import { CONTRACT_VERSION, REST_API_VERSION } from "@agentkit/contracts";
 import type { AiProviderClient } from "@agentkit/core";
-import type { Clock, Logger } from "@agentkit/host";
+import type { Clock, Logger } from "./system-types.js";
 import {
   NativeSessionService,
   NativeStore,
@@ -121,7 +121,7 @@ export interface BuildAppOptions {
       Parameters<NativeSessionService["setContentAuthority"]>[1]
     >;
   };
-  /** Defaults to `new Date()`'s ISO clock — see `packages/host/src/ports/system.ts`. */
+  /** Defaults to `new Date()`'s ISO clock. */
   clock?: Clock;
   logger?: Logger;
   /** Defaults to `process.env`. A test passes `{}` so nothing real is read. */

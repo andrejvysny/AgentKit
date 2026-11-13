@@ -6,17 +6,23 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-agentkit-client = { path = "../../crates/client" }
-agentkit-contracts = { path = "../../crates/contracts" }
-agentkit-core = { path = "../../crates/core" }
-agentkit-host = { path = "../../crates/host" }
-agentkit-connections = { path = "../../crates/connections", features = ["http"] }
-agentkit-store = { path = "../../crates/store" }
+agentkit-client = { workspace = true }
+agentkit-core = { workspace = true }
+agentkit-chat = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-sessions = { workspace = true }
+agentkit-connections = { workspace = true, features = ["http"] }
+agentkit-store = { workspace = true }
+agentkit-runtime = { workspace = true }
+agentkit-providers = { workspace = true }
 eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 async-trait.workspace = true
-async-stream = "=0.3.6"
+async-stream.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
-url = "2"
+url.workspace = true

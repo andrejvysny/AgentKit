@@ -593,9 +593,12 @@ fn is_server_alias(value: &str) -> bool {
 pub fn normalize_server_alias(value: &str) -> Result<String> {
     let trimmed = value.trim();
     if !is_server_alias(trimmed) {
-        return Err(StoreError::InvalidInput(format!(
-            "MCP server alias \"{value}\" is invalid; expected ^[a-z][a-z0-9-]*$."
-        )));
+        return Err(StoreError::ManagedInput {
+            reason: crate::ManagedInputReason::InvalidAlias,
+            message: format!(
+                "MCP server alias \"{value}\" is invalid; expected ^[a-z][a-z0-9-]*$."
+            ),
+        });
     }
     Ok(trimmed.to_owned())
 }
@@ -722,10 +725,13 @@ pub fn validate_connection_config(config: &Value) -> Result<String> {
     if let Some(refs) = object.get("secretRefs").and_then(Value::as_object)
         && !refs.is_empty()
     {
-        return Err(StoreError::InvalidInput(format!(
-            "{SECRET_REF_MARKER}{} secretRef entries were provided and the native binding resolves none.",
-            refs.len()
-        )));
+        return Err(StoreError::ManagedInput {
+            reason: crate::ManagedInputReason::SecretReferencesUnsupported,
+            message: format!(
+                "{SECRET_REF_MARKER}{} secretRef entries were provided and the native binding resolves none.",
+                refs.len()
+            ),
+        });
     }
     normalize_server_alias(object["alias"].as_str().expect("validated"))
 }
@@ -1189,18 +1195,14 @@ impl SqliteStore {
                     .as_str()
                     .is_none_or(|account| account.is_empty())
             {
-                return Err(StoreError::InvalidInput(
-                    "Connection and account identities are required.".into(),
-                ));
+                return Err(StoreError::ManagedInput { reason: crate::ManagedInputReason::IdentityRequired, message: "Connection and account identities are required.".into() });
             }
             required_text(&record, "connectorId", "Connector id")?;
             if let Some(workspace) = record.get("workspaceId")
                 && !workspace.is_null()
                 && !workspace.is_string()
             {
-                return Err(StoreError::InvalidInput(
-                    "Connection and account identities are required.".into(),
-                ));
+                return Err(StoreError::ManagedInput { reason: crate::ManagedInputReason::IdentityRequired, message: "Connection and account identities are required.".into() });
             }
             if let Some((_, text)) = existing.as_ref() {
                 let old = read_stored(text)?;
@@ -1209,10 +1211,7 @@ impl SqliteStore {
                         && !(old.get(field).is_none_or(Value::is_null)
                             && record.get(field).is_none_or(Value::is_null))
                     {
-                        return Err(StoreError::InvalidInput(
-                            "Account and workspace identity are immutable; create a separate connection."
-                                .into(),
-                        ));
+                        return Err(StoreError::ManagedInput { reason: crate::ManagedInputReason::ImmutableIdentity, message: "Account and workspace identity are immutable; create a separate connection.".into() });
                     }
                 }
             }
@@ -1241,9 +1240,7 @@ impl SqliteStore {
                 }
             }
             if conflicts {
-                return Err(StoreError::InvalidInput(
-                    "Connection aliases must be unique across accounts.".into(),
-                ));
+                return Err(StoreError::ManagedInput { reason: crate::ManagedInputReason::AliasConflict, message: "Connection aliases must be unique across accounts.".into() });
             }
             validate_connection_config(&record["config"])?;
             refuse_forged_envelopes(&record["config"])?;
@@ -1491,9 +1488,7 @@ impl SqliteStore {
                         .iter()
                         .any(|need| !authorized_connectors.iter().any(|grant| grant == need))
                     {
-                        return Err(StoreError::InvalidInput(
-                            "Skill requires a selected authorized connector.".into(),
-                        ));
+                        return Err(StoreError::ManagedInput { reason: crate::ManagedInputReason::SelectedConnectorRequired, message: "Skill requires a selected authorized connector.".into() });
                     }
                     // The stored revision is content-hashed at publish; the
                     // reference re-hashes between catalog and read, so the

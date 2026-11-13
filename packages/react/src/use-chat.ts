@@ -903,7 +903,7 @@ export function useChat(
 /**
  * One run event, applied to the placeholder.
  *
- * MIRRORS THE HOST's own projector (`packages/host/src/turn/projection.ts`)
+ * MIRRORS THE ENGINE's own projector (the Rust run projection)
  * rather than inventing a second rule: deltas accumulate, and a
  * `run.message.completed` overwrites the text only for a NON-streaming provider
  * (one that sent no deltas at all). Overwriting after a stream would drop the

@@ -16,8 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use agentkit_host::http::DesktopBackend;
-use agentkit_transport_http::{Actor, Config, StreamOptions};
+use agentkit_http::{Actor, Config, DesktopBackend, StreamOptions};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -163,7 +162,7 @@ struct ServerOptions {
     /// Cross-origin policy mirrored from the TypeScript transport's
     /// `CorsConfig`: absent (default) answers plain HTTP with no CORS
     /// headers and OPTIONS with 405 — no browser was ever expected.
-    cors: Option<agentkit_transport_http::CorsConfig>,
+    cors: Option<agentkit_http::CorsConfig>,
     /// `"memory"` wires a volatile credential vault so the provider
     /// management routes' `apiKey`/`extraHeaders` writes really store
     /// secrets (mirroring the desktop example's `MemorySecretStore`);
@@ -219,8 +218,8 @@ pub(super) fn optional_text(
 
 /// Strictly parse `cors` into the transport's `CorsConfig`. Every accepted
 /// shape changes observable behavior; anything malformed fails the call.
-fn parse_cors(object: &Value) -> Result<Option<agentkit_transport_http::CorsConfig>> {
-    use agentkit_transport_http::{CorsConfig, CorsOrigins};
+fn parse_cors(object: &Value) -> Result<Option<agentkit_http::CorsConfig>> {
+    use agentkit_http::{CorsConfig, CorsOrigins};
     match object.get("cors") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) => {
@@ -389,7 +388,7 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
     })
 }
 
-/// Normalize a base path exactly as `agentkit_transport_http::router` does,
+/// Normalize a base path exactly as `agentkit_http::router` does,
 /// so the advertised `baseUrl` is the path that actually routes.
 fn normalize_base_path(path: &str) -> String {
     let path = path.trim().trim_end_matches('/').to_owned();
@@ -530,7 +529,7 @@ impl SessionService {
     /// `closed` after `close()`. Every request is authenticated by the
     /// backend's bearer check; a REST-submitted turn is executed by this
     /// service's worker like any other durable task.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn start_http_server(&self, options_json: String) -> Result<String> {
         let options = parse_server_options(&options_json)?;
         let listener = ensure_bound_loopback(
@@ -558,10 +557,10 @@ impl SessionService {
                 "an HTTP server is already running on this service; call stopHttpServer() first",
             ));
         }
-        let mcp_configuration = agentkit_host::McpConfigRepository::new(
-            core.host.store().clone(),
+        let mcp_configuration = agentkit_mcp::McpConfigRepository::new(
+            core.runtime.host().store().clone(),
             &options.actor_id,
-            core.host.runtime().clone(),
+            core.runtime.host().runtime().clone(),
         )
         .map_err(|_| {
             errors::stable(
@@ -589,7 +588,7 @@ impl SessionService {
             )
         })?;
         let mut backend = DesktopBackend::open(
-            core.host.clone(),
+            core.runtime.host().clone(),
             Actor {
                 id: options.actor_id,
                 metadata: BTreeMap::new(),
@@ -600,10 +599,12 @@ impl SessionService {
         .await
         .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
         backend = backend.with_mcp_configuration(Arc::new(mcp_configuration));
+        if let Some(authority) = core.runtime.content_authority() {
+            backend = backend.with_content_authority(authority.clone());
+        }
         backend = backend
-            .with_content_authority(core.content_authority.clone())
-            .with_profiles(core.profiles.clone())
-            .with_provider_factory(core.native_provider_factory.clone());
+            .with_profiles(core.runtime.profiles().clone())
+            .with_provider_factory(core.runtime.native_provider_factory().clone());
         if let Some(profile_id) = &options.session_profile_id {
             backend = backend
                 .with_session_profile(profile_id)
@@ -619,7 +620,7 @@ impl SessionService {
             backend = backend
                 .with_native_provider_operations(
                     core.provider_ports.clone(),
-                    core.native_provider_factory.clone(),
+                    core.runtime.native_provider_factory().clone(),
                 )
                 .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
         }
@@ -663,7 +664,7 @@ impl SessionService {
     /// service's close deadline, and the accept loop is force-stopped
     /// after. Idempotent — stopping a service that never started, or was
     /// already stopped or closed, is a no-op success.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn stop_http_server(&self) -> Result<()> {
         let server = {
             let mut guard = self.core.lock().await;

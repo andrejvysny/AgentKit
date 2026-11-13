@@ -10,7 +10,7 @@
  * any leftover `@agentkit/` TEXT to `agentkit/` so the old scope survives
  * nowhere in the shipped package. That collapse is right for a doc comment and
  * catastrophic for a specifier the rewrite did not recognise: a subpath import
- * (`"@agentkit/host/foo"`) or a computed one (`` `@agentkit/${name}` ``) is
+ * (`"@agentkit/core/foo"`) or a computed one (`` `@agentkit/${name}` ``) is
  * silently turned into a bare `agentkit/...` import of a module that does not
  * exist, and the final "no `@agentkit/` remains" check passes — the evidence
  * was destroyed by the thing being checked. A build that ships a broken import
@@ -52,11 +52,11 @@ export const AGENTKIT_SPECIFIER = /(["'])@agentkit\/([a-zA-Z0-9_-]+)\1/g;
  * What must NOT remain after the rewrite, and nothing else.
  *
  * - `"@agentkit/` / `'@agentkit/` — a quoted specifier the rewrite left alone
- *   (unknown package, or a subpath: `"@agentkit/host/internal.js"`).
+ *   (unknown package, or a subpath: `"@agentkit/core/internal.js"`).
  * - `@agentkit/${` — a specifier built in a template literal.
  *
  * A BACKTICK alone is deliberately NOT a signal: this codebase writes
- * `` `@agentkit/host` `` inside doc comments constantly, and those are exactly
+ * `` `@agentkit/core` `` inside doc comments constantly, and those are exactly
  * the prose mentions the collapse is for.
  */
 const RESIDUAL_SPECIFIER = /(?:["']@agentkit\/)|(?:@agentkit\/\$\{)/;

@@ -1,5 +1,5 @@
 use crate::{ToolLimits, ToolResult};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 const MARKER: &str = "\n[...truncated]";
 pub(crate) fn stringify(value: &Value) -> String {
     agentkit_contracts::stringify_javascript_value(value).expect("JSON values serialize")

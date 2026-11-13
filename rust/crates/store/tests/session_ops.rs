@@ -383,7 +383,7 @@ async fn the_same_answer_replays_and_a_different_one_conflicts() {
         .answer_human_request(answer("req", "other", json!({"answer":"right"})))
         .await
         .unwrap_err();
-    assert!(matches!(error, StoreError::Duplicate(_)));
+    assert!(matches!(error, StoreError::AnswerConflict(_)));
     assert!(error.to_string().contains("answer_conflict"));
 }
 
@@ -426,7 +426,7 @@ async fn a_lost_answer_record_is_missing_evidence_never_a_fresh_replay() {
         .answer_human_request(answer("req", "ans", json!({"answer":"left"})))
         .await
         .unwrap_err();
-    assert!(matches!(error, StoreError::Duplicate(_)), "{error}");
+    assert!(matches!(error, StoreError::AnswerConflict(_)), "{error}");
     assert!(error.to_string().contains("answer_conflict"), "{error}");
     assert!(
         !store
@@ -535,7 +535,7 @@ async fn expired_cancelled_and_wrong_turn_requests_are_stale() {
         .answer_human_request(answer("twice", "a2", json!({"decision":"deny"})))
         .await
         .unwrap_err();
-    assert!(matches!(error, StoreError::Duplicate(_)), "{error}");
+    assert!(matches!(error, StoreError::AnswerConflict(_)), "{error}");
 }
 
 #[tokio::test]

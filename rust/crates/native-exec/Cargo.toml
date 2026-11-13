@@ -1,0 +1,31 @@
+[package]
+name = "agentkit-native-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit native-turn context: durable executor for vendor agent runtimes, one owned process per attempt"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-core = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-native = { workspace = true }
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+agentkit-mcp = { workspace = true }
+# The inline tests drive the real MCP broker.
+agentkit-native-broker = { workspace = true }
+# The inline tests run the generic executor against the SQLite repository.
+agentkit-store = { workspace = true }
+# The example replays the shared scripted native ports (ADR 0021 R10).
+agentkit-testkit = { workspace = true }

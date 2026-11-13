@@ -9,14 +9,14 @@
 // opts in exactly once.
 //
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
-// every `@agentkit/host` import is `import type`, and error assertions match on
+// every `./ports.js` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
 import type {
   AssistantStore,
   ClaimedTask,
   CreateTaskInput,
   TaskStatus,
-} from "@agentkit/host";
+} from "./ports.js";
 import {
   expectRejectsWithCode,
   type AssistantStoreConformanceHarness,

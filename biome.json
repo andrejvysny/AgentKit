@@ -73,12 +73,7 @@
       "linter": { "enabled": false }
     },
     {
-      "includes": [
-        "packages/mcp-client/tests/**",
-        "packages/testing/src/mcp-config-conformance.ts",
-        "packages/transport-http/tests/management.test.ts",
-        "scripts/tests/**"
-      ],
+      "includes": ["scripts/tests/**"],
       "linter": {
         "rules": {
           "suspicious": {

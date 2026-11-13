@@ -1,21 +1,6 @@
 {
-  "frozenCommit": "5a4bb61a479cc8ca3dfb0e24a8a0e1e0b37a9c61",
+  "frozenCommit": "a31dcb15cda4f12c1f75d720b83e44b3322bf681",
   "surfaces": [
-    {
-      "name": "@agentkit/adapters-memory",
-      "subpath": ".",
-      "report": "adapters-memory"
-    },
-    {
-      "name": "@agentkit/adapters-sqlite",
-      "subpath": ".",
-      "report": "adapters-sqlite"
-    },
-    {
-      "name": "@agentkit/adapters-sqlite",
-      "subpath": "./node",
-      "report": "adapters-sqlite--node"
-    },
     {
       "name": "agentkit",
       "subpath": ".",
@@ -43,48 +28,8 @@
     },
     {
       "name": "agentkit",
-      "subpath": "./host",
-      "report": "agentkit--host"
-    },
-    {
-      "name": "agentkit",
       "subpath": "./testing",
       "report": "agentkit--testing"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./mcp-client",
-      "report": "agentkit--mcp-client"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./transport-http",
-      "report": "agentkit--transport-http"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./adapters-memory",
-      "report": "agentkit--adapters-memory"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./adapters-sqlite",
-      "report": "agentkit--adapters-sqlite"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./runner-local",
-      "report": "agentkit--runner-local"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./adapters-sqlite-node",
-      "report": "agentkit--adapters-sqlite-node"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./runner-local/filesystem",
-      "report": "agentkit--runner-local--filesystem"
     },
     {
       "name": "agentkit",
@@ -107,16 +52,6 @@
       "report": "core"
     },
     {
-      "name": "@agentkit/host",
-      "subpath": ".",
-      "report": "host"
-    },
-    {
-      "name": "@agentkit/mcp-client",
-      "subpath": ".",
-      "report": "mcp-client"
-    },
-    {
       "name": "@agentkit/native",
       "subpath": ".",
       "report": "native"
@@ -127,24 +62,9 @@
       "report": "react"
     },
     {
-      "name": "@agentkit/runner-local",
-      "subpath": ".",
-      "report": "runner-local"
-    },
-    {
-      "name": "@agentkit/runner-local",
-      "subpath": "./filesystem",
-      "report": "runner-local--filesystem"
-    },
-    {
       "name": "@agentkit/testing",
       "subpath": ".",
       "report": "testing"
-    },
-    {
-      "name": "@agentkit/transport-http",
-      "subpath": ".",
-      "report": "transport-http"
     }
   ]
 }

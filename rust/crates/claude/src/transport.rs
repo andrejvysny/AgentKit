@@ -1764,8 +1764,9 @@ mod tests {
         );
 
         // Leak the handle: no per-child Drop ladder runs; the supervisor
-        // destructor is the only cleanup left standing.
-        std::mem::forget(child_a);
+        // destructor is the only cleanup left standing (`ManuallyDrop`
+        // skips the handle's Drop ladder, toolpacks-coding precedent).
+        let _leaked = std::mem::ManuallyDrop::new(child_a);
         drop(sup);
 
         // The group SIGKILL is issued synchronously in Drop; poll honestly

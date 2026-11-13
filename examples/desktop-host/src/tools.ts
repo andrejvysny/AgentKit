@@ -20,7 +20,7 @@ import type {
   ToolResultJson,
   ToolRunFunction,
 } from "@agentkit/native";
-import type { Clock } from "@agentkit/host";
+import type { Clock } from "./system-types.js";
 
 /** One tool and its execution, as one unit: both halves go to
  * `registerTool`, and the catalogue entry the façade serves is the
@@ -67,7 +67,7 @@ const echoTool: ExampleTool = {
   },
 };
 
-/** Takes `clock` rather than reading `Date.now()` — see `packages/host/src/ports/system.ts`. */
+/** Takes `clock` rather than reading `Date.now()`. */
 function createNowTool(clock: Clock): ExampleTool {
   return {
     definition: {

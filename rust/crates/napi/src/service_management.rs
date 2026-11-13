@@ -1,35 +1,37 @@
 //! Session management methods exposed without duplicating host policy.
 use super::{SessionService, parse_object, session_state_json};
 use crate::errors;
-use agentkit_host::{Runtime, SystemRuntime};
+use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_store::SqliteStore;
 use napi::bindgen_prelude::*;
 use serde_json::Value;
 
 #[napi]
 impl SessionService {
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn set_execution_mode(&self, session_id: String, mode: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(core
-            .service
+            .runtime
+            .service()
             .set_execution_mode(&session_id, &mode)
             .await
             .map_err(errors::session)?
             .to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn list_approval_grants(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(Value::Array(
-            core.service
+            core.runtime
+                .service()
                 .list_approval_grants(&session_id)
                 .await
                 .map_err(errors::session)?,
@@ -37,7 +39,7 @@ impl SessionService {
         .to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn revoke_approval_grant(
         &self,
         session_id: String,
@@ -48,40 +50,43 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         Ok(core
-            .service
+            .runtime
+            .service()
             .revoke_approval_grant(&session_id, &grant_id)
             .await
             .map_err(errors::session)?
             .to_string())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn compact(&self, session_id: String) -> Result<()> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .compact(&session_id)
             .await
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn fork(&self, session_id: String, from_message_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let state = core
-            .service
+            .runtime
+            .service()
             .fork(&session_id, &from_message_id)
             .await
             .map_err(errors::session)?;
         Ok(session_state_json(&state))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn set_model(&self, session_id: String, input_json: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -100,40 +105,43 @@ impl SessionService {
             _ => return Err(errors::invalid("reasoningEffort must be a string or null")),
         };
         let state = core
-            .service
+            .runtime
+            .service()
             .set_model(&session_id, provider, model, effort)
             .await
             .map_err(errors::session)?;
         Ok(session_state_json(&state))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn cancel_queued_input(&self, session_id: String, input_id: String) -> Result<bool> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        core.service
+        core.runtime
+            .service()
             .cancel_queued_input(&session_id, &input_id)
             .await
             .map_err(errors::session)
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn clear_queue(&self, session_id: String) -> Result<u32> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let count = core
-            .service
+            .runtime
+            .service()
             .clear_queue(&session_id)
             .await
             .map_err(errors::session)?;
         u32::try_from(count).map_err(|_| errors::internal("queue count overflow"))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn configure(&self, session_id: String, input_json: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
@@ -151,7 +159,8 @@ impl SessionService {
             _ => return Err(errors::invalid("workspaceTrusted must be a boolean")),
         };
         let state = core
-            .service
+            .runtime
+            .service()
             .configure(&session_id, skills, input.get("context").cloned(), trusted)
             .await
             .map_err(errors::session)?;
@@ -163,35 +172,35 @@ impl SessionService {
     /// scope is non-terminal the engine refuses atomically with `chat_busy`
     /// (never a delete that silently cancels live work). The binding adds no
     /// policy of its own.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn delete_chat(&self, session_id: String) -> Result<()> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        delete_chat(core.host.store(), &session_id).await
+        delete_chat(core.runtime.host().store(), &session_id).await
     }
 
     /// Hide the chat from the default listing; a named pass-through over the
     /// store's `archived` field, answering with the updated record JSON.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn archive_chat(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        set_chat_archived(core.host.store(), &session_id, true).await
+        set_chat_archived(core.runtime.host().store(), &session_id, true).await
     }
 
     /// The inverse of `archiveChat`: un-hide the chat, answering with the
     /// updated record JSON. An unknown chat fails `not_found`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn unarchive_chat(&self, session_id: String) -> Result<String> {
         let guard = self.core.lock().await;
         let core = guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        set_chat_archived(core.host.store(), &session_id, false).await
+        set_chat_archived(core.runtime.host().store(), &session_id, false).await
     }
 }
 

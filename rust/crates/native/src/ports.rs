@@ -467,8 +467,8 @@ pub trait StreamFrameAdapter: Send {
 }
 
 /// The vendor-protocol port implemented by an optional driver (e.g. the
-/// Claude Code driver). The generic executor in `agentkit-host` consumes
-/// only these operations; the host never depends on a driver crate.
+/// Claude Code driver). The generic executor in `agentkit-native-exec` consumes
+/// only these operations; it never depends on a driver crate.
 #[async_trait]
 pub trait NativeBackend: Send + Sync {
     /// Stable backend identity, e.g. `"claude-code"`.

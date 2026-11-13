@@ -122,7 +122,7 @@ const surfaces = inventory.map(({ package: name, subpath, name: report }) => ({
 }));
 if (update && !selected) {
   const manifest = {
-    frozenCommit: "5a4bb61a479cc8ca3dfb0e24a8a0e1e0b37a9c61",
+    frozenCommit: "a31dcb15cda4f12c1f75d720b83e44b3322bf681",
     surfaces,
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

@@ -6,63 +6,62 @@ import {
 } from "../../../rust/tests/support/http-server.js";
 import { runPhase } from "../src/index.js";
 
-for (const backend of ["typescript", "rust"] as const) {
-  const skip = backend === "rust" && !nativeBackendAvailable;
-  (skip ? test.skip : test)(
-    `same client full-turn assertions against ${backend}`,
-    async () => {
-      const server = await startCompatibilityServer(backend);
-      try {
-        const client = server.client;
-        const chat = await client.createChat({ title: "Client flow" });
-        expect(chat.id).toBeString();
-        expect(chat.title).toBe("Client flow");
-        expect(chat.archived).toBe(false);
-        const submitted = await client.submitMessage(
-          { chatId: chat.id },
-          { content: "Say hello." },
-        );
-        expect(submitted.idempotencyKey.length).toBeGreaterThan(0);
-        expect(submitted.result.chatId).toBe(chat.id);
-        const events = [];
-        for await (const event of client.streamRun(submitted.result.runId))
-          events.push(event);
-        expect(events.map((event) => event.seq)).toEqual(
-          events.map((_event, index) => index),
-        );
-        expect(events.at(-1)?.type).toBe("run.completed");
-        expect(runPhase({ events })).toBe("settling");
-        const run = await client.getRun({ runId: submitted.result.runId });
-        expect(run.status).toBe("completed");
-        expect(runPhase({ status: run.status, events })).toBe("completed");
-        const page = await client.listMessages({ chatId: chat.id });
-        expect(page.items.map((message) => message.role)).toEqual([
-          "user",
-          "assistant",
-        ]);
-        expect(page.items[1]?.content).toBe("Hello, client.");
-        expect(page.items[1]?.metadata["placeholder"]).toBe(false);
-        const replay = await client.submitMessage(
-          { chatId: chat.id },
-          { content: "Say hello." },
-          { idempotencyKey: submitted.idempotencyKey },
-        );
-        expect(replay.result).toEqual(submitted.result);
-        const resumed = [];
-        for await (const event of client.streamRun(run.runId, {
-          lastEventId: events[1]!.eventId,
-        }))
-          resumed.push(event);
-        expect(resumed.map((event) => event.eventId)).toEqual(
-          events.slice(2).map((event) => event.eventId),
-        );
-      } finally {
-        await server.stop();
-      }
-    },
-    60_000,
-  );
-}
+const skip = !nativeBackendAvailable;
+
+(skip ? test.skip : test)(
+  `same client full-turn assertions against rust`,
+  async () => {
+    const server = await startCompatibilityServer();
+    try {
+      const client = server.client;
+      const chat = await client.createChat({ title: "Client flow" });
+      expect(chat.id).toBeString();
+      expect(chat.title).toBe("Client flow");
+      expect(chat.archived).toBe(false);
+      const submitted = await client.submitMessage(
+        { chatId: chat.id },
+        { content: "Say hello." },
+      );
+      expect(submitted.idempotencyKey.length).toBeGreaterThan(0);
+      expect(submitted.result.chatId).toBe(chat.id);
+      const events = [];
+      for await (const event of client.streamRun(submitted.result.runId))
+        events.push(event);
+      expect(events.map((event) => event.seq)).toEqual(
+        events.map((_event, index) => index),
+      );
+      expect(events.at(-1)?.type).toBe("run.completed");
+      expect(runPhase({ events })).toBe("settling");
+      const run = await client.getRun({ runId: submitted.result.runId });
+      expect(run.status).toBe("completed");
+      expect(runPhase({ status: run.status, events })).toBe("completed");
+      const page = await client.listMessages({ chatId: chat.id });
+      expect(page.items.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+      ]);
+      expect(page.items[1]?.content).toBe("Hello, client.");
+      expect(page.items[1]?.metadata["placeholder"]).toBe(false);
+      const replay = await client.submitMessage(
+        { chatId: chat.id },
+        { content: "Say hello." },
+        { idempotencyKey: submitted.idempotencyKey },
+      );
+      expect(replay.result).toEqual(submitted.result);
+      const resumed = [];
+      for await (const event of client.streamRun(run.runId, {
+        lastEventId: events[1]!.eventId,
+      }))
+        resumed.push(event);
+      expect(resumed.map((event) => event.eventId)).toEqual(
+        events.slice(2).map((event) => event.eventId),
+      );
+    } finally {
+      await server.stop();
+    }
+  },
+  60_000,
+);
 
 test.skipIf(!nativeBackendAvailable)(
   "native SQLite state survives process restart",
@@ -175,52 +174,49 @@ test.skipIf(!nativeBackendAvailable)(
   60_000,
 );
 
-for (const backend of ["typescript", "rust"] as const) {
-  const skip = backend === "rust" && !nativeBackendAvailable;
-  (skip ? test.skip : test)(
-    `raw JSON numbers follow JavaScript overflow semantics against ${backend}`,
-    async () => {
-      const { startTestServer } = await import("./support/server.js");
-      const server = await startTestServer({ backend });
-      try {
-        const response = await fetch(`${server.baseUrl}/v1/chats`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: '{"metadata":{"positive":1e400,"negative":-1e400,"nested":[1e400],"rounded":9007199254740993}}',
-        });
-        expect(response.status).toBe(201);
-        const chat = (await response.json()) as {
-          id: string;
-          metadata: Record<string, unknown>;
-        };
-        expect(chat.metadata).toEqual({
-          positive: null,
-          negative: null,
-          nested: [null],
-          rounded: 9007199254740992,
-        });
-        const client = (await import("../src/index.js")).createAgentKitClient({
-          baseUrl: server.baseUrl,
-        });
-        expect((await client.getChat({ chatId: chat.id })).metadata).toEqual(
-          chat.metadata,
-        );
-        const invalid = await fetch(`${server.baseUrl}/v1/settings`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: '{"maxToolIterations":1e400}',
-        });
-        expect(invalid.status).toBe(400);
-        expect(((await invalid.json()) as { code: string }).code).toBe(
-          "invalid_request",
-        );
-      } finally {
-        await server.stop();
-      }
-    },
-    60_000,
-  );
-}
+(skip ? test.skip : test)(
+  `raw JSON numbers follow JavaScript overflow semantics against rust`,
+  async () => {
+    const { startTestServer } = await import("./support/server.js");
+    const server = await startTestServer();
+    try {
+      const response = await fetch(`${server.baseUrl}/v1/chats`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"metadata":{"positive":1e400,"negative":-1e400,"nested":[1e400],"rounded":9007199254740993}}',
+      });
+      expect(response.status).toBe(201);
+      const chat = (await response.json()) as {
+        id: string;
+        metadata: Record<string, unknown>;
+      };
+      expect(chat.metadata).toEqual({
+        positive: null,
+        negative: null,
+        nested: [null],
+        rounded: 9007199254740992,
+      });
+      const client = (await import("../src/index.js")).createAgentKitClient({
+        baseUrl: server.baseUrl,
+      });
+      expect((await client.getChat({ chatId: chat.id })).metadata).toEqual(
+        chat.metadata,
+      );
+      const invalid = await fetch(`${server.baseUrl}/v1/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: '{"maxToolIterations":1e400}',
+      });
+      expect(invalid.status).toBe(400);
+      expect(((await invalid.json()) as { code: string }).code).toBe(
+        "invalid_request",
+      );
+    } finally {
+      await server.stop();
+    }
+  },
+  60_000,
+);
 
 test.skipIf(!nativeBackendAvailable)(
   "native test control uses a separate listener and credential",

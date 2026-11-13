@@ -1,7 +1,7 @@
 use crate::{
-    budget::minimum, envelope, CoreError, ExecutionBudget, ToolCall, ToolContext, ToolRegistry,
+    CoreError, ExecutionBudget, ToolCall, ToolContext, ToolRegistry, budget::minimum, envelope,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 pub(crate) struct ToolOutcome {
@@ -72,21 +72,21 @@ pub(crate) async fn execute(
             json!({"phase":"validation","retryable":false}),
         );
     }
-    if let Some(budget) = &budget {
-        if let Err(error) = budget.consume("toolCalls").await {
-            return failed(call, &error, max, json!({}));
-        }
+    if let Some(budget) = &budget
+        && let Err(error) = budget.consume("toolCalls").await
+    {
+        return failed(call, &error, max, json!({}));
     }
-    if let Some(guard) = &context.dispatch_guard {
-        if let Err(error) = guard.check().await {
-            context.cancellation.cancel();
-            return failed(call, &error, max, json!({}));
-        }
+    if let Some(guard) = &context.dispatch_guard
+        && let Err(error) = guard.check().await
+    {
+        context.cancellation.cancel();
+        return failed(call, &error, max, json!({}));
     }
-    if let Some(budget) = &budget {
-        if let Err(error) = budget.check() {
-            return failed(call, &error, max, json!({}));
-        }
+    if let Some(budget) = &budget
+        && let Err(error) = budget.check()
+    {
+        return failed(call, &error, max, json!({}));
     }
     if context.cancellation.is_cancelled() {
         return failed(
@@ -241,7 +241,7 @@ fn outcome(
     }
 }
 
-pub(crate) fn dedupe(calls: &mut [ToolCall]) -> Vec<String> {
+pub fn dedupe(calls: &mut [ToolCall]) -> Vec<String> {
     let reserved: HashSet<String> = calls.iter().map(|call| call.id.clone()).collect();
     let mut used = HashSet::new();
     let mut duplicates = vec![];

@@ -1,0 +1,46 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AiRunEventType {
+    #[serde(rename = "run.started")]
+    RunStarted,
+    #[serde(rename = "run.message.delta")]
+    RunMessageDelta,
+    #[serde(rename = "run.message.reasoning-delta")]
+    RunMessageReasoningDelta,
+    #[serde(rename = "run.message.completed")]
+    RunMessageCompleted,
+    #[serde(rename = "run.tool.preparing")]
+    RunToolPreparing,
+    #[serde(rename = "run.tool.requested")]
+    RunToolRequested,
+    #[serde(rename = "run.tool.running")]
+    RunToolRunning,
+    #[serde(rename = "run.tool.succeeded")]
+    RunToolSucceeded,
+    #[serde(rename = "run.tool.failed")]
+    RunToolFailed,
+    #[serde(rename = "run.warning")]
+    RunWarning,
+    #[serde(rename = "run.usage")]
+    RunUsage,
+    #[serde(rename = "run.context.compacted")]
+    RunContextCompacted,
+    #[serde(rename = "run.context.admitted")]
+    RunContextAdmitted,
+    #[serde(rename = "run.verification")]
+    RunVerification,
+    #[serde(rename = "run.progress")]
+    RunProgress,
+    #[serde(rename = "run.input.applied")]
+    RunInputApplied,
+    #[serde(rename = "run.waiting")]
+    RunWaiting,
+    #[serde(rename = "run.completed")]
+    RunCompleted,
+    #[serde(rename = "run.failed")]
+    RunFailed,
+    #[serde(rename = "run.cancelled")]
+    RunCancelled,
+}
+crate::impl_json_via_serde!(AiRunEventType);

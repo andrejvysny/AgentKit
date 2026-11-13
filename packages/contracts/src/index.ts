@@ -1,6 +1,8 @@
 // Public barrel: the serialized surface shared across AgentKit packages.
 //
-// TypeBox is the single source of truth: each wire DTO is declared once as a
+// The Rust `agentkit-contracts` bundle is the wire authority (ADR 0022); this
+// package is its TypeBox mirror, checked by `bun run contracts:check`. Each wire
+// DTO is declared once as a
 // `<Name>Schema` value, and its TS type is derived via `Static<typeof <Name>Schema>`
 // under the same public name it has always had. The two exceptions are documented
 // where they live: `AiJsonSchemaObject` (a hand-written meta-type, see

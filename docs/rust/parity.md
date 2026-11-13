@@ -1,5 +1,10 @@
 # Rust parity baseline
 
+> **0.8.0 note.** The frozen TypeScript backend packages were deleted ([ADR 0023](../adr/0023-retire-typescript-backend.md)); the
+> API freeze was re-baselined to the 13 remaining reports ([api/README.md](api/README.md)). Mentions below of
+> `packages/host`, `transport-http`, `adapters-*`, `runner-local` and `mcp-client` are historical records; the source
+> is at commit `a31dcb1`. Differential testing against them ended with the deletion.
+
 ## Migration checkpoint: 30 October 2026
 
 The reviewed starting commit is `5a4bb61a479cc8ca3dfb0e24a8a0e1e0b37a9c61`.
@@ -96,7 +101,7 @@ detail fields where the TypeScript `tokenCount` guard would fail with
 Host-facade hardening round (2026-11-01). The session engine now matches
 the TypeScript authority on `answer_stale` (replayed answers to settled
 requests settle `answer_stale` without touching turn state; ten cases
-pinned in `rust/crates/host/tests/answer_stale.rs`), and plain duplicate
+pinned in `rust/crates/sessions/tests/answer_stale.rs`), and plain duplicate
 store records surface as `input_conflict` on the session surface — the
 same code the binding's store mapping already used; the non-contract
 `duplicate` bucket is gone (`session/mod.rs` From-arm). Project
@@ -114,9 +119,9 @@ per pass and emits one durable `run.warning
 and the binding wires the FS source unconditionally — sessions whose
 descriptor carries a workspace receive the injection; descriptor-less
 sessions stay untouched. Evidence: the port matrix
-(`rust/crates/host/tests/project_instructions.rs`), an end-to-end host
+(`rust/crates/chat/tests/project_instructions.rs`), an end-to-end host
 test proving the warning is durable and the symlinked target never
-reaches the provider (`rust/crates/host/tests/project_instructions_session.rs`),
+reaches the provider (`rust/crates/chat/tests/project_instructions_session.rs`),
 and two binding suites with wire-level capture through the mock provider
 (`packages/native/tests/project-instructions.test.ts`). The binding also
 gained `deleteChat`/`archiveChat`/`unarchiveChat` over the store engine
@@ -127,7 +132,7 @@ sequences start at 0, so `afterSeq: 0` silently drops the first event;
 the wrapper now documents it.
 
 Native REST/SSE server (2026-11-01). The binding gained
-`startHttpServer`/`stopHttpServer`: `agentkit-transport-http`'s router
+`startHttpServer`/`stopHttpServer`: `agentkit-http`'s router
 over the host crate's `DesktopBackend` (bearer token enforced engine-side,
 ≥32 bytes) serves AgentKit REST v1 and the SSE run stream **from Rust**
 on the session service's own host/store — a Bun process gets the whole
@@ -149,7 +154,7 @@ the engine had behind its frozen option bag are now wired rather than
 documented away. **CORS** is a real `startHttpServer` option: the napi
 layer strictly parses `cors: {origins: "*"|[string], allowHeaders?,
 exposeHeaders?, maxAgeSeconds?}` into
-`agentkit_transport_http::CorsConfig` (`rust/crates/transport-http/src/cors.rs`),
+`agentkit_http::CorsConfig` (`rust/crates/http/src/cors.rs`),
 and the handler answers exactly the retired TypeScript transport's matrix
 (`packages/transport-http/src/cors.ts` + `handler.ts`): unconfigured means
 byte-for-byte untouched and OPTIONS still 405s; configured puts
@@ -159,7 +164,7 @@ answers matched-origin `OPTIONS` with 204 + that path's real method set,
 allow-headers defaults and max-age — while an unmatched-origin preflight
 falls through to the ordinary 405 and an unmatched path 404s, still
 decorated. Pinned by 5 unit + 6 socket-level tests
-(`rust/crates/transport-http/tests/cors.rs`) and the binding-level matrix
+(`rust/crates/http/tests/cors.rs`) and the binding-level matrix
 in `packages/native/tests/http-server.test.ts`; malformed `cors`/
 `providerSecrets` values fail `startHttpServer` with `invalid_input`
 rather than being ignored. **Provider-management credential writes** are
@@ -187,7 +192,7 @@ managed-content.ts`, `packages/native/tests/managed-content.test.ts`). The
 TypeScript `ConnectionService`, `PromptTemplateService`, `SkillService`
 and `createRunContentProvider` imports are gone from the recipe; the
 desktop backend's nine managed-content routes are served by the same
-engine (`rust/crates/host/src/http/managed_content.rs`), no longer by
+engine (`rust/crates/http/src/desktop/managed_content.rs`), no longer by
 `management.rs`'s "Native managed content services are not configured."
 stub. The generic managed-content connection-action API remains a separate limitation:
 Its generic `ConnectionService` lifecycle is not implicitly mapped to the explicit native MCP OAuth composition. The wrapper still exposes
@@ -196,6 +201,8 @@ are: each crosses the port surface and is refused `not_implemented`, and
 the REST `connectionAction` answers 501 (`connect`/`test →
 not_implemented` is the binding's documented answer, never a silent
 success). Use the explicit native MCP callback/OAuth APIs described below; this generic action port is not their alias.
+
+Known gap (2026-11-09): the TS-only `ConnectionService` managed-connector acceptance harness (`examples/desktop-host`) was removed with the TS backend; native has no equivalent generic connection-action acceptance leg.
 
 MCP client dispatch authority (2026-11-01). The Rust MCP client no
 longer trusts the remote `readOnlyHint`: tool effect comes only from the
@@ -240,7 +247,7 @@ params. Native suite: 187 pass / 2 named skips / 0 fail.
 Native client-contract proof (2026-11-01, AGENTKIT-56/59 evidence). With
 `AGENTKIT_TEST_BACKEND=rust`, the ENTIRE unchanged client suite (157
 tests) and react suite (76 tests) pass against the Rust server:
-`DesktopBackend` over `agentkit-transport-http`, real SQLite, JS
+`DesktopBackend` over `agentkit-http`, real SQLite, JS
 provider bridge — zero skips, all 39 contract routes already served,
 no engine gaps surfaced. The single baseline failure was fixture drift
 (`http_fixture` left the SSE `retry_hint` at the 500 ms default while
@@ -354,7 +361,7 @@ real compositions against the binding, not while reading code:
   refused with "guard error", even in `full_auto`. The guard now falls
   back to its configured mode for a non-session chat exactly as for a
   session with no execution state; malformed state on a real session
-  stays a hard error (`crates/host/tests/execution_authority.rs`,
+  stays a hard error (`crates/sessions/tests/execution_authority.rs`,
   `packages/native/tests/authority.test.ts`).
 - Host cancellation never reached JS callbacks. The bridge's
   `request()` cancellation branch removed the pending entry before the
@@ -387,7 +394,7 @@ Production backend paths — both examples, the client/react test lanes,
 session services, REST/SSE, MCP, storage, provider transports — run on
 Rust. The frozen TS backend libraries persist under the API-freeze
 constraint, exercised by their own suites. No app-shaped composition runs a
-TS backend engine: `scripts/check-composition-ownership.mjs` (CI: lint job)
+TS backend engine: `scripts/check-composition-ownership.mjs` (local gate: `bun run check:composition`; no hosted CI)
 rejects backend-implementation imports from `examples/*/src`, the desktop
 Node entries, and the qualification drivers, except an audited allowlist —
 the coding-agent CLI's `REASONING_EFFORTS` metadata for argument parsing
@@ -840,8 +847,8 @@ No stubs, no delegating shims.
    binding tests in `packages/native/tests/`, or new ports. The
    fingerprint differential survives as frozen fixtures:
    `rust/fixtures/coding-fingerprint/{fingerprint-material,tokenizer,
-   env-order}.json` asserted by `command_fingerprint::tests` (CI step in
-   `.github/workflows/rust.yml`), and the model-facing descriptor contract
+   env-order}.json` asserted by `command_fingerprint::tests` (run by the local Rust test
+   gate; hosted workflows were removed), and the model-facing descriptor contract
    as `packages/native/tests/fixtures/coding-descriptors.json` (frozen TS
    authority, asserted descriptor-by-descriptor by
    `packages/native/tests/coding-native.test.ts`). The bridge-cancellation

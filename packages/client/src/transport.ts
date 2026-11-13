@@ -2,7 +2,7 @@
  * Request plumbing: URL building, header assembly, one `fetch` call.
  *
  * PATHS ARE NOT TRANSCRIBED. Every URL comes from `REST_ROUTES` in
- * `@agentkit/contracts` — the same table `@agentkit/transport-http` compiles its
+ * `@agentkit/contracts` — the same table the Rust server (`agentkit-http`) compiles its
  * router from — so a renamed segment breaks both sides at once instead of
  * leaving the client asking for a path the server stopped serving. It is the one
  * value (as opposed to type) this package imports, and the reason it depends on

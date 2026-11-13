@@ -482,7 +482,7 @@ pub fn barrier_id_of(
         "argsSha256": args_sha256,
     });
     let canonical = serde_json::to_string(&binding).unwrap_or_else(|_| "{}".into());
-    format!("barrier:{}", crate::schema::sha256_hex(&canonical))
+    format!("barrier:{}", agentkit_kernel::sha256_hex(&canonical))
 }
 
 fn validate_approval(

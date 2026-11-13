@@ -15,7 +15,7 @@
 //! engine's run-scoped layers — the `ToolGuard` chain (the `BindingAuthority`
 //! and `JsToolGuard` pair, plan-mode blocking, durable ask/approve) and the
 //! exactly-once execution receipts — are bound to task-lease execution
-//! inside a turn (see `agentkit_host::governance` and
+//! inside a turn (see `agentkit_chat::governance` and
 //! `agentkit_core::ToolContext::dispatch_guard`: "standalone calls have no
 //! task lease"). Fabricating a run to borrow them would be host surgery,
 //! so the binding instead enforces what genuinely holds at this layer:
@@ -52,9 +52,9 @@ use super::http_server::{
     CONNECTION_SHUTDOWN_GRACE, bind_listener, ensure_bound_loopback, ensure_loopback_bind,
     optional_sized, optional_text, optional_u64, url_host,
 };
-use crate::authority::effective_class;
 use crate::errors;
 use crate::tool::JsToolContributor;
+use agentkit_runtime::effective_class;
 
 /// Floor mirrored from the REST server's bearer policy: the crate's
 /// `BearerAuth` only refuses empty tokens, so the binding enforces the
@@ -494,7 +494,7 @@ impl SessionService {
     /// executes the same `JsTool::execute` bridge request a local tool
     /// call takes. Fails with `invalid_input` if an MCP server already
     /// runs on this service, and `closed` after `close()`.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn start_mcp_server(&self, options_json: String) -> Result<String> {
         let config = parse_mcp_options(&options_json)?;
         let listener = ensure_bound_loopback(
@@ -561,7 +561,7 @@ impl SessionService {
     /// service that never started, or was already stopped or closed, is a
     /// no-op success. `close()` stops a live server itself, before the
     /// bridge begins Closing.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn stop_mcp_server(&self) -> Result<()> {
         let server = {
             let mut guard = self.core.lock().await;

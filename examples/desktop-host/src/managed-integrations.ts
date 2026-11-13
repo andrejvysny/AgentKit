@@ -64,5 +64,3 @@ export function createManagedIntegrations(options: { store: NativeStore }) {
     transaction: managed.transaction.bind(managed),
   };
 }
-
-export { createManagedConnectorAcceptance } from "./managed-connector-acceptance.js";

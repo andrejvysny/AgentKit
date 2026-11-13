@@ -11,8 +11,8 @@ import {
  * (see [`docs/non-goals.md`](../../../docs/non-goals.md) — the adapter itself
  * remains deferred).
  *
- * **DTOs are projections, not records.** Each DTO below mirrors a host record
- * (`packages/host/src/ports/*.ts`) with its internals removed: leases and
+ * **DTOs are projections, not records.** Each DTO below mirrors an engine record
+ * (the `agentkit-store` records) with its internals removed: leases and
  * fencing tokens, queue bookkeeping, the host-shaped `envelope`/`operations`
  * bodies of a proposal, idempotency keys. Those exist so the orchestrator can
  * recover from a crash; publishing them would freeze private mechanics into a
@@ -21,12 +21,11 @@ import {
  *
  * **Some enumerations are mirrored, not imported.** `RunStatusDto`,
  * `ProposalStatusDto`, `RiskLevelDto`, `WritePolicyModeDto` and
- * `ToolCallingModeDto` restate unions that `@agentkit/host` owns, and
- * `McpTransportDto` restates one `@agentkit/mcp-client` owns, because contracts
- * sits *below* both and cannot depend on either. They must be kept in step by
- * hand; the compile-time cross-check for the host ones lives in
- * `packages/host/tests/state-machines.test.ts`, and each one names its source
- * below.
+ * `ToolCallingModeDto` restate unions that the Rust engine owns, and
+ * `McpTransportDto` restates the MCP transport config, because contracts
+ * sits *below* the engine and cannot depend on it. They must be kept in step by
+ * hand; the Rust contract fixtures (`rust/fixtures`) are the cross-check, and
+ * each one names its source below.
  */
 import { Type, type Static } from "@sinclair/typebox";
 import { AiMessageContentSchema } from "./content.js";
@@ -178,7 +177,7 @@ export const REST_ROUTES = {
    * grant is one conversation's "yes", and a route whose chat lives in a query
    * (or, worse, in the request body) cannot be authorized per chat — an
    * `AuthorizationPort` is handed the path and the URL, and never the body.
-   * See `authorize.ts` in `@agentkit/transport-http`.
+   * See the authorization hook in `agentkit-http`.
    */
   listAllowances: {
     method: "GET",
@@ -288,7 +287,7 @@ export type RestOperation = keyof typeof REST_ROUTES;
 // ---------------------------------------------------------------------------
 
 /**
- * MIRROR of `TaskStatus` (`packages/host/src/ports/task-store.ts`). Note that
+ * MIRROR of the engine's `TaskStatus`. Note that
  * `waiting_approval` is currently producer-less in this repository — a staged
  * write returns pending to the model and the run completes — but it is part of
  * the vocabulary a client must handle, since a host that parks runs on approval
@@ -305,7 +304,7 @@ export const RunStatusDtoSchema = Type.Union([
 ]);
 export type RunStatusDto = Static<typeof RunStatusDtoSchema>;
 
-/** MIRROR of `ProposalStatus` (`packages/host/src/ports/proposal-store.ts`). */
+/** MIRROR of the engine's `ProposalStatus`. */
 export const ProposalStatusDtoSchema = Type.Union([
   Type.Literal("pending"),
   Type.Literal("approved"),
@@ -318,7 +317,7 @@ export const ProposalStatusDtoSchema = Type.Union([
 export type ProposalStatusDto = Static<typeof ProposalStatusDtoSchema>;
 
 /**
- * MIRROR of `RiskLevel` (`packages/host/src/ports/proposal-store.ts`). Ordered
+ * MIRROR of the engine's `RiskLevel`. Ordered
  * low → destructive; a write policy's allowance at rank N covers everything at
  * rank ≤ N.
  */
@@ -330,7 +329,7 @@ export const RiskLevelDtoSchema = Type.Union([
 ]);
 export type RiskLevelDto = Static<typeof RiskLevelDtoSchema>;
 
-/** MIRROR of `WritePolicyMode` (`packages/host/src/ports/write-policy.ts`). */
+/** MIRROR of the engine's `WritePolicyMode`. */
 export const WritePolicyModeDtoSchema = Type.Union([
   Type.Literal("auto_readonly_confirm_writes"),
   Type.Literal("confirm_all_writes"),
@@ -338,7 +337,7 @@ export const WritePolicyModeDtoSchema = Type.Union([
 ]);
 export type WritePolicyModeDto = Static<typeof WritePolicyModeDtoSchema>;
 
-/** MIRROR of `ToolCallingMode` (`packages/host/src/ports/settings-store.ts`). */
+/** MIRROR of the engine's `ToolCallingMode`. */
 export const ToolCallingModeDtoSchema = Type.Union([
   Type.Literal("auto"),
   Type.Literal("on"),
@@ -713,8 +712,8 @@ export type WriteAllowanceListResponse = Static<
 >;
 
 /**
- * How to reach one MCP server. MIRROR of `McpTransportConfig`
- * (`packages/mcp-client/src/config.ts`) — contracts sits below that package and
+ * How to reach one MCP server. MIRROR of the engine's MCP
+ * transport config — contracts sits below the engine and
  * cannot import from it, so the union is restated and kept in step by hand,
  * exactly as `RunStatusDto` restates `TaskStatus`.
  *
@@ -757,8 +756,8 @@ export type McpTransportDto = Static<typeof McpTransportDtoSchema>;
  * why `id` exists separately: a rename must not break the handle a URL uses.
  *
  * `resilience` is an open record rather than a typed one for the same reason
- * the transport union is mirrored: `McpResilienceOptions` belongs to
- * `@agentkit/mcp-client`, a package this one sits below, and its knobs are
+ * the transport union is mirrored: the MCP resilience options belong to
+ * the engine, which this package sits below, and its knobs are
  * tuning rather than contract.
  */
 export const McpServerDtoSchema = Type.Object({
@@ -809,7 +808,7 @@ export const SubmitMessageRequestSchema = Type.Object({
    * carrying its bytes — that is the shape a client that already uploaded a file
    * sends, and it is what keeps a submit small no matter how large the
    * attachment is. The host resolves refs per provider pass; see
-   * `AttachmentResolver` in `@agentkit/host`.
+   * the attachment resolver in the Rust engine.
    */
   content: AiMessageContentSchema,
   /** Overrides the provider's default model for this turn only. */

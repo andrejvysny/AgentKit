@@ -3,6 +3,7 @@ mod backend;
 mod bridge;
 mod client;
 mod client_request;
+mod configuration;
 mod elicitation;
 mod guards;
 mod handler;
@@ -21,6 +22,9 @@ mod stdio_client;
 pub use backend::{Backend, CatalogTool, Features, RpcId, SessionScope};
 pub use bridge::{BridgeError, McpToolSet, aliases_are_one_step, resolve_original};
 pub use client::{ClientOptions, McpClient, McpClientError};
+pub use configuration::{
+    McpConfigError, McpConfigLease, McpConfigRepository, McpConfigRuntime, McpConfigSecrets,
+};
 pub use elicitation::ElicitationHandler;
 pub use http_client::McpHttpExecutor;
 pub use manager::{

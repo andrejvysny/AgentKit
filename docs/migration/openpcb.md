@@ -1,9 +1,34 @@
 # Embedding AgentKit in OpenPCB
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](../adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 This guide describes the supported framework seams. Acceptance and sequencing live in the
 [canonical Plane plan](https://app.plane.so/andrejvysny/projects/9b59c292-53a4-4887-948b-26531650ac60/pages/7172dcf4-9299-402a-b837-87f60244f488/).
 It supersedes the historical Bun-only recipe, legacy-chat import, automatic recovery and
 unconditional Tasks module deletion instructions. No application cutover is implied.
+
+## 0.8 delta (read first)
+
+AgentKit `0.8.0` deleted the frozen TypeScript backend ([ADR 0023](../adr/0023-retire-typescript-backend.md)).
+Every section below that composes `TurnRunner`, `createRestHandler`, `SingleProcessTaskRunner`,
+a TypeScript SQLite or memory store, or the TypeScript MCP client describes the removed `0.5`-`0.7`
+shape. Compose the Rust engine through `agentkit/native` instead and keep the wire contract
+(`agentkit/contracts`, `agentkit/client`, `agentkit/react`) as written.
+
+| Removed subpath | Replacement |
+| --- | --- |
+| `agentkit/host` (`TurnRunner`, tasks, proposals) | Rust engine: `NativeStore.open(...)` + `store.createService(...)` from `agentkit/native` |
+| `agentkit/transport-http` (`createRestHandler`) | Rust REST v1 + SSE server: `service.startHttpServer(...)`, called with `agentkit/client` |
+| `agentkit/adapters-sqlite`, `agentkit/adapters-sqlite-node` | `NativeStore` (Rust SQLite store; the schema is owned by the engine) |
+| `agentkit/adapters-memory` | `NativeStore` on a temporary store file |
+| `agentkit/runner-local`, `agentkit/runner-local/filesystem` | The Rust worker inside the native service; managed skills and templates via `NativeManagedContent` |
+| `agentkit/mcp-client` | The Rust MCP client inside the engine, configured through the MCP server REST routes |
+
+`better-sqlite3` is no longer a peer or a dependency. `agentkit/testing` keeps the conformance
+suites, now run against the native store.
 
 ## Runtime and installation
 
@@ -31,8 +56,7 @@ DDL inert. The earlier schema-8 foundation projection is superseded. These separ
 tracks do not make foundation wait for Responses, OAuth or SIWC approval. Source versions
 and commits are not package releases.
 
-Follow the [release procedure](../../DEVELOPING.md#qualifying-a-release-candidate): snapshot,
-build and pack once, then qualify those exact bytes. Install only the reviewed versioned tarball
+Follow the [release procedure](../../DEVELOPING.md#releases): build and pack once, then qualify those exact bytes. Install only the reviewed versioned tarball
 after checking its recorded SHA-256. Retain the consumer lockfile and archive integrity. Never
 use mutable `master`, a workspace symlink or consumer-side framework build as the production
 install target. A local candidate path is not a remotely available release.
@@ -51,7 +75,7 @@ Use the executable [Node desktop host](../../examples/desktop-host/node-host.mjs
 
 Open a dedicated `APP_DATA_DIR/agentkit.sqlite`. Never pass `openpcb.sqlite` to AgentKit's schema
 manager. Initialization errors must not delete either database, WAL or SHM. The
-[SQLite guide](../../packages/adapters-sqlite/README.md) defines supported upgrades,
+SQLite store (owned by the Rust engine since 0.8, see the delta above) defines supported upgrades,
 foreign/newer database refusal, WAL backups and ownership limits. Legacy chat import is outside
 this migration; designs, library data and settings are retained.
 

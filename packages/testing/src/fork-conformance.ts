@@ -8,10 +8,10 @@
 // what did it drop, and can it be undone?".
 //
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
-// every `@agentkit/host` import is `import type`, and error assertions match on
+// every `./ports.js` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
 import type { AiContentPart } from "@agentkit/contracts";
-import type { AssistantStore, MessageRecord } from "@agentkit/host";
+import type { AssistantStore, MessageRecord } from "./ports.js";
 import {
   expectRejects,
   expectRejectsWithCode,

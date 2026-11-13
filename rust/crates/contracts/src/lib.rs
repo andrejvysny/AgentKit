@@ -1,9 +1,10 @@
-//! Provider-neutral wire contracts, generated from AgentKit's authoritative TypeBox schemas.
-//! Unknown fields are retained where the TypeScript schema permits them.
+//! Provider-neutral wire contracts. This crate is the wire source of truth: the DTOs in
+//! `dto/`, the route table in `routes.rs` and `schema_bundle.json` are hand-owned and
+//! edited together (ADR 0022). Unknown fields are retained where the schema permits them.
 
 mod ajv;
+mod dto;
 mod event;
-mod generated;
 mod idempotency;
 mod javascript;
 mod json_deserialize;
@@ -17,8 +18,8 @@ mod tool_schema_profile;
 mod validation;
 
 pub use ajv::*;
+pub use dto::*;
 pub use event::*;
-pub use generated::*;
 pub use idempotency::*;
 pub use javascript::*;
 pub use json_deserialize::*;
@@ -67,20 +68,3 @@ pub const KNOWN_PROVIDER_KINDS: &[&str] = &[
     "omlx",
     "ollama",
 ];
-
-/// Host-supplied wall time. Runtime code must not bypass this port.
-pub trait Clock: Send + Sync {
-    fn now_millis(&self) -> i64;
-    fn now_iso(&self) -> String;
-}
-
-/// Host-supplied identity generation, with distinct namespaces for each record.
-pub trait IdGenerator: Send + Sync {
-    fn task_id(&self) -> String;
-    fn attempt_id(&self) -> String;
-    fn event_id(&self) -> String;
-    fn proposal_id(&self) -> String;
-    fn operation_id(&self) -> String;
-    fn message_id(&self) -> String;
-    fn chat_id(&self) -> String;
-}

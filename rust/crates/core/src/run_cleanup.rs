@@ -1,7 +1,7 @@
 use super::State;
 use crate::{CoreError, ProviderEvent, ProviderStream, ToolContext};
 use futures_util::{FutureExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 impl State {
     /// Preserve already-observed billing without waiting on an uncooperative stream.
@@ -32,7 +32,7 @@ impl State {
         let mut metadata = self.options.tool_metadata.clone();
         metadata.insert(
             "toolEventId".into(),
-            self.options.runtime.id("tool_").into(),
+            self.options.runtime.id_with_prefix("tool_").into(),
         );
         ToolContext {
             run_id: self.run_id.clone(),

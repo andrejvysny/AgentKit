@@ -331,7 +331,7 @@ export interface NativeCodingToolsOptions {
 
 /** Global fan-out bounds for delegation, enforced from durable rows at
  * spawn time (mirrors `SubagentRoleLimits` in
- * `rust/crates/host/src/subagents/config.rs`). */
+ * `rust/crates/agents/src/subagents/config.rs`). */
 export interface NativeSubagentLimits {
   /** Child depth below the main agent. Default 2; 0 disables nesting. */
   maxDepth?: number;

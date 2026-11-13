@@ -1,4 +1,4 @@
-import type { ImportMessageInput } from "@agentkit/host";
+import type { ImportMessageInput } from "./ports.js";
 import type { ConversationBranchingOptions } from "./conversation-conformance.js";
 import { expectRejectsWithCode } from "./conformance-support.js";
 

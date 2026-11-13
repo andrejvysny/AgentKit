@@ -1,0 +1,55 @@
+pub mod agentkit_native_broker
+pub use agentkit_native_broker::BROKER_AUTHORIZE_BUDGET_MS
+pub use agentkit_native_broker::BrokerLimits
+pub use agentkit_native_broker::BrokerToolDefinition
+pub struct agentkit_native_broker::AttemptBroker
+impl agentkit_native_broker::AttemptBroker
+pub fn agentkit_native_broker::AttemptBroker::backend(&self) -> &alloc::rcs::arc::Arc<agentkit_native_broker::BrokerBackend>
+pub fn agentkit_native_broker::AttemptBroker::live_calls(&self) -> usize
+pub fn agentkit_native_broker::AttemptBroker::parked_ms(&self) -> u64
+pub fn agentkit_native_broker::AttemptBroker::server_call_deadline(&self) -> core::time::Duration
+pub async fn agentkit_native_broker::AttemptBroker::shutdown(&self)
+pub fn agentkit_native_broker::AttemptBroker::spec(&self) -> agentkit_native::ports::McpEndpointSpec
+pub async fn agentkit_native_broker::AttemptBroker::start(&str, &str, &str, alloc::vec::Vec<agentkit_native::broker::BrokerToolDefinition>, agentkit_native::broker::BrokerLimits, alloc::rcs::arc::Arc<dyn agentkit_native_broker::BrokerAuthority>) -> core::result::Result<alloc::rcs::arc::Arc<Self>, alloc::string::String>
+impl agentkit_native::broker::AttemptBrokerHandle for agentkit_native_broker::AttemptBroker
+pub fn agentkit_native_broker::AttemptBroker::live_calls(&self) -> usize
+pub fn agentkit_native_broker::AttemptBroker::parked_ms(&self) -> u64
+pub fn agentkit_native_broker::AttemptBroker::revoke(&self)
+pub fn agentkit_native_broker::AttemptBroker::shutdown<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_native_broker::AttemptBroker::spec(&self) -> agentkit_native::ports::McpEndpointSpec
+impl core::ops::drop::Drop for agentkit_native_broker::AttemptBroker
+pub fn agentkit_native_broker::AttemptBroker::drop(&mut self)
+pub struct agentkit_native_broker::BrokerBackend
+impl agentkit_native_broker::BrokerBackend
+pub fn agentkit_native_broker::BrokerBackend::cli_tool_names(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_native_broker::BrokerBackend::has_writes(&self) -> bool
+pub fn agentkit_native_broker::BrokerBackend::live_calls(&self) -> usize
+pub fn agentkit_native_broker::BrokerBackend::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &str, alloc::vec::Vec<agentkit_native::broker::BrokerToolDefinition>, agentkit_native::broker::BrokerLimits, alloc::rcs::arc::Arc<dyn agentkit_native_broker::BrokerAuthority>, tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<alloc::rcs::arc::Arc<Self>, agentkit_native_broker::BrokerDenial>
+pub fn agentkit_native_broker::BrokerBackend::parked_ms(&self) -> u64
+pub fn agentkit_native_broker::BrokerBackend::revoke(&self)
+impl agentkit_mcp::backend::Backend for agentkit_native_broker::BrokerBackend
+pub fn agentkit_native_broker::BrokerBackend::call_tool<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, rmcp::model::JsonObject, &'life2 agentkit_mcp::backend::SessionScope) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<rmcp::model::CallToolResult, rmcp::model::ErrorData>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native_broker::BrokerBackend::list_tools<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_mcp::backend::SessionScope) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_mcp::backend::CatalogTool>, rmcp::model::ErrorData>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_native_broker::BrokerBackend::revoke_actor(&self, &str)
+pub struct agentkit_native_broker::BrokerDenial
+pub agentkit_native_broker::BrokerDenial::code: alloc::string::String
+pub agentkit_native_broker::BrokerDenial::message: alloc::string::String
+pub struct agentkit_native_broker::BrokerExecuted
+pub agentkit_native_broker::BrokerExecuted::content: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_native_broker::BrokerExecuted::structured: core::option::Option<serde_json::value::Value>
+pub struct agentkit_native_broker::BrokerInvocation
+pub agentkit_native_broker::BrokerInvocation::actor_id: alloc::string::String
+pub agentkit_native_broker::BrokerInvocation::attempt_id: alloc::string::String
+pub agentkit_native_broker::BrokerInvocation::generation: u64
+pub agentkit_native_broker::BrokerInvocation::invocation_id: alloc::string::String
+pub agentkit_native_broker::BrokerInvocation::request_id: core::option::Option<agentkit_mcp::backend::RpcId>
+pub agentkit_native_broker::BrokerInvocation::server_name: alloc::string::String
+pub agentkit_native_broker::BrokerInvocation::task_id: alloc::string::String
+pub agentkit_native_broker::BrokerInvocation::tool_name: alloc::string::String
+pub const agentkit_native_broker::BROKER_SERVER_DEADLINE_OVERHEAD_MS: i64
+pub trait agentkit_native_broker::BrokerAuthority: core::marker::Send + core::marker::Sync + 'static
+pub fn agentkit_native_broker::BrokerAuthority::attempt_generation(&self) -> core::option::Option<u64>
+pub fn agentkit_native_broker::BrokerAuthority::authorize<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_native_broker::BrokerInvocation, &'life2 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_native_broker::BrokerDenial>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_native_broker::BrokerAuthority::execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_native_broker::BrokerInvocation, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native_broker::BrokerExecuted, agentkit_native_broker::BrokerDenial>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_native_broker::BrokerAuthority::record(&self, &agentkit_native_broker::BrokerInvocation, &serde_json::value::Value)
+pub fn agentkit_native_broker::BrokerAuthority::record_lifecycle<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native_broker::BrokerInvocation, &'life2 str, &'life3 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_native_broker::BrokerDenial>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait

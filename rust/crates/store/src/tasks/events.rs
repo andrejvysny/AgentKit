@@ -22,8 +22,9 @@ pub(crate) fn append(
     for event in events {
         let sequence = agentkit_contracts::javascript_number(&event["seq"])
             .filter(|sequence| sequence.is_finite() && *sequence > previous)
-            .ok_or_else(|| {
-                StoreError::InvalidInput(format!("event seq must be greater than {previous}"))
+            .ok_or_else(|| StoreError::TaskInput {
+                reason: agentkit_engine::TaskInputReason::EventSequence,
+                message: format!("event seq must be greater than {previous}"),
             })?;
         let record = EventRecord {
             task_id: task_id.into(),
@@ -525,13 +526,7 @@ pub fn redact_event(event: &serde_json::Value) -> serde_json::Value {
                 items.iter().map(|item| walk(item, tool_payload)).collect(),
             ),
             serde_json::Value::String(text) if tool_payload && text.len() > MAX_TOOL_TEXT_BYTES => {
-                let digest = {
-                    use sha2::Digest as _;
-                    sha2::Sha256::digest(text.as_bytes())
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>()
-                };
+                let digest = agentkit_kernel::sha256_hex(text.as_bytes());
                 object!({
                     "truncated": true,
                     "sha256": digest,

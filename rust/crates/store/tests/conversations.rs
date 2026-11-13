@@ -863,7 +863,7 @@ async fn fork_refuses_inactive_branch_and_omits_placeholder_and_run_identity() {
     placeholder.metadata = json!({"placeholder":true});
     store.append_message(placeholder, None, 1000).await.unwrap();
     assert!(
-        matches!(store.fork_chat("chat","old","bad",1001).await,Err(StoreError::InvalidInput(message)) if message=="invalid_fork_point")
+        matches!(store.fork_chat("chat","old","bad",1001).await,Err(StoreError::TaskInput { reason: agentkit_engine::TaskInputReason::InvalidForkPoint, message }) if message=="invalid_fork_point")
     );
     let (chat, messages) = store
         .fork_chat("chat", "placeholder", "copy", 1001)

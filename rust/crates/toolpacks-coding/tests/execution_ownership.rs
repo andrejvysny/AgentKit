@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agentkit_core::{Tool, ToolContext, ToolLimits};
-use agentkit_host::{ContributedTool, ToolContributionContext, ToolContributor};
+use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
 use agentkit_toolpacks_coding::coordination::{
     AcquireWorkspaceInput, LeaseHolder, default_in_process_coordinator,
 };

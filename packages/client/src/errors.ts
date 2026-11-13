@@ -2,7 +2,7 @@
  * The one exception every non-2xx answer becomes.
  *
  * The server writes exactly one error shape — RFC 7807 `application/problem+json`,
- * see `packages/transport-http/src/problem.ts` — and the member a client branches
+ * as served by `agentkit-http` — and the member a client branches
  * on is `code`, not `status`: two different 409s (`duplicate_alias`,
  * `revision_conflict`) need two different recoveries, and the status cannot tell
  * them apart. So `code` is lifted onto the error object rather than left for the

@@ -10,18 +10,8 @@
 //
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import
 // and error assertions match on the `code` string rather than on `instanceof`.
-// The one VALUE imported from `@agentkit/host` is `orderMessagesForProvider`,
-// and deliberately so: the point of round-tripping tool linkage through an
-// import is that the host's own replay ordering can still use it, and a
-// re-implementation of that function here would grade a copy of the rule
-// instead of the rule. `@agentkit/host` is a peer dependency of this package
-// and a real dependency of every adapter that runs this suite.
-import { orderMessagesForProvider } from "@agentkit/host";
-import type {
-  ImportConversationInput,
-  ImportMessageInput,
-  MessageRecord,
-} from "@agentkit/host";
+// Every import from `./ports.js` is a type.
+import type { ImportConversationInput, ImportMessageInput } from "./ports.js";
 import {
   expectRejectsWithCode,
   type AssistantStoreConformanceHarness,
@@ -237,16 +227,6 @@ export function describeConversationImport(
         expect(byId.get("tl-u1")?.toolCalls).toBe(undefined);
         expect(byId.get("tl-u1")?.toolCallId).toBe(undefined);
         expect(byId.get("tl-a2")?.modelResultJson).toBe(undefined);
-
-        // THE POINT OF PERSISTING IT. The host's own replay ordering groups an
-        // internal assistant turn with the results answering the ids IT
-        // declared — so an import that dropped the linkage would migrate a
-        // conversation whose every replay hands the provider a tool result with
-        // no preceding `tool_calls`, which providers reject outright.
-        const ordered: MessageRecord[] = orderMessagesForProvider(path);
-        const assistantAt = ordered.findIndex((m) => m.id === "tl-a1");
-        expect(assistantAt).toBeGreaterThan(-1);
-        expect(ordered[assistantAt + 1]?.id).toBe("tl-t1");
       } finally {
         close?.();
       }

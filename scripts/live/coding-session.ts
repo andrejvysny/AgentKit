@@ -53,7 +53,7 @@
  *    stdout is forwarded to the parent's stdout, so terminal output is
  *    unchanged.
  *  - lease wait: the binding does not expose the scheduler's lease TTL to JS
- *    (Rust default 30 s, rust/crates/host/src/runner.rs); the parent waits
+ *    (Rust default 30 s, rust/crates/engine/src/runner.rs); the parent waits
  *    that out before rebuilding the service so construction-time recovery
  *    parks the killed turn.
  */
@@ -71,7 +71,7 @@ const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
 const MODEL = process.env["AGENTKIT_LIVE_MODEL"] ?? "Qwen3.8-Flash-Next";
 /** The binding does not expose the scheduler's lease TTL to JS; this mirrors
- * the Rust runtime default (`HostOptions::lease_ttl_ms`, rust/crates/host/
+ * the Rust runtime default (`HostOptions::lease_ttl_ms`, rust/crates/engine/
  * src/runner.rs) that the parent waits out before rebuilding the service. */
 const LEASE_TTL_MS = 30_000;
 const TURN_TIMEOUT_MS = 10 * 60_000;

@@ -1,0 +1,33 @@
+# cargo-deny gate (ADR 0021). Run from rust/: `cargo deny check`.
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "ISC", "BSD-2-Clause",
+  "BSD-3-Clause", "Zlib", "Unicode-3.0", "Unlicense", "BSL-1.0", "MIT-0",
+  "0BSD", "CC0-1.0", "CDLA-Permissive-2.0", "OFL-1.1", "Ubuntu-font-1.0",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Layer rules (ADR 0021 R1): inner crates must not pull outer frameworks.
+deny = [
+  { crate = "axum", wrappers = ["agentkit-mcp", "agentkit-napi", "agentkit-runtime", "agentkit-http", "agentkit-teammate-consumer", "agentkit-client", "tower-http", "agentkit-native-broker"] },
+  { crate = "rusqlite", wrappers = ["agentkit-store", "agentkit-mcp", "agentkit-chat", "agentkit-http", "agentkit-toolpacks-coding"] },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

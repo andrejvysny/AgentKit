@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use sha2::{Digest, Sha256};
+use agentkit_kernel::sha256_hex;
 
 use crate::command_policy::{executable_name, shell_words};
 
@@ -1340,10 +1340,7 @@ pub(crate) fn fingerprint_document(
 }
 
 pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sha256_hex(bytes)
 }
 
 #[cfg(test)]

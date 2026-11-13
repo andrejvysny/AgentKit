@@ -1,0 +1,33 @@
+[package]
+name = "agentkit-agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit agents context: agent definitions, teammates, subagents and the advisor"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-core = { workspace = true }
+agentkit-governance = { workspace = true }
+agentkit-chat = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-sessions = { workspace = true }
+agentkit-kernel = { workspace = true }
+agentkit-store = { workspace = true }
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+uuid.workspace = true

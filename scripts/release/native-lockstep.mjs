@@ -36,7 +36,7 @@ function writeJson(output, path, manifest) {
 }
 
 /**
- * Bump the native stack in `output` (a snapshot-release copy of the tree)
+ * Bump the native stack in `output` (a copy of the tree)
  * to `version`. Returns the list of paths changed.
  */
 export function bumpNativeStackVersions(output, version) {

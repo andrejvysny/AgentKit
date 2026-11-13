@@ -12,14 +12,9 @@ use napi::bindgen_prelude::*;
 #[macro_use]
 extern crate napi_derive;
 
-mod advisor_lane;
-mod authority;
-#[cfg(test)]
-mod authority_tests;
-mod coding_lane;
+mod advisor_sink;
 mod errors;
 mod jsbridge;
-mod lsp_lane;
 mod profiles;
 pub use profiles::{list_native_profiles, resolve_native_profile};
 mod provider;
@@ -30,7 +25,6 @@ mod run_hooks;
 mod run_provider;
 mod run_retry;
 mod run_steering;
-mod subagent_lane;
 mod teammate_lane;
 pub use run_provider::{
     end_run_provider, is_run_callback_active, push_run_provider_event, reserve_run_provider_request,
@@ -38,9 +32,8 @@ pub use run_provider::{
 mod service;
 mod store;
 mod tool;
-mod workspace_binding;
 
-/// `cargo test` links this crate outside a Node process, so the three
+/// `cargo test` links this crate outside a Node process, so the four
 /// libnode symbols the napi rlib genuinely references are missing. These
 /// stubs exist only in the test binary; they are never reached by the unit
 /// tests below (which exercise pure payload logic), and shipping builds
@@ -67,6 +60,14 @@ mod napi_test_stubs {
     pub unsafe extern "C" fn napi_call_threadsafe_function(
         _tsfn: *mut c_void,
         _data: *mut c_void,
+        _mode: i32,
+    ) -> i32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn napi_release_threadsafe_function(
+        _tsfn: *mut c_void,
         _mode: i32,
     ) -> i32 {
         0
@@ -108,7 +109,7 @@ pub fn binding_smoke() -> Result<String> {
 }
 
 /// The in-flight callback must still own the host's request authority.
-#[napi]
+#[napi(catch_unwind)]
 pub async fn assert_provider_authority(call_id: String) -> napi::Result<()> {
     jsbridge::check_provider_authority(&call_id)
         .await

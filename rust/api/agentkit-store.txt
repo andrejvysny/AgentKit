@@ -1,0 +1,1042 @@
+pub mod agentkit_store
+pub use agentkit_store::AttemptRecord
+pub use agentkit_store::ClaimInput
+pub use agentkit_store::ClaimedTask
+pub use agentkit_store::ConversationTimestamp
+pub use agentkit_store::EventRecord
+pub use agentkit_store::Lease
+pub use agentkit_store::LeaseFence
+pub use agentkit_store::MessageInput
+pub use agentkit_store::PinnedRunProfile
+pub use agentkit_store::RecoveryMode
+pub use agentkit_store::RetryTask
+pub use agentkit_store::SettleTask
+pub use agentkit_store::SubmitTask
+pub use agentkit_store::TaskBinding
+pub use agentkit_store::TaskRecord
+pub use agentkit_store::TaskStatus
+pub use agentkit_store::TaskTransitionPatch
+pub use agentkit_store::TimestampOutOfRange
+pub enum agentkit_store::AgentDisplayState
+pub agentkit_store::AgentDisplayState::Error
+pub agentkit_store::AgentDisplayState::Idle
+pub agentkit_store::AgentDisplayState::Interrupted
+pub agentkit_store::AgentDisplayState::NeedsYou
+pub agentkit_store::AgentDisplayState::Queued
+pub agentkit_store::AgentDisplayState::Working
+pub enum agentkit_store::AgentInputKind
+pub agentkit_store::AgentInputKind::FollowUp
+pub agentkit_store::AgentInputKind::HumanRequest
+pub agentkit_store::AgentInputKind::Steer
+pub enum agentkit_store::AgentInputSettlePolicy
+pub agentkit_store::AgentInputSettlePolicy::Cancel
+pub agentkit_store::AgentInputSettlePolicy::FollowUp
+pub enum agentkit_store::AgentInputStatus
+pub agentkit_store::AgentInputStatus::Answered
+pub agentkit_store::AgentInputStatus::Applied
+pub agentkit_store::AgentInputStatus::Cancelled
+pub agentkit_store::AgentInputStatus::Converted
+pub agentkit_store::AgentInputStatus::Pending
+pub enum agentkit_store::AgentLifecycle
+pub agentkit_store::AgentLifecycle::Active
+pub agentkit_store::AgentLifecycle::Archived
+pub agentkit_store::AgentLifecycle::Deleted
+pub enum agentkit_store::AgentRevisionSource
+pub agentkit_store::AgentRevisionSource::Create
+pub agentkit_store::AgentRevisionSource::Edit
+pub agentkit_store::AgentRevisionSource::ModelChange
+pub agentkit_store::AgentRevisionSource::Restore
+pub enum agentkit_store::ArgsHashProvenance
+pub agentkit_store::ArgsHashProvenance::Canonical
+pub agentkit_store::ArgsHashProvenance::TsCanonical
+pub enum agentkit_store::ExecutionReceiptStatus
+pub agentkit_store::ExecutionReceiptStatus::Admitted
+pub agentkit_store::ExecutionReceiptStatus::Completed
+pub agentkit_store::ExecutionReceiptStatus::Resolved
+pub enum agentkit_store::ExecutionStateRead
+pub agentkit_store::ExecutionStateRead::Absent
+pub agentkit_store::ExecutionStateRead::Malformed
+pub agentkit_store::ExecutionStateRead::Valid(serde_json::value::Value)
+pub enum agentkit_store::ManagedInputReason
+pub agentkit_store::ManagedInputReason::AliasConflict
+pub agentkit_store::ManagedInputReason::IdentityRequired
+pub agentkit_store::ManagedInputReason::ImmutableIdentity
+pub agentkit_store::ManagedInputReason::InvalidAlias
+pub agentkit_store::ManagedInputReason::SecretReferencesUnsupported
+pub agentkit_store::ManagedInputReason::SelectedConnectorRequired
+pub enum agentkit_store::ProposalStatus
+pub agentkit_store::ProposalStatus::Applied
+pub agentkit_store::ProposalStatus::Applying
+pub agentkit_store::ProposalStatus::Approved
+pub agentkit_store::ProposalStatus::Failed
+pub agentkit_store::ProposalStatus::Invalidated
+pub agentkit_store::ProposalStatus::Pending
+pub agentkit_store::ProposalStatus::Rejected
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ProposalStatus
+pub fn agentkit_store::ProposalStatus::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_store::QueueAdmission
+pub agentkit_store::QueueAdmission::Queued(agentkit_store::AgentInputRecord)
+pub agentkit_store::QueueAdmission::Staged(agentkit_engine::model::TaskRecord)
+pub enum agentkit_store::ReceiptTransitionReason
+pub agentkit_store::ReceiptTransitionReason::NotUncertain
+pub agentkit_store::ReceiptTransitionReason::RunActive
+pub enum agentkit_store::ResolutionOutcome
+pub agentkit_store::ResolutionOutcome::Acknowledged
+pub agentkit_store::ResolutionOutcome::Completed
+pub agentkit_store::ResolutionOutcome::NotStarted
+pub enum agentkit_store::SettingsCommit
+pub agentkit_store::SettingsCommit::Aborted(agentkit_store::StoreError)
+pub agentkit_store::SettingsCommit::Applied
+pub agentkit_store::SettingsCommit::Conflict
+pub enum agentkit_store::StoreError
+pub agentkit_store::StoreError::AgentInputTransition(alloc::string::String)
+pub agentkit_store::StoreError::AlreadyOwned
+pub agentkit_store::StoreError::AnswerConflict(alloc::string::String)
+pub agentkit_store::StoreError::AnswerStale(alloc::string::String)
+pub agentkit_store::StoreError::Closed
+pub agentkit_store::StoreError::Conflict(alloc::string::String)
+pub agentkit_store::StoreError::Database(rusqlite::error::Error)
+pub agentkit_store::StoreError::Duplicate(alloc::string::String)
+pub agentkit_store::StoreError::ForeignDatabase
+pub agentkit_store::StoreError::Internal(alloc::string::String)
+pub agentkit_store::StoreError::InvalidImport
+pub agentkit_store::StoreError::InvalidImport::reason: alloc::string::String
+pub agentkit_store::StoreError::InvalidInput(alloc::string::String)
+pub agentkit_store::StoreError::InvalidTransition(alloc::string::String)
+pub agentkit_store::StoreError::Io(core::io::error::Error)
+pub agentkit_store::StoreError::Json(serde_json::error::Error)
+pub agentkit_store::StoreError::LeaseLost(alloc::string::String)
+pub agentkit_store::StoreError::ManagedInput
+pub agentkit_store::StoreError::ManagedInput::message: alloc::string::String
+pub agentkit_store::StoreError::ManagedInput::reason: agentkit_store::ManagedInputReason
+pub agentkit_store::StoreError::NotFound(alloc::string::String)
+pub agentkit_store::StoreError::ReceiptTransition
+pub agentkit_store::StoreError::ReceiptTransition::message: alloc::string::String
+pub agentkit_store::StoreError::ReceiptTransition::reason: agentkit_store::ReceiptTransitionReason
+pub agentkit_store::StoreError::RecoveryUnreadable(alloc::string::String)
+pub agentkit_store::StoreError::ScopeBusy(alloc::string::String)
+pub agentkit_store::StoreError::SessionDescriptorChanged(alloc::string::String)
+pub agentkit_store::StoreError::TaskInput
+pub agentkit_store::StoreError::TaskInput::message: alloc::string::String
+pub agentkit_store::StoreError::TaskInput::reason: agentkit_engine::repository::TaskInputReason
+pub agentkit_store::StoreError::TransactionGateTimeout
+pub agentkit_store::StoreError::TransactionScopeExpired
+pub agentkit_store::StoreError::UnsupportedVersion(i64)
+impl agentkit_engine::repository::RepositoryFault for agentkit_store::StoreError
+pub fn agentkit_store::StoreError::invalid_input(&self) -> core::option::Option<&str>
+pub fn agentkit_store::StoreError::is_duplicate(&self) -> bool
+pub fn agentkit_store::StoreError::is_invalid_transition(&self) -> bool
+pub fn agentkit_store::StoreError::is_lease_lost(&self) -> bool
+pub fn agentkit_store::StoreError::is_not_found(&self) -> bool
+pub fn agentkit_store::StoreError::is_transient(&self) -> bool
+pub fn agentkit_store::StoreError::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_store::StoreError::task_input_reason(&self) -> core::option::Option<agentkit_engine::repository::TaskInputReason>
+impl core::convert::From<agentkit_kernel::timestamp::TimestampOutOfRange> for agentkit_store::StoreError
+pub fn agentkit_store::StoreError::from(agentkit_kernel::timestamp::TimestampOutOfRange) -> Self
+impl core::convert::From<agentkit_store::StoreError> for agentkit_engine::error::EngineError<agentkit_store::StoreError>
+pub fn agentkit_engine::error::EngineError<agentkit_store::StoreError>::from(agentkit_store::StoreError) -> Self
+pub struct agentkit_store::AdmitTeammateTask
+pub agentkit_store::AdmitTeammateTask::admission_key: alloc::string::String
+pub agentkit_store::AdmitTeammateTask::agent_id: alloc::string::String
+pub agentkit_store::AdmitTeammateTask::available_at: core::option::Option<i64>
+pub agentkit_store::AdmitTeammateTask::depends_on: alloc::vec::Vec<alloc::string::String>
+pub agentkit_store::AdmitTeammateTask::kind: alloc::string::String
+pub agentkit_store::AdmitTeammateTask::now: i64
+pub agentkit_store::AdmitTeammateTask::parent_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AdmitTeammateTask::payload: serde_json::value::Value
+pub agentkit_store::AdmitTeammateTask::priority: i32
+pub agentkit_store::AdmitTeammateTask::run_profile: core::option::Option<agentkit_engine::model::PinnedRunProfile>
+pub agentkit_store::AdmitTeammateTask::task_id: core::option::Option<alloc::string::String>
+pub struct agentkit_store::AdmittedTask
+pub agentkit_store::AdmittedTask::replayed: bool
+pub agentkit_store::AdmittedTask::task: agentkit_engine::model::TaskRecord
+pub struct agentkit_store::AdvisorFindingRecord
+pub agentkit_store::AdvisorFindingRecord::chat_id: alloc::string::String
+pub agentkit_store::AdvisorFindingRecord::created_at: i64
+pub agentkit_store::AdvisorFindingRecord::detail: serde_json::value::Value
+pub agentkit_store::AdvisorFindingRecord::escalated: bool
+pub agentkit_store::AdvisorFindingRecord::finding_id: alloc::string::String
+pub agentkit_store::AdvisorFindingRecord::model: alloc::string::String
+pub agentkit_store::AdvisorFindingRecord::severity: alloc::string::String
+pub agentkit_store::AdvisorFindingRecord::source: alloc::string::String
+pub agentkit_store::AdvisorFindingRecord::title: alloc::string::String
+pub agentkit_store::AdvisorFindingRecord::trigger_kind: alloc::string::String
+pub struct agentkit_store::AgentBudgets
+pub agentkit_store::AgentBudgets::attempt_budget_ms: core::option::Option<i64>
+pub agentkit_store::AgentBudgets::max_output_tokens: core::option::Option<i64>
+pub agentkit_store::AgentBudgets::max_tool_calls_per_iteration: core::option::Option<i64>
+pub agentkit_store::AgentBudgets::max_tool_iterations: core::option::Option<i64>
+pub struct agentkit_store::AgentDefinition
+pub agentkit_store::AgentDefinition::allowed_tools: alloc::vec::Vec<alloc::string::String>
+pub agentkit_store::AgentDefinition::avatar: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentDefinition::budgets: agentkit_store::AgentBudgets
+pub agentkit_store::AgentDefinition::instructions: alloc::string::String
+pub agentkit_store::AgentDefinition::model: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentDefinition::name: alloc::string::String
+pub agentkit_store::AgentDefinition::permission_mode: alloc::string::String
+pub agentkit_store::AgentDefinition::purpose: alloc::string::String
+pub agentkit_store::AgentDefinition::reasoning_effort: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentDefinition::resources: alloc::vec::Vec<alloc::string::String>
+pub agentkit_store::AgentDefinition::secret_refs: alloc::vec::Vec<alloc::string::String>
+pub agentkit_store::AgentDefinition::skills: alloc::vec::Vec<agentkit_store::AgentSkillSelection>
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::AgentDefinition
+pub fn agentkit_store::AgentDefinition::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::AgentDeletionPreview
+pub agentkit_store::AgentDeletionPreview::active_tasks: i64
+pub agentkit_store::AgentDeletionPreview::agent_id: alloc::string::String
+pub agentkit_store::AgentDeletionPreview::current_revision: i64
+pub agentkit_store::AgentDeletionPreview::deletable: bool
+pub agentkit_store::AgentDeletionPreview::lifecycle: agentkit_store::AgentLifecycle
+pub agentkit_store::AgentDeletionPreview::owner_id: alloc::string::String
+pub agentkit_store::AgentDeletionPreview::revision_count: i64
+pub agentkit_store::AgentDeletionPreview::scope: alloc::string::String
+pub agentkit_store::AgentDeletionPreview::unresolved_executions: i64
+pub struct agentkit_store::AgentExportEntry
+pub agentkit_store::AgentExportEntry::agent_id: alloc::string::String
+pub agentkit_store::AgentExportEntry::created_at: i64
+pub agentkit_store::AgentExportEntry::definition: agentkit_store::AgentDefinition
+pub agentkit_store::AgentExportEntry::lifecycle: agentkit_store::AgentLifecycle
+pub agentkit_store::AgentExportEntry::owner_id: alloc::string::String
+pub agentkit_store::AgentExportEntry::revisions: alloc::vec::Vec<agentkit_store::AgentRevisionExport>
+pub agentkit_store::AgentExportEntry::scope: alloc::string::String
+pub agentkit_store::AgentExportEntry::updated_at: i64
+pub struct agentkit_store::AgentExportEnvelope
+pub agentkit_store::AgentExportEnvelope::agents: alloc::vec::Vec<agentkit_store::AgentExportEntry>
+pub agentkit_store::AgentExportEnvelope::format_version: i64
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::AgentExportEnvelope
+pub fn agentkit_store::AgentExportEnvelope::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::AgentInputPatch
+pub agentkit_store::AgentInputPatch::answer_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputPatch::applied_message_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputPatch::applied_task_id: core::option::Option<alloc::string::String>
+pub struct agentkit_store::AgentInputQuery
+pub agentkit_store::AgentInputQuery::kinds: core::option::Option<alloc::vec::Vec<agentkit_store::AgentInputKind>>
+pub agentkit_store::AgentInputQuery::session_id: alloc::string::String
+pub agentkit_store::AgentInputQuery::statuses: core::option::Option<alloc::vec::Vec<agentkit_store::AgentInputStatus>>
+pub agentkit_store::AgentInputQuery::target_task_id: core::option::Option<alloc::string::String>
+pub struct agentkit_store::AgentInputRecord
+pub agentkit_store::AgentInputRecord::agent_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::answer_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::applied_message_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::applied_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::attempt_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::content: serde_json::value::Value
+pub agentkit_store::AgentInputRecord::content_hash: alloc::string::String
+pub agentkit_store::AgentInputRecord::created_at: alloc::string::String
+pub agentkit_store::AgentInputRecord::expires_at: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::input_id: alloc::string::String
+pub agentkit_store::AgentInputRecord::kind: agentkit_store::AgentInputKind
+pub agentkit_store::AgentInputRecord::on_settled: core::option::Option<agentkit_store::AgentInputSettlePolicy>
+pub agentkit_store::AgentInputRecord::order: i64
+pub agentkit_store::AgentInputRecord::session_id: alloc::string::String
+pub agentkit_store::AgentInputRecord::status: agentkit_store::AgentInputStatus
+pub agentkit_store::AgentInputRecord::target_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::tool_call_id: core::option::Option<alloc::string::String>
+pub agentkit_store::AgentInputRecord::updated_at: alloc::string::String
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::AgentInputRecord
+pub fn agentkit_store::AgentInputRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::AgentRecord
+pub agentkit_store::AgentRecord::agent_id: alloc::string::String
+pub agentkit_store::AgentRecord::created_at: i64
+pub agentkit_store::AgentRecord::current_revision: i64
+pub agentkit_store::AgentRecord::definition: agentkit_store::AgentDefinition
+pub agentkit_store::AgentRecord::lifecycle: agentkit_store::AgentLifecycle
+pub agentkit_store::AgentRecord::owner_id: alloc::string::String
+pub agentkit_store::AgentRecord::scope: alloc::string::String
+pub agentkit_store::AgentRecord::updated_at: i64
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::AgentRecord
+pub fn agentkit_store::AgentRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::AgentRevision
+pub agentkit_store::AgentRevision::agent_id: alloc::string::String
+pub agentkit_store::AgentRevision::created_at: i64
+pub agentkit_store::AgentRevision::revision: i64
+pub agentkit_store::AgentRevision::snapshot: agentkit_store::AgentDefinition
+pub agentkit_store::AgentRevision::source: agentkit_store::AgentRevisionSource
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::AgentRevision
+pub fn agentkit_store::AgentRevision::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::AgentRevisionExport
+pub agentkit_store::AgentRevisionExport::created_at: i64
+pub agentkit_store::AgentRevisionExport::revision: i64
+pub agentkit_store::AgentRevisionExport::snapshot: agentkit_store::AgentDefinition
+pub agentkit_store::AgentRevisionExport::source: agentkit_store::AgentRevisionSource
+pub struct agentkit_store::AgentSkillSelection
+pub agentkit_store::AgentSkillSelection::id: alloc::string::String
+pub agentkit_store::AgentSkillSelection::revision: alloc::string::String
+pub struct agentkit_store::AgentTaskPage
+pub agentkit_store::AgentTaskPage::next_before: core::option::Option<i64>
+pub agentkit_store::AgentTaskPage::tasks: alloc::vec::Vec<agentkit_engine::model::TaskRecord>
+pub struct agentkit_store::AnswerHumanRequest
+pub agentkit_store::AnswerHumanRequest::answer_id: alloc::string::String
+pub agentkit_store::AnswerHumanRequest::granted_mode: core::option::Option<alloc::string::String>
+pub agentkit_store::AnswerHumanRequest::message_id: alloc::string::String
+pub agentkit_store::AnswerHumanRequest::now: i64
+pub agentkit_store::AnswerHumanRequest::plan_tool_names: alloc::vec::Vec<alloc::string::String>
+pub agentkit_store::AnswerHumanRequest::policy_denial: core::option::Option<alloc::string::String>
+pub agentkit_store::AnswerHumanRequest::request_id: alloc::string::String
+pub agentkit_store::AnswerHumanRequest::response: serde_json::value::Value
+pub agentkit_store::AnswerHumanRequest::response_hash: alloc::string::String
+pub struct agentkit_store::AnswerOutcome
+pub agentkit_store::AnswerOutcome::enqueue: core::option::Option<(alloc::string::String, alloc::string::String)>
+pub agentkit_store::AnswerOutcome::receipt: agentkit_store::AnswerReceipt
+pub struct agentkit_store::AnswerReceipt
+pub agentkit_store::AnswerReceipt::answer_id: alloc::string::String
+pub agentkit_store::AnswerReceipt::duplicate: bool
+pub agentkit_store::AnswerReceipt::message_id: alloc::string::String
+pub agentkit_store::AnswerReceipt::request_id: alloc::string::String
+pub agentkit_store::AnswerReceipt::turn_id: alloc::string::String
+pub struct agentkit_store::AppendProjectedInputs
+pub agentkit_store::AppendProjectedInputs::applies: alloc::vec::Vec<agentkit_store::AppliedSteer>
+pub agentkit_store::AppendProjectedInputs::creates: alloc::vec::Vec<agentkit_store::CreateAgentInput>
+pub agentkit_store::AppendProjectedInputs::events: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_store::AppendProjectedInputs::fence: agentkit_engine::model::LeaseFence
+pub agentkit_store::AppendProjectedInputs::messages: alloc::vec::Vec<agentkit_engine::model::MessageInput>
+pub agentkit_store::AppendProjectedInputs::now: i64
+pub agentkit_store::AppendProjectedInputs::task_id: alloc::string::String
+pub struct agentkit_store::AppliedSteer
+pub agentkit_store::AppliedSteer::input_id: alloc::string::String
+pub agentkit_store::AppliedSteer::message: agentkit_engine::model::MessageInput
+pub struct agentkit_store::ApplyOutcome
+pub agentkit_store::ApplyOutcome::applied_ops: u32
+pub agentkit_store::ApplyOutcome::failed_ops: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_store::ApplyOutcome::result_json: core::option::Option<alloc::string::String>
+pub agentkit_store::ApplyOutcome::revision: core::option::Option<alloc::string::String>
+pub agentkit_store::ApplyOutcome::status: alloc::string::String
+pub struct agentkit_store::ChatRecord
+pub agentkit_store::ChatRecord::archived: bool
+pub agentkit_store::ChatRecord::created_at: agentkit_kernel::timestamp::ConversationTimestamp
+pub agentkit_store::ChatRecord::id: alloc::string::String
+pub agentkit_store::ChatRecord::metadata: serde_json::value::Value
+pub agentkit_store::ChatRecord::title: core::option::Option<alloc::string::String>
+pub agentkit_store::ChatRecord::updated_at: agentkit_kernel::timestamp::ConversationTimestamp
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ChatRecord
+pub fn agentkit_store::ChatRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::CreateAgent
+pub agentkit_store::CreateAgent::agent_id: core::option::Option<alloc::string::String>
+pub agentkit_store::CreateAgent::definition: agentkit_store::AgentDefinition
+pub agentkit_store::CreateAgent::now: i64
+pub agentkit_store::CreateAgent::owner_id: alloc::string::String
+pub agentkit_store::CreateAgent::scope: alloc::string::String
+pub struct agentkit_store::CreateAgentInput
+pub agentkit_store::CreateAgentInput::attempt_id: core::option::Option<alloc::string::String>
+pub agentkit_store::CreateAgentInput::content: serde_json::value::Value
+pub agentkit_store::CreateAgentInput::content_hash: alloc::string::String
+pub agentkit_store::CreateAgentInput::expires_at: core::option::Option<alloc::string::String>
+pub agentkit_store::CreateAgentInput::input_id: alloc::string::String
+pub agentkit_store::CreateAgentInput::kind: agentkit_store::AgentInputKind
+pub agentkit_store::CreateAgentInput::on_settled: core::option::Option<agentkit_store::AgentInputSettlePolicy>
+pub agentkit_store::CreateAgentInput::session_id: alloc::string::String
+pub agentkit_store::CreateAgentInput::target_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::CreateAgentInput::tool_call_id: core::option::Option<alloc::string::String>
+pub struct agentkit_store::CreateAgentMailbox
+pub agentkit_store::CreateAgentMailbox::content: serde_json::value::Value
+pub agentkit_store::CreateAgentMailbox::content_hash: alloc::string::String
+pub agentkit_store::CreateAgentMailbox::expires_at: core::option::Option<alloc::string::String>
+pub agentkit_store::CreateAgentMailbox::input_id: alloc::string::String
+pub agentkit_store::CreateAgentMailbox::kind: agentkit_store::AgentInputKind
+pub agentkit_store::CreateAgentMailbox::now: i64
+pub struct agentkit_store::DuplicateAgent
+pub agentkit_store::DuplicateAgent::agent_id: alloc::string::String
+pub agentkit_store::DuplicateAgent::new_agent_id: core::option::Option<alloc::string::String>
+pub agentkit_store::DuplicateAgent::now: i64
+pub agentkit_store::DuplicateAgent::owner_id: core::option::Option<alloc::string::String>
+pub struct agentkit_store::ExecutionReceiptAdmission
+pub agentkit_store::ExecutionReceiptAdmission::approval_generation: core::option::Option<alloc::string::String>
+pub agentkit_store::ExecutionReceiptAdmission::approval_request_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ExecutionReceiptAdmission::args_hash_provenance: agentkit_store::ArgsHashProvenance
+pub agentkit_store::ExecutionReceiptAdmission::args_sha256: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::attempt_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::chat_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::context_sha256: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::execution_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::now: i64
+pub agentkit_store::ExecutionReceiptAdmission::run_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::tool_call_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::tool_name: alloc::string::String
+pub agentkit_store::ExecutionReceiptAdmission::ts_args_sha256: core::option::Option<alloc::string::String>
+pub struct agentkit_store::ExecutionReceiptRecord
+pub agentkit_store::ExecutionReceiptRecord::approval_generation: core::option::Option<alloc::string::String>
+pub agentkit_store::ExecutionReceiptRecord::approval_request_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ExecutionReceiptRecord::args_hash_provenance: agentkit_store::ArgsHashProvenance
+pub agentkit_store::ExecutionReceiptRecord::args_sha256: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::attempt_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::chat_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::context_sha256: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::execution_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::resolution: core::option::Option<agentkit_store::ExecutionResolution>
+pub agentkit_store::ExecutionReceiptRecord::result: core::option::Option<serde_json::value::Value>
+pub agentkit_store::ExecutionReceiptRecord::run_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::status: agentkit_store::ExecutionReceiptStatus
+pub agentkit_store::ExecutionReceiptRecord::tool_call_id: alloc::string::String
+pub agentkit_store::ExecutionReceiptRecord::tool_name: alloc::string::String
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ExecutionReceiptRecord
+pub fn agentkit_store::ExecutionReceiptRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::ExecutionResolution
+pub agentkit_store::ExecutionResolution::note: core::option::Option<alloc::string::String>
+pub agentkit_store::ExecutionResolution::outcome: agentkit_store::ResolutionOutcome
+pub agentkit_store::ExecutionResolution::resolved_at: i64
+pub agentkit_store::ExecutionResolution::resolved_by: core::option::Option<alloc::string::String>
+pub struct agentkit_store::FinalizeApply
+pub agentkit_store::FinalizeApply::from: alloc::vec::Vec<agentkit_store::ProposalStatus>
+pub agentkit_store::FinalizeApply::now: i64
+pub agentkit_store::FinalizeApply::operation_id: alloc::string::String
+pub agentkit_store::FinalizeApply::outcome: agentkit_store::ApplyOutcome
+pub agentkit_store::FinalizeApply::patch: agentkit_store::ProposalPatch
+pub agentkit_store::FinalizeApply::proposal_id: alloc::string::String
+pub agentkit_store::FinalizeApply::to: agentkit_store::ProposalStatus
+pub struct agentkit_store::ImportConversation
+pub agentkit_store::ImportConversation::chat: agentkit_store::ChatRecord
+pub agentkit_store::ImportConversation::messages: alloc::vec::Vec<agentkit_store::MessageRecord>
+pub struct agentkit_store::ImportOptions
+pub agentkit_store::ImportOptions::abort_on_error: bool
+pub agentkit_store::ImportOptions::copy_mcp_servers: bool
+pub agentkit_store::ImportOptions::copy_outbox: bool
+pub agentkit_store::ImportOptions::copy_proposals: bool
+pub agentkit_store::ImportOptions::copy_provider_catalog: bool
+pub agentkit_store::ImportOptions::dry_run: bool
+pub agentkit_store::ImportOptions::promote_mcp_application_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ImportOptions::promote_settings: bool
+impl core::default::Default for agentkit_store::ImportOptions
+pub fn agentkit_store::ImportOptions::default() -> Self
+pub struct agentkit_store::ImportReport
+pub agentkit_store::ImportReport::agent_inputs: usize
+pub agentkit_store::ImportReport::attempts: usize
+pub agentkit_store::ImportReport::chats: usize
+pub agentkit_store::ImportReport::conflicted_mcp_servers: usize
+pub agentkit_store::ImportReport::context_summaries: usize
+pub agentkit_store::ImportReport::events: usize
+pub agentkit_store::ImportReport::executions: usize
+pub agentkit_store::ImportReport::mcp_servers: usize
+pub agentkit_store::ImportReport::messages: usize
+pub agentkit_store::ImportReport::outbox: usize
+pub agentkit_store::ImportReport::preserved_mcp_configs: usize
+pub agentkit_store::ImportReport::preserved_settings: usize
+pub agentkit_store::ImportReport::promoted_mcp_servers: usize
+pub agentkit_store::ImportReport::promoted_settings: usize
+pub agentkit_store::ImportReport::proposals: usize
+pub agentkit_store::ImportReport::providers: usize
+pub agentkit_store::ImportReport::receipts: usize
+pub agentkit_store::ImportReport::tasks: usize
+pub agentkit_store::ImportReport::uncertainty_barriers: usize
+pub agentkit_store::ImportReport::warnings: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_store::InsertFinding
+pub agentkit_store::InsertFinding::chat_id: alloc::string::String
+pub agentkit_store::InsertFinding::detail: serde_json::value::Value
+pub agentkit_store::InsertFinding::finding_id: alloc::string::String
+pub agentkit_store::InsertFinding::model: alloc::string::String
+pub agentkit_store::InsertFinding::now: i64
+pub agentkit_store::InsertFinding::severity: alloc::string::String
+pub agentkit_store::InsertFinding::source: alloc::string::String
+pub agentkit_store::InsertFinding::title: alloc::string::String
+pub agentkit_store::InsertFinding::trigger_kind: alloc::string::String
+pub struct agentkit_store::InteractionRow
+pub agentkit_store::InteractionRow::answer: core::option::Option<agentkit_native::interaction::AnswerSubmission>
+pub agentkit_store::InteractionRow::answered_at_ms: core::option::Option<i64>
+pub agentkit_store::InteractionRow::record: agentkit_native::interaction::PendingInteraction
+pub agentkit_store::InteractionRow::status: alloc::string::String
+pub struct agentkit_store::MessageRecord
+pub agentkit_store::MessageRecord::active: bool
+pub agentkit_store::MessageRecord::archived: bool
+pub agentkit_store::MessageRecord::branch_index: u32
+pub agentkit_store::MessageRecord::chat_id: alloc::string::String
+pub agentkit_store::MessageRecord::content: serde_json::value::Value
+pub agentkit_store::MessageRecord::created_at: agentkit_kernel::timestamp::ConversationTimestamp
+pub agentkit_store::MessageRecord::depth: u32
+pub agentkit_store::MessageRecord::id: alloc::string::String
+pub agentkit_store::MessageRecord::metadata: serde_json::value::Value
+pub agentkit_store::MessageRecord::model_result_json: core::option::Option<alloc::string::String>
+pub agentkit_store::MessageRecord::order_key: u64
+pub agentkit_store::MessageRecord::parent_message_id: core::option::Option<alloc::string::String>
+pub agentkit_store::MessageRecord::role: alloc::string::String
+pub agentkit_store::MessageRecord::run_id: core::option::Option<alloc::string::String>
+pub agentkit_store::MessageRecord::tool_call_id: core::option::Option<alloc::string::String>
+pub agentkit_store::MessageRecord::tool_calls: core::option::Option<serde_json::value::Value>
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::MessageRecord
+pub fn agentkit_store::MessageRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::MessageSearchHit
+pub agentkit_store::MessageSearchHit::message: agentkit_store::MessageRecord
+pub agentkit_store::MessageSearchHit::score: usize
+pub struct agentkit_store::NativeCallReceipt
+pub agentkit_store::NativeCallReceipt::attempt_id: alloc::string::String
+pub agentkit_store::NativeCallReceipt::content_hash: alloc::string::String
+pub agentkit_store::NativeCallReceipt::invocation_id: alloc::string::String
+pub agentkit_store::NativeCallReceipt::record: serde_json::value::Value
+pub agentkit_store::NativeCallReceipt::recorded_at: i64
+pub agentkit_store::NativeCallReceipt::task_id: alloc::string::String
+pub agentkit_store::NativeCallReceipt::tool_name: alloc::string::String
+pub struct agentkit_store::OutboxInput
+pub agentkit_store::OutboxInput::available_at: i64
+pub agentkit_store::OutboxInput::id: core::option::Option<alloc::string::String>
+pub agentkit_store::OutboxInput::payload: serde_json::value::Value
+pub agentkit_store::OutboxInput::run_id: core::option::Option<alloc::string::String>
+pub agentkit_store::OutboxInput::topic: alloc::string::String
+pub struct agentkit_store::OutboxRecord
+pub agentkit_store::OutboxRecord::attempts: u32
+pub agentkit_store::OutboxRecord::available_at: i64
+pub agentkit_store::OutboxRecord::claim_owner: core::option::Option<alloc::string::String>
+pub agentkit_store::OutboxRecord::claim_token: core::option::Option<alloc::string::String>
+pub agentkit_store::OutboxRecord::claim_until: core::option::Option<i64>
+pub agentkit_store::OutboxRecord::created_at: i64
+pub agentkit_store::OutboxRecord::id: alloc::string::String
+pub agentkit_store::OutboxRecord::last_error: core::option::Option<alloc::string::String>
+pub agentkit_store::OutboxRecord::payload: serde_json::value::Value
+pub agentkit_store::OutboxRecord::published_at: core::option::Option<i64>
+pub agentkit_store::OutboxRecord::run_id: core::option::Option<alloc::string::String>
+pub agentkit_store::OutboxRecord::topic: alloc::string::String
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::OutboxRecord
+pub fn agentkit_store::OutboxRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::ParkTurn
+pub agentkit_store::ParkTurn::assistant_message: core::option::Option<(alloc::string::String, serde_json::value::Value)>
+pub agentkit_store::ParkTurn::events: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_store::ParkTurn::fence: agentkit_engine::model::LeaseFence
+pub agentkit_store::ParkTurn::now: i64
+pub agentkit_store::ParkTurn::request: core::option::Option<agentkit_store::CreateAgentInput>
+pub struct agentkit_store::ProjectionCommit
+pub agentkit_store::ProjectionCommit::applied: alloc::vec::Vec<alloc::string::String>
+pub agentkit_store::ProjectionCommit::created: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_store::PromoteMailbox
+pub agentkit_store::PromoteMailbox::kind: alloc::string::String
+pub agentkit_store::PromoteMailbox::now: i64
+pub agentkit_store::PromoteMailbox::priority: i32
+pub struct agentkit_store::ProposalPatch
+pub agentkit_store::ProposalPatch::decision: core::option::Option<serde_json::value::Value>
+pub agentkit_store::ProposalPatch::operation_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ProposalPatch::reason: core::option::Option<alloc::string::String>
+pub struct agentkit_store::ProposalRecord
+pub agentkit_store::ProposalRecord::action_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ProposalRecord::applied_at: core::option::Option<i64>
+pub agentkit_store::ProposalRecord::chat_id: alloc::string::String
+pub agentkit_store::ProposalRecord::claimed_at: core::option::Option<i64>
+pub agentkit_store::ProposalRecord::created_at: i64
+pub agentkit_store::ProposalRecord::decided_at: core::option::Option<i64>
+pub agentkit_store::ProposalRecord::decision: core::option::Option<serde_json::value::Value>
+pub agentkit_store::ProposalRecord::envelope: serde_json::value::Value
+pub agentkit_store::ProposalRecord::id: alloc::string::String
+pub agentkit_store::ProposalRecord::kind: alloc::string::String
+pub agentkit_store::ProposalRecord::operation_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ProposalRecord::operations: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_store::ProposalRecord::reason: core::option::Option<alloc::string::String>
+pub agentkit_store::ProposalRecord::revision_at_create: core::option::Option<alloc::string::String>
+pub agentkit_store::ProposalRecord::risk: alloc::string::String
+pub agentkit_store::ProposalRecord::run_id: core::option::Option<alloc::string::String>
+pub agentkit_store::ProposalRecord::scope_key: alloc::string::String
+pub agentkit_store::ProposalRecord::status: agentkit_store::ProposalStatus
+pub agentkit_store::ProposalRecord::tool_name: alloc::string::String
+pub agentkit_store::ProposalRecord::truncated: bool
+pub agentkit_store::ProposalRecord::warnings: alloc::vec::Vec<alloc::string::String>
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ProposalRecord
+pub fn agentkit_store::ProposalRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::ProviderContinuationRecord
+pub agentkit_store::ProviderContinuationRecord::anchor_message_id: alloc::string::String
+pub agentkit_store::ProviderContinuationRecord::run_id: alloc::string::String
+pub agentkit_store::ProviderContinuationRecord::state: serde_json::value::Value
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ProviderContinuationRecord
+pub fn agentkit_store::ProviderContinuationRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::ProviderContinuityRestore
+pub agentkit_store::ProviderContinuityRestore::expected_generation: u64
+pub agentkit_store::ProviderContinuityRestore::legacy: bool
+pub agentkit_store::ProviderContinuityRestore::previous_generation: u64
+pub struct agentkit_store::QueueOrStage
+pub agentkit_store::QueueOrStage::candidate: core::option::Option<agentkit_store::StagedCandidate>
+pub agentkit_store::QueueOrStage::input: agentkit_store::CreateAgentInput
+pub agentkit_store::QueueOrStage::now: i64
+pub agentkit_store::QueueOrStage::session_id: alloc::string::String
+pub agentkit_store::QueueOrStage::target_the_live_turn: bool
+pub agentkit_store::QueueOrStage::task_kind: alloc::string::String
+pub struct agentkit_store::ReceiptRecord
+pub agentkit_store::ReceiptRecord::created_at: i64
+pub agentkit_store::ReceiptRecord::operation_id: alloc::string::String
+pub agentkit_store::ReceiptRecord::outcome: agentkit_store::ApplyOutcome
+pub agentkit_store::ReceiptRecord::proposal_id: alloc::string::String
+impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_store::ReceiptRecord
+pub fn agentkit_store::ReceiptRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_store::RegisterSubagent
+pub agentkit_store::RegisterSubagent::child_chat_id: alloc::string::String
+pub agentkit_store::RegisterSubagent::depth: i64
+pub agentkit_store::RegisterSubagent::model: core::option::Option<alloc::string::String>
+pub agentkit_store::RegisterSubagent::now: i64
+pub agentkit_store::RegisterSubagent::parent_chat_id: alloc::string::String
+pub agentkit_store::RegisterSubagent::parent_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::RegisterSubagent::prompt: alloc::string::String
+pub agentkit_store::RegisterSubagent::role: alloc::string::String
+pub agentkit_store::RegisterSubagent::turn_task_id: core::option::Option<alloc::string::String>
+pub struct agentkit_store::ResealReport
+pub agentkit_store::ResealReport::legacy_plaintext_sealed: u64
+pub agentkit_store::ResealReport::local_key_retired: bool
+pub agentkit_store::ResealReport::rows: u64
+pub agentkit_store::ResealReport::values_resealed: u64
+pub struct agentkit_store::ResolveExecution
+pub agentkit_store::ResolveExecution::note: core::option::Option<alloc::string::String>
+pub agentkit_store::ResolveExecution::now: i64
+pub agentkit_store::ResolveExecution::outcome: agentkit_store::ResolutionOutcome
+pub agentkit_store::ResolveExecution::resolved_by: core::option::Option<alloc::string::String>
+pub agentkit_store::ResolveExecution::result: core::option::Option<serde_json::value::Value>
+pub struct agentkit_store::SessionSettle
+pub agentkit_store::SessionSettle::convert: alloc::vec::Vec<agentkit_store::StagedCandidate>
+pub agentkit_store::SessionSettle::expected_descriptor: core::option::Option<serde_json::value::Value>
+pub agentkit_store::SessionSettle::staging: core::option::Option<agentkit_store::TurnStaging>
+impl agentkit_engine::repository::SessionSettlement for agentkit_store::SessionSettle
+pub fn agentkit_store::SessionSettle::staged_kinds(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_store::SessionSettle::without_promotion(self) -> Self
+pub struct agentkit_store::SetAgentModel
+pub agentkit_store::SetAgentModel::agent_id: alloc::string::String
+pub agentkit_store::SetAgentModel::expected_revision: i64
+pub agentkit_store::SetAgentModel::model: core::option::Option<alloc::string::String>
+pub agentkit_store::SetAgentModel::now: i64
+pub agentkit_store::SetAgentModel::reasoning_effort: core::option::Option<alloc::string::String>
+pub struct agentkit_store::SettingWrite
+pub agentkit_store::SettingWrite::key: alloc::string::String
+pub agentkit_store::SettingWrite::namespace: alloc::string::String
+pub agentkit_store::SettingWrite::value: core::option::Option<serde_json::value::Value>
+pub struct agentkit_store::SqliteStore
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::acquire_lease(&self, &str, &str, &str, i64, i64) -> agentkit_store::Result<agentkit_engine::model::Lease>
+pub async fn agentkit_store::SqliteStore::get_lease(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::Lease>>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::activate_path(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::MessageRecord>>
+pub async fn agentkit_store::SqliteStore::append_message(&self, agentkit_engine::model::MessageInput, core::option::Option<agentkit_engine::model::LeaseFence>, i64) -> agentkit_store::Result<agentkit_store::MessageRecord>
+pub async fn agentkit_store::SqliteStore::create_chat(&self, &str, core::option::Option<alloc::string::String>, serde_json::value::Value, i64) -> agentkit_store::Result<agentkit_store::ChatRecord>
+pub async fn agentkit_store::SqliteStore::get_chat(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::ChatRecord>>
+pub async fn agentkit_store::SqliteStore::get_message(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::MessageRecord>>
+pub async fn agentkit_store::SqliteStore::last_message_of_run(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::MessageRecord>>
+pub async fn agentkit_store::SqliteStore::list_chats(&self, bool) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::ChatRecord>>
+pub async fn agentkit_store::SqliteStore::messages(&self, &str, bool) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::MessageRecord>>
+pub async fn agentkit_store::SqliteStore::mutate_chat<F, T>(&self, &str, i64, F) -> agentkit_store::Result<T> where T: core::marker::Send + 'static, F: core::ops::function::FnOnce(&mut agentkit_store::ChatRecord) -> agentkit_store::Result<T> + core::marker::Send + 'static
+pub async fn agentkit_store::SqliteStore::search_messages(&self, &str, core::option::Option<alloc::string::String>, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::MessageSearchHit>>
+pub async fn agentkit_store::SqliteStore::update_chat(&self, &str, core::option::Option<alloc::string::String>, core::option::Option<serde_json::value::Value>, core::option::Option<bool>, i64) -> agentkit_store::Result<agentkit_store::ChatRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::active_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::claim_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>, &str, &str, i64) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::claim_selected_continuation(&self, &agentkit_native::repository::NativeContinuationBinding, &str, &str, i64) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::commit_continuation(&self, agentkit_native::repository::CommitContinuation) -> agentkit_store::Result<agentkit_native::repository::NativeContinuationBinding>
+pub async fn agentkit_store::SqliteStore::continuation_for_attempt(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::get_call_receipt(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::NativeCallReceipt>>
+pub async fn agentkit_store::SqliteStore::mark_continuation_uncertain(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::reconcile_continuation(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::record_call_lifecycle(&self, agentkit_store::NativeCallReceipt) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::record_call_receipt(&self, agentkit_store::NativeCallReceipt) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::release_continuation_claim(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::resumable_continuation(&self, &str, &str, i64, &str, &str, &str, core::option::Option<&str>, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>>
+pub async fn agentkit_store::SqliteStore::retire_continuations(&self, &str) -> agentkit_store::Result<usize>
+impl agentkit_store::SqliteStore
+pub fn agentkit_store::SqliteStore::actor_identity(&self) -> agentkit_store::StoreActorIdentity
+pub async fn agentkit_store::SqliteStore::flush(&self) -> agentkit_store::Result<()>
+pub fn agentkit_store::SqliteStore::memory(usize) -> agentkit_store::Result<Self>
+pub fn agentkit_store::SqliteStore::open(impl core::convert::AsRef<std::path::Path>, usize) -> agentkit_store::Result<Self>
+pub fn agentkit_store::SqliteStore::same_actor(&self, &Self) -> bool
+pub fn agentkit_store::SqliteStore::with_connector_credential_key(self, impl core::convert::Into<alloc::vec::Vec<u8>>) -> Self
+pub fn agentkit_store::SqliteStore::with_connector_key_required(self, bool) -> Self
+pub fn agentkit_store::SqliteStore::with_task_aging(self, agentkit_store::TaskAging) -> Self
+pub fn agentkit_store::SqliteStore::with_transaction_gate_timeout(self, core::time::Duration) -> Self
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::admit_execution(&self, agentkit_engine::model::LeaseFence, agentkit_store::ExecutionReceiptAdmission) -> core::result::Result<bool, agentkit_store::StoreError>
+pub async fn agentkit_store::SqliteStore::complete_execution(&self, agentkit_engine::model::LeaseFence, alloc::string::String, serde_json::value::Value, i64) -> core::result::Result<(), agentkit_store::StoreError>
+pub async fn agentkit_store::SqliteStore::list_executions(&self, alloc::string::String) -> core::result::Result<alloc::vec::Vec<agentkit_store::ExecutionReceiptRecord>, agentkit_store::StoreError>
+pub async fn agentkit_store::SqliteStore::list_executions_by_chat(&self, alloc::string::String) -> core::result::Result<alloc::vec::Vec<agentkit_store::ExecutionReceiptRecord>, agentkit_store::StoreError>
+pub async fn agentkit_store::SqliteStore::list_uncertainty_barriers(&self, alloc::string::String, alloc::string::String) -> core::result::Result<alloc::vec::Vec<agentkit_store::UncertaintyBarrierRecord>, agentkit_store::StoreError>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::admit_teammate_task(&self, agentkit_store::AdmitTeammateTask) -> agentkit_store::Result<agentkit_store::AdmittedTask>
+pub async fn agentkit_store::SqliteStore::cancel_agent_mailbox(&self, alloc::string::String, i64) -> agentkit_store::Result<agentkit_store::AgentInputRecord>
+pub async fn agentkit_store::SqliteStore::continue_after_children(&self, alloc::string::String, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::enqueue_agent_mailbox(&self, alloc::string::String, agentkit_store::CreateAgentMailbox) -> agentkit_store::Result<(agentkit_store::AgentInputRecord, bool)>
+pub async fn agentkit_store::SqliteStore::list_agent_mailbox(&self, alloc::string::String, core::option::Option<alloc::vec::Vec<agentkit_store::AgentInputStatus>>) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::AgentInputRecord>>
+pub async fn agentkit_store::SqliteStore::list_agent_tasks(&self, alloc::string::String) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::list_agent_tasks_page(&self, alloc::string::String, core::option::Option<i64>, usize) -> agentkit_store::Result<agentkit_store::AgentTaskPage>
+pub async fn agentkit_store::SqliteStore::list_agent_unfinished_tasks(&self, alloc::string::String) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::mark_uncertain(&self, agentkit_engine::model::LeaseFence, i64, &str) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::promote_next_agent_mailbox(&self, alloc::string::String, agentkit_store::PromoteMailbox) -> agentkit_store::Result<core::option::Option<(agentkit_store::AgentInputRecord, agentkit_engine::model::TaskRecord)>>
+pub async fn agentkit_store::SqliteStore::reconcile_agent_runs(&self, alloc::string::String, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::resolve_uncertain(&self, alloc::string::String, agentkit_engine::model::TaskStatus, core::option::Option<alloc::string::String>, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::task_by_admission_key(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::wait_for_children(&self, agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<bool>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::answer_human_request(&self, agentkit_store::AnswerHumanRequest) -> agentkit_store::Result<agentkit_store::AnswerOutcome>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::answer_interaction(&self, &agentkit_native::interaction::AnswerSubmission, &str, &str, u64, &str, i64) -> agentkit_store::Result<agentkit_native::interaction::AnswerDisposition>
+pub async fn agentkit_store::SqliteStore::answer_interaction_fenced(&self, &agentkit_native::interaction::AnswerSubmission, &str, &str, u64, &str, i64) -> agentkit_store::Result<agentkit_native::interaction::AnswerDisposition>
+pub async fn agentkit_store::SqliteStore::bind_native_session(&self, agentkit_native::repository::BindNativeSession) -> agentkit_store::Result<agentkit_native::repository::NativeSessionBinding>
+pub async fn agentkit_store::SqliteStore::current_native_binding(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_native::repository::NativeSessionBinding>>
+pub async fn agentkit_store::SqliteStore::expire_interactions(&self, &str, i64) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::get_interaction(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::InteractionRow>>
+pub async fn agentkit_store::SqliteStore::invalidate_interaction(&self, &str) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::invalidate_interactions(&self, &str, i64) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::is_observed_native_session(&self, &str) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::list_interactions(&self, &str, bool) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::InteractionRow>>
+pub async fn agentkit_store::SqliteStore::observe_native_session(&self, &str, &str, i64) -> agentkit_store::Result<agentkit_native::repository::NativeSessionBinding>
+pub async fn agentkit_store::SqliteStore::open_interaction(&self, agentkit_native::interaction::PendingInteraction) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::retire_native_binding(&self, &str) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::append_events(&self, agentkit_engine::model::LeaseFence, alloc::vec::Vec<serde_json::value::Value>, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
+pub async fn agentkit_store::SqliteStore::append_projected(&self, agentkit_engine::model::LeaseFence, alloc::vec::Vec<serde_json::value::Value>, alloc::vec::Vec<agentkit_engine::model::MessageInput>, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
+pub async fn agentkit_store::SqliteStore::claim(&self, agentkit_engine::model::ClaimInput) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::ClaimedTask>>
+pub async fn agentkit_store::SqliteStore::claim_with_concurrency(&self, agentkit_engine::model::ClaimInput, usize) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::ClaimedTask>>
+pub async fn agentkit_store::SqliteStore::get_task(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::list_tasks(&self, core::option::Option<alloc::string::String>) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::submit(&self, agentkit_engine::model::SubmitTask) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::submit_turn(&self, agentkit_engine::model::SubmitTask, alloc::vec::Vec<agentkit_engine::model::MessageInput>) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::verify_fence(&self, &agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::append_projected_inputs(&self, agentkit_store::AppendProjectedInputs) -> agentkit_store::Result<agentkit_store::ProjectionCommit>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::archive_agent(&self, alloc::string::String, i64) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::check_agent_admission(&self, alloc::string::String) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::create_agent(&self, agentkit_store::CreateAgent) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::delete_agent(&self, alloc::string::String, i64) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::duplicate_agent(&self, agentkit_store::DuplicateAgent) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::export_agents(&self, alloc::string::String) -> agentkit_store::Result<alloc::string::String>
+pub async fn agentkit_store::SqliteStore::get_agent(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<agentkit_store::AgentRecord>>
+pub async fn agentkit_store::SqliteStore::import_agents(&self, alloc::string::String, alloc::string::String) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::AgentRecord>>
+pub async fn agentkit_store::SqliteStore::list_agent_revisions(&self, alloc::string::String) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::AgentRevision>>
+pub async fn agentkit_store::SqliteStore::list_agents(&self, alloc::string::String) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::AgentRecord>>
+pub async fn agentkit_store::SqliteStore::preview_agent_deletion(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<agentkit_store::AgentDeletionPreview>>
+pub async fn agentkit_store::SqliteStore::restore_agent(&self, alloc::string::String, i64) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::set_agent_model(&self, agentkit_store::SetAgentModel) -> agentkit_store::Result<agentkit_store::AgentRecord>
+pub async fn agentkit_store::SqliteStore::update_agent(&self, agentkit_store::UpdateAgent) -> agentkit_store::Result<agentkit_store::AgentRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::archive_branch(&self, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::delete_chat(&self, &str) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::fork_chat(&self, &str, &str, &str, i64) -> agentkit_store::Result<(agentkit_store::ChatRecord, alloc::vec::Vec<agentkit_store::MessageRecord>)>
+pub async fn agentkit_store::SqliteStore::import_conversation(&self, agentkit_store::ImportConversation) -> agentkit_store::Result<agentkit_store::ChatRecord>
+pub async fn agentkit_store::SqliteStore::list_siblings(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::MessageRecord>>
+pub async fn agentkit_store::SqliteStore::update_message(&self, &str, core::option::Option<serde_json::value::Value>, core::option::Option<serde_json::value::Value>, core::option::Option<serde_json::value::Value>, core::option::Option<agentkit_engine::model::LeaseFence>, i64) -> agentkit_store::Result<agentkit_store::MessageRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::attempts(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::AttemptRecord>>
+pub async fn agentkit_store::SqliteStore::cancel_task(&self, &str, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::check_dispatch(&self, agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::recover(&self, i64, u32, i64, agentkit_engine::model::RecoveryMode) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::renew(&self, agentkit_engine::model::LeaseFence, i64, i64) -> agentkit_store::Result<agentkit_engine::model::Lease>
+pub async fn agentkit_store::SqliteStore::resume_task(&self, &str, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::settle(&self, agentkit_engine::model::SettleTask) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::settle_session(&self, agentkit_engine::model::SettleTask, agentkit_store::SessionSettle) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::update_progress(&self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::begin_transaction(&self) -> agentkit_store::Result<agentkit_store::StoreTransaction>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::bind_run(&self, &str, &str, serde_json::value::Value, agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::continuations_by_anchors(&self, &str, alloc::vec::Vec<alloc::string::String>) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::ProviderContinuationRecord>>
+pub async fn agentkit_store::SqliteStore::get_continuation(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::ProviderContinuationRecord>>
+pub async fn agentkit_store::SqliteStore::get_run_scope(&self, &str) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::put_continuation(&self, agentkit_store::ProviderContinuationRecord, agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<agentkit_store::ProviderContinuationRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::bind_setting(&self, &str, &str, serde_json::value::Value) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::claim_outbox(&self, &str, i64, i64, usize, u32) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::OutboxRecord>>
+pub async fn agentkit_store::SqliteStore::compare_and_set_setting(&self, &str, &str, core::option::Option<serde_json::value::Value>, serde_json::value::Value) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::delete_setting(&self, &str, &str) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::enqueue_outbox(&self, agentkit_store::OutboxInput, i64) -> agentkit_store::Result<agentkit_store::OutboxRecord>
+pub async fn agentkit_store::SqliteStore::fail_outbox(&self, &str, &str, i64, alloc::string::String, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::get_setting(&self, &str, &str) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_settings(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<(alloc::string::String, serde_json::value::Value)>>
+pub async fn agentkit_store::SqliteStore::mark_outbox_failed(&self, &str, alloc::string::String, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::mark_outbox_published(&self, &str, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::outbox(&self) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::OutboxRecord>>
+pub async fn agentkit_store::SqliteStore::prune_outbox(&self, i64, u32) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::publish_outbox(&self, &str, &str, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::set_setting(&self, &str, &str, serde_json::value::Value) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::update_setting<F>(&self, &str, &str, serde_json::value::Value, F) -> agentkit_store::Result<serde_json::value::Value> where F: core::ops::function::FnOnce(serde_json::value::Value) -> serde_json::value::Value + core::marker::Send + 'static
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::checkpoint_runtime_state(&self, agentkit_engine::model::LeaseFence, core::option::Option<serde_json::value::Value>, serde_json::value::Value, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::interrupt_queued(&self, i64) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::submit_child(&self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::compare_and_set_settings(&self, &str, &str, core::option::Option<serde_json::value::Value>, alloc::vec::Vec<agentkit_store::SettingWrite>) -> agentkit_store::Result<agentkit_store::SettingsCommit>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::complete_execution_not_started(&self, agentkit_engine::model::LeaseFence, alloc::string::String, alloc::string::String, serde_json::value::Value) -> core::result::Result<bool, agentkit_store::StoreError>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::complete_proposal(&self, &str, &str, agentkit_store::ApplyOutcome, i64) -> agentkit_store::Result<agentkit_store::ReceiptRecord>
+pub async fn agentkit_store::SqliteStore::create_proposal(&self, agentkit_store::ProposalRecord) -> agentkit_store::Result<agentkit_store::ProposalRecord>
+pub async fn agentkit_store::SqliteStore::delete_proposals_by_chat(&self, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::finalize_apply(&self, agentkit_store::FinalizeApply) -> agentkit_store::Result<agentkit_store::ReceiptRecord>
+pub async fn agentkit_store::SqliteStore::get_proposal(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::ProposalRecord>>
+pub async fn agentkit_store::SqliteStore::invalidate_pending(&self, &str, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::proposal_by_action(&self, &str, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::ProposalRecord>>
+pub async fn agentkit_store::SqliteStore::proposals(&self, core::option::Option<alloc::string::String>, core::option::Option<agentkit_store::ProposalStatus>) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::ProposalRecord>>
+pub async fn agentkit_store::SqliteStore::receipt(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::ReceiptRecord>>
+pub async fn agentkit_store::SqliteStore::record_outcome(&self, &str, agentkit_store::ApplyOutcome, i64) -> agentkit_store::Result<agentkit_store::ReceiptRecord>
+pub async fn agentkit_store::SqliteStore::transition_proposal(&self, &str, alloc::vec::Vec<agentkit_store::ProposalStatus>, agentkit_store::ProposalStatus, agentkit_store::ProposalPatch, i64) -> agentkit_store::Result<agentkit_store::ProposalRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::count_active_subagents(&self) -> agentkit_store::Result<i64>
+pub async fn agentkit_store::SqliteStore::get_subagent(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_store::SubagentRecord>>
+pub async fn agentkit_store::SqliteStore::list_active_subagents(&self) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::SubagentRecord>>
+pub async fn agentkit_store::SqliteStore::list_subagents(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::SubagentRecord>>
+pub async fn agentkit_store::SqliteStore::list_subagents_by_parent_task(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::SubagentRecord>>
+pub async fn agentkit_store::SqliteStore::reactivate_subagent(&self, &str, &str, i64) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::reactivate_subagent_for_parent(&self, &str, &str, i64, core::option::Option<&str>) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::rebind_subagent_parent(&self, &str, &str) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::register_subagent(&self, agentkit_store::RegisterSubagent) -> agentkit_store::Result<agentkit_store::SubagentRecord>
+pub async fn agentkit_store::SqliteStore::register_subagent_if_under(&self, agentkit_store::RegisterSubagent, i64, i64) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::set_subagent_turn(&self, &str, &str) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::update_subagent(&self, &str, &str, core::option::Option<&str>, core::option::Option<&str>, i64) -> agentkit_store::Result<bool>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::count_advisor_findings_since(&self, core::option::Option<&str>, core::option::Option<&str>, i64) -> agentkit_store::Result<i64>
+pub async fn agentkit_store::SqliteStore::count_advisor_reviews_since(&self, core::option::Option<&str>, core::option::Option<&str>, i64) -> agentkit_store::Result<i64>
+pub async fn agentkit_store::SqliteStore::insert_advisor_finding(&self, agentkit_store::InsertFinding) -> agentkit_store::Result<agentkit_store::AdvisorFindingRecord>
+pub async fn agentkit_store::SqliteStore::list_advisor_findings(&self, &str, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::AdvisorFindingRecord>>
+pub async fn agentkit_store::SqliteStore::mark_advisor_finding_escalated(&self, &str) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::record_advisor_review(&self, &str, &str, &str, &str, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::reserve_advisor_review_if_under(&self, &str, &str, &str, &str, i64, i64, i64) -> agentkit_store::Result<bool>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::create_attempt(&self, &str, &str, &str, i64) -> agentkit_store::Result<agentkit_engine::model::AttemptRecord>
+pub async fn agentkit_store::SqliteStore::delete_by_scope(&self, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::end_attempt(&self, &str, &str, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, i64) -> agentkit_store::Result<agentkit_engine::model::AttemptRecord>
+pub async fn agentkit_store::SqliteStore::expire_stale_leases(&self, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::Lease>>
+pub async fn agentkit_store::SqliteStore::interrupt_task(&self, &str, &str, core::option::Option<alloc::string::String>, i64) -> agentkit_store::Result<bool>
+pub async fn agentkit_store::SqliteStore::list_children(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::mark_dead_lettered(&self, &str, &str, core::option::Option<alloc::string::String>, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+pub async fn agentkit_store::SqliteStore::release_lease(&self, &str) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::renew_lease_by_token(&self, &str, i64, i64) -> agentkit_store::Result<agentkit_engine::model::Lease>
+pub async fn agentkit_store::SqliteStore::transition_task(&self, &str, alloc::vec::Vec<agentkit_engine::model::TaskStatus>, agentkit_engine::model::TaskStatus, agentkit_engine::model::TaskTransitionPatch, core::option::Option<alloc::string::String>, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::create_input(&self, agentkit_store::CreateAgentInput, i64) -> agentkit_store::Result<(agentkit_store::AgentInputRecord, bool)>
+pub async fn agentkit_store::SqliteStore::delete_session_inputs(&self, alloc::string::String) -> agentkit_store::Result<u64>
+pub async fn agentkit_store::SqliteStore::get_input(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<agentkit_store::AgentInputRecord>>
+pub async fn agentkit_store::SqliteStore::list_inputs(&self, agentkit_store::AgentInputQuery) -> agentkit_store::Result<alloc::vec::Vec<agentkit_store::AgentInputRecord>>
+pub async fn agentkit_store::SqliteStore::transition_input(&self, alloc::string::String, alloc::vec::Vec<agentkit_store::AgentInputStatus>, agentkit_store::AgentInputStatus, agentkit_store::AgentInputPatch, i64) -> agentkit_store::Result<agentkit_store::AgentInputRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::delete_connection(&self, alloc::string::String) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::delete_prompt_template(&self, alloc::string::String, alloc::string::String) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::delete_skill(&self, alloc::string::String) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::get_connection(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::get_prompt_template(&self, alloc::string::String, alloc::string::String) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::get_skill(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_connections(&self) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_prompt_templates(&self) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_run_content_resources(&self, core::option::Option<alloc::string::String>) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_skills(&self) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::publish_prompt_template(&self, serde_json::value::Value) -> agentkit_store::Result<serde_json::value::Value>
+pub async fn agentkit_store::SqliteStore::publish_skill(&self, alloc::string::String, alloc::string::String, alloc::string::String) -> agentkit_store::Result<serde_json::value::Value>
+pub async fn agentkit_store::SqliteStore::record_run_content_resource(&self, serde_json::value::Value, alloc::string::String, alloc::string::String) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::render_prompt_template_record(&self, serde_json::value::Value) -> agentkit_store::Result<serde_json::value::Value>
+pub async fn agentkit_store::SqliteStore::resolve_run_content(&self, serde_json::value::Value, alloc::vec::Vec<alloc::string::String>, bool) -> agentkit_store::Result<serde_json::value::Value>
+pub async fn agentkit_store::SqliteStore::save_connection(&self, serde_json::value::Value, core::option::Option<i64>) -> agentkit_store::Result<serde_json::value::Value>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::delete_provider(&self, &str) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::get_provider(&self, &str) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::get_provider_capabilities(&self, &str) -> agentkit_store::Result<core::option::Option<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_provider_models(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::list_providers(&self) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::replace_provider_models(&self, &str, alloc::vec::Vec<serde_json::value::Value>) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::save_provider_capabilities(&self, &str, serde_json::value::Value) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::upsert_provider(&self, serde_json::value::Value) -> agentkit_store::Result<serde_json::value::Value>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::delete_session_context_summaries(&self, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::list_context_summaries(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::save_context_summary(&self, serde_json::value::Value) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::events(&self, &str, core::option::Option<u64>, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
+pub async fn agentkit_store::SqliteStore::events_after_number(&self, &str, core::option::Option<f64>, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
+pub async fn agentkit_store::SqliteStore::events_tail(&self, &str, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
+pub async fn agentkit_store::SqliteStore::next_seq(&self, &str) -> agentkit_store::Result<u64>
+pub async fn agentkit_store::SqliteStore::next_sequence(&self, &str) -> agentkit_store::Result<f64>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::import_from_ts_schema(&self, &std::path::Path, &agentkit_store::ImportOptions) -> agentkit_store::Result<agentkit_store::ImportReport>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::park_interrupted(&self, agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<()>
+pub async fn agentkit_store::SqliteStore::request_interrupt(&self, alloc::string::String, i64) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::park_turn(&self, agentkit_store::ParkTurn) -> agentkit_store::Result<core::option::Option<alloc::string::String>>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::queue_or_stage_turn(&self, agentkit_store::QueueOrStage) -> agentkit_store::Result<agentkit_store::QueueAdmission>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::request_compact(&self, alloc::string::String, alloc::string::String, serde_json::value::Value, i64) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::reseal_connector_credentials(&self) -> agentkit_store::Result<agentkit_store::ResealReport>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::resolve_execution(&self, alloc::string::String, agentkit_store::ResolveExecution) -> core::result::Result<agentkit_store::ExecutionReceiptRecord, agentkit_store::StoreError>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::retry_task(&self, agentkit_engine::model::RetryTask) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::revoke_standing_approval(&self, alloc::string::String, alloc::string::String, i64) -> agentkit_store::Result<serde_json::value::Value>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::run_profile_dispatch_refusal(&self, alloc::string::String) -> agentkit_store::Result<core::option::Option<alloc::string::String>>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::stage_queued_turn(&self, agentkit_store::StageQueuedTurn) -> agentkit_store::Result<core::option::Option<alloc::string::String>>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::task_projection(&self, &str, usize) -> agentkit_store::Result<core::option::Option<agentkit_store::TaskProjection>>
+impl agentkit_engine::repository::TaskRepository for agentkit_store::SqliteStore
+pub type agentkit_store::SqliteStore::Error = agentkit_store::StoreError
+pub type agentkit_store::SqliteStore::SessionSettle = agentkit_store::SessionSettle
+pub fn agentkit_store::SqliteStore::append_events<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, alloc::vec::Vec<serde_json::value::Value>, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::cancel_task<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::check_dispatch<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::claim_with_concurrency<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::ClaimInput, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_engine::model::ClaimedTask>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::events_after_number<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, core::option::Option<f64>, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::get_task<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_engine::model::TaskRecord>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::interrupt_queued<'life0, 'async_trait>(&'life0 self, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<usize, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::interrupt_task<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<alloc::string::String>, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::list_children<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::next_seq<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<u64, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::park_interrupted<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::recover<'life0, 'async_trait>(&'life0 self, i64, u32, i64, agentkit_engine::model::RecoveryMode) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::renew<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::Lease, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::resume_task<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::retry_task<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::RetryTask) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::settle<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::SettleTask) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::settle_session<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::SettleTask, agentkit_store::SessionSettle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::submit<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::SubmitTask) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::submit_child<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::update_progress<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::wait_for_children<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_native::repository::NativeRunRepository for agentkit_store::SqliteStore
+pub type agentkit_store::SqliteStore::Error = agentkit_store::StoreError
+pub fn agentkit_store::SqliteStore::active_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
+pub fn agentkit_store::SqliteStore::bind_native_session<'life0, 'async_trait>(&'life0 self, agentkit_native::repository::BindNativeSession) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::repository::NativeSessionBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::claim_selected_continuation<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::repository::NativeContinuationBinding, &'life2 str, &'life3 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_store::SqliteStore::commit_continuation<'life0, 'async_trait>(&'life0 self, agentkit_native::repository::CommitContinuation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::repository::NativeContinuationBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteStore::current_native_binding<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeSessionBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::invalidate_interactions<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<usize, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteStore::mark_continuation_uncertain<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::observe_native_session<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::repository::NativeSessionBinding, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::release_continuation_claim<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::resumable_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'life7, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>, &'life7 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait, 'life7: 'async_trait
+impl core::fmt::Debug for agentkit_store::SqliteStore
+pub fn agentkit_store::SqliteStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_store::StageQueuedTurn
+pub agentkit_store::StageQueuedTurn::exclude_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::StageQueuedTurn::expected_kind: agentkit_store::AgentInputKind
+pub agentkit_store::StageQueuedTurn::input_id: alloc::string::String
+pub agentkit_store::StageQueuedTurn::messages: alloc::vec::Vec<agentkit_engine::model::MessageInput>
+pub agentkit_store::StageQueuedTurn::now: i64
+pub agentkit_store::StageQueuedTurn::session_id: alloc::string::String
+pub agentkit_store::StageQueuedTurn::task: agentkit_engine::model::SubmitTask
+pub agentkit_store::StageQueuedTurn::task_kind: alloc::string::String
+pub struct agentkit_store::StagedCandidate
+pub agentkit_store::StagedCandidate::input_id: alloc::string::String
+pub agentkit_store::StagedCandidate::messages: alloc::vec::Vec<agentkit_engine::model::MessageInput>
+pub agentkit_store::StagedCandidate::task: agentkit_engine::model::SubmitTask
+pub struct agentkit_store::StoreActorIdentity
+impl agentkit_store::StoreActorIdentity
+pub fn agentkit_store::StoreActorIdentity::is_alive(&self) -> bool
+pub fn agentkit_store::StoreActorIdentity::matches(&self, &agentkit_store::SqliteStore) -> bool
+pub struct agentkit_store::StoreTransaction
+impl agentkit_store::StoreTransaction
+pub async fn agentkit_store::StoreTransaction::commit(self) -> agentkit_store::Result<()>
+pub async fn agentkit_store::StoreTransaction::rollback(self) -> agentkit_store::Result<()>
+pub fn agentkit_store::StoreTransaction::view(&self) -> agentkit_store::SqliteStore
+impl core::ops::drop::Drop for agentkit_store::StoreTransaction
+pub fn agentkit_store::StoreTransaction::drop(&mut self)
+pub struct agentkit_store::SubagentRecord
+pub agentkit_store::SubagentRecord::child_chat_id: alloc::string::String
+pub agentkit_store::SubagentRecord::created_at: i64
+pub agentkit_store::SubagentRecord::depth: i64
+pub agentkit_store::SubagentRecord::error: core::option::Option<alloc::string::String>
+pub agentkit_store::SubagentRecord::model: core::option::Option<alloc::string::String>
+pub agentkit_store::SubagentRecord::parent_chat_id: alloc::string::String
+pub agentkit_store::SubagentRecord::parent_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::SubagentRecord::prompt: alloc::string::String
+pub agentkit_store::SubagentRecord::result: core::option::Option<alloc::string::String>
+pub agentkit_store::SubagentRecord::role: alloc::string::String
+pub agentkit_store::SubagentRecord::status: alloc::string::String
+pub agentkit_store::SubagentRecord::turn_task_id: core::option::Option<alloc::string::String>
+pub agentkit_store::SubagentRecord::updated_at: i64
+pub struct agentkit_store::TaskAging
+pub agentkit_store::TaskAging::bonus: i64
+pub agentkit_store::TaskAging::interval_ms: i64
+pub agentkit_store::TaskAging::max_bonus: i64
+impl agentkit_store::TaskAging
+pub fn agentkit_store::TaskAging::effective_priority(&self, i32, i64, i64) -> i64
+impl core::default::Default for agentkit_store::TaskAging
+pub fn agentkit_store::TaskAging::default() -> Self
+pub struct agentkit_store::TaskProjection
+pub agentkit_store::TaskProjection::approval: core::option::Option<agentkit_store::TaskProjectionApproval>
+pub agentkit_store::TaskProjection::attempt_id: core::option::Option<alloc::string::String>
+pub agentkit_store::TaskProjection::event_count: usize
+pub agentkit_store::TaskProjection::last_seq: core::option::Option<f64>
+pub agentkit_store::TaskProjection::source_refs: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_store::TaskProjection::task: agentkit_engine::model::TaskRecord
+pub agentkit_store::TaskProjection::usage: agentkit_store::TaskProjectionUsage
+pub struct agentkit_store::TaskProjectionApproval
+pub agentkit_store::TaskProjectionApproval::approval_id: core::option::Option<alloc::string::String>
+pub agentkit_store::TaskProjectionApproval::seq: f64
+pub agentkit_store::TaskProjectionApproval::state: alloc::string::String
+pub agentkit_store::TaskProjectionApproval::tool_name: core::option::Option<alloc::string::String>
+pub struct agentkit_store::TaskProjectionUsage
+pub agentkit_store::TaskProjectionUsage::cached_prompt_tokens: core::option::Option<f64>
+pub agentkit_store::TaskProjectionUsage::completion_tokens: core::option::Option<f64>
+pub agentkit_store::TaskProjectionUsage::prompt_tokens: core::option::Option<f64>
+pub agentkit_store::TaskProjectionUsage::reasoning_tokens: core::option::Option<f64>
+pub agentkit_store::TaskProjectionUsage::total_tokens: core::option::Option<f64>
+pub agentkit_store::TaskProjectionUsage::usage_events: u64
+pub struct agentkit_store::TurnStaging
+pub agentkit_store::TurnStaging::config: serde_json::value::Value
+pub agentkit_store::TurnStaging::kind: alloc::string::String
+pub struct agentkit_store::UncertaintyBarrierRecord
+pub agentkit_store::UncertaintyBarrierRecord::args_hash_provenance: agentkit_store::ArgsHashProvenance
+pub agentkit_store::UncertaintyBarrierRecord::args_sha256: core::option::Option<alloc::string::String>
+pub agentkit_store::UncertaintyBarrierRecord::barrier_id: alloc::string::String
+pub agentkit_store::UncertaintyBarrierRecord::chat_id: core::option::Option<alloc::string::String>
+pub agentkit_store::UncertaintyBarrierRecord::reason: alloc::string::String
+pub agentkit_store::UncertaintyBarrierRecord::run_id: core::option::Option<alloc::string::String>
+pub agentkit_store::UncertaintyBarrierRecord::tool_name: alloc::string::String
+impl agentkit_store::UncertaintyBarrierRecord
+pub fn agentkit_store::UncertaintyBarrierRecord::blocks(&self, &str, &str, core::option::Option<&str>) -> bool
+pub struct agentkit_store::UpdateAgent
+pub agentkit_store::UpdateAgent::agent_id: alloc::string::String
+pub agentkit_store::UpdateAgent::definition: agentkit_store::AgentDefinition
+pub agentkit_store::UpdateAgent::expected_revision: i64
+pub agentkit_store::UpdateAgent::now: i64
+pub agentkit_store::UpdateAgent::source: agentkit_store::AgentRevisionSource
+pub const agentkit_store::AGENT_EXPORT_FORMAT_VERSION: i64
+pub const agentkit_store::AGENT_INPUT_TRANSITIONS: [(agentkit_store::AgentInputKind, &[agentkit_store::AgentInputStatus]); 3]
+pub const agentkit_store::APPROVE_MARKER: &str
+pub const agentkit_store::ASSISTANT_SETTINGS_KEY: &str
+pub const agentkit_store::ASSISTANT_SETTINGS_NAMESPACE: &str
+pub const agentkit_store::COMPACT_REQUESTED_METADATA_KEY: &str
+pub const agentkit_store::CONTEXT_SUMMARIES_NAMESPACE: &str
+pub const agentkit_store::EXECUTION_METADATA_KEY: &str
+pub const agentkit_store::MAX_AGENT_IMPORT_AGENTS: usize
+pub const agentkit_store::MAX_AGENT_IMPORT_BYTES: usize
+pub const agentkit_store::MAX_RESOLUTION_RESULT_BYTES: usize
+pub const agentkit_store::MAX_TOOL_TEXT_BYTES: usize
+pub const agentkit_store::MCP_CONFIG_NAMESPACE: &str
+pub const agentkit_store::MCP_SERVERS_NAMESPACE: &str
+pub const agentkit_store::PROVIDERS_NAMESPACE: &str
+pub const agentkit_store::PROVIDER_CAPABILITIES_NAMESPACE: &str
+pub const agentkit_store::PROVIDER_MODELS_NAMESPACE: &str
+pub const agentkit_store::RECEIPT_NOT_UNCERTAIN: &str
+pub const agentkit_store::RECEIPT_RUN_ACTIVE: &str
+pub const agentkit_store::SCHEMA_VERSION: i64
+pub const agentkit_store::SECRET_REF_MARKER: &str
+pub const agentkit_store::SESSION_METADATA_KEY: &str
+pub const agentkit_store::SETTINGS_KEY: &str
+pub const agentkit_store::SETTINGS_NAMESPACE: &str
+pub const agentkit_store::STANDING_APPROVALS_METADATA_KEY: &str
+pub fn agentkit_store::answer_stale_reason(&agentkit_store::StoreError) -> core::option::Option<&str>
+pub fn agentkit_store::args_match(agentkit_store::ArgsHashProvenance, &str, &str, core::option::Option<&str>) -> bool
+pub fn agentkit_store::assert_agent_input_transition(&agentkit_store::AgentInputRecord, &[agentkit_store::AgentInputStatus], agentkit_store::AgentInputStatus) -> agentkit_store::Result<()>
+pub fn agentkit_store::barrier_id_of(core::option::Option<&str>, core::option::Option<&str>, &str, core::option::Option<&str>) -> alloc::string::String
+pub fn agentkit_store::check_approval_answer_shape(&serde_json::value::Value, &serde_json::value::Value) -> agentkit_store::Result<()>
+pub fn agentkit_store::check_provider_connection(&std::path::Path, &str, u64) -> agentkit_store::Result<()>
+pub fn agentkit_store::derive_agent_display_state(&[agentkit_engine::model::TaskRecord]) -> agentkit_store::AgentDisplayState
+pub fn agentkit_store::derive_task_projection(&agentkit_engine::model::TaskRecord, core::option::Option<&str>, &[agentkit_engine::model::EventRecord]) -> agentkit_store::TaskProjection
+pub fn agentkit_store::execution_state_for_mode(&str, &str, core::option::Option<&serde_json::value::Value>) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_store::find_active_standing_grant(&serde_json::value::Value, &str) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_store::id() -> alloc::string::String
+pub fn agentkit_store::insert_barrier(&rusqlite::Connection, &agentkit_store::UncertaintyBarrierRecord) -> core::result::Result<bool, agentkit_store::StoreError>
+pub fn agentkit_store::inspect_execution_state(&serde_json::value::Value) -> agentkit_store::ExecutionStateRead
+pub fn agentkit_store::is_approval_request(&serde_json::value::Value) -> bool
+pub fn agentkit_store::normalize_server_alias(&str) -> agentkit_store::Result<alloc::string::String>
+pub fn agentkit_store::order_messages_for_provider(alloc::vec::Vec<agentkit_store::MessageRecord>) -> alloc::vec::Vec<agentkit_store::MessageRecord>
+pub fn agentkit_store::parse_answer_expiry(&str) -> core::option::Option<i64>
+pub fn agentkit_store::parse_skill_document(&str) -> agentkit_store::Result<serde_json::value::Value>
+pub fn agentkit_store::plan_request_of(&serde_json::value::Value, &[alloc::string::String]) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_store::provider_connection_identity(&str) -> alloc::string::String
+pub fn agentkit_store::read_execution_receipt(serde_json::value::Value, &str, &str, core::option::Option<core::option::Option<&str>>) -> core::result::Result<agentkit_store::ExecutionReceiptRecord, agentkit_store::StoreError>
+pub fn agentkit_store::read_execution_state(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_store::read_standing_key(&serde_json::value::Value) -> core::option::Option<(alloc::string::String, alloc::string::String)>
+pub fn agentkit_store::redact_connection(&mut serde_json::value::Value)
+pub fn agentkit_store::redact_event(&serde_json::value::Value) -> serde_json::value::Value
+pub fn agentkit_store::register_provider_connection(&std::path::Path, &str, core::option::Option<&str>, i64) -> agentkit_store::Result<(alloc::string::String, u64)>
+pub fn agentkit_store::register_provider_connection_with_continuity(&std::path::Path, &str, core::option::Option<&str>, &str, &str, i64, core::option::Option<agentkit_store::ProviderContinuityRestore>) -> agentkit_store::Result<(alloc::string::String, u64)>
+pub fn agentkit_store::register_scoped_provider_connection(&std::path::Path, &str, core::option::Option<&str>, &str, &str, i64) -> agentkit_store::Result<(alloc::string::String, u64)>
+pub fn agentkit_store::render_prompt_template(&serde_json::value::Value, &serde_json::value::Value) -> agentkit_store::Result<serde_json::value::Value>
+pub fn agentkit_store::restore_provider_continuity(&std::path::Path, &str, u64, u64, &str, &str) -> agentkit_store::Result<usize>
+pub fn agentkit_store::revoke_persisted_provider_connection(&std::path::Path, &str) -> agentkit_store::Result<bool>
+pub fn agentkit_store::run_profile_digest(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_store::skill_content_hash(&str) -> alloc::string::String
+pub fn agentkit_store::standing_grants(&serde_json::value::Value) -> alloc::vec::Vec<serde_json::value::Value>
+pub fn agentkit_store::teammate_scope(&str) -> alloc::string::String
+pub fn agentkit_store::validate_apply_outcome(&agentkit_store::ProposalRecord, &agentkit_store::ApplyOutcome) -> agentkit_store::Result<()>
+pub fn agentkit_store::validate_connection_config(&serde_json::value::Value) -> agentkit_store::Result<alloc::string::String>
+pub fn agentkit_store::validate_create_agent_input(&agentkit_store::CreateAgentInput) -> agentkit_store::Result<()>
+pub fn agentkit_store::validate_prompt_template(&serde_json::value::Value) -> agentkit_store::Result<()>
+pub fn agentkit_store::with_execution(&serde_json::value::Value, core::option::Option<serde_json::value::Value>) -> serde_json::value::Value
+pub type agentkit_store::Result<T> = core::result::Result<T, agentkit_store::StoreError>

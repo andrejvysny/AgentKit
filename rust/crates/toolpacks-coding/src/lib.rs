@@ -33,7 +33,6 @@ pub mod types;
 pub mod version_ledger;
 
 pub use agentkit_core::permission::PLAN_MODE_BLOCKED_HINT;
-pub use agentkit_host::SessionExecutionAuthority;
 pub use args::{as_record, opt_bool, opt_int, opt_string, req_string};
 pub use command_fingerprint::{
     FingerprintError, command_fingerprint, direct_script_files, leading_executable,

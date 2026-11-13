@@ -241,14 +241,14 @@ mod tests {
         async fn mode_of(
             &self,
             _ctx: &PermissionContext,
-        ) -> agentkit_host::HostResult<Option<CodingMode>> {
+        ) -> agentkit_governance::GovernanceResult<Option<CodingMode>> {
             Ok(self.mode)
         }
         async fn plan_approved(
             &self,
             _chat_id: Option<&str>,
             _plan_digest: &str,
-        ) -> agentkit_host::HostResult<Option<bool>> {
+        ) -> agentkit_governance::GovernanceResult<Option<bool>> {
             Ok(Some(self.approved))
         }
     }
@@ -335,8 +335,8 @@ mod tests {
             &self,
             _chat_id: Option<&str>,
             _plan_digest: &str,
-        ) -> agentkit_host::HostResult<Option<bool>> {
-            Err(agentkit_host::HostError::Execution(
+        ) -> agentkit_governance::GovernanceResult<Option<bool>> {
+            Err(agentkit_governance::GovernanceError::Port(
                 "session store unreachable".into(),
             ))
         }
@@ -371,7 +371,7 @@ mod tests {
             async fn mode_of(
                 &self,
                 _ctx: &PermissionContext,
-            ) -> agentkit_host::HostResult<Option<CodingMode>> {
+            ) -> agentkit_governance::GovernanceResult<Option<CodingMode>> {
                 Ok(Some(CodingMode::Ask))
             }
         }

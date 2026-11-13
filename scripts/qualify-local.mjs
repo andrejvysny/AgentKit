@@ -117,11 +117,6 @@ const gates = [
     requires: ["build"],
   }),
   gate("api", "bun", ["run", "check:api"], { requires: ["build"] }),
-  gate("composition", "bun", ["run", "check:composition"]),
-  gate("differential", "bun", ["run", "check:parity"], {
-    env: { ...nativeEnv, AGENTKIT_PARITY_OUTPUT: join(output, "parity") },
-    requires: ["native-build"],
-  }),
   gate("typescript", "bun", ["run", "typecheck"]),
   gate("lint", "bun", ["run", "lint"]),
   gate("bun-full", "bun", ["test", "--timeout", "60000"], {
@@ -197,12 +192,9 @@ const toolchain = readFileSync(
 if (!toolchain) throw new Error("Rust toolchain pin missing");
 for (const entry of gates) {
   entry.cwd = join(work, relative(root, entry.cwd));
-  entry.requireTests = [
-    "rust-tests",
-    "native-tests",
-    "bun-full",
-    "differential",
-  ].includes(entry.id);
+  entry.requireTests = ["rust-tests", "native-tests", "bun-full"].includes(
+    entry.id,
+  );
   entry.noSkips = entry.id === "native-tests";
   entry.env = {
     RUSTUP_TOOLCHAIN: toolchain,

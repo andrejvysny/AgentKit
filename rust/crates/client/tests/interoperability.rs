@@ -1,44 +1,16 @@
 use agentkit_client::{Call, Client, RestOperation, StreamOptions};
 use futures::StreamExt;
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeMap,
-    io::{BufRead, BufReader},
-    process::{Child, Command, Stdio},
-};
+use std::collections::BTreeMap;
 
 mod support;
 
-struct Service(Child);
-impl Drop for Service {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 #[tokio::test]
-async fn rust_client_talks_to_typescript_service_and_replays_same_key() {
-    if support::ts_interop_skipped() {
-        return;
-    }
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ts-service.ts");
-    let child = Command::new("bun")
-        .arg(script)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("Bun is required for cross-language interoperability tests");
-    let mut service = Service(child);
-    let stdout = service.0.stdout.take().unwrap();
-    let base = tokio::task::spawn_blocking(move || {
-        let mut line = String::new();
-        BufReader::new(stdout).read_line(&mut line).unwrap();
-        line
-    })
-    .await
-    .unwrap();
-    let client = Client::new(base.trim()).unwrap();
+async fn rust_client_talks_to_native_service_and_replays_same_key() {
+    let server = support::Native::start(&support::Observer::default()).await;
+    let client = Client::new(&server.base_url)
+        .unwrap()
+        .with_headers(support::bearer());
     let version = client
         .call(RestOperation::GetVersion, Call::default())
         .await

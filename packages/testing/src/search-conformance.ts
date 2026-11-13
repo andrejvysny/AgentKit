@@ -9,10 +9,10 @@
 // with results rather than an exception.
 //
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
-// every `@agentkit/host` import is `import type`, and error assertions match on
+// every `./ports.js` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
 import type { AiContentPart } from "@agentkit/contracts";
-import type { AssistantStore, MessageSearchHit } from "@agentkit/host";
+import type { AssistantStore, MessageSearchHit } from "./ports.js";
 import type {
   AssistantStoreConformanceHarness,
   AssistantStoreConformanceTestApi,

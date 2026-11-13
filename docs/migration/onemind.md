@@ -1,5 +1,10 @@
 # Migrating OneMind onto AgentKit
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](../adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 An executable playbook, in the same shape as
 [`openpcb.md`](openpcb.md): what is deleted, what survives as a port
 implementation, the composition root, the wire-compat tables, a one-shot data
@@ -19,6 +24,28 @@ directory is unrelated legacy and is not touched by this migration.
 // OneMind/package.json
 "dependencies": { "agentkit": "github:andrejvysny/AgentKit#v0.5.0" }
 ```
+
+---
+
+## 0.8 delta (read first)
+
+AgentKit `0.8.0` deleted the frozen TypeScript backend ([ADR 0023](../adr/0023-retire-typescript-backend.md)).
+Every section below that composes `TurnRunner`, `createRestHandler`, `SingleProcessTaskRunner`,
+a TypeScript SQLite or memory store, or the TypeScript MCP client describes the removed `0.5`-`0.7`
+shape. Compose the Rust engine through `agentkit/native` instead and keep the wire contract
+(`agentkit/contracts`, `agentkit/client`, `agentkit/react`) as written.
+
+| Removed subpath | Replacement |
+| --- | --- |
+| `agentkit/host` (`TurnRunner`, tasks, proposals) | Rust engine: `NativeStore.open(...)` + `store.createService(...)` from `agentkit/native` |
+| `agentkit/transport-http` (`createRestHandler`) | Rust REST v1 + SSE server: `service.startHttpServer(...)`, called with `agentkit/client` |
+| `agentkit/adapters-sqlite`, `agentkit/adapters-sqlite-node` | `NativeStore` (Rust SQLite store; the schema is owned by the engine) |
+| `agentkit/adapters-memory` | `NativeStore` on a temporary store file |
+| `agentkit/runner-local`, `agentkit/runner-local/filesystem` | The Rust worker inside the native service; managed skills and templates via `NativeManagedContent` |
+| `agentkit/mcp-client` | The Rust MCP client inside the engine, configured through the MCP server REST routes |
+
+`better-sqlite3` is no longer a peer or a dependency. `agentkit/testing` keeps the conformance
+suites, now run against the native store.
 
 ---
 

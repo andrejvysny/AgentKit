@@ -17,7 +17,7 @@
 
 use super::ports::{record, records, text};
 use crate::errors;
-use agentkit_store::{SECRET_REF_MARKER, SqliteStore};
+use agentkit_store::SqliteStore;
 use napi::bindgen_prelude::*;
 use serde_json::{Value, json};
 
@@ -27,15 +27,6 @@ use serde_json::{Value, json};
 /// single 400 class for "template invalid or revision exists" — maps to
 /// `invalid_input`. The deny-all `secretRefs` refusal keeps the binding's
 /// dedicated secret code.
-fn port_error(error: agentkit_store::StoreError) -> Error {
-    if matches!(&error, agentkit_store::StoreError::InvalidInput(message)
-        if message.starts_with(SECRET_REF_MARKER))
-    {
-        return errors::stable("mcp_secret_missing", error.to_string(), None);
-    }
-    errors::store_port(error, "invalid_state", "invalid_input")
-}
-
 /// Strict wire shape: an unknown option is a refusal, never an ignore.
 fn only(input: &Value, allowed: &[&str]) -> Result<()> {
     let Some(object) = input.as_object() else {
@@ -91,13 +82,16 @@ pub(super) async fn execute(
                 store
                     .publish_prompt_template(template)
                     .await
-                    .map_err(port_error)?,
+                    .map_err(errors::managed_store)?,
             ))
         }
         ("promptTemplates", "list") => {
             only(&input, &[])?;
             Ok(records(
-                store.list_prompt_templates().await.map_err(port_error)?,
+                store
+                    .list_prompt_templates()
+                    .await
+                    .map_err(errors::managed_store)?,
             ))
         }
         ("promptTemplates", "get") => {
@@ -109,7 +103,7 @@ pub(super) async fn execute(
                         text(&input, "revision")?.to_owned(),
                     )
                     .await
-                    .map_err(port_error)?
+                    .map_err(errors::managed_store)?
                     .unwrap_or(Value::Null),
             ))
         }
@@ -121,7 +115,7 @@ pub(super) async fn execute(
                     text(&input, "revision")?.to_owned(),
                 )
                 .await
-                .map_err(port_error)?;
+                .map_err(errors::managed_store)?;
             Ok(Value::Null)
         }
         ("promptTemplates", "render") => {
@@ -135,7 +129,7 @@ pub(super) async fn execute(
                 store
                     .render_prompt_template_record(selection)
                     .await
-                    .map_err(port_error)?,
+                    .map_err(errors::managed_store)?,
             ))
         }
         // -- managed skills ---------------------------------------------------
@@ -149,12 +143,14 @@ pub(super) async fn execute(
                         text(&input, "content")?.to_owned(),
                     )
                     .await
-                    .map_err(port_error)?,
+                    .map_err(errors::managed_store)?,
             ))
         }
         ("skills", "list") => {
             only(&input, &[])?;
-            Ok(records(store.list_skills().await.map_err(port_error)?))
+            Ok(records(
+                store.list_skills().await.map_err(errors::managed_store)?,
+            ))
         }
         ("skills", "get") => {
             only(&input, &["id"])?;
@@ -162,7 +158,7 @@ pub(super) async fn execute(
                 store
                     .get_skill(text(&input, "id")?.to_owned())
                     .await
-                    .map_err(port_error)?
+                    .map_err(errors::managed_store)?
                     .unwrap_or(Value::Null),
             ))
         }
@@ -171,13 +167,18 @@ pub(super) async fn execute(
             store
                 .delete_skill(text(&input, "id")?.to_owned())
                 .await
-                .map_err(port_error)?;
+                .map_err(errors::managed_store)?;
             Ok(Value::Null)
         }
         // -- managed connections (non-secret configuration only) --------------
         ("connections", "list") => {
             only(&input, &[])?;
-            Ok(records(store.list_connections().await.map_err(port_error)?))
+            Ok(records(
+                store
+                    .list_connections()
+                    .await
+                    .map_err(errors::managed_store)?,
+            ))
         }
         ("connections", "get") => {
             only(&input, &["connectionId"])?;
@@ -185,7 +186,7 @@ pub(super) async fn execute(
                 store
                     .get_connection(text(&input, "connectionId")?.to_owned())
                     .await
-                    .map_err(port_error)?
+                    .map_err(errors::managed_store)?
                     .unwrap_or(Value::Null),
             ))
         }
@@ -207,7 +208,7 @@ pub(super) async fn execute(
                 store
                     .save_connection(candidate, expected)
                     .await
-                    .map_err(port_error)?,
+                    .map_err(errors::managed_store)?,
             ))
         }
         ("connections", "remove") => {
@@ -215,7 +216,7 @@ pub(super) async fn execute(
             store
                 .delete_connection(text(&input, "connectionId")?.to_owned())
                 .await
-                .map_err(port_error)?;
+                .map_err(errors::managed_store)?;
             Ok(Value::Null)
         }
         // -- run content --------------------------------------------------------
@@ -237,7 +238,7 @@ pub(super) async fn execute(
                 store
                     .resolve_run_content(selection, authorized, tolerate)
                     .await
-                    .map_err(port_error)?,
+                    .map_err(errors::managed_store)?,
             ))
         }
         ("runContent", "recordResource") => {
@@ -250,7 +251,7 @@ pub(super) async fn execute(
                     text(&input, "revision")?.to_owned(),
                 )
                 .await
-                .map_err(port_error)?;
+                .map_err(errors::managed_store)?;
             Ok(Value::Null)
         }
         ("runContent", "listResources") => {
@@ -261,7 +262,7 @@ pub(super) async fn execute(
                         optional_text(&input, "skillId")?.map(str::to_owned),
                     )
                     .await
-                    .map_err(port_error)?,
+                    .map_err(errors::managed_store)?,
             ))
         }
         _ => Err(errors::stable(

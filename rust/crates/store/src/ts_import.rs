@@ -77,7 +77,7 @@ pub const ASSISTANT_SETTINGS_KEY: &str = "assistant";
 /// the compatibility record here is what makes an imported
 /// `toolCalling: "off"` reach the executor instead of dying in storage.
 /// The literals must match `crates/napi/src/store_settings.rs` and
-/// `crates/host/src/http/management.rs`, which hardcode them.
+/// `crates/http/src/desktop/management.rs`, which hardcode them.
 pub const SETTINGS_NAMESPACE: &str = "http";
 /// The only key [`SETTINGS_NAMESPACE`] holds the settings document under.
 pub const SETTINGS_KEY: &str = "settings";
@@ -637,16 +637,12 @@ impl<'a> Importer<'a> {
     /// literal from this module.
     fn rows_sql(&self, sql: &str) -> Result<Vec<Row>> {
         let mut statement = self.source.prepare(sql)?;
-        let names: Vec<String> = statement
-            .column_names()
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
+        let names: Vec<String> = statement.column_names().map(str::to_owned).collect();
         let mut rows = Vec::new();
         for row in statement.query_map([], |row| {
             let mut values = Row::with_capacity(names.len());
             for (index, name) in names.iter().enumerate() {
-                let value = match row.get_ref(index)?.into() {
+                let value = match row.get::<_, rusqlite::types::Value>(index)? {
                     rusqlite::types::Value::Null => Value::Null,
                     rusqlite::types::Value::Integer(number) => Value::from(number),
                     rusqlite::types::Value::Real(number) => serde_json::Number::from_f64(number)

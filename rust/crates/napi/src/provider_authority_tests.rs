@@ -1,5 +1,6 @@
 use super::*;
-use agentkit_core::{ProviderEvent, providers::ChatCompletionsProvider};
+use agentkit_core::ProviderEvent;
+use agentkit_providers::ChatCompletionsProvider;
 use futures::StreamExt;
 use serde_json::json;
 

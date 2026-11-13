@@ -120,7 +120,7 @@ async fn repeat_is_idempotent_and_conflicting_repeat_is_refused() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&conflict, StoreError::InvalidTransition(m) if m.starts_with(RECEIPT_NOT_UNCERTAIN)),
+        matches!(&conflict, StoreError::ReceiptTransition { reason: ReceiptTransitionReason::NotUncertain, message: m } if m.starts_with(RECEIPT_NOT_UNCERTAIN)),
         "{conflict:?}"
     );
 }
@@ -141,7 +141,13 @@ async fn normally_completed_receipt_cannot_be_resolved() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, StoreError::InvalidTransition(_)),
+            matches!(
+                error,
+                StoreError::ReceiptTransition {
+                    reason: ReceiptTransitionReason::NotUncertain,
+                    ..
+                }
+            ),
             "{error:?}"
         );
     }
@@ -188,7 +194,7 @@ async fn resolving_is_refused_while_the_run_is_active() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&error, StoreError::InvalidTransition(m) if m.starts_with(RECEIPT_RUN_ACTIVE)),
+        matches!(&error, StoreError::ReceiptTransition { reason: ReceiptTransitionReason::RunActive, message: m } if m.starts_with(RECEIPT_RUN_ACTIVE)),
         "{error:?}"
     );
     let rows = store.list_executions("run".into()).await.unwrap();
@@ -234,7 +240,7 @@ async fn completed_repeat_must_name_the_same_result() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&different, StoreError::InvalidTransition(m) if m.starts_with(RECEIPT_NOT_UNCERTAIN)),
+        matches!(&different, StoreError::ReceiptTransition { reason: ReceiptTransitionReason::NotUncertain, message: m } if m.starts_with(RECEIPT_NOT_UNCERTAIN)),
         "{different:?}"
     );
 }

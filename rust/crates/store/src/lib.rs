@@ -8,14 +8,15 @@ mod context_summaries;
 mod conversations;
 mod data;
 mod deadline;
+mod engine_repository;
 mod execution_no_start;
 mod execution_receipts;
 mod execution_resolution;
 mod faults;
 mod managed_content;
-mod models;
 mod native_continuations;
 mod native_exec;
+mod native_repository;
 mod proposals;
 mod provider_catalog;
 mod provider_connections;
@@ -26,7 +27,6 @@ mod settings_commit;
 mod subagents;
 mod tasks;
 mod teammates;
-mod timestamp;
 mod transaction;
 #[cfg(feature = "ts-import")]
 mod ts_import;
@@ -35,6 +35,12 @@ mod util;
 pub use actor::{SqliteStore, StoreActorIdentity};
 pub use advisor::*;
 pub use agent_inputs::*;
+pub use agentkit_engine::{
+    AttemptRecord, ClaimInput, ClaimedTask, EventRecord, Lease, LeaseFence, MessageInput,
+    PinnedRunProfile, RecoveryMode, RetryTask, SettleTask, SubmitTask, TaskBinding, TaskRecord,
+    TaskStatus, TaskTransitionPatch,
+};
+pub use agentkit_kernel::{ConversationTimestamp, TimestampOutOfRange};
 pub use agents::*;
 pub use connector_crypto::ResealReport;
 pub use context_summaries::*;
@@ -43,9 +49,8 @@ pub use data::*;
 pub use execution_receipts::*;
 pub use execution_resolution::*;
 pub use managed_content::*;
-pub use models::*;
-pub use native_continuations::{CommitContinuation, NativeCallReceipt, NativeContinuationBinding};
-pub use native_exec::{BindNativeSession, InteractionRow, NativeSessionBinding};
+pub use native_continuations::NativeCallReceipt;
+pub use native_exec::InteractionRow;
 pub use proposals::*;
 pub use provider_catalog::*;
 pub use provider_connections::{
@@ -64,11 +69,29 @@ pub use tasks::{
     derive_task_projection, redact_event,
 };
 pub use teammates::*;
-pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
 #[cfg(feature = "ts-import")]
-pub use ts_import::*;
+pub use ts_import::{
+    ASSISTANT_SETTINGS_KEY, ASSISTANT_SETTINGS_NAMESPACE, ImportOptions, ImportReport,
+    MCP_CONFIG_NAMESPACE, MCP_SERVERS_NAMESPACE, SETTINGS_KEY, SETTINGS_NAMESPACE,
+};
 pub use util::id;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiptTransitionReason {
+    NotUncertain,
+    RunActive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagedInputReason {
+    SecretReferencesUnsupported,
+    InvalidAlias,
+    IdentityRequired,
+    ImmutableIdentity,
+    AliasConflict,
+    SelectedConnectorRequired,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -88,6 +111,8 @@ pub enum StoreError {
     NotFound(String),
     #[error("duplicate record: {0}")]
     Duplicate(String),
+    #[error("duplicate record: {0}")]
+    AnswerConflict(String),
     /// Optimistic concurrency: the record moved out from under the caller's
     /// expected version and the write applied NOTHING. The caller re-reads
     /// and retries against the current version; versions never silently
@@ -104,8 +129,27 @@ pub enum StoreError {
     LeaseLost(String),
     #[error("invalid transition: {0}")]
     InvalidTransition(String),
+    #[error("invalid transition: {0}")]
+    AnswerStale(String),
+    #[error("invalid transition: {0}")]
+    AgentInputTransition(String),
+    #[error("invalid transition: {message}")]
+    ReceiptTransition {
+        reason: ReceiptTransitionReason,
+        message: String,
+    },
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("invalid input: {message}")]
+    TaskInput {
+        reason: agentkit_engine::TaskInputReason,
+        message: String,
+    },
+    #[error("invalid input: {message}")]
+    ManagedInput {
+        reason: ManagedInputReason,
+        message: String,
+    },
     #[error("invalid import: {reason}")]
     InvalidImport { reason: String },
     #[error("recovery evidence unreadable: {0}")]
@@ -120,6 +164,12 @@ pub enum StoreError {
     /// kept running.
     #[error("internal store error: {0}")]
     Internal(String),
+}
+
+impl From<TimestampOutOfRange> for StoreError {
+    fn from(error: TimestampOutOfRange) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

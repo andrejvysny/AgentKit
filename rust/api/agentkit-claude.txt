@@ -1,0 +1,187 @@
+pub mod agentkit_claude
+pub mod agentkit_claude::backend
+pub struct agentkit_claude::backend::ClaudeCodeBackend
+impl agentkit_claude::backend::ClaudeCodeBackend
+pub fn agentkit_claude::backend::ClaudeCodeBackend::new(impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn agentkit_claude::backend::ClaudeCodeBackend::with_temp_run_root() -> Self
+impl agentkit_native::ports::NativeBackend for agentkit_claude::backend::ClaudeCodeBackend
+pub fn agentkit_claude::backend::ClaudeCodeBackend::backend_id(&self) -> &str
+pub fn agentkit_claude::backend::ClaudeCodeBackend::encode_input(&self, &agentkit_native::ports::TurnInput) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::backend::ClaudeCodeBackend::new_frame_adapter(&self) -> alloc::boxed::Box<dyn agentkit_native::ports::StreamFrameAdapter>
+pub fn agentkit_claude::backend::ClaudeCodeBackend::plan_turn(&self, &agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput, core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<agentkit_native::ports::LaunchPlan, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::backend::ClaudeCodeBackend::preflight<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::target::NativeExecutionTarget, &'life2 dyn agentkit_native::ports::ExecutableLocator, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::PreflightReport, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_claude::backend::ClaudeCodeBackend::terminal_outcome(&self, &agentkit_native::ports::ProcessExit, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub fn agentkit_claude::backend::default_backend(core::option::Option<std::path::PathBuf>, impl core::convert::Into<std::path::PathBuf>) -> (agentkit_claude::backend::ClaudeCodeBackend, alloc::rcs::arc::Arc<dyn agentkit_native::ports::ExecutableLocator>)
+pub mod agentkit_claude::discovery
+pub struct agentkit_claude::discovery::ClaudeLocator
+impl agentkit_claude::discovery::ClaudeLocator
+pub fn agentkit_claude::discovery::ClaudeLocator::new(core::option::Option<std::path::PathBuf>) -> Self
+pub fn agentkit_claude::discovery::ClaudeLocator::with_home(self, impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn agentkit_claude::discovery::ClaudeLocator::with_path_env(self, impl core::convert::Into<std::ffi::os_str::OsString>) -> Self
+pub fn agentkit_claude::discovery::ClaudeLocator::with_probe_timeout_ms(self, u64) -> Self
+impl agentkit_native::ports::ExecutableLocator for agentkit_claude::discovery::ClaudeLocator
+pub fn agentkit_claude::discovery::ClaudeLocator::auth_status<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::AuthEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_claude::discovery::ClaudeLocator::locate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::ExecutableEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_claude::discovery::ClaudeSupportMatrix
+impl agentkit_claude::discovery::ClaudeSupportMatrix
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::is_qualified(&str) -> bool
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::is_qualified_for(&str, &str) -> bool
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::load_qualification_file(&std::path::Path) -> core::result::Result<usize, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::load_qualification_json(&str) -> core::result::Result<usize, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::load_qualification_records(&[agentkit_claude::discovery::QualificationRecord]) -> usize
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::meets_qualified_floor(&str) -> bool
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::record_qualification(agentkit_claude::discovery::QualificationEvidence)
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::recorded_qualification(&str) -> core::option::Option<agentkit_claude::discovery::QualificationEvidence>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::recorded_qualification_for(&str, &str, &str) -> core::option::Option<agentkit_claude::discovery::QualificationEvidence>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::snapshot(core::option::Option<&str>) -> agentkit_native::capability::CapabilitySnapshot
+pub struct agentkit_claude::discovery::QualificationEvidence
+pub agentkit_claude::discovery::QualificationEvidence::cli_version: alloc::string::String
+pub agentkit_claude::discovery::QualificationEvidence::os: alloc::string::String
+pub agentkit_claude::discovery::QualificationEvidence::profile: alloc::string::String
+pub agentkit_claude::discovery::QualificationEvidence::qualified_at: alloc::string::String
+pub agentkit_claude::discovery::QualificationEvidence::source: alloc::string::String
+pub struct agentkit_claude::discovery::QualificationRecord
+pub agentkit_claude::discovery::QualificationRecord::os: alloc::string::String
+pub agentkit_claude::discovery::QualificationRecord::profile: alloc::string::String
+pub agentkit_claude::discovery::QualificationRecord::qualified_at: alloc::string::String
+pub agentkit_claude::discovery::QualificationRecord::source: alloc::string::String
+pub agentkit_claude::discovery::QualificationRecord::version: alloc::string::String
+pub const agentkit_claude::discovery::DEFAULT_PROBE_TIMEOUT_MS: u64
+pub const agentkit_claude::discovery::QUALIFIED_FLOOR: (u32, u32, u32)
+pub const agentkit_claude::discovery::RECORDED_QUALIFIED: &[&str]
+pub fn agentkit_claude::discovery::managed_policy_conflict(&std::path::Path) -> core::option::Option<alloc::string::String>
+pub fn agentkit_claude::discovery::recheck_replaced(&agentkit_native::ports::ExecutableEvidence) -> core::result::Result<(), agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::discovery::system_managed_dirs() -> alloc::vec::Vec<std::path::PathBuf>
+pub mod agentkit_claude::launch
+pub struct agentkit_claude::launch::ChatLaunchProfiles
+impl agentkit_claude::launch::ChatLaunchProfiles
+pub const agentkit_claude::launch::ChatLaunchProfiles::MCP_MAX_TURNS: u32
+pub const agentkit_claude::launch::ChatLaunchProfiles::PLAIN_MAX_TURNS: u32
+pub const agentkit_claude::launch::BACKEND_ID: &str
+pub const agentkit_claude::launch::BROKER_MCP_REQUEST_BUDGET_MS: i64
+pub const agentkit_claude::launch::PRIVATE_RUN_DIR_PREFIX: &str
+pub fn agentkit_claude::launch::argv_template(&[alloc::string::String]) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_claude::launch::build_launch_plan(&agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput, core::option::Option<&agentkit_native::ports::McpEndpointSpec>, std::path::PathBuf) -> core::result::Result<agentkit_native::ports::LaunchPlan, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::launch::config_identity(&agentkit_native::target::NativeExecutionTarget, &[alloc::string::String], &[(alloc::string::String, alloc::string::String)]) -> alloc::string::String
+pub fn agentkit_claude::launch::flag_set(&[alloc::string::String]) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, core::option::Option<alloc::string::String>>
+pub fn agentkit_claude::launch::mcp_config_json(core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<alloc::string::String, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::launch::new_per_run_dir(&std::path::Path) -> std::path::PathBuf
+pub fn agentkit_claude::launch::write_per_run_files(&std::path::Path, core::option::Option<&str>, core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<(), agentkit_native::error::NativeRefusal>
+pub mod agentkit_claude::protocol
+pub struct agentkit_claude::protocol::ClaudeStreamAdapter
+impl agentkit_claude::protocol::ClaudeStreamAdapter
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::ignored_frames(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, u64>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::ignored_overflow(&self) -> u64
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::new() -> Self
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::partial_text(&self) -> core::option::Option<alloc::string::String>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::redacted_thinking_dropped(&self) -> usize
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::redacted_thinking_markers(&self) -> &[serde_json::value::Value]
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::result_evidence(&self) -> core::option::Option<agentkit_claude::protocol::ResultEvidence>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::saw_root_result(&self) -> bool
+impl agentkit_native::ports::StreamFrameAdapter for agentkit_claude::protocol::ClaudeStreamAdapter
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::finish(&mut self) -> agentkit_native::ports::FinishDisposition
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::push_line(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<agentkit_native::events::NativeEvent>, agentkit_native::ports::ProtocolViolation>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::terminal_outcome(&self, &agentkit_native::ports::ProcessExit) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_claude::protocol::ResultEvidence
+pub agentkit_claude::protocol::ResultEvidence::errors: alloc::vec::Vec<alloc::string::String>
+pub agentkit_claude::protocol::ResultEvidence::is_error: bool
+pub agentkit_claude::protocol::ResultEvidence::observed_model: core::option::Option<alloc::string::String>
+pub agentkit_claude::protocol::ResultEvidence::permission_denials: alloc::vec::Vec<alloc::string::String>
+pub agentkit_claude::protocol::ResultEvidence::result_text: core::option::Option<alloc::string::String>
+pub agentkit_claude::protocol::ResultEvidence::session_id: alloc::string::String
+pub agentkit_claude::protocol::ResultEvidence::subtype: alloc::string::String
+pub agentkit_claude::protocol::ResultEvidence::usage: core::option::Option<agentkit_native::events::NativeUsage>
+pub const agentkit_claude::protocol::QUALIFIED_MIN_VERSION: (u32, u32, u32)
+pub fn agentkit_claude::protocol::claude_input_frame(&str) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::protocol::claude_terminal_outcome(&agentkit_native::ports::ProcessExit, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub fn agentkit_claude::protocol::claude_terminal_outcome_with_result(&agentkit_native::ports::ProcessExit, core::option::Option<&agentkit_claude::protocol::ResultEvidence>, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub mod agentkit_claude::transport
+pub struct agentkit_claude::transport::OwnedProcessSupervisor
+impl agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::descendant_cleanup_report(&self, u32, u64) -> core::option::Option<agentkit_native::ports::InterruptReceipt>
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::new() -> Self
+impl agentkit_native::ports::ProcessSupervisor for agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::descendant_cleanup(&self, u32, u64) -> core::option::Option<agentkit_native::ports::InterruptReceipt>
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::drain_owned<'life0, 'async_trait>(&'life0 self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::ports::LaunchPlan, &'life2 agentkit_native::ports::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::ports::OwnedChildHandle>, agentkit_native::error::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::default::Default for agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::default() -> Self
+impl core::ops::drop::Drop for agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::drop(&mut self)
+pub struct agentkit_claude::ChatLaunchProfiles
+impl agentkit_claude::launch::ChatLaunchProfiles
+pub const agentkit_claude::launch::ChatLaunchProfiles::MCP_MAX_TURNS: u32
+pub const agentkit_claude::launch::ChatLaunchProfiles::PLAIN_MAX_TURNS: u32
+pub struct agentkit_claude::ClaudeCodeBackend
+impl agentkit_claude::backend::ClaudeCodeBackend
+pub fn agentkit_claude::backend::ClaudeCodeBackend::new(impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn agentkit_claude::backend::ClaudeCodeBackend::with_temp_run_root() -> Self
+impl agentkit_native::ports::NativeBackend for agentkit_claude::backend::ClaudeCodeBackend
+pub fn agentkit_claude::backend::ClaudeCodeBackend::backend_id(&self) -> &str
+pub fn agentkit_claude::backend::ClaudeCodeBackend::encode_input(&self, &agentkit_native::ports::TurnInput) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::backend::ClaudeCodeBackend::new_frame_adapter(&self) -> alloc::boxed::Box<dyn agentkit_native::ports::StreamFrameAdapter>
+pub fn agentkit_claude::backend::ClaudeCodeBackend::plan_turn(&self, &agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput, core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<agentkit_native::ports::LaunchPlan, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::backend::ClaudeCodeBackend::preflight<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::target::NativeExecutionTarget, &'life2 dyn agentkit_native::ports::ExecutableLocator, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::PreflightReport, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_claude::backend::ClaudeCodeBackend::terminal_outcome(&self, &agentkit_native::ports::ProcessExit, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_claude::ClaudeLocator
+impl agentkit_claude::discovery::ClaudeLocator
+pub fn agentkit_claude::discovery::ClaudeLocator::new(core::option::Option<std::path::PathBuf>) -> Self
+pub fn agentkit_claude::discovery::ClaudeLocator::with_home(self, impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn agentkit_claude::discovery::ClaudeLocator::with_path_env(self, impl core::convert::Into<std::ffi::os_str::OsString>) -> Self
+pub fn agentkit_claude::discovery::ClaudeLocator::with_probe_timeout_ms(self, u64) -> Self
+impl agentkit_native::ports::ExecutableLocator for agentkit_claude::discovery::ClaudeLocator
+pub fn agentkit_claude::discovery::ClaudeLocator::auth_status<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::AuthEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_claude::discovery::ClaudeLocator::locate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_native::ports::ExecutableEvidence, agentkit_native::error::NativeRefusal>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_claude::ClaudeStreamAdapter
+impl agentkit_claude::protocol::ClaudeStreamAdapter
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::ignored_frames(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, u64>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::ignored_overflow(&self) -> u64
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::new() -> Self
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::partial_text(&self) -> core::option::Option<alloc::string::String>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::redacted_thinking_dropped(&self) -> usize
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::redacted_thinking_markers(&self) -> &[serde_json::value::Value]
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::result_evidence(&self) -> core::option::Option<agentkit_claude::protocol::ResultEvidence>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::saw_root_result(&self) -> bool
+impl agentkit_native::ports::StreamFrameAdapter for agentkit_claude::protocol::ClaudeStreamAdapter
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::finish(&mut self) -> agentkit_native::ports::FinishDisposition
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::push_line(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<agentkit_native::events::NativeEvent>, agentkit_native::ports::ProtocolViolation>
+pub fn agentkit_claude::protocol::ClaudeStreamAdapter::terminal_outcome(&self, &agentkit_native::ports::ProcessExit) -> agentkit_native::events::NativeTerminalOutcome
+pub struct agentkit_claude::ClaudeSupportMatrix
+impl agentkit_claude::discovery::ClaudeSupportMatrix
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::is_qualified(&str) -> bool
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::is_qualified_for(&str, &str) -> bool
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::load_qualification_file(&std::path::Path) -> core::result::Result<usize, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::load_qualification_json(&str) -> core::result::Result<usize, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::load_qualification_records(&[agentkit_claude::discovery::QualificationRecord]) -> usize
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::meets_qualified_floor(&str) -> bool
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::record_qualification(agentkit_claude::discovery::QualificationEvidence)
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::recorded_qualification(&str) -> core::option::Option<agentkit_claude::discovery::QualificationEvidence>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::recorded_qualification_for(&str, &str, &str) -> core::option::Option<agentkit_claude::discovery::QualificationEvidence>
+pub fn agentkit_claude::discovery::ClaudeSupportMatrix::snapshot(core::option::Option<&str>) -> agentkit_native::capability::CapabilitySnapshot
+pub struct agentkit_claude::OwnedProcessSupervisor
+impl agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::descendant_cleanup_report(&self, u32, u64) -> core::option::Option<agentkit_native::ports::InterruptReceipt>
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::new() -> Self
+impl agentkit_native::ports::ProcessSupervisor for agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::descendant_cleanup(&self, u32, u64) -> core::option::Option<agentkit_native::ports::InterruptReceipt>
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::drain_owned<'life0, 'async_trait>(&'life0 self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::ports::LaunchPlan, &'life2 agentkit_native::ports::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::ports::OwnedChildHandle>, agentkit_native::error::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::default::Default for agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::default() -> Self
+impl core::ops::drop::Drop for agentkit_claude::transport::OwnedProcessSupervisor
+pub fn agentkit_claude::transport::OwnedProcessSupervisor::drop(&mut self)
+pub struct agentkit_claude::QualificationEvidence
+pub agentkit_claude::QualificationEvidence::cli_version: alloc::string::String
+pub agentkit_claude::QualificationEvidence::os: alloc::string::String
+pub agentkit_claude::QualificationEvidence::profile: alloc::string::String
+pub agentkit_claude::QualificationEvidence::qualified_at: alloc::string::String
+pub agentkit_claude::QualificationEvidence::source: alloc::string::String
+pub const agentkit_claude::PRIVATE_RUN_DIR_PREFIX: &str
+pub const agentkit_claude::QUALIFIED_MIN_VERSION: (u32, u32, u32)
+pub fn agentkit_claude::build_launch_plan(&agentkit_native::target::NativeExecutionTarget, &agentkit_native::ports::TurnInput, core::option::Option<&agentkit_native::ports::McpEndpointSpec>, std::path::PathBuf) -> core::result::Result<agentkit_native::ports::LaunchPlan, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::claude_input_frame(&str) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::claude_terminal_outcome(&agentkit_native::ports::ProcessExit, &[agentkit_native::events::NativeEvent], core::option::Option<&str>) -> agentkit_native::events::NativeTerminalOutcome
+pub fn agentkit_claude::recheck_replaced(&agentkit_native::ports::ExecutableEvidence) -> core::result::Result<(), agentkit_native::error::NativeRefusal>
+pub fn agentkit_claude::write_per_run_files(&std::path::Path, core::option::Option<&str>, core::option::Option<&agentkit_native::ports::McpEndpointSpec>) -> core::result::Result<(), agentkit_native::error::NativeRefusal>

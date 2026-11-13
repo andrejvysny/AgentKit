@@ -1,7 +1,7 @@
 use agentkit_core::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 struct Script {
@@ -103,10 +103,11 @@ fn normalized(mut event: Value) -> Value {
 fn normalize_numbers(value: &mut Value) {
     match value {
         Value::Number(number) => {
-            if let Some(number) = number.as_f64() {
-                if number.fract() == 0.0 && number >= 0.0 {
-                    *value = Value::from(number as u64);
-                }
+            if let Some(number) = number.as_f64()
+                && number.fract() == 0.0
+                && number >= 0.0
+            {
+                *value = Value::from(number as u64);
             }
         }
         Value::Object(object) => {

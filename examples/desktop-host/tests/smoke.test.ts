@@ -11,9 +11,8 @@
  * SSE engine started by `buildApp`, which executes the durable turn itself.
  *
  * Two scenarios: a plain text turn end to end, and one round trip through the
- * `example_echo` tool this example ships (see `../src/tools.ts`), scripted the
- * way `packages/runner-local/tests/e2e-vertical-slice.test.ts` scripts a tool
- * call for `MockProviderClient`.
+ * `example_echo` tool this example ships (see `../src/tools.ts`), scripted
+ * through `MockProviderClient`.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

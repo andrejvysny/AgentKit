@@ -19,7 +19,7 @@ is vendored.
 
 ## Third-party adaptations
 
-`packages/toolpacks-coding` (deleted 2026-11-02) and `packages/host/src/context/compactor.ts` adapt
+`packages/toolpacks-coding` (deleted 2026-11-02) and `packages/host/src/context/compactor.ts` (deleted 2026-11-09, ADR 0023; recoverable at commit `a31dcb1`) adapt
 MIT-licensed code. Each adapted file starts with a header naming the upstream
 repository, path and commit, plus the upstream copyright line. Nothing was copied wholesale; each file is a
 selective, TypeScript-strict rewrite. Neither upstream repository was modified.

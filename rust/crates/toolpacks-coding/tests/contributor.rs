@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agentkit_core::{ToolLimits, ToolRegistry};
-use agentkit_host::{ContributedTool, ToolContributionContext};
+use agentkit_governance::{ContributedTool, ToolContributionContext};
 use agentkit_toolpacks_coding::{
     CODING_NAMESPACE, CODING_TOOL_NAMES, CodingLimitsOverride, CodingToolPackOptions,
     CodingWorkspace, SandboxMode, create_coding_tool_pack,
@@ -85,7 +85,7 @@ const EXPECTED: &[(&str, &str, &str, u64)] = &[
 #[tokio::test]
 async fn registers_eleven_tools_under_namespace_coding() {
     let pack = pack().await;
-    use agentkit_host::ToolContributor;
+    use agentkit_governance::ToolContributor;
     assert_eq!(pack.namespace(), CODING_NAMESPACE);
     assert_eq!(CODING_NAMESPACE, "coding");
     let tools = pack.contribute(&contribution()).await.unwrap();
@@ -104,7 +104,7 @@ async fn registers_eleven_tools_under_namespace_coding() {
 
 #[tokio::test]
 async fn effects_capabilities_and_schemas() {
-    use agentkit_host::ToolContributor;
+    use agentkit_governance::ToolContributor;
     let tools = pack().await.contribute(&contribution()).await.unwrap();
     let mut registry = ToolRegistry::new();
     for (tool, (name, effect, capability, timeout_ms)) in tools.iter().zip(EXPECTED) {

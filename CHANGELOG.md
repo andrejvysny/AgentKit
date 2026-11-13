@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.8.0 — unreleased
+
+**Breaking: the TypeScript backend is deleted** ([ADR 0023](docs/adr/0023-retire-typescript-backend.md)). The Rust engine behind `agentkit/native` is the only backend. Nothing was published to npm, so no registry consumer is affected.
+
+- Removed packages: `@agentkit/host`, `@agentkit/adapters-memory`, `@agentkit/adapters-sqlite`, `@agentkit/runner-local`, `@agentkit/transport-http`, `@agentkit/mcp-client`.
+- Removed `agentkit` subpaths and replacements: `agentkit/host` -> `agentkit/native` (`NativeStore`, `createService`); `agentkit/transport-http` -> Rust REST/SSE server (`service.startHttpServer`) + `agentkit/client`; `agentkit/adapters-memory`, `agentkit/adapters-sqlite`, `agentkit/adapters-sqlite-node` -> `NativeStore`; `agentkit/runner-local`, `agentkit/runner-local/filesystem` -> the native service worker and `NativeManagedContent`; `agentkit/mcp-client` -> the Rust MCP client in the engine.
+- The umbrella drops its `@modelcontextprotocol/*` dependencies and the optional `better-sqlite3` peer. Root dev dependencies `better-sqlite3` and `node-gyp` are gone.
+- `CONTRACT_VERSION` stays `0.7.0` (the wire contract did not change). The umbrella moves `0.7.0` -> `0.8.0`.
+
+**Changed (Rust architecture cleanup).**
+
+- Layered crates per [ADR 0021](docs/adr/0021-layered-crate-architecture.md): `agentkit-kernel` (shared sha256 and canonical JSON), workspace-inherited metadata/lints, `check:arch` gate, `agentkit-runtime` composition root with `AgentRuntime::builder()` (the HTTP fixture and the egui host build through it), `transport-http` and `host::http` merged into `agentkit-http`.
+- **One clock/identity port.** `agentkit-kernel` now owns the single `Runtime` port — `now_ms`, `id`, plus derived `timestamp`, `id_with_prefix` and `random` — implemented by a `SystemRuntime` (system clock, UUIDv7). The duplicated `agentkit_core::Runtime` and `agentkit_engine::Runtime` traits are gone (both crates re-export the kernel trait), which retires the hand-written adapter structs `agentkit-chat` and the advisor lane carried, and the never-used `Clock`/`IdGenerator` traits leave `agentkit-contracts`. The `timestamp()` default keeps the JavaScript `Date` contract: the whole epoch-millis range formats without chrono panics, extended years included, and a clock outside the range fails the explicit precondition.
+- `@agentkit/client` and `@agentkit/react` suites run only against the Rust HTTP fixture (`bun run build:fixture`).
+- Fix: `reasoningContent` is persisted into assistant message metadata.
+- Fix: an SSE run stream whose durable read fails mid-stream now ends the response — last frame flushed, terminating chunk written — instead of resetting the peer's socket, so the client's documented unmarked-EOF resume is what answers. The `client`/`react` gate no longer prints an unhandled `ECONNRESET` for `/v1/runs/<id>/stream`.
+- Security dependency upgrades: tokio 1.54.1 (RUSTSEC-2026-0386), rmcp 3.9.0 (RUSTSEC-2026-0457/0461/0462), rusqlite 0.41.1 / libsqlite3-sys 0.39.1 (RUSTSEC-2026-0459). `cargo-deny` now gates advisories, licenses, sources and layer bans.
+- Live TypeScript packages, examples and scripts no longer import the frozen backend; `native` and `testing` carry their own port types.
+- Public API reports re-baselined to the 13 remaining entry points (`docs/rust/api`).
+- **Committed CI.** `scripts/gates.mjs` runs the full battery (fmt, clippy `-D`, workspace tests with a passing-count floor, machete, deny, `check:arch`, public-API baselines, then the Bun half with `check:api` and the node smoke after `build`), and `.github/workflows/ci.yml` runs it on every PR and on pushes to `master`/`arch/cleanup`. Logs land in `.gate-logs/` (ignored, uploaded as an artifact on CI failure).
+- **Governance is now a context** ([ADR 0027](docs/adr/0027-governance-as-execution-context.md)). Staging, durable execution receipts, write policy, the proposal service/tool and the native command drain moved out of `agentkit-chat` into `agentkit-governance` (layer 3: `engine ← sessions ← governance ← chat ← agents`), so both execution owners — the model loop and the native executor's broker — reach receipts and approvals through one crate with no chat dependency (AGENTKIT-146). Behaviour and every failure-event code string are unchanged; `GovernanceError` gained 18 typed variants and its `Execution(String)` catch-all became the documented host-port escape hatch `Port(String)`. The dead `EngineError`↔`GovernanceError` conversions were deleted. Public API baselines re-recorded for chat, engine, governance and http.
+
+**Merged: Claude Code native backend (AGENTKIT-107 to 118) onto the layered crates.** Behaviour is unchanged from `master`; crate paths moved ([ADR 0025](docs/adr/0025-claude-code-native-backend-contracts.md)).
+
+- `agentkit_host::native_executor::*` -> `agentkit_native_exec::*` (`NativeAgentExecutor`, `NativeDispatchExecutor`, `AttemptBrokerFactory`, `NativeExecutorOptions`).
+- `agentkit_host::native_bridge::*` -> `agentkit_native_broker::*` (`AttemptBroker`, `BrokerAuthority`, `BrokerBackend`, `BrokerLimits`).
+- The frozen admission contract (the four payload keys, `ContinuationScope`, `BrokerSpec`, `validate_frozen_stanza`) lives in `agentkit-native`; `agentkit-native-exec` re-exports the types.
+- Session admission validates the frozen stanza against the typed contract in every build (no `http` feature gate).
+- `TaskExecutor` gains `handles_verification_for` and `resolves_provider_snapshots_for`; `ExecutionContext` gains `lease_fence()`. Store schema version is 19.
+- Post-merge review fix (AGENTKIT-140): the native broker's `ReservationGuard::drop` no longer calls `tokio::spawn` unguarded — dropping a pending `call_tool` future after `block_on` returned or after the Tokio runtime was shut down panicked 'there is no reactor running' and skipped the uncertain-memo settlement. Cleanup now publishes the uncertain memo and in-memory uncertainty BEFORE any optional async work, schedules the durable `uncertain` refinement only through a checked live handle (`tokio::runtime::Handle::try_current` at drop), and NEVER constructs or blocks a replacement runtime in Drop; when no runtime can run the refinement, the already-acknowledged `effectStarted` row remains as the recovery fallback. A conclusive terminal receipt (disarmed guard) still wins over the racing cleanup in either ordering.
+
+**Native lane ports (N1).** `NativeAgentExecutor` and `NativeDispatchExecutor` are generic over the repository: they name `agentkit_engine::TaskRepository` and `agentkit_native::NativeRunRepository` instead of `SqliteStore`. `AttemptBrokerFactory::start` returns `Arc<dyn AttemptBrokerHandle>` and an `agentkit_engine::ExecutionFailure`; the MCP broker reaches the executor only through the port. The four native persistence records (`NativeSessionBinding`, `BindNativeSession`, `NativeContinuationBinding`, `CommitContinuation`) and both ports (`AttemptBrokerHandle`, `NativeRunRepository`) live in `agentkit-native`. The executor crate's normal dependency graph no longer contains `agentkit-store`, `agentkit-native-broker`, `agentkit-mcp` or `axum`. `agentkit-facade` is gone: `NativeChat` now lives in the SDK facade as `agentkit_rust::native_chat` (feature `claude`) and the driver conformance harness in `agentkit_testkit::conformance::native_backend`.
+
+**Open composition root (C1).** `AgentRuntimeBuilder` gains three methods:
+`executor(kind, executor)` registers a task kind for the runtime (a kind the
+builder already owns is refused at `build()`), `turn_kinds(kinds)` adds kinds
+served by the turn executor, and `native_lane(lane)` runs the turn executor
+through `NativeDispatchExecutor` (native targets on `NativeAgentExecutor`,
+everything else on the model loop). `NativeLane` (in `agentkit-runtime`)
+takes the `backend`, `supervisor`, `locator`, optional `broker_factory` and
+`options` from the consumer: the runtime crate names `agentkit-native` and
+`agentkit-native-exec`, never a driver crate ([ADR 0026]). The SDK facade
+renames its `runtime` feature (core + connections) to `core`; `runtime` now
+brings in the composition root (`pub use agentkit_runtime as runtime`).
+
+**Removed (tooling).** `snapshot:release`, `qualify:package`, `source:digest` and the scripts behind them (`scripts/snapshot-release.mjs`, `scripts/release/{foundation.mjs,foundation/,fixture-projection.mjs,publication.mjs,qualify-candidates.mjs,source-proof.mjs}`, `scripts/qualify-package.mjs`, `scripts/source-digest.mjs`, `scripts/sqlite-durability.mjs`, `scripts/node-sqlite-conformance.mjs`, `scripts/qualification/{consumer.mjs,types.ts,electron-native.cjs,responses-openpcb-smoke.mjs,sqlite-fixture.mjs}`) and their tests. The native lockstep release lane and `qualify:local` / `qualify:cold` remain.
+
 ## Unreleased — Unified agent runtime M0–M7
 
 **Hybrid M1 hardening: admission, recovery, profile and credential contracts tightened (review of `ab936de`).** Behavior changes callers must know about:

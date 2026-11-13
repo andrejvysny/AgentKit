@@ -46,14 +46,10 @@
     "@agentkit/contracts": "workspace:*"
   },
   "peerDependencies": {
-    "@agentkit/core": "workspace:*",
-    "@agentkit/host": "workspace:*",
-    "@agentkit/mcp-client": "workspace:*"
+    "@agentkit/core": "workspace:*"
   },
   "devDependencies": {
     "@agentkit/core": "workspace:*",
-    "@agentkit/host": "workspace:*",
-    "@agentkit/mcp-client": "workspace:*",
     "typescript": "^5.8.3",
     "@types/bun": "^1.3.5"
   }

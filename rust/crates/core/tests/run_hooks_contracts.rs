@@ -6,9 +6,9 @@
 use agentkit_core::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 struct ScriptProvider {

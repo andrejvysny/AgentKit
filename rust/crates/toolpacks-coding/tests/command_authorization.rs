@@ -1,9 +1,14 @@
 //! End-to-end host authorization with inert tools; no shell commands execute.
+use agentkit_chat::*;
 use agentkit_core::{
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, Tool, ToolContext,
     ToolDefinition, ToolRegistry, ToolResult,
 };
-use agentkit_host::*;
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+};
+use agentkit_sessions::*;
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, STANDING_APPROVALS_METADATA_KEY, SqliteStore,
 };
@@ -94,7 +99,10 @@ impl ToolContributor for Contributor {
     fn namespace(&self) -> &str {
         "coding"
     }
-    async fn contribute(&self, _: &ToolContributionContext) -> HostResult<Vec<ContributedTool>> {
+    async fn contribute(
+        &self,
+        _: &ToolContributionContext,
+    ) -> GovernanceResult<Vec<ContributedTool>> {
         Ok(vec![ContributedTool::DirectWrite(self.0.clone())])
     }
 }
@@ -153,7 +161,7 @@ async fn fixture_inner(
         authority: None,
         plan_tool_names: None,
     });
-    let executor: Arc<dyn TaskExecutor> = Arc::new(
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Provider {
                 command: command.into(),

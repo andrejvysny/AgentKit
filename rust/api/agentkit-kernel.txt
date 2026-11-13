@@ -1,0 +1,37 @@
+pub mod agentkit_kernel
+pub enum agentkit_kernel::ConversationTimestamp
+pub agentkit_kernel::ConversationTimestamp::EpochMillis(i64)
+pub agentkit_kernel::ConversationTimestamp::Text(alloc::string::String)
+impl agentkit_kernel::ConversationTimestamp
+pub fn agentkit_kernel::ConversationTimestamp::epoch_millis(&self) -> core::option::Option<i64>
+pub fn agentkit_kernel::ConversationTimestamp::from_epoch_millis(i64) -> core::result::Result<Self, agentkit_kernel::TimestampOutOfRange>
+pub fn agentkit_kernel::ConversationTimestamp::wire_text(&self) -> core::result::Result<alloc::borrow::Cow<'_, str>, agentkit_kernel::TimestampOutOfRange>
+impl core::convert::From<&str> for agentkit_kernel::ConversationTimestamp
+pub fn agentkit_kernel::ConversationTimestamp::from(&str) -> Self
+impl core::convert::From<alloc::string::String> for agentkit_kernel::ConversationTimestamp
+pub fn agentkit_kernel::ConversationTimestamp::from(alloc::string::String) -> Self
+impl core::convert::From<i64> for agentkit_kernel::ConversationTimestamp
+pub fn agentkit_kernel::ConversationTimestamp::from(i64) -> Self
+pub struct agentkit_kernel::SystemRuntime
+impl agentkit_kernel::Runtime for agentkit_kernel::SystemRuntime
+pub fn agentkit_kernel::SystemRuntime::id(&self) -> alloc::string::String
+pub fn agentkit_kernel::SystemRuntime::id_with_prefix(&self, &str) -> alloc::string::String
+pub fn agentkit_kernel::SystemRuntime::now_ms(&self) -> i64
+pub fn agentkit_kernel::SystemRuntime::random(&self) -> f64
+pub fn agentkit_kernel::SystemRuntime::timestamp(&self) -> alloc::string::String
+pub struct agentkit_kernel::TimestampOutOfRange
+pub trait agentkit_kernel::Runtime: core::marker::Send + core::marker::Sync
+pub fn agentkit_kernel::Runtime::id(&self) -> alloc::string::String
+pub fn agentkit_kernel::Runtime::id_with_prefix(&self, &str) -> alloc::string::String
+pub fn agentkit_kernel::Runtime::now_ms(&self) -> i64
+pub fn agentkit_kernel::Runtime::random(&self) -> f64
+pub fn agentkit_kernel::Runtime::timestamp(&self) -> alloc::string::String
+impl agentkit_kernel::Runtime for agentkit_kernel::SystemRuntime
+pub fn agentkit_kernel::SystemRuntime::id(&self) -> alloc::string::String
+pub fn agentkit_kernel::SystemRuntime::id_with_prefix(&self, &str) -> alloc::string::String
+pub fn agentkit_kernel::SystemRuntime::now_ms(&self) -> i64
+pub fn agentkit_kernel::SystemRuntime::random(&self) -> f64
+pub fn agentkit_kernel::SystemRuntime::timestamp(&self) -> alloc::string::String
+pub fn agentkit_kernel::canonical_json(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_kernel::canonical_sha256(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_kernel::sha256_hex(impl core::convert::AsRef<[u8]>) -> alloc::string::String

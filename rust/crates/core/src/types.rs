@@ -355,7 +355,7 @@ pub trait ChatProvider: Send + Sync {
     fn supports_usage_cleanup(&self) -> bool {
         false
     }
-    fn connection_identity(&self) -> Option<crate::providers::ConnectionIdentity> {
+    fn connection_identity(&self) -> Option<crate::ConnectionIdentity> {
         None
     }
     fn tracks_transport_requests(&self) -> bool {

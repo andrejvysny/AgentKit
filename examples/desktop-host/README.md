@@ -212,7 +212,7 @@ Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
 | Sample tools | this example's own descriptors + `registerTool` runs | `src/tools.ts` |
 | MCP bridge (optional) | `@agentkit/native` (`store.mcpConnect` + `registerMcpTools`) | `src/wiring.ts` |
 | MCP server (optional) | `@agentkit/native` (`service.startMcpServer`) | `src/wiring.ts` (started) / `src/main.ts` (façade mounted at `/mcp`) |
-| Managed integrations (opt-in recipe) | `@agentkit/native` (`NativeManagedContent` — templates, skills, connections, run content execute in `agentkit-store::managed_content`). The OAuth connector leg has no native implementation yet; its acceptance harness (`src/managed-connector-acceptance.ts`) is the only `@agentkit/mcp-client` consumer and the leg stays `not_implemented` | `src/managed-integrations.ts` |
+| Managed integrations (opt-in recipe) | `@agentkit/native` (`NativeManagedContent` — templates, skills, connections, run content execute in `agentkit-store::managed_content`). The OAuth connector leg has no native implementation yet; the leg stays `not_implemented` | `src/managed-integrations.ts` |
 
 One registration list is the single source of truth: the descriptors handed
 to `registerTool` are what the Rust executor can call, what the MCP server
@@ -248,7 +248,7 @@ disk persistence or an OS keychain.
 ## Node fake-provider counterpart
 
 `node-host.mjs` is a separate minimal composition root using published
-`agentkit/*` imports and `NodeSqliteAssistantStore`. The existing Bun sample is
+`agentkit/*` imports and the native store (`NativeStore`). The existing Bun sample is
 unchanged. This counterpart binds only loopback on an ephemeral port, uses a
 scripted local provider, and requires no API key or remote service.
 
@@ -256,28 +256,22 @@ Copy `node-host.mjs` and `node-main.mjs` to a clean consumer directory, then:
 
 ```sh
 npm init -y
-npm install /absolute/path/agentkit-VERSION.tgz better-sqlite3@13.0.3
+npm install /absolute/path/agentkit-VERSION.tgz
 node node-main.mjs
 ```
 
-Node >=22 is required by the native peer. The command prints the actual origin.
+The command prints the actual origin.
 Use the same `/v1/chats` and `/v1/chats/:id/messages` REST/SSE routes shown above,
 without the Bun sample's `/api/agentkit` prefix. `SIGINT` or `SIGTERM` stops the
-server and worker, disposes contributors, and closes SQLite. Reusing
+server and worker and closes the store. Reusing
 `AGENTKIT_DB` reopens the same file. This fixture has no authentication and
 therefore offers no non-loopback bind option.
 
 `exerciseNodeHost(dbPath)` creates a chat with the published typed client,
 submits a message, follows the real SSE stream to `run.completed`, reads the
-fake answer, shuts down, and verifies the chat after reopening the file. The
-exact-tarball qualification script copies and runs this fixture in both clean
-npm and Bun consumer projects; it does not import monorepo source.
+fake answer, shuts down, and verifies the chat after reopening the file.
 
-This is a generic Node host and an Electron-style CommonJS packaging exercise.
-The example itself does not implement Electron UI, PCB operations, OAuth, or
-restricted DevKit integration. The package qualification script can separately
-run a pinned actual Electron binary in RunAsNode mode, load the CommonJS native
-external, record ABI/Node-API/binary hashes, and reopen before and after an npm
-rebuild lifecycle check. That does not qualify a renderer or packaged installer. Consumers must rebuild
-and package `better-sqlite3` for their actual Electron runtime before claiming
-that qualification.
+This is a generic Node host. The example itself does not implement Electron UI,
+PCB operations, OAuth, or restricted DevKit integration. Electron consumers must
+rebuild and package the native addon for their actual Electron runtime before
+claiming runtime support.

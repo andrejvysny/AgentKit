@@ -4,9 +4,9 @@
 
 use crate::execution_receipts::read_row;
 use crate::{ExecutionReceiptStatus, LeaseFence, SqliteStore, StoreError};
+use agentkit_kernel::sha256_hex;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 pub(crate) const AUTHORITY_FIELD: &str = "nativeAdmissionAuthoritySha256";
 
@@ -17,10 +17,7 @@ pub(crate) fn admission_authority(proof: &LeaseFence, attempt_id: &str) -> Strin
         proof.lease_token,
         proof.fencing_token
     ]);
-    Sha256::digest(material.to_string().as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sha256_hex(material.to_string())
 }
 
 fn validate_result(result: &Value) -> Result<(), StoreError> {

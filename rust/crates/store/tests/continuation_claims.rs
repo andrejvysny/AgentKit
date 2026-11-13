@@ -8,9 +8,8 @@
 //! `validate_schema` compares against), so the upgrade path is exercised
 //! exactly as an on-disk v18 database would hit it.
 
-use agentkit_store::{
-    ClaimInput, CommitContinuation, SettleTask, SqliteStore, SubmitTask, TaskStatus,
-};
+use agentkit_native::CommitContinuation;
+use agentkit_store::{ClaimInput, SettleTask, SqliteStore, SubmitTask, TaskStatus};
 use rusqlite::Connection;
 use serde_json::json;
 

@@ -190,7 +190,7 @@ New: `rust/crates/native/src/{canonical,capability,error,events,interaction,lib,
 `rust/crates/host/src/{native_bridge,native_executor}.rs`,
 `rust/crates/store/src/native_exec.rs`,
 `rust/crates/host/examples/native-chat-lifecycle.rs`,
-`rust/crates/facade/**` (AGENTKIT-117), `docs/adr/0021-*.md`, this file.
+`rust/crates/facade/**` (AGENTKIT-117), `docs/adr/0025-claude-code-native-backend-contracts.md`, this file.
 Modified: `rust/Cargo.toml`, `crates/host/{Cargo.toml,src/lib.rs,src/ports.rs,src/bin/server.rs}`,
 `crates/store/{Cargo.toml,src/lib.rs}`.
 

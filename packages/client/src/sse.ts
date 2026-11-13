@@ -9,7 +9,7 @@
  * send the header; what it cannot do is frame the bytes, so the framing is here.
  *
  * The grammar implemented is the WHATWG one, narrowed to what the server writes
- * (`packages/transport-http/src/sse.ts`): `id:`, `event:`, `data:`, `retry:`,
+ * (`agentkit-http`'s SSE writer): `id:`, `event:`, `data:`, `retry:`,
  * `:` comments for heartbeats, and a blank line to dispatch. Multi-line `data`
  * is joined with `\n` even though this server never emits it — a parser that
  * only handles the frames it has seen is a parser that corrupts the first one it

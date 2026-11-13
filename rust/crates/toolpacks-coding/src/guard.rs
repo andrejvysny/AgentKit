@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use agentkit_host::{ApprovalAsk, HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
+use agentkit_governance::{
+    ApprovalAsk, GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict,
+};
 use async_trait::async_trait;
 
 use agentkit_core::permission::{
@@ -74,7 +76,7 @@ impl CodingPermissionGuard {
 
 #[async_trait]
 impl ToolGuard for CodingPermissionGuard {
-    async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+    async fn can_execute(&self, context: &ToolGuardContext) -> GovernanceResult<ToolGuardVerdict> {
         if context.namespace != CODING_NAMESPACE {
             return Ok(ToolGuardVerdict::Allowed);
         }
@@ -169,7 +171,7 @@ fn plan_preview(args: Option<&Value>) -> Option<String> {
 mod tests {
     use super::*;
     use agentkit_core::{ToolDefinition, ToolLimits};
-    use agentkit_host::ToolContributionContext;
+    use agentkit_governance::ToolContributionContext;
     use serde_json::{Value, json};
     use tokio_util::sync::CancellationToken;
 
@@ -355,13 +357,13 @@ mod tests {
         async fn mode_of(
             &self,
             _ctx: &PermissionContext,
-        ) -> agentkit_host::HostResult<Option<CodingMode>> {
+        ) -> agentkit_governance::GovernanceResult<Option<CodingMode>> {
             Ok(self.mode)
         }
         async fn role_of(
             &self,
             _ctx: &PermissionContext,
-        ) -> agentkit_host::HostResult<Option<CodingRole>> {
+        ) -> agentkit_governance::GovernanceResult<Option<CodingRole>> {
             Ok(self.role)
         }
     }
@@ -373,8 +375,8 @@ mod tests {
         async fn role_of(
             &self,
             _ctx: &PermissionContext,
-        ) -> agentkit_host::HostResult<Option<CodingRole>> {
-            Err(agentkit_host::HostError::Execution(
+        ) -> agentkit_governance::GovernanceResult<Option<CodingRole>> {
+            Err(agentkit_governance::GovernanceError::Port(
                 "session store unreachable".into(),
             ))
         }

@@ -1,0 +1,339 @@
+pub mod agentkit_core
+pub use agentkit_core::AiRunEvent
+pub use agentkit_core::CancellationToken
+pub use agentkit_core::Runtime
+pub use agentkit_core::SystemRuntime
+pub mod agentkit_core::permission
+pub enum agentkit_core::permission::BlockedFinal
+pub agentkit_core::permission::BlockedFinal::PlanMode
+pub agentkit_core::permission::BlockedFinal::PlanMode::tool_class: agentkit_core::permission::ToolClass
+pub agentkit_core::permission::BlockedFinal::ReadOnly
+pub enum agentkit_core::permission::CodingMode
+pub agentkit_core::permission::CodingMode::Ask
+pub agentkit_core::permission::CodingMode::AutoEdit
+pub agentkit_core::permission::CodingMode::FullAuto
+pub agentkit_core::permission::CodingMode::Plan
+pub agentkit_core::permission::CodingMode::ReadOnly
+impl agentkit_core::permission::CodingMode
+pub fn agentkit_core::permission::CodingMode::as_str(self) -> &'static str
+pub fn agentkit_core::permission::CodingMode::parse(&str) -> core::option::Option<Self>
+pub enum agentkit_core::permission::CodingRole
+pub agentkit_core::permission::CodingRole::Implementer
+pub agentkit_core::permission::CodingRole::Reviewer
+pub agentkit_core::permission::CodingRole::Supervisor
+impl agentkit_core::permission::CodingRole
+pub fn agentkit_core::permission::CodingRole::as_str(self) -> &'static str
+pub fn agentkit_core::permission::CodingRole::parse(&str) -> core::option::Option<Self>
+pub enum agentkit_core::permission::PermissionDecision
+pub agentkit_core::permission::PermissionDecision::Allowed
+pub agentkit_core::permission::PermissionDecision::ApprovalRequired
+pub agentkit_core::permission::PermissionDecision::BlockedFinal(agentkit_core::permission::BlockedFinal)
+pub agentkit_core::permission::PermissionDecision::PlanApprovalRequired
+pub enum agentkit_core::permission::ToolClass
+pub agentkit_core::permission::ToolClass::Exec
+pub agentkit_core::permission::ToolClass::Read
+pub agentkit_core::permission::ToolClass::Write
+impl agentkit_core::permission::ToolClass
+pub fn agentkit_core::permission::ToolClass::as_str(self) -> &'static str
+pub const agentkit_core::permission::FS_READ_CAPABILITY: &str
+pub const agentkit_core::permission::FS_WRITE_CAPABILITY: &str
+pub const agentkit_core::permission::GIT_READ_CAPABILITY: &str
+pub const agentkit_core::permission::PLAN_CAPABILITY: &str
+pub const agentkit_core::permission::PLAN_MODE_BLOCKED_HINT: &str
+pub const agentkit_core::permission::PROCESS_EXEC_CAPABILITY: &str
+pub fn agentkit_core::permission::classify_capability(&str) -> core::option::Option<agentkit_core::permission::ToolClass>
+pub fn agentkit_core::permission::decide(agentkit_core::permission::CodingMode, agentkit_core::permission::ToolClass, bool) -> agentkit_core::permission::PermissionDecision
+pub fn agentkit_core::permission::role_ceiling_allows(agentkit_core::permission::CodingRole, agentkit_core::permission::ToolClass) -> bool
+pub enum agentkit_core::AuthKind
+pub agentkit_core::AuthKind::ApiKey
+pub agentkit_core::AuthKind::ChatGptAccount
+pub enum agentkit_core::ProviderEvent
+pub agentkit_core::ProviderEvent::Activity
+pub agentkit_core::ProviderEvent::Completed
+pub agentkit_core::ProviderEvent::Completed::content: alloc::string::String
+pub agentkit_core::ProviderEvent::Completed::finish_reason: alloc::string::String
+pub agentkit_core::ProviderEvent::Completed::tool_calls: alloc::vec::Vec<agentkit_core::ToolCall>
+pub agentkit_core::ProviderEvent::Continuation(serde_json::value::Value)
+pub agentkit_core::ProviderEvent::Delta(alloc::string::String)
+pub agentkit_core::ProviderEvent::Event
+pub agentkit_core::ProviderEvent::Event::data: serde_json::value::Value
+pub agentkit_core::ProviderEvent::Event::kind: alloc::string::String
+pub agentkit_core::ProviderEvent::RequestStarted
+pub agentkit_core::ProviderEvent::RetryBackoff(alloc::rcs::arc::Arc<tokio::sync::notify::Notify>)
+pub agentkit_core::ProviderEvent::Started
+pub agentkit_core::ProviderEvent::ToolCallProgress
+pub agentkit_core::ProviderEvent::ToolCallProgress::args_bytes: u64
+pub agentkit_core::ProviderEvent::ToolCallProgress::id: alloc::string::String
+pub agentkit_core::ProviderEvent::ToolCallProgress::name: alloc::string::String
+pub agentkit_core::ProviderEvent::ToolRequested(agentkit_core::ToolCall)
+pub agentkit_core::ProviderEvent::Usage(serde_json::value::Value)
+pub agentkit_core::ProviderEvent::Warning
+pub agentkit_core::ProviderEvent::Warning::code: alloc::string::String
+pub agentkit_core::ProviderEvent::Warning::message: alloc::string::String
+pub enum agentkit_core::ReasoningEffort
+pub agentkit_core::ReasoningEffort::High
+pub agentkit_core::ReasoningEffort::Low
+pub agentkit_core::ReasoningEffort::Medium
+pub agentkit_core::ReasoningEffort::Minimal
+pub enum agentkit_core::ReasoningSummary
+pub agentkit_core::ReasoningSummary::Auto
+pub agentkit_core::ReasoningSummary::Concise
+pub agentkit_core::ReasoningSummary::Detailed
+pub agentkit_core::ReasoningSummary::Off
+pub enum agentkit_core::Terminal
+pub agentkit_core::Terminal::Cancelled
+pub agentkit_core::Terminal::Completed
+pub agentkit_core::Terminal::Failed
+pub struct agentkit_core::BudgetLimits
+pub agentkit_core::BudgetLimits::correction_passes: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::first_byte_ms: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::overall_ms: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::provider_requests: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::retries: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::stream_idle_ms: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::tool_calls: core::option::Option<u64>
+pub agentkit_core::BudgetLimits::tool_ms: core::option::Option<u64>
+pub struct agentkit_core::BudgetSnapshot
+pub agentkit_core::BudgetSnapshot::correction_passes: u64
+pub agentkit_core::BudgetSnapshot::provider_requests: u64
+pub agentkit_core::BudgetSnapshot::retries: u64
+pub agentkit_core::BudgetSnapshot::started_at: u64
+pub agentkit_core::BudgetSnapshot::tool_calls: u64
+pub agentkit_core::BudgetSnapshot::version: u8
+pub struct agentkit_core::ChatMessage
+pub agentkit_core::ChatMessage::content: serde_json::value::Value
+pub agentkit_core::ChatMessage::metadata: core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
+pub agentkit_core::ChatMessage::name: core::option::Option<alloc::string::String>
+pub agentkit_core::ChatMessage::role: alloc::string::String
+pub agentkit_core::ChatMessage::tool_call_id: core::option::Option<alloc::string::String>
+pub agentkit_core::ChatMessage::tool_calls: alloc::vec::Vec<agentkit_core::ToolCall>
+impl agentkit_core::ChatMessage
+pub fn agentkit_core::ChatMessage::is_synthetic_missing(&self) -> bool
+pub fn agentkit_core::ChatMessage::text(&str, &str) -> Self
+pub struct agentkit_core::ChatRequest
+pub agentkit_core::ChatRequest::budget: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::ExecutionBudget>>
+pub agentkit_core::ChatRequest::content_binding_digest: core::option::Option<alloc::string::String>
+pub agentkit_core::ChatRequest::continuation: core::option::Option<serde_json::value::Value>
+pub agentkit_core::ChatRequest::continuation_required: bool
+pub agentkit_core::ChatRequest::continuation_scope: core::option::Option<agentkit_core::ContinuationScope>
+pub agentkit_core::ChatRequest::continuation_store: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::ContinuationStore>>
+pub agentkit_core::ChatRequest::max_output_tokens: core::option::Option<u64>
+pub agentkit_core::ChatRequest::messages: alloc::vec::Vec<agentkit_core::ChatMessage>
+pub agentkit_core::ChatRequest::model: alloc::string::String
+pub agentkit_core::ChatRequest::reasoning_effort: core::option::Option<agentkit_core::ReasoningEffort>
+pub agentkit_core::ChatRequest::reasoning_summary: agentkit_core::ReasoningSummary
+pub agentkit_core::ChatRequest::request_guard: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::DispatchGuard>>
+pub agentkit_core::ChatRequest::run_id: alloc::string::String
+pub agentkit_core::ChatRequest::runtime: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>>
+pub agentkit_core::ChatRequest::selected_content: alloc::vec::Vec<agentkit_core::ChatMessage>
+pub agentkit_core::ChatRequest::temperature: core::option::Option<f64>
+pub agentkit_core::ChatRequest::tools: alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub struct agentkit_core::ConnectionIdentity
+pub agentkit_core::ConnectionIdentity::connection_id: alloc::string::String
+pub agentkit_core::ConnectionIdentity::generation: u64
+pub agentkit_core::ConnectionIdentity::protocol: alloc::string::String
+pub agentkit_core::ConnectionIdentity::provider_id: alloc::string::String
+pub struct agentkit_core::ContinuationScope
+pub agentkit_core::ContinuationScope::branch_id: alloc::string::String
+pub agentkit_core::ContinuationScope::chat_id: alloc::string::String
+pub struct agentkit_core::CoreError
+pub agentkit_core::CoreError::code: alloc::string::String
+pub agentkit_core::CoreError::message: alloc::string::String
+pub agentkit_core::CoreError::retryable: bool
+impl agentkit_core::CoreError
+pub fn agentkit_core::CoreError::new(&str, &str) -> Self
+pub fn agentkit_core::CoreError::responses(&str) -> Self
+pub struct agentkit_core::DispatchFence
+pub agentkit_core::DispatchFence::attempt_id: alloc::string::String
+pub agentkit_core::DispatchFence::fencing_token: u64
+pub agentkit_core::DispatchFence::task_id: alloc::string::String
+pub struct agentkit_core::ExecutionBudget
+pub agentkit_core::ExecutionBudget::limits: agentkit_core::BudgetLimits
+impl agentkit_core::ExecutionBudget
+pub fn agentkit_core::ExecutionBudget::check(&self) -> core::result::Result<(), agentkit_core::CoreError>
+pub async fn agentkit_core::ExecutionBudget::consume(&self, &str) -> core::result::Result<(), agentkit_core::CoreError>
+pub fn agentkit_core::ExecutionBudget::fail(&self, agentkit_core::CoreError)
+pub fn agentkit_core::ExecutionBudget::new(agentkit_core::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>, core::option::Option<agentkit_core::BudgetSnapshot>) -> core::result::Result<Self, agentkit_core::CoreError>
+pub fn agentkit_core::ExecutionBudget::remaining_ms(&self) -> core::option::Option<u64>
+pub fn agentkit_core::ExecutionBudget::snapshot(&self) -> agentkit_core::BudgetSnapshot
+pub fn agentkit_core::ExecutionBudget::with_checkpoint(self, alloc::rcs::arc::Arc<dyn agentkit_core::BudgetCheckpoint>) -> Self
+pub struct agentkit_core::HumanRequestSpec
+pub agentkit_core::HumanRequestSpec::content: serde_json::value::Value
+pub agentkit_core::HumanRequestSpec::content_hash: alloc::string::String
+pub agentkit_core::HumanRequestSpec::expires_at: core::option::Option<alloc::string::String>
+pub agentkit_core::HumanRequestSpec::request_id: alloc::string::String
+pub struct agentkit_core::RegistryError
+pub agentkit_core::RegistryError::code: &'static str
+pub agentkit_core::RegistryError::message: alloc::string::String
+pub agentkit_core::RegistryError::tool_name: alloc::string::String
+pub struct agentkit_core::RetryPolicy
+pub agentkit_core::RetryPolicy::base_delay_ms: f64
+pub agentkit_core::RetryPolicy::max_attempts: u32
+pub agentkit_core::RetryPolicy::max_delay_ms: f64
+pub struct agentkit_core::RetryProvider
+pub agentkit_core::RetryProvider::hooks: alloc::rcs::arc::Arc<dyn agentkit_core::RetryHooks>
+pub agentkit_core::RetryProvider::policy: agentkit_core::RetryPolicy
+pub agentkit_core::RetryProvider::provider: alloc::rcs::arc::Arc<dyn agentkit_core::ChatProvider>
+impl agentkit_core::ChatProvider for agentkit_core::RetryProvider
+pub fn agentkit_core::RetryProvider::allows_implicit_output_limit(&self) -> bool
+pub fn agentkit_core::RetryProvider::apply_request_defaults(&self, &mut agentkit_core::ChatRequest)
+pub fn agentkit_core::RetryProvider::connection_identity(&self) -> core::option::Option<agentkit_core::ConnectionIdentity>
+pub fn agentkit_core::RetryProvider::id(&self) -> &str
+pub fn agentkit_core::RetryProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::RetryProvider::stream_chat(&self, agentkit_core::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::ProviderStream
+pub fn agentkit_core::RetryProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_core::RetryProvider::tracks_transport_requests(&self) -> bool
+pub struct agentkit_core::RunHandle
+pub agentkit_core::RunHandle::events: tokio_stream::wrappers::mpsc_bounded::ReceiverStream<agentkit_contracts::dto::ai_run_event::AiRunEvent>
+pub agentkit_core::RunHandle::result: tokio::runtime::task::join::JoinHandle<agentkit_core::RunResult>
+pub struct agentkit_core::RunOptions
+pub agentkit_core::RunOptions::attempt_id: core::option::Option<alloc::string::String>
+pub agentkit_core::RunOptions::batch_suspension: bool
+pub agentkit_core::RunOptions::bindings: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_core::RunOptions::cancellation: tokio_util::sync::cancellation_token::CancellationToken
+pub agentkit_core::RunOptions::chat_id: core::option::Option<alloc::string::String>
+pub agentkit_core::RunOptions::default_tool_timeout_ms: core::option::Option<u64>
+pub agentkit_core::RunOptions::dispatch_guard: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::DispatchGuard>>
+pub agentkit_core::RunOptions::event_gate: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::RunEventGate>>
+pub agentkit_core::RunOptions::event_sink: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::RunEventSink>>
+pub agentkit_core::RunOptions::first_seq: u64
+pub agentkit_core::RunOptions::hook_timeout_ms: core::option::Option<u64>
+pub agentkit_core::RunOptions::hooks: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::RunHooks>>
+pub agentkit_core::RunOptions::interruption: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_core::RunOptions::limits: agentkit_core::ToolLimits
+pub agentkit_core::RunOptions::max_tool_calls_per_iteration: usize
+pub agentkit_core::RunOptions::max_tool_iterations: u32
+pub agentkit_core::RunOptions::request: agentkit_core::ChatRequest
+pub agentkit_core::RunOptions::resume_calls: alloc::vec::Vec<agentkit_core::ToolCall>
+pub agentkit_core::RunOptions::run_id: core::option::Option<alloc::string::String>
+pub agentkit_core::RunOptions::runtime: alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>
+pub agentkit_core::RunOptions::scope_id: core::option::Option<alloc::string::String>
+pub agentkit_core::RunOptions::steering: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::SteeringSource>>
+pub agentkit_core::RunOptions::suspender: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::SuspendSink>>
+pub agentkit_core::RunOptions::tool_close: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
+pub agentkit_core::RunOptions::tool_metadata: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub agentkit_core::RunOptions::user_id: core::option::Option<alloc::string::String>
+impl core::default::Default for agentkit_core::RunOptions
+pub fn agentkit_core::RunOptions::default() -> Self
+pub struct agentkit_core::RunResult
+pub agentkit_core::RunResult::appended_messages: alloc::vec::Vec<agentkit_core::ChatMessage>
+pub agentkit_core::RunResult::continuation: core::option::Option<serde_json::value::Value>
+pub agentkit_core::RunResult::iterations: u32
+pub agentkit_core::RunResult::run_id: alloc::string::String
+pub agentkit_core::RunResult::suspended: bool
+pub agentkit_core::RunResult::terminal: agentkit_core::Terminal
+pub struct agentkit_core::SteeringItem
+pub agentkit_core::SteeringItem::input_id: alloc::string::String
+pub agentkit_core::SteeringItem::message: agentkit_core::ChatMessage
+pub struct agentkit_core::SuspendSlot
+impl agentkit_core::SuspendSlot
+pub fn agentkit_core::SuspendSlot::set(&self, agentkit_core::HumanRequestSpec)
+pub struct agentkit_core::ToolCall
+pub agentkit_core::ToolCall::arguments_json: alloc::string::String
+pub agentkit_core::ToolCall::id: alloc::string::String
+pub agentkit_core::ToolCall::name: alloc::string::String
+pub struct agentkit_core::ToolContext
+pub agentkit_core::ToolContext::attempt_id: core::option::Option<alloc::string::String>
+pub agentkit_core::ToolContext::bindings: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_core::ToolContext::cancellation: tokio_util::sync::cancellation_token::CancellationToken
+pub agentkit_core::ToolContext::chat_id: core::option::Option<alloc::string::String>
+pub agentkit_core::ToolContext::dispatch_guard: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::DispatchGuard>>
+pub agentkit_core::ToolContext::limits: agentkit_core::ToolLimits
+pub agentkit_core::ToolContext::metadata: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub agentkit_core::ToolContext::run_id: alloc::string::String
+pub agentkit_core::ToolContext::scope_id: core::option::Option<alloc::string::String>
+pub agentkit_core::ToolContext::suspension: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::SuspendSlot>>
+pub agentkit_core::ToolContext::tool_call_id: core::option::Option<alloc::string::String>
+pub agentkit_core::ToolContext::user_id: core::option::Option<alloc::string::String>
+impl agentkit_core::ToolContext
+pub fn agentkit_core::ToolContext::request_human(&self, agentkit_core::HumanRequestSpec) -> bool
+pub fn agentkit_core::ToolContext::waiting_request_id(&self) -> alloc::string::String
+pub struct agentkit_core::ToolDefinition
+pub agentkit_core::ToolDefinition::capability: alloc::string::String
+pub agentkit_core::ToolDefinition::description: alloc::string::String
+pub agentkit_core::ToolDefinition::effect: alloc::string::String
+pub agentkit_core::ToolDefinition::input_schema: serde_json::value::Value
+pub agentkit_core::ToolDefinition::name: alloc::string::String
+pub agentkit_core::ToolDefinition::output_schema: core::option::Option<serde_json::value::Value>
+pub agentkit_core::ToolDefinition::timeout_ms: core::option::Option<u64>
+pub agentkit_core::ToolDefinition::version: alloc::string::String
+pub struct agentkit_core::ToolLimits
+pub agentkit_core::ToolLimits::max_bytes: usize
+pub agentkit_core::ToolLimits::max_items: core::option::Option<usize>
+pub agentkit_core::ToolLimits::profile: alloc::string::String
+impl core::default::Default for agentkit_core::ToolLimits
+pub fn agentkit_core::ToolLimits::default() -> Self
+pub struct agentkit_core::ToolRegistry
+impl agentkit_core::ToolRegistry
+pub fn agentkit_core::ToolRegistry::definitions(&self) -> alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub fn agentkit_core::ToolRegistry::get(&self, &str) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::Tool>>
+pub fn agentkit_core::ToolRegistry::is_empty(&self) -> bool
+pub fn agentkit_core::ToolRegistry::len(&self) -> usize
+pub fn agentkit_core::ToolRegistry::new() -> Self
+pub fn agentkit_core::ToolRegistry::register(&mut self, alloc::rcs::arc::Arc<dyn agentkit_core::Tool>) -> core::result::Result<(), agentkit_core::RegistryError>
+pub fn agentkit_core::ToolRegistry::validate_input(&self, &str, &serde_json::value::Value) -> alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_core::ToolResult
+pub agentkit_core::ToolResult::data: core::option::Option<serde_json::value::Value>
+pub agentkit_core::ToolResult::limits: agentkit_core::ToolLimits
+pub agentkit_core::ToolResult::model_content: core::option::Option<alloc::vec::Vec<serde_json::value::Value>>
+pub agentkit_core::ToolResult::model_data: core::option::Option<serde_json::value::Value>
+pub agentkit_core::ToolResult::ok: bool
+pub agentkit_core::ToolResult::sources: alloc::vec::Vec<serde_json::value::Value>
+pub agentkit_core::ToolResult::status: core::option::Option<alloc::string::String>
+pub agentkit_core::ToolResult::summary: core::option::Option<alloc::string::String>
+pub agentkit_core::ToolResult::truncated: bool
+pub agentkit_core::ToolResult::warnings: alloc::vec::Vec<alloc::string::String>
+impl agentkit_core::ToolResult
+pub fn agentkit_core::ToolResult::serialize_data<T: serde_core::ser::Serialize>(&str, &T) -> core::result::Result<serde_json::value::Value, agentkit_core::CoreError>
+pub const agentkit_core::TOOL_RESULT_MISSING_CODE: &str
+pub trait agentkit_core::BudgetCheckpoint: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::BudgetCheckpoint::checkpoint<'life0, 'async_trait>(&'life0 self, agentkit_core::BudgetSnapshot) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_core::ChatProvider: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::ChatProvider::allows_implicit_output_limit(&self) -> bool
+pub fn agentkit_core::ChatProvider::apply_request_defaults(&self, &mut agentkit_core::ChatRequest)
+pub fn agentkit_core::ChatProvider::connection_identity(&self) -> core::option::Option<agentkit_core::ConnectionIdentity>
+pub fn agentkit_core::ChatProvider::id(&self) -> &str
+pub fn agentkit_core::ChatProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::ChatProvider::stream_chat(&self, agentkit_core::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::ProviderStream
+pub fn agentkit_core::ChatProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_core::ChatProvider::tracks_transport_requests(&self) -> bool
+impl agentkit_core::ChatProvider for agentkit_core::RetryProvider
+pub fn agentkit_core::RetryProvider::allows_implicit_output_limit(&self) -> bool
+pub fn agentkit_core::RetryProvider::apply_request_defaults(&self, &mut agentkit_core::ChatRequest)
+pub fn agentkit_core::RetryProvider::connection_identity(&self) -> core::option::Option<agentkit_core::ConnectionIdentity>
+pub fn agentkit_core::RetryProvider::id(&self) -> &str
+pub fn agentkit_core::RetryProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::RetryProvider::stream_chat(&self, agentkit_core::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::ProviderStream
+pub fn agentkit_core::RetryProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_core::RetryProvider::tracks_transport_requests(&self) -> bool
+pub trait agentkit_core::ContinuationStore: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::ContinuationStore::save<'life0, 'async_trait>(&'life0 self, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_core::DispatchGuard: core::marker::Send + core::marker::Sync + core::fmt::Debug
+pub fn agentkit_core::DispatchGuard::check<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::DispatchGuard::fence(&self) -> agentkit_core::DispatchFence
+pub trait agentkit_core::RetryHooks: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::RetryHooks::random<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<f64, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_core::RetryHooks::sleep<'life0, 'life1, 'async_trait>(&'life0 self, u64, &'life1 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_core::RunEventGate: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::RunEventGate::wait<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_core::RunEventSink: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::RunEventSink::append<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_contracts::dto::ai_run_event::AiRunEvent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_core::RunEventSink::append_messages<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_contracts::dto::ai_run_event::AiRunEvent, &'life2 [agentkit_core::ChatMessage]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_core::RunHooks: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::RunHooks::call<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, usize, serde_json::value::Value, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<serde_json::value::Value, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_core::RunHooks::indexes(&self, &str) -> alloc::vec::Vec<usize>
+pub trait agentkit_core::SteeringSource: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::SteeringSource::pending<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_core::SteeringItem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::SteeringSource::pending_context<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::SteeringItem>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_core::SuspendSink: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::SuspendSink::park<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::HumanRequestSpec, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_core::Tool: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::Tool::definition(&self) -> &agentkit_core::ToolDefinition
+pub fn agentkit_core::Tool::effect_context(&self) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_core::Tool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::ToolResult, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::Tool::record_schema_refusal<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_core::ToolContext, &'life2 serde_json::value::Value, &'life3 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_core::Tool::records_command_start(&self) -> bool
+pub fn agentkit_core::dedupe_tool_call_ids(&mut [agentkit_core::ToolCall]) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::run_chat(agentkit_core::RunOptions, alloc::rcs::arc::Arc<dyn agentkit_core::ChatProvider>, alloc::rcs::arc::Arc<agentkit_core::ToolRegistry>) -> agentkit_core::RunHandle
+pub fn agentkit_core::tool_model_envelope(&agentkit_core::ToolResult, &agentkit_core::ToolLimits) -> alloc::string::String
+pub type agentkit_core::ProviderStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<agentkit_core::ProviderEvent, agentkit_core::CoreError>> + core::marker::Send)>>

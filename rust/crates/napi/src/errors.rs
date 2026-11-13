@@ -5,6 +5,8 @@
 //! TS tests. Rust debug formatting never becomes observable behavior: internal
 //! failures collapse to `internal_error` with a redacted message.
 
+use agentkit_agents::AgentsError;
+use agentkit_runtime::RuntimeError;
 use napi::{Status, bindgen_prelude::Error};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -146,12 +148,19 @@ fn store_mapped(
         E::RecoveryUnreadable(_) => ("recovery_unreadable", error.to_string()),
         E::Closed => ("store_closed", error.to_string()),
         E::UnsupportedVersion(_) => ("unsupported_version", error.to_string()),
-        E::InvalidInput(_) => ("invalid_input", error.to_string()),
+        E::InvalidInput(_) | E::TaskInput { .. } | E::ManagedInput { .. } => {
+            ("invalid_input", error.to_string())
+        }
         E::NotFound(_) => ("not_found", error.to_string()),
-        E::Duplicate(_) => (duplicate.unwrap_or("input_conflict"), error.to_string()),
+        E::Duplicate(_) | E::AnswerConflict(_) => {
+            (duplicate.unwrap_or("input_conflict"), error.to_string())
+        }
         E::ScopeBusy(_) => ("chat_busy", error.to_string()),
         E::LeaseLost(_) => ("lease_lost", error.to_string()),
-        E::InvalidTransition(_) => (
+        E::InvalidTransition(_)
+        | E::AgentInputTransition(_)
+        | E::AnswerStale(_)
+        | E::ReceiptTransition { .. } => (
             invalid_transition.unwrap_or("unknown-store-error"),
             error.to_string(),
         ),
@@ -171,45 +180,174 @@ fn store_mapped(
     stable(code, message, None)
 }
 
-pub fn session(error: agentkit_host::SessionError) -> Error {
-    stable(&error.code, error.message, None)
+pub fn managed_store(error: agentkit_store::StoreError) -> Error {
+    if matches!(
+        &error,
+        agentkit_store::StoreError::ManagedInput {
+            reason: agentkit_store::ManagedInputReason::SecretReferencesUnsupported,
+            ..
+        }
+    ) {
+        return stable("mcp_secret_missing", error.to_string(), None);
+    }
+    store_port(error, "invalid_state", "invalid_input")
 }
 
-/// Sentinel texts the late-bound lanes raise through `HostError::Execution`
-/// when a subsystem was never configured; `host` turns them into stable
-/// public codes instead of an opaque `internal_error`.
-pub(crate) const SUBAGENTS_NOT_CONFIGURED: &str = "subagents not configured";
-pub(crate) const ADVISOR_NOT_CONFIGURED: &str = "advisor not configured";
-
-/// Map a host error. Store failures keep their store codes (`not_found`,
-/// `already_owned`, `lease_lost`, ...); the unconfigured-lane sentinels get
-/// stable codes; everything else collapses to a redacted `internal_error`
-/// and leaves a native-log breadcrumb carrying only the variant name —
-/// never the Display text, which may embed arguments or secrets.
-pub fn host(error: agentkit_host::HostError) -> Error {
-    use agentkit_host::HostError as H;
-    let text = error.to_string();
-    let kind = match error {
-        H::Store(inner) => return store(inner),
-        H::Execution(sentinel) if sentinel == SUBAGENTS_NOT_CONFIGURED => {
-            return stable("subagents_not_configured", sentinel, None);
+pub fn session(error: agentkit_sessions::SessionsError) -> Error {
+    use agentkit_sessions::SessionsError as S;
+    match error {
+        S::InvalidInput(message) => stable("invalid_input", message, None),
+        S::InvalidInputContext(source) => stable("invalid_input", source.to_string(), None),
+        S::ChatBusy(message) => stable("chat_busy", message, None),
+        S::ChatIdle(message) => stable("chat_idle", message, None),
+        S::InvalidState(message) => stable("invalid_state", message, None),
+        S::InputNotFound(message) | S::TurnNotFound(message) | S::ExecutionNotFound(message) => {
+            stable("not_found", message, None)
         }
-        H::Execution(sentinel) if sentinel == ADVISOR_NOT_CONFIGURED => {
-            return stable("advisor_not_configured", sentinel, None);
+        S::SessionNotFound(message) => stable("session_not_found", message, None),
+        S::AnswerStale(message) => stable("answer_stale", message, None),
+        S::NoExecutorForKind(message) => stable("no_executor_for_kind", message, None),
+        S::SessionContextInvalid(message) => stable("session_context_invalid", message, None),
+        S::SessionStore(error) => session_store(error.0),
+        S::AnswerStore(error) => match error.0 {
+            agentkit_store::StoreError::AnswerStale(message) => {
+                stable("answer_stale", message, None)
+            }
+            other => session_store(other),
+        },
+        S::ReceiptStore(error) => match error.0 {
+            agentkit_store::StoreError::ReceiptTransition {
+                reason: agentkit_store::ReceiptTransitionReason::RunActive,
+                message,
+            } => stable("receipt_run_active", message, None),
+            agentkit_store::StoreError::ReceiptTransition {
+                reason: agentkit_store::ReceiptTransitionReason::NotUncertain,
+                message,
+            } => stable("receipt_not_uncertain", message, None),
+            other => session_store(other),
+        },
+        S::ReceiptInvalidInput(message) => stable("invalid_input", message, None),
+        S::ReceiptNotFound {
+            execution_id,
+            chat_id,
+        } => stable(
+            "not_found",
+            format!("execution {execution_id} not found in chat {chat_id}."),
+            None,
+        ),
+        other => stable("internal", other.to_string(), None),
+    }
+}
+fn session_store(error: agentkit_store::StoreError) -> Error {
+    use agentkit_store::StoreError as E;
+    match error {
+        E::NotFound(message) => stable("not_found", message, None),
+        E::AnswerConflict(message) => stable("answer_conflict", message, None),
+        E::Duplicate(message) => stable("input_conflict", message, None),
+        E::ScopeBusy(scope) => stable("chat_busy", format!("Chat {scope} is busy."), None),
+        E::InvalidTransition(message)
+        | E::AgentInputTransition(message)
+        | E::AnswerStale(message)
+        | E::ReceiptTransition { message, .. } => stable("invalid_state", message, None),
+        E::LeaseLost(task) => stable("invalid_state", format!("lease lost: {task}"), None),
+        E::InvalidInput(message)
+        | E::TaskInput { message, .. }
+        | E::ManagedInput { message, .. } => stable("invalid_input", message, None),
+        other => stable("store_failure", other.to_string(), None),
+    }
+}
+pub fn host(error: agentkit_engine::EngineError<agentkit_store::StoreError>) -> Error {
+    match error {
+        agentkit_engine::EngineError::Store(error) => store(error),
+        other => stable("internal_error", other.to_string(), None),
+    }
+}
+pub fn sessions(error: agentkit_sessions::SessionsError) -> Error {
+    use agentkit_sessions::SessionsError as S;
+    match error {
+        S::Engine(error) => host(error),
+        S::Store(error) => store(error),
+        S::AgentNotFound(id) => stable("not_found", format!("agent {id}"), None),
+        S::TaskNotFound(id) => stable("not_found", format!("task {id}"), None),
+        S::ReceiptNotFound {
+            execution_id,
+            chat_id,
+        } => stable(
+            "not_found",
+            format!("not_found: execution {execution_id} not found in chat {chat_id}."),
+            None,
+        ),
+        other => stable("internal_error", other.to_string(), None),
+    }
+}
+pub fn chat(error: agentkit_chat::ChatError) -> Error {
+    match error {
+        agentkit_chat::ChatError::Engine(error) => host(error),
+        agentkit_chat::ChatError::Store(error) => store(error),
+        agentkit_chat::ChatError::Sessions(error) => sessions(error),
+        other => stable("internal_error", other.to_string(), None),
+    }
+}
+pub fn agents(error: AgentsError) -> Error {
+    match error {
+        AgentsError::Engine(error) => host(error),
+        AgentsError::Store(error) => store(error),
+        AgentsError::Sessions(error) => sessions(error),
+        AgentsError::Chat(error) => chat(error),
+        AgentsError::AgentNotFound(id) => {
+            stable("not_found", format!("agent_not_found: {id}"), None)
         }
-        H::NotFound(message) => return stable("not_found", message, None),
-        H::Failure(_) => "failure",
-        H::UnknownKind(_) => "unknown_kind",
-        H::NoExecutorForKind(_) => "no_executor_for_kind",
-        H::Cancelled => "cancelled",
-        H::Execution(_) => "execution",
-    };
-    eprintln!("agentkit-napi: host error mapped to internal_error (kind: {kind})");
-    stable("internal_error", text, None)
+        AgentsError::SubagentNotFound(id) => {
+            stable("not_found", format!("subagent_not_found: {id}"), None)
+        }
+        AgentsError::SubagentsNotConfigured => {
+            stable("subagents_not_configured", "subagents not configured", None)
+        }
+        AgentsError::AdvisorNotConfigured => {
+            stable("advisor_not_configured", "advisor not configured", None)
+        }
+        other => stable("internal_error", other.to_string(), None),
+    }
+}
+pub fn teammate(error: impl Into<AgentsError>) -> Error {
+    use agentkit_sessions::SessionsError as S;
+    match error.into() {
+        refusal @ (AgentsError::InvalidAgent(_) | AgentsError::InvalidAdmission(_)) => {
+            invalid(refusal.to_string())
+        }
+        AgentsError::Sessions(S::InvalidOverrides(message)) => {
+            invalid(format!("invalid_overrides: {message}"))
+        }
+        AgentsError::Sessions(S::RunProfileRefused(message)) => {
+            invalid(format!("run_profile_refused:{message}"))
+        }
+        AgentsError::Sessions(S::Store(error)) | AgentsError::Store(error) => teammate_store(error),
+        AgentsError::Engine(agentkit_engine::EngineError::Store(error)) => teammate_store(error),
+        other => agents(other),
+    }
+}
+fn teammate_store(error: agentkit_store::StoreError) -> Error {
+    match error {
+        agentkit_store::StoreError::Conflict(message) => stable("revision_conflict", message, None),
+        other => store_port(other, "invalid_task_transition", "duplicate_task"),
+    }
 }
 
 pub fn invalid(message: impl Into<String>) -> Error {
     stable("invalid_input", message, None)
+}
+
+/// Map a runtime error: refusals keep the exact code and text the binding
+/// raised before the runtime was extracted.
+pub fn runtime(error: RuntimeError) -> Error {
+    match error {
+        RuntimeError::InvalidInput(message) => invalid(message),
+        RuntimeError::Coded { code, message } => stable(&code, message, None),
+        RuntimeError::Engine(error) => host(error),
+        RuntimeError::Agents(error) => agents(error),
+        RuntimeError::Sessions(error) => sessions(error),
+        RuntimeError::Chat(error) => chat(error),
+    }
 }
 
 /// A provider-configuration refusal: the connection a service was told to
@@ -231,159 +369,4 @@ pub fn closed(context: &str) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn contract_is_valid_and_deduplicated() {
-        let codes = contract_codes();
-        assert!(!codes.is_empty());
-        let unique: std::collections::HashSet<&String> = codes.iter().collect();
-        assert_eq!(unique.len(), codes.len(), "codes must be deduplicated");
-        assert!(codes.iter().any(|code| code == "internal_error"));
-    }
-
-    #[test]
-    fn contract_codes_cross_the_boundary_verbatim() {
-        let error = stable("answer_conflict", "duplicate answer", None);
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "answer_conflict");
-        assert_eq!(payload["message"], "duplicate answer");
-        assert!(payload.get("details").is_none());
-    }
-
-    #[test]
-    fn answer_stale_crosses_the_boundary_verbatim() {
-        // The stale-answer code is part of the contract: a session-service
-        // stale refusal must reach JavaScript as `answer_stale` with the
-        // TypeScript message text, never redacted to `internal_error`.
-        let message = "Request req-1 can no longer be answered: it was cancelled.";
-        let error = session(agentkit_host::SessionError::new("answer_stale", message));
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "answer_stale");
-        assert_eq!(payload["message"], message);
-        assert!(payload.get("details").is_none());
-        assert!(is_contract_code("answer_stale"));
-    }
-
-    #[test]
-    fn unknown_codes_are_redacted_not_leaked() {
-        let error = stable("weird-debug-code", "raw internal detail", None);
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "internal_error");
-        // The raw message NEVER crosses for a non-contract code: only the
-        // fixed generic string does, and the unknown code survives solely
-        // as an origin marker, never as the wire code.
-        let message = payload["message"].as_str().expect("message is a string");
-        assert!(!message.contains("raw internal detail"));
-        assert_eq!(message, GENERIC_MESSAGE);
-        assert_eq!(payload["details"]["origin"], "weird-debug-code");
-    }
-
-    #[test]
-    fn explicit_internal_error_messages_are_redacted() {
-        // Even a caller that names the contract code cannot smuggle raw
-        // runtime text across: the message is the fixed generic string.
-        let error = stable("internal_error", "raw secret", None);
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "internal_error");
-        let message = payload["message"].as_str().expect("message is a string");
-        assert!(!message.contains("raw secret"));
-        assert_eq!(message, GENERIC_MESSAGE);
-    }
-
-    #[test]
-    fn internal_keeps_its_compile_time_context() {
-        // `internal` bypasses the blanket redaction because every call site
-        // passes a compile-time literal (audited), so the context message
-        // stays observable.
-        let error = internal("run event serialization");
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "internal_error");
-        assert_eq!(
-            payload["message"],
-            "run event serialization failed; inspect the native logs"
-        );
-        assert!(payload.get("details").is_none());
-    }
-
-    #[test]
-    fn host_store_errors_keep_their_store_codes_and_unconfigured_lanes_are_stable() {
-        let payload = |error: Error| -> Value { serde_json::from_str(&error.reason).unwrap() };
-        let mapped = payload(host(agentkit_host::HostError::Store(
-            agentkit_store::StoreError::NotFound("x".into()),
-        )));
-        assert_eq!(mapped["code"], "not_found");
-        let mapped = payload(host(agentkit_host::HostError::Store(
-            agentkit_store::StoreError::LeaseLost("x".into()),
-        )));
-        assert_eq!(mapped["code"], "lease_lost");
-        let mapped = payload(host(agentkit_host::HostError::Execution(
-            SUBAGENTS_NOT_CONFIGURED.into(),
-        )));
-        assert_eq!(mapped["code"], "subagents_not_configured");
-        let mapped = payload(host(agentkit_host::HostError::Execution(
-            ADVISOR_NOT_CONFIGURED.into(),
-        )));
-        assert_eq!(mapped["code"], "advisor_not_configured");
-        let mapped = payload(host(agentkit_host::HostError::NotFound(
-            "subagent_not_found: c1".into(),
-        )));
-        assert_eq!(mapped["code"], "not_found");
-        assert_eq!(mapped["message"], "subagent_not_found: c1");
-    }
-
-    #[test]
-    fn host_error_text_is_redacted_not_leaked() {
-        // `host` hands the Display text of a HostError to `stable` with the
-        // internal_error code; the redaction now keeps it native-only.
-        let error = host(agentkit_host::HostError::Execution(
-            "tcp connect to 10.0.0.7:8080 refused: token abc123".into(),
-        ));
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "internal_error");
-        let message = payload["message"].as_str().expect("message is a string");
-        assert_eq!(message, GENERIC_MESSAGE);
-        assert!(!error.reason.contains("10.0.0.7"));
-        assert!(!error.reason.contains("abc123"));
-    }
-
-    #[test]
-    fn store_unknown_fallback_keeps_origin_and_redacts_message() {
-        // Variants with no explicit arm land in `unknown-store-error`: not a
-        // contract code, so the wire code is internal_error with the origin
-        // preserved and the Display text withheld.
-        let error = store(agentkit_store::StoreError::SessionDescriptorChanged(
-            "raw descriptor diff leaked".into(),
-        ));
-        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
-        assert_eq!(payload["code"], "internal_error");
-        assert_eq!(payload["details"]["origin"], "unknown-store-error");
-        assert_eq!(payload["message"], GENERIC_MESSAGE);
-        assert!(!error.reason.contains("raw descriptor diff leaked"));
-    }
-
-    #[test]
-    fn store_variants_map_to_contract_codes() {
-        let cases = [
-            (agentkit_store::StoreError::AlreadyOwned, "already_owned"),
-            (agentkit_store::StoreError::Closed, "store_closed"),
-            (
-                agentkit_store::StoreError::NotFound("x".into()),
-                "not_found",
-            ),
-            (
-                agentkit_store::StoreError::RecoveryUnreadable("x".into()),
-                "recovery_unreadable",
-            ),
-            (
-                agentkit_store::StoreError::UnsupportedVersion(9),
-                "unsupported_version",
-            ),
-        ];
-        for (error, expected) in cases {
-            let payload: Value = serde_json::from_str(&store(error).reason).expect("JSON");
-            assert_eq!(payload["code"], expected, "for {expected}");
-        }
-    }
-}
+mod tests;

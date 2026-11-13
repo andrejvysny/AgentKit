@@ -30,7 +30,7 @@ import type {
   AiToolDefinition,
 } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
-import type { SessionReasoningEffort } from "@agentkit/host";
+import type { SessionReasoningEffort } from "./reasoning.js";
 import {
   NativeSessionService,
   NativeStore,

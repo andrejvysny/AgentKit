@@ -1,21 +1,24 @@
 use agentkit_core::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 struct Clock(AtomicU64);
 impl Runtime for Clock {
-    fn now_ms(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
+    fn now_ms(&self) -> i64 {
+        self.0.load(Ordering::SeqCst).cast_signed()
     }
     fn timestamp(&self) -> String {
         "2026-10-22T12:00:00.000Z".into()
     }
-    fn id(&self, prefix: &str) -> String {
+    fn id(&self) -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+    fn id_with_prefix(&self, prefix: &str) -> String {
         format!("{prefix}{}", uuid::Uuid::new_v4())
     }
 }

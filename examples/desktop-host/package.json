@@ -18,11 +18,8 @@
     "directory": "examples/desktop-host"
   },
   "dependencies": {
-    "@agentkit/adapters-memory": "workspace:*",
     "@agentkit/contracts": "workspace:*",
     "@agentkit/core": "workspace:*",
-    "@agentkit/host": "workspace:*",
-    "@agentkit/mcp-client": "workspace:*",
     "@agentkit/native": "workspace:*"
   },
   "devDependencies": {

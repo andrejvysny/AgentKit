@@ -1,8 +1,8 @@
 // Shared behavioral contract for the optional AssistantStore.inputs port
 // (ADR 0016 §2). Framework-neutral like the other suites: test primitives are
-// injected, every @agentkit/host import is a type, and errors are matched on
+// injected, every ./ports.js import is a type, and errors are matched on
 // `code`.
-import type { AgentInputStore, CreateAgentInput } from "@agentkit/host";
+import type { AgentInputStore, CreateAgentInput } from "./ports.js";
 import {
   expectRejects,
   expectRejectsWithCode,

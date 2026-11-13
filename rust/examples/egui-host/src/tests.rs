@@ -1,5 +1,5 @@
 use crate::{backend, bridge::*};
-use agentkit_host::{Runtime, SystemRuntime};
+use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_store::{ProposalStatus, TaskStatus};
 use std::time::Duration;
 use tokio::sync::mpsc;

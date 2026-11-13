@@ -35,7 +35,7 @@
  *    no manual startWorker/stopWorker, and none is needed: this script never
  *    kills a process, so no lease ever expires — S7/S8 interrupt and resume
  *    inside the live worker. The binding does not expose the scheduler's
- *    lease TTL; the Rust default lives in rust/crates/host/src/runner.rs).
+ *    lease TTL; the Rust default lives in rust/crates/engine/src/runner.rs).
  *  - `providers.upsertProvider` + `settings.updateSettings` +
  *    `OpenAiCompatibleClient.fromConfig` → the Rust provider lane:
  *    `NativeSessionService.registerProviderConnection(BASE_URL, null)` plus
@@ -130,8 +130,7 @@ const ALL_CODING_TOOL_NAMES = [
   "submit_plan",
 ];
 /** Host-side pruning for S5: the tool sets the retired
- * `coding/reviewer` / `coding/supervisor` profiles allowed (see
- * `packages/host/src/profiles/agent-profile.ts` — READ_ONLY_TOOLS, plus
+ * `coding/reviewer` / `coding/supervisor` profiles allowed (READ_ONLY_TOOLS, plus
  * `run_tests` for the reviewer). Registering only these IS the ceiling. */
 const REVIEWER_TOOL_NAMES = [...READ_TOOLS, "run_tests"];
 const SUPERVISOR_TOOL_NAMES = [...READ_TOOLS];
@@ -244,8 +243,7 @@ interface Node {
  * way), and the coding tools registered through the native lane. The role
  * ceiling that the retired host-side JS bridge enforced by registering only
  * the allowed descriptors is now the native `role` option — the same
- * ceiling the `coding/reviewer` / `coding/supervisor` profiles carried
- * (`packages/host/src/profiles/agent-profile.ts`). Constructing the service
+ * ceiling the `coding/reviewer` / `coding/supervisor` profiles carried. Constructing the service
  * crash-reconciles and starts the worker. */
 async function openNativeNode(
   dbPath: string,

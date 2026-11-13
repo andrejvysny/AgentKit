@@ -147,7 +147,7 @@ pub struct NativeRunHandle {
 }
 #[napi]
 impl NativeRunHandle {
-    #[napi(factory)]
+    #[napi(factory, catch_unwind)]
     pub async fn start(options_json: String, callback: ThreadsafeFunction<String>) -> Result<Self> {
         let value: Value = serde_json::from_str(&options_json)
             .map_err(|e| errors::stable("invalid_input", e.to_string(), None))?;
@@ -190,7 +190,7 @@ impl NativeRunHandle {
             hooks,
         })
     }
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn next(&self) -> Result<String> {
         let mut guard = self.handle.lock().await;
         if self.awaiting_ack.swap(false, Ordering::AcqRel) {

@@ -1,11 +1,11 @@
 //! Versioned native-execution contracts for optional vendor agent backends.
 //!
-//! This crate is the shared vocabulary between `agentkit-host`'s generic
+//! This crate is the shared vocabulary between `agentkit-native-exec`'s generic
 //! `NativeAgentExecutor`, injected backend drivers (the optional Claude Code
 //! driver lives in `agentkit-claude`), and consumers. It contains NO process
 //! logic, NO vendor protocol, NO store access and NO dependency on the host:
 //! the durable authority (tasks, attempts, leases, events, receipts) stays in
-//! `agentkit-host` / `agentkit-store` (AGENTKIT-107 §3.1).
+//! `agentkit-engine` / `agentkit-store` (AGENTKIT-107 §3.1).
 //!
 //! Contract invariants (AGENTKIT-108):
 //! * An [`ExecutionTarget`] distinguishes the existing model-provider loop
@@ -20,14 +20,20 @@
 //! * Terminal outcome, process exit and pipe EOF are three distinct signals
 //!   ([`NativeTerminalOutcome`] vs [`ProcessExit`] vs EOF on the line stream).
 
+mod broker;
 mod canonical;
 mod capability;
 mod error;
 mod events;
+mod frozen;
 mod interaction;
 mod ports;
+mod repository;
 mod target;
 
+pub use broker::{
+    AttemptBrokerHandle, BROKER_AUTHORIZE_BUDGET_MS, BrokerLimits, BrokerToolDefinition,
+};
 pub use canonical::canonical_digest;
 pub use capability::{
     CapabilityMatrix, CapabilitySnapshot, CapabilityState, CapabilityViolation,
@@ -37,6 +43,11 @@ pub use error::{NativeError, NativeRefusal, NativeResult};
 pub use events::{
     BillingInclusion, FailureClass, McpServerStatus, NativeEvent, NativeTerminalOutcome,
     NativeUsage, ProcessTerminalEvidence, TokenSet, UsageProvenance, VendorToolPhase,
+};
+pub use frozen::{
+    BROKER_PAYLOAD_KEY, BrokerLimitsSpec, BrokerSpec, BrokerToolSpec,
+    CONTINUATION_SCOPE_PAYLOAD_KEY, ContinuationScope, EXECUTION_TARGET_PAYLOAD_KEY,
+    TURN_INPUT_PAYLOAD_KEY, parse_target, validate_frozen_semantics, validate_frozen_stanza,
 };
 pub use interaction::{
     AnswerDisposition, AnswerSubmission, Decision, InteractionKind, InteractionRejection,
@@ -49,6 +60,10 @@ pub use ports::{
     ProcessSupervisor, ProtocolViolation, ResourceLimits, STDERR_TAIL_MAX_BYTES,
     StreamFrameAdapter, TransportFault, TurnInput, TurnResume, bounded_stderr_tail, collect_frames,
     fingerprint, with_stderr_suffix,
+};
+pub use repository::{
+    BindNativeSession, CommitContinuation, NativeContinuationBinding, NativeRunRepository,
+    NativeSessionBinding,
 };
 pub use target::{
     AuthExpectation, CONTENT_POLICY_VERSION, CONTENT_SCHEMA_VERSION, ContentPolicy,

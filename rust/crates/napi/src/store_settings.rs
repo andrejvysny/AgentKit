@@ -1,8 +1,9 @@
 //! The `settings.*` port surface: the single assistant-settings document.
-//! Same storage the Rust host's HTTP lane already uses — namespace `http`,
-//! key `settings` — so both lanes read one document. Defaults and the patch
-//! whitelist mirror `agentkit-host`'s settings handler exactly; the store
-//! keeps the JSON verbatim.
+//! Same storage the HTTP lane already uses — namespace `http`, key
+//! `settings` — so both lanes read one document. Defaults and the patch
+//! whitelist mirror that handler exactly
+//! (`rust/crates/http/src/desktop/management.rs`); the store keeps the JSON
+//! verbatim.
 
 use super::ports::record;
 use crate::errors;

@@ -1,10 +1,10 @@
 use agentkit_core::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 struct Calls;
 #[async_trait]
@@ -409,10 +409,12 @@ async fn interruption_after_a_tool_ran_still_records_its_outcome() {
             .count(),
         0
     );
-    assert!(result
-        .appended_messages
-        .iter()
-        .any(|message| message.tool_call_id.as_deref() == Some("call0")));
+    assert!(
+        result
+            .appended_messages
+            .iter()
+            .any(|message| message.tool_call_id.as_deref() == Some("call0"))
+    );
 }
 #[tokio::test]
 async fn stream_ending_without_completion_is_incomplete_even_without_a_budget() {

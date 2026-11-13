@@ -40,9 +40,7 @@ async function ensureBinary(): Promise<string> {
         "--manifest-path",
         "rust/Cargo.toml",
         "-p",
-        "agentkit-host",
-        "--features",
-        "http",
+        "agentkit-runtime",
         "--example",
         "http_fixture",
         "--locked",
@@ -155,22 +153,11 @@ export async function startNativeServer(existing?: {
   };
 }
 
-export type CompatibilityBackend = "typescript" | "rust";
 export interface CompatibilityServer {
   client: ReturnType<typeof createAgentKitClient>;
   stop(): Promise<void>;
 }
 
-export async function startCompatibilityServer(
-  backend: CompatibilityBackend,
-): Promise<CompatibilityServer> {
-  if (backend === "rust") return startNativeServer();
-  const { startTestServer } = await import(
-    "../../../packages/client/tests/support/server.js"
-  );
-  const server = await startTestServer({ backend: "typescript" });
-  return {
-    client: createAgentKitClient({ baseUrl: server.baseUrl }),
-    stop: () => server.stop(),
-  };
+export async function startCompatibilityServer(): Promise<CompatibilityServer> {
+  return startNativeServer();
 }

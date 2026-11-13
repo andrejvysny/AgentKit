@@ -60,7 +60,10 @@ impl SqliteStore {
             let mut cursor: MessageRecord =
                 get::<MessageRecord>(&transaction, "messages", "id", &from_message_id)?
                     .filter(|message| message.chat_id == chat_id && message.active)
-                    .ok_or_else(|| StoreError::InvalidInput("invalid_fork_point".into()))?;
+                    .ok_or_else(|| StoreError::TaskInput {
+                        reason: agentkit_engine::TaskInputReason::InvalidForkPoint,
+                        message: "invalid_fork_point".into(),
+                    })?;
             let mut path = vec![cursor.clone()];
             while let Some(parent) = cursor.parent_message_id {
                 cursor = required(&transaction, "messages", "id", &parent)?;

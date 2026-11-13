@@ -1,6 +1,8 @@
 [workspace]
 members = ["crates/*", "examples/agent-lifecycle", "examples/egui-host", "examples/teammate-consumer"]
 default-members = ["crates/*"]
+# Agent tooling may drop dot-directories under crates/; never treat them as members.
+exclude = ["crates/.claude"]
 resolver = "3"
 
 [workspace.package]
@@ -15,10 +17,64 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.150", features = ["preserve_order", "arbitrary_precision", "raw_value"] }
 sha2 = "=0.10.9"
 thiserror = "=2.0.18"
-tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 futures = "=0.3.32"
 async-trait = "=0.1.89"
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
+axum = "=0.8.8"
+http = "=1.5.0"
+url = "=2.5.8"
+tokio-util = "=0.7.20"
+uuid = { version = "=1.28.0", features = ["v4"] }
+libc = "=0.2.191"
+tempfile = "=3.27.0"
+regex = "=1.13.1"
+# Crates opt into std/clock/serde individually.
+chrono = { version = "=0.4.45", default-features = false }
+# Crates opt into bundled/hooks individually.
+rusqlite = "=0.41.1"
+async-stream = "=0.3.6"
+tower = "=0.5.3"
+futures-util = "=0.3.34"
+tokio-stream = "=0.1.19"
+keyring = "=3.6.3"
+zeroize = "=1.9.1"
+
+agentkit-contracts = { path = "crates/contracts", version = "0.1.0" }
+agentkit-kernel = { path = "crates/kernel", version = "0.1.0" }
+agentkit-core = { path = "crates/core", version = "0.1.0" }
+agentkit-governance = { path = "crates/governance", version = "0.1.0" }
+agentkit-connections = { path = "crates/connections", version = "0.1.0" }
+agentkit-engine = { path = "crates/engine", version = "0.1.0" }
+agentkit-sessions = { path = "crates/sessions", version = "0.1.0" }
+agentkit-agents = { path = "crates/agents", version = "0.1.0" }
+agentkit-chat = { path = "crates/chat", version = "0.1.0" }
+agentkit-store = { path = "crates/store", version = "0.1.0" }
+agentkit-testkit = { path = "crates/testkit", version = "0.1.0" }
+agentkit-client = { path = "crates/client", version = "0.1.0" }
+agentkit-providers = { path = "crates/providers", version = "0.1.0" }
+agentkit-http = { path = "crates/http", version = "0.1.0" }
+agentkit-mcp = { path = "crates/mcp", version = "0.1.0" }
+agentkit-lsp = { path = "crates/lsp", version = "0.1.0" }
+agentkit-toolpacks-coding = { path = "crates/toolpacks-coding", version = "0.1.0" }
+agentkit-runtime = { path = "crates/runtime", version = "0.1.0" }
+agentkit-napi = { path = "crates/napi", version = "0.1.0" }
+agentkit-rust = { path = "crates/agentkit", version = "0.1.0" }
+agentkit-native = { path = "crates/native", version = "0.1.0" }
+agentkit-native-exec = { path = "crates/native-exec", version = "0.1.0" }
+agentkit-native-broker = { path = "crates/native-broker", version = "0.1.0" }
+agentkit-claude = { path = "crates/claude", version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+mem_forget = "deny"
 
 # panic stays "unwind": the napi binding relies on catch_unwind at the FFI boundary.
 [profile.release]

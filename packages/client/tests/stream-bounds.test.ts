@@ -6,7 +6,7 @@
  * WHY A SCRIPTED `fetch` RATHER THAN THE REAL SERVER, which every other test in
  * this package uses: the failures under test are things a CORRECT server never
  * does. `retry: 0`, a connection that delivers one event and dies forever, a
- * resume answered from the start of the log — `@agentkit/transport-http` does
+ * resume answered from the start of the log — the Rust server does
  * none of them, and a client whose safety depends on the server behaving is not
  * a client with bounds. So the server here is a function that misbehaves on
  * purpose.

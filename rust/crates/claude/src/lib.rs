@@ -15,8 +15,8 @@
 //! * [`backend`] — the [`NativeBackend`] implementation composing the above.
 //!
 //! The crate never touches the durable store, leases or approvals; those
-//! remain in `agentkit-host`. Nothing here imports the coding toolpack or
-//! the private stdio control protocol.
+//! remain in `agentkit-engine` / `agentkit-store`. Nothing here imports the
+//! coding toolpack or the private stdio control protocol.
 
 pub mod backend;
 pub mod discovery;

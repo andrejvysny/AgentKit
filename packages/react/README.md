@@ -32,8 +32,8 @@ Through the umbrella package:
 import { AgentKitProvider, useChat } from "agentkit/react";
 ```
 
-`react` is an OPTIONAL peer of `agentkit` — the other eleven subpaths have
-nothing to do with React, so an installer that only wants `agentkit/host` is not
+`react` is an OPTIONAL peer of `agentkit` — the other subpaths have
+nothing to do with React, so an installer that only wants `agentkit/core` is not
 told it is missing something. Optional also means npm will not install it for
 you; a project using these hooks already has React.
 
@@ -130,7 +130,7 @@ this hook renders all three, in order:
    truncates the path at the branch point, because the answer that followed the
    old question is not on the new branch.
 2. **Streaming.** Deltas are applied to the placeholder as they arrive, by the
-   same rule the host's own projector uses (`packages/host/src/turn/projection.ts`):
+   same rule the Rust engine's projector uses:
    deltas accumulate, and a `run.message.completed` overwrites the text only for
    a provider that streamed nothing. At a **pass boundary** — a `retry_pass`
    warning, or a second `run.started`, i.e. the host abandoning that pass and
@@ -245,8 +245,8 @@ landed.
 bun test packages/react     # or: bun run test:react
 ```
 
-Against the real stack: `@agentkit/transport-http` over the in-memory store, the
-real queue and `TurnRunner`, a scripted provider, behind `Bun.serve` on an
+Against the real stack: the Rust HTTP fixture server (`agentkit-runtime`'s
+`http_fixture` example, `bun run build:fixture`) with a scripted provider on an
 ephemeral port. Mocking the client would test the mock — the resume path in
 particular only means anything against a server that really replays from
 `Last-Event-ID`.

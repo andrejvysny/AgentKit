@@ -259,7 +259,7 @@ pub(super) async fn management(f: &mut Fixture, chat: &str) {
         204,
     )
     .await;
-    let config=f.call(Op::CreateMcpServer,request(&[],Some(json!({"alias":"reverse","transport":{"kind":"stdio","command":"fixture","env":{"TOKEN":"reverse-mcp-private"}},"secretRefs":{"token":"secret/ref"}}))),"McpServerDtoSchema",201).await;
+    let config=f.call(Op::CreateMcpServer,request(&[],Some(json!({"alias":"reverse","transport":{"kind":"stdio","command":"fixture","env":{"TOKEN":"reverse-mcp-private"}}}))),"McpServerDtoSchema",201).await;
     assert!(!config.to_string().contains("reverse-mcp-private"));
     f.call(
         Op::ListMcpServers,
@@ -301,7 +301,7 @@ pub(super) async fn proposals(f: &mut Fixture) {
     let listed = f
         .call(
             Op::ListProposals,
-            request(&[("chatId", "chat-http")], None),
+            request(&[("chatId", support::CHAT)], None),
             "ProposalDtoSchema[]",
             200,
         )
@@ -412,4 +412,201 @@ pub(super) async fn cancellation_and_resume(f: &mut Fixture) {
         .await["status"],
         "completed"
     );
+}
+
+fn template(revision: &str) -> Value {
+    json!({
+        "id": "greet",
+        "revision": revision,
+        "description": "Greets someone",
+        "argumentsSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+        "messages": [{"role": "system", "content": "Hello {{name}}!"}],
+    })
+}
+/// The routes whose services the TypeScript fixture left unwired (and so
+/// answered 501) are real on the native host; each runs to its success status.
+pub(super) async fn optional_services(f: &mut Fixture) {
+    managed_content(f).await;
+    teammates(f).await;
+}
+/// The contract declares no request schema for the three body-carrying
+/// managed-content routes, so the typed client refuses to send a body: through
+/// the client they answer the server's 400, and the successful path is driven
+/// with a raw request.
+async fn managed_content(f: &mut Fixture) {
+    f.refused(Op::PublishPromptTemplate, request(&[], None), 400)
+        .await;
+    let published = f
+        .raw(
+            Op::PublishPromptTemplate,
+            "/v1/prompt-templates",
+            Some(template("1")),
+            201,
+        )
+        .await;
+    check(
+        &agentkit_contracts::parse_javascript_json(&published).unwrap(),
+        "PromptTemplateSchema",
+    );
+    let listed = f
+        .call(
+            Op::ListPromptTemplates,
+            Call::default(),
+            "PromptTemplateSchema[]",
+            200,
+        )
+        .await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    let path = [("templateId", "greet"), ("revision", "1")];
+    f.refused(Op::RenderPromptTemplate, request(&path, None), 400)
+        .await;
+    let rendered = f
+        .raw(
+            Op::RenderPromptTemplate,
+            "/v1/prompt-templates/greet/1/render",
+            Some(json!({"name": "world"})),
+            200,
+        )
+        .await;
+    assert!(rendered.contains("Hello world!"), "{rendered}");
+    f.call(Op::DeletePromptTemplate, request(&path, None), "", 204)
+        .await;
+    f.call(Op::ListSkills, Call::default(), "*", 200).await;
+    let connection = [("connectionId", "c1")];
+    f.refused(Op::SaveConnection, request(&connection, None), 400)
+        .await;
+    // The typed client cannot send a body for this route (the contract
+    // declares no request schema), so the response is validated by hand.
+    let saved = f
+        .raw(
+            Op::SaveConnection,
+            "/v1/connections/c1",
+            Some(json!({
+                "connectorId": "github",
+                "accountId": "a1",
+                "revision": 1,
+                "expectedRevision": null,
+                "config": {
+                    "alias": "github",
+                    "transport": {"kind": "http", "url": "http://127.0.0.1:9/mcp"},
+                },
+            })),
+            200,
+        )
+        .await;
+    let saved = agentkit_contracts::parse_javascript_json(&saved).unwrap();
+    check(&saved, "ConnectionRecordSchema");
+    assert_eq!(saved["revision"], 1);
+    assert!(saved.get("workspaceId").is_none(), "{saved}");
+    let listed = f
+        .call(
+            Op::ListConnections,
+            Call::default(),
+            "ConnectionRecordSchema[]",
+            200,
+        )
+        .await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    // The documented MCP-OAuth reduction: lifecycle actions are refused.
+    f.refused(Op::ConnectionAction, request(&connection, None), 501)
+        .await;
+    f.call(Op::DeleteConnection, request(&connection, None), "", 204)
+        .await;
+}
+async fn teammates(f: &mut Fixture) {
+    let created = f
+        .call(
+            Op::CreateAgent,
+            request(&[], Some(json!({"definition": agent_definition()}))),
+            "AgentDtoSchema",
+            201,
+        )
+        .await;
+    let agent = id(&created, "agentId");
+    let path = [("agentId", agent.as_str())];
+    f.call(Op::ListAgents, Call::default(), "AgentDtoSchema[]", 200)
+        .await;
+    f.call(Op::GetAgent, request(&path, None), "AgentDtoSchema", 200)
+        .await;
+    let updated = f
+        .call(
+            Op::UpdateAgent,
+            request(
+                &path,
+                Some(json!({"expectedRevision": 1, "definition": agent_definition()})),
+            ),
+            "AgentDtoSchema",
+            200,
+        )
+        .await;
+    assert_eq!(updated["currentRevision"], 2);
+    let remodeled = f
+        .call(
+            Op::SetAgentModel,
+            request(&path, Some(json!({"expectedRevision": 2, "model": "m1"}))),
+            "AgentDtoSchema",
+            200,
+        )
+        .await;
+    assert_eq!(remodeled["currentRevision"], 3);
+    f.call(
+        Op::ListAgentRevisions,
+        request(&path, None),
+        "AgentRevisionDtoSchema[]",
+        200,
+    )
+    .await;
+    let submit = request(
+        &path,
+        Some(json!({"admissionKey": "all-routes", "kind": "review.diff", "payload": {}})),
+    );
+    let admitted = f.call(Op::SubmitTeammateTask, submit, "*", 201).await;
+    let task = id(&admitted["task"], "taskId");
+    let task_path = [("taskId", task.as_str())];
+    f.call(Op::ListAgentTasks, request(&path, None), "*", 200)
+        .await;
+    f.call(Op::GetAgentTask, request(&task_path, None), "*", 200)
+        .await;
+    f.call(
+        Op::GetAgentTaskRunProfile,
+        request(&task_path, None),
+        "*",
+        200,
+    )
+    .await;
+    // Nothing executes `review.diff` here: the queued task settles on cancel.
+    let cancelled = f
+        .call(Op::CancelAgentTask, request(&task_path, None), "*", 202)
+        .await;
+    assert_eq!(cancelled["status"], "cancelled");
+    f.call(Op::ListAgentTaskEvents, request(&task_path, None), "*", 200)
+        .await;
+    // The client has no typed agent-task stream; read the raw SSE body.
+    let body = f
+        .raw(
+            Op::StreamAgentTask,
+            &format!("/v1/agent-tasks/{task}/stream"),
+            None,
+            200,
+        )
+        .await;
+    assert!(body.contains("event:") || body.contains("data:"), "{body}");
+    f.call(
+        Op::ArchiveAgent,
+        request(&path, None),
+        "AgentDtoSchema",
+        200,
+    )
+    .await;
+    f.call(
+        Op::RestoreAgent,
+        request(&path, None),
+        "AgentDtoSchema",
+        200,
+    )
+    .await;
 }

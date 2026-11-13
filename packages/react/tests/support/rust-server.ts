@@ -1,4 +1,4 @@
-import type { ProposalService } from "@agentkit/host";
+import type { TestProposalService } from "../../../client/tests/support/test-types.js";
 import { startRustClientServer } from "../../../client/tests/support/rust-server.js";
 import type { TestServer, TestServerOptions } from "./server.js";
 
@@ -7,7 +7,6 @@ export async function startRustReactServer(
   options: TestServerOptions,
 ): Promise<TestServer> {
   const native = await startRustClientServer({
-    backend: "rust",
     ...(options.contributors === undefined
       ? {}
       : { contributors: options.contributors }),
@@ -18,15 +17,15 @@ export async function startRustReactServer(
     (
       native.provider as import("@agentkit/testing").MockProviderClient
     ).setScript([{ steps: [{ kind: "text", content: "Hello, hooks." }] }]);
-  const proposals = new Proxy(Object.create(null) as ProposalService, {
+  const proposals = new Proxy(Object.create(null) as TestProposalService, {
     get(_target, key) {
       if (key === "stage")
-        return async (input: Parameters<ProposalService["stage"]>[0]) =>
+        return async (input: Parameters<TestProposalService["stage"]>[0]) =>
           native.control("/proposal", input) as ReturnType<
-            ProposalService["stage"]
+            TestProposalService["stage"]
           >;
       throw new Error(
-        `Native ProposalService test control does not implement ${String(key)}.`,
+        `Native proposal test control does not implement ${String(key)}.`,
       );
     },
   });

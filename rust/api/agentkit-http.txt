@@ -1,0 +1,139 @@
+pub mod agentkit_http
+pub enum agentkit_http::CorsOrigins
+pub agentkit_http::CorsOrigins::Any
+pub agentkit_http::CorsOrigins::List(alloc::vec::Vec<alloc::string::String>)
+pub struct agentkit_http::Actor
+pub agentkit_http::Actor::id: alloc::string::String
+pub agentkit_http::Actor::metadata: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub struct agentkit_http::Config
+pub agentkit_http::Config::base_path: alloc::string::String
+pub agentkit_http::Config::cors: core::option::Option<agentkit_http::CorsConfig>
+pub agentkit_http::Config::max_body_bytes: usize
+pub agentkit_http::Config::max_query_bytes: usize
+pub agentkit_http::Config::streaming: agentkit_http::StreamOptions
+impl core::default::Default for agentkit_http::Config
+pub fn agentkit_http::Config::default() -> Self
+pub struct agentkit_http::CorsConfig
+pub agentkit_http::CorsConfig::allow_headers: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub agentkit_http::CorsConfig::expose_headers: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub agentkit_http::CorsConfig::max_age_seconds: core::option::Option<u32>
+pub agentkit_http::CorsConfig::origins: agentkit_http::CorsOrigins
+impl agentkit_http::CorsConfig
+pub fn agentkit_http::CorsConfig::decorate(&self, &mut http::header::map::HeaderMap, core::option::Option<&str>)
+pub fn agentkit_http::CorsConfig::matched_origin(&self, &http::header::map::HeaderMap) -> core::option::Option<alloc::string::String>
+pub fn agentkit_http::CorsConfig::preflight(&self, &str, &[&str]) -> axum_core::response::Response
+pub struct agentkit_http::DesktopBackend
+impl agentkit_http::DesktopBackend
+pub fn agentkit_http::DesktopBackend::into_router(alloc::rcs::arc::Arc<Self>, agentkit_http::Config) -> axum::routing::Router
+pub fn agentkit_http::DesktopBackend::new(agentkit_sessions::store_aliases::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub async fn agentkit_http::DesktopBackend::open(agentkit_sessions::store_aliases::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub fn agentkit_http::DesktopBackend::with_connections(self, agentkit_connections::repository::AppConnections, core::option::Option<alloc::rcs::arc::Arc<agentkit_connections::execution::NativeConnections>>, core::option::Option<agentkit_connections::secrets::SharedSecretStore>) -> Self
+pub fn agentkit_http::DesktopBackend::with_content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>) -> Self
+pub fn agentkit_http::DesktopBackend::with_insecure_http(self, bool) -> Self
+pub fn agentkit_http::DesktopBackend::with_mcp_configuration(self, alloc::rcs::arc::Arc<dyn agentkit_http::McpConfigurationPort>) -> Self
+pub fn agentkit_http::DesktopBackend::with_pinned_provider(self, &str) -> Self
+pub fn agentkit_http::DesktopBackend::with_profiles(self, alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>) -> Self
+pub fn agentkit_http::DesktopBackend::with_proposals(self, alloc::rcs::arc::Arc<agentkit_governance::proposals::ProposalService>) -> Self
+pub fn agentkit_http::DesktopBackend::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>) -> Self
+pub fn agentkit_http::DesktopBackend::with_provider_operations(self, alloc::rcs::arc::Arc<dyn agentkit_http::ProviderOperations>) -> Self
+pub fn agentkit_http::DesktopBackend::with_provider_secrets(self, agentkit_connections::secrets::SharedSecretStore) -> Self
+pub fn agentkit_http::DesktopBackend::with_run_profile_defaults(self, agentkit_sessions::run_profiles::RunProfileDefaults) -> Self
+pub fn agentkit_http::DesktopBackend::with_session_profile(self, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub fn agentkit_http::DesktopBackend::with_tool_catalog(self, alloc::rcs::arc::Arc<dyn agentkit_http::ToolCatalogPort>) -> Self
+pub fn agentkit_http::DesktopBackend::with_write_policy(self, alloc::rcs::arc::Arc<dyn agentkit_http::WritePolicyPort>) -> Self
+impl agentkit_http::DesktopBackend
+pub fn agentkit_http::DesktopBackend::with_native_provider_operations(self, alloc::rcs::arc::Arc<dyn agentkit_http::ProviderConsentPort>, alloc::rcs::arc::Arc<agentkit_providers::native_provider_factory::NativeProviderFactory>) -> core::result::Result<Self, agentkit_http::Problem>
+impl agentkit_http::Backend for agentkit_http::DesktopBackend
+pub fn agentkit_http::DesktopBackend::authenticate<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 http::header::map::HeaderMap) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_http::Actor, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::DesktopBackend::authorize<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::DesktopBackend::dispatch<'life0, 'async_trait>(&'life0 self, agentkit_http::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_http::OperationResponse, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_http::DesktopBackend::events<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, core::option::Option<f64>, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::DesktopBackend::run_status<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<alloc::string::String>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_http::Idempotency
+pub agentkit_http::Idempotency::fingerprint: alloc::string::String
+pub agentkit_http::Idempotency::key: alloc::string::String
+pub agentkit_http::Idempotency::task_id: alloc::string::String
+pub struct agentkit_http::NativeProviderOperations
+impl agentkit_http::NativeProviderOperations
+pub fn agentkit_http::NativeProviderOperations::new(agentkit_connections::execution::NativeConnections, alloc::rcs::arc::Arc<dyn agentkit_http::ProviderConsentPort>, agentkit_engine::ports::SharedRuntime) -> Self
+pub fn agentkit_http::NativeProviderOperations::with_timeout(self, core::time::Duration) -> core::result::Result<Self, agentkit_http::Problem>
+impl agentkit_http::ProviderOperations for agentkit_http::NativeProviderOperations
+pub fn agentkit_http::NativeProviderOperations::refresh_models<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::ai_provider_model::AiProviderModel>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::NativeProviderOperations::test<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::test_provider_response::TestProviderResponse, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_http::OperationRequest
+pub agentkit_http::OperationRequest::actor: agentkit_http::Actor
+pub agentkit_http::OperationRequest::body: serde_json::value::Value
+pub agentkit_http::OperationRequest::idempotency: core::option::Option<agentkit_http::Idempotency>
+pub agentkit_http::OperationRequest::operation: alloc::string::String
+pub agentkit_http::OperationRequest::params: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub agentkit_http::OperationRequest::query: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub struct agentkit_http::OperationResponse
+pub agentkit_http::OperationResponse::body: serde_json::value::Value
+pub agentkit_http::OperationResponse::status: u16
+impl agentkit_http::OperationResponse
+pub fn agentkit_http::OperationResponse::json(u16, serde_json::value::Value) -> Self
+pub struct agentkit_http::Problem
+pub agentkit_http::Problem::code: alloc::string::String
+pub agentkit_http::Problem::detail: alloc::string::String
+pub agentkit_http::Problem::instance: core::option::Option<alloc::string::String>
+pub agentkit_http::Problem::status: u16
+pub agentkit_http::Problem::title: alloc::string::String
+pub agentkit_http::Problem::type_uri: alloc::boxed::Box<str>
+impl agentkit_http::Problem
+pub fn agentkit_http::Problem::at(self, &str) -> Self
+pub fn agentkit_http::Problem::host(&str, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_http::Problem::new(u16, &str, impl core::convert::Into<alloc::string::String>) -> Self
+impl axum_core::response::into_response::IntoResponse for agentkit_http::Problem
+pub fn agentkit_http::Problem::into_response(self) -> axum_core::response::Response
+pub struct agentkit_http::Route
+pub agentkit_http::Route::method: alloc::string::String
+pub agentkit_http::Route::operation: alloc::string::String
+pub agentkit_http::Route::path: alloc::string::String
+pub struct agentkit_http::StreamOptions
+pub agentkit_http::StreamOptions::heartbeat_interval: core::time::Duration
+pub agentkit_http::StreamOptions::max_event_bytes: usize
+pub agentkit_http::StreamOptions::poll_interval: core::time::Duration
+pub agentkit_http::StreamOptions::read_batch_size: usize
+pub agentkit_http::StreamOptions::retry_hint: core::time::Duration
+impl core::default::Default for agentkit_http::StreamOptions
+pub fn agentkit_http::StreamOptions::default() -> Self
+pub const agentkit_http::DEFAULT_ALLOW_HEADERS: [&str; 4]
+pub trait agentkit_http::Backend: core::marker::Send + core::marker::Sync + 'static
+pub fn agentkit_http::Backend::authenticate<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 http::header::map::HeaderMap) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_http::Actor, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::Backend::authorize<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::Backend::dispatch<'life0, 'async_trait>(&'life0 self, agentkit_http::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_http::OperationResponse, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_http::Backend::events<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, core::option::Option<f64>, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::Backend::run_status<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<alloc::string::String>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_http::Backend for agentkit_http::DesktopBackend
+pub fn agentkit_http::DesktopBackend::authenticate<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 http::header::map::HeaderMap) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_http::Actor, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::DesktopBackend::authorize<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::DesktopBackend::dispatch<'life0, 'async_trait>(&'life0 self, agentkit_http::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_http::OperationResponse, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_http::DesktopBackend::events<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, core::option::Option<f64>, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::DesktopBackend::run_status<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<alloc::string::String>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_http::McpConfigurationPort: core::marker::Send + core::marker::Sync
+pub fn agentkit_http::McpConfigurationPort::create<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, agentkit_contracts::dto::create_mcp_server_request::CreateMcpServerRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::mcp_server_dto::McpServerDto, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::McpConfigurationPort::delete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::McpConfigurationPort::list<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::mcp_server_dto::McpServerDto>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_http::McpConfigurationPort::update<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, agentkit_contracts::dto::update_mcp_server_request::UpdateMcpServerRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::mcp_server_dto::McpServerDto, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_http::McpConfigurationPort for agentkit_mcp::configuration::McpConfigRepository
+pub fn agentkit_mcp::configuration::McpConfigRepository::create<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, agentkit_contracts::dto::create_mcp_server_request::CreateMcpServerRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::mcp_server_dto::McpServerDto, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_mcp::configuration::McpConfigRepository::delete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_mcp::configuration::McpConfigRepository::list<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::mcp_server_dto::McpServerDto>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_mcp::configuration::McpConfigRepository::update<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, agentkit_contracts::dto::update_mcp_server_request::UpdateMcpServerRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::mcp_server_dto::McpServerDto, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_http::ProviderConsentPort: core::marker::Send + core::marker::Sync
+pub fn agentkit_http::ProviderConsentPort::approve<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 agentkit_connections::execution::RequestPlan, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_http::ProviderOperations: core::marker::Send + core::marker::Sync
+pub fn agentkit_http::ProviderOperations::refresh_models<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::ai_provider_model::AiProviderModel>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::ProviderOperations::test<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::test_provider_response::TestProviderResponse, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_http::ProviderOperations for agentkit_http::NativeProviderOperations
+pub fn agentkit_http::NativeProviderOperations::refresh_models<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::ai_provider_model::AiProviderModel>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::NativeProviderOperations::test<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::test_provider_response::TestProviderResponse, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_http::ToolCatalogPort: core::marker::Send + core::marker::Sync
+pub fn agentkit_http::ToolCatalogPort::list<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::ai_tool_definition::AiToolDefinition>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_http::WritePolicyPort: core::marker::Send + core::marker::Sync
+pub fn agentkit_http::WritePolicyPort::grant<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, agentkit_contracts::dto::grant_allowance_request::GrantAllowanceRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_contracts::dto::write_allowance_dto::WriteAllowanceDto, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::WritePolicyPort::list<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_contracts::dto::write_allowance_dto::WriteAllowanceDto>, agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_http::WritePolicyPort::revoke<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_http::Actor, &'life2 str, &'life3 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_http::Problem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_http::derive_task_id(&str, core::option::Option<&str>, &str) -> alloc::string::String
+pub fn agentkit_http::router(alloc::rcs::arc::Arc<dyn agentkit_http::Backend>, agentkit_http::Config) -> axum::routing::Router
+pub fn agentkit_http::routes() -> &'static [agentkit_http::Route]

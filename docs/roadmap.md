@@ -1,5 +1,10 @@
 # Roadmap
 
+> **0.8.0 note.** The TypeScript packages `host`, `mcp-client`, `transport-http`, `adapters-memory`,
+> `adapters-sqlite` and `runner-local` were deleted ([ADR 0023](adr/0023-retire-typescript-backend.md)).
+> References to them below are historical design context, not live code; the source is recoverable
+> from commit `a31dcb1` (`git show a31dcb1:packages/<name>/...`). The Rust engine owns these behaviours.
+
 Future work, in dependency order. This file is **not** a list of current
 guarantees — everything here is unimplemented unless a phase is explicitly
 marked done. Current guarantees live in `docs/architecture.md`,
@@ -8,6 +13,16 @@ marked done. Current guarantees live in `docs/architecture.md`,
 implementation (in OpenPCB or OneMind — read-only source repos) whose
 semantics the phase should preserve, so that work does not start from a
 blank page or re-learn fixed bugs.
+
+## Now
+
+Active work is the ADR 0021 architecture cleanup
+([layered crate architecture](adr/0021-layered-crate-architecture.md)):
+splitting `agentkit-host` into layered crates and deleting the frozen
+TypeScript backend packages, and the Hybrid programme that builds on it. Both
+are tracked as work items in Plane, not in this file. The phases below are
+older and may predate the Rust engine; current structure is in
+[`architecture.md`](architecture.md).
 
 ## Done
 
@@ -247,7 +262,7 @@ itself) creates real pressure for them.
   between those two awaits leaves exactly the orphaned-secret state the
   route's own docstring names as "the worst combination a credential can
   have." The order should invert: delete the secret first, then the config.
-  **Native lane fixed (AGENTKIT-37):** `rust/crates/host/src/http/providers.rs`
+  **Native lane fixed (AGENTKIT-37):** `rust/crates/http/src/desktop/providers.rs`
   now retires the secret before committing the row deletion (failed deletion
   aborts the reservation with the row intact and is retryable; a rolled-back
   commit restores the captured values). The TypeScript reference route above

@@ -8,11 +8,11 @@
 // host already has. The test primitives — `describe`, `it`, `expect`, and the
 // optional `beforeEach` — are INJECTED by the caller instead.
 //
-// Likewise every @agentkit/host import below is `import type`: this package
+// Likewise every ./ports.js import below is `import type`: this package
 // has no runtime dependency on host (a peer dependency only, mirroring the
 // existing @agentkit/core rule — see stamp.ts's module doc). Error assertions
 // therefore match on the `code` string every AgentKitHostError carries
-// (see packages/host/src/errors.ts) rather than on `instanceof` against an
+// (the engine's error vocabulary) rather than on `instanceof` against an
 // imported class — the same code-not-message discipline host's own error
 // vocabulary asks every OTHER consumer to follow.
 import type { TaskEventEnvelope } from "@agentkit/contracts";
@@ -20,7 +20,7 @@ import type {
   AssistantStore,
   CreateProposalInput,
   CreateTaskInput,
-} from "@agentkit/host";
+} from "./ports.js";
 import {
   createConformanceClock,
   expectRejects,

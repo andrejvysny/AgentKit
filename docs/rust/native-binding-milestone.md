@@ -86,7 +86,7 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   and `done()` are sync. `afterSeq` is **exclusive** and sequences start
   at 0: omit it to receive every event from the first.
 - `SessionService.startHttpServer(options)` / `stopHttpServer()`: serves
-  AgentKit REST v1 + SSE **from Rust** (`agentkit-transport-http` router
+  AgentKit REST v1 + SSE **from Rust** (`agentkit-http` router
   over `DesktopBackend`, which enforces the bearer token itself) on the
   SAME host/store as the session service — one worker executes, no
   second engine. Options: `host` (default 127.0.0.1), `port` (0 =
@@ -395,9 +395,9 @@ test-written first, covering:
    the whole matrix.
 6. Migration policy for existing TS schema-9 databases (separate identity;
    explicit, reviewed, never implicit).
-7. Windows client interop: qualify the client mixed-runtime suite
-   (`all_routes`, `interoperability`, `typescript_boundaries` — the
-   Bun-spawned TypeScript service harness) on the Windows runner and then
+7. Windows client interop: qualify the client service suites
+   (`all_routes`, `interoperability`, `native_boundaries` — formerly the
+   Bun-spawned TypeScript service harness, now an in-process native server) on the Windows runner and then
    lift the `AGENTKIT_SKIP_TS_INTEROP` opt-out from the `native-windows`
    workspace step. Until then those tests run only in the `native` job; the
    Windows job's required mixed-runtime scope is the five Bun-spawning MCP

@@ -1,0 +1,49 @@
+[package]
+name = "agentkit-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit native runtime composition: lane adapters, authority, and the runtime builder"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-core = { workspace = true }
+agentkit-governance = { workspace = true }
+agentkit-agents = { workspace = true }
+agentkit-chat = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-sessions = { workspace = true }
+agentkit-native = { workspace = true }
+agentkit-native-exec = { workspace = true }
+agentkit-providers = { workspace = true }
+agentkit-store = { workspace = true }
+agentkit-lsp = { workspace = true }
+agentkit-toolpacks-coding = { workspace = true }
+libc.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+# The scripted native ports and the scripted chat provider (ADR 0021 R10).
+agentkit-testkit = { workspace = true }
+# http_fixture example (TypeScript client/react test server)
+agentkit-http = { workspace = true }
+agentkit-mcp = { workspace = true }
+agentkit-contracts = { workspace = true }
+agentkit-connections = { workspace = true, features = ["http"] }
+axum.workspace = true
+http.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+futures.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+tempfile.workspace = true

@@ -1,6 +1,6 @@
 //! Minimal consumer walkthrough of AgentKit's persistent agent records
 //! (AGENTKIT-87) through the Rust service boundary
-//! ([`agentkit_host::AgentDefinitionService`]): identity, configuration
+//! ([`agentkit_agents::AgentDefinitionService`]): identity, configuration
 //! revisions with optimistic concurrency, model change without identity
 //! replacement, archive/restore admission, retention-gated deletion,
 //! credential-free duplication, and bounded versioned export/import.
@@ -9,7 +9,7 @@
 //! postcondition, so the example doubles as an executable specification
 //! for consumers integrating the host crate.
 
-use agentkit_host::{AgentDefinitionService, HostError};
+use agentkit_agents::{AgentDefinitionService, AgentsError};
 use agentkit_store::{
     AgentDefinition, AgentLifecycle, AgentRevisionSource, AgentSkillSelection, ArgsHashProvenance,
     ClaimInput, CreateAgent, ExecutionReceiptAdmission, SqliteStore, SubmitTask,
@@ -79,7 +79,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let conflict = service.update(&created.agent_id, 1, edited.clone()).await;
     assert!(matches!(
         conflict,
-        Err(HostError::Store(agentkit_store::StoreError::Conflict(_)))
+        Err(AgentsError::Store(agentkit_store::StoreError::Conflict(_)))
     ));
     println!(
         "    revision={} after conflict-free retry window",
@@ -114,7 +114,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let refused = service.check_admission(&created.agent_id).await;
     assert!(matches!(
         refused,
-        Err(HostError::Store(
+        Err(AgentsError::Store(
             agentkit_store::StoreError::InvalidTransition(_)
         ))
     ));

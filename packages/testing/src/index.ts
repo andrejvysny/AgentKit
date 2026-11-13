@@ -15,9 +15,11 @@ export * from "./fixtures.js";
 // Golden traces
 export * from "./golden/golden.js";
 
+// Seeded randomness (mulberry32) shared by the conformance drivers
+export * from "./rng.js";
+
 // Store conformance: the shared behavioral contract every AssistantStore
-// implementation must pass (see @agentkit/adapters-memory and
-// @agentkit/adapters-sqlite, which both pass it).
+// implementation must pass (`@agentkit/native`'s `NativeAssistantStore` runs it).
 export * from "./store-conformance.js";
 
 // AgentInputStore conformance: durable steer / follow-up / human-input records
@@ -27,24 +29,3 @@ export * from "./agent-input-conformance.js";
 // ContextSummaryStore conformance: derived compaction summaries (ADR 0017 part 2),
 // the optional `AssistantStore.summaries` member.
 export * from "./context-summary-conformance.js";
-
-// MCP server-config conformance: the same idea for the standalone
-// McpServerConfigStore port (@agentkit/mcp-client), which is NOT part of the
-// AssistantStore aggregate and so cannot be graded through its harness.
-export * from "./mcp-config-conformance.js";
-
-// SecretStore conformance: the same idea for the credential port
-// (@agentkit/host), which every host wires but none of the port matrix
-// covers. @agentkit/adapters-memory's MemorySecretStore runs it.
-export * from "./secret-store-conformance.js";
-
-// Runner conformance: the same idea for the other half of the host's runtime —
-// the four promises the TaskRunner port makes that a store cannot make for it.
-// @agentkit/runner-local runs it against both reference stores.
-export * from "./task-runner-conformance.js";
-
-// Durability: the invariants a TaskStore must hold whatever a pile of
-// concurrent workers just did to it, and the seeded schedule that puts them
-// under one.
-export * from "./task-invariants.js";
-export * from "./task-schedule-driver.js";

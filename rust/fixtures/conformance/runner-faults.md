@@ -73,7 +73,7 @@ distributed workers, and every heartbeat race remain outside these six profiles.
 
 ```sh
 bun test scripts/tests/rust-runner-conformance.test.ts
-cargo test --manifest-path rust/Cargo.toml -p agentkit-host --test runner_conformance --locked --offline
+cargo test --manifest-path rust/Cargo.toml -p agentkit-chat --test runner_conformance --locked --offline
 AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE=1 bun test scripts/tests/rust-runner-conformance.test.ts
 ```
 

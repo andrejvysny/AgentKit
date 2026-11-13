@@ -31,7 +31,7 @@ negotiation supports **2026-07-28** and the older initialize handshake. The
 inbound HTTP tests exercise every revision in `MCP_COMPATIBILITY.verified`;
 outbound HTTP and stdio tests exercise 2026-07-28 and 2025-11-25 peers over real
 loopback sockets and child processes. Node 22 and Bun 1.4 are locally qualified;
-other runtime versions remain CI gates. Supported protocol constants alone are
+other runtime versions remain unqualified (gates are local, see `DEVELOPING.md`). Supported protocol constants alone are
 not evidence that every transport/revision pair has been exercised.
 
 Both inbound paths use application-generated actors independent of transport
@@ -142,14 +142,12 @@ database; malformed or unknown tables still fail closed.
 `SkillService` catalogs explicitly configured application bundles or directory
 sources, parses safe scalar/block `SKILL.md` frontmatter, activates explicitly
 selected instruction hashes, and progressively reads bounded references. Complex
-YAML tags, anchors and collections are refused. `fileSkillSource` from `@agentkit/runner-local/filesystem`
-checks real paths, symlink containment, file type, byte limits and cancellation.
+YAML tags, anchors and collections are refused. The removed TypeScript `fileSkillSource` (0.8.0, ADR 0023;
+see commit `a31dcb1`) checked real paths, symlink containment, file type, byte limits and cancellation.
 It opens without following a final symlink, verifies file identity before and
 after bounded reads, and detects parent substitution before reading. Portable
 Node filesystem APIs do not provide atomic ancestor resolution against a hostile
 process continuously renaming directories; such deployments need an OS sandbox.
-Default package imports do not load filesystem services; the umbrella package
-exposes them through `agentkit/runner-local/filesystem`.
 Supporting-resource reads include a content hash and an optional audit callback.
 `metadata.requires-connectors` can declare comma-separated dependencies on
 already selected authorized connectors. A declaration never creates a grant.
@@ -185,11 +183,9 @@ catalogs use `skill`.
 | Skill metadata | `GET /v1/skills` |
 
 The typed client follows the shared route table. Applications still own account
-selection, settings and approval presentation. The reusable
-[acceptance harness](../examples/desktop-host/src/managed-connector-acceptance.ts)
-uses the same production connection service. Follow the
-[live acceptance instructions](managed-connector-acceptance.md) for trusted
-identity probes, disposable targets, exact-action approval, and evidence capture.
+selection, settings and approval presentation. The TypeScript connection-service
+acceptance harness was removed with the TypeScript backend (see
+[`docs/rust/parity.md`](rust/parity.md)).
 Deterministic tests do not qualify live GitHub/Plane OAuth, account identity,
 revocation, or external writes. Those checks still require application credentials,
 registered OAuth callbacks, and explicitly designated disposable resources.

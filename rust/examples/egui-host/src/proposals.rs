@@ -1,8 +1,9 @@
-use agentkit_host::{HostError, HostResult, Runtime, SystemRuntime};
+use crate::ExampleResult;
+use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_store::{ApplyOutcome, ProposalPatch, ProposalRecord, ProposalStatus, SqliteStore};
 use serde_json::json;
 
-pub async fn stage(store: &SqliteStore, chat_id: &str, note: String) -> HostResult<()> {
+pub async fn stage(store: &SqliteStore, chat_id: &str, note: String) -> ExampleResult<()> {
     let runtime = SystemRuntime;
     store
         .create_proposal(ProposalRecord {
@@ -32,7 +33,7 @@ pub async fn stage(store: &SqliteStore, chat_id: &str, note: String) -> HostResu
     Ok(())
 }
 
-pub async fn decide(store: &SqliteStore, id: &str, approve: bool) -> HostResult<()> {
+pub async fn decide(store: &SqliteStore, id: &str, approve: bool) -> ExampleResult<()> {
     let runtime = SystemRuntime;
     store
         .transition_proposal(
@@ -55,12 +56,12 @@ pub async fn decide(store: &SqliteStore, id: &str, approve: bool) -> HostResult<
 }
 
 /// The demo effect is an idempotent local setting replacement, never a filesystem write.
-pub async fn apply(store: &SqliteStore, id: &str) -> HostResult<()> {
+pub async fn apply(store: &SqliteStore, id: &str) -> ExampleResult<()> {
     let runtime = SystemRuntime;
     let mut proposal = store
         .get_proposal(id)
         .await?
-        .ok_or_else(|| HostError::Execution("proposal not found".into()))?;
+        .ok_or_else(|| std::io::Error::other("proposal not found"))?;
     if let Some(operation) = &proposal.operation_id
         && store.receipt(operation).await?.is_some()
     {
@@ -81,13 +82,11 @@ pub async fn apply(store: &SqliteStore, id: &str) -> HostResult<()> {
             .await?;
     }
     if proposal.status != ProposalStatus::Applying || proposal.truncated {
-        return Err(HostError::Execution(
-            "proposal is not eligible for apply".into(),
-        ));
+        return Err(std::io::Error::other("proposal is not eligible for apply").into());
     }
     let note = proposal.envelope["note"]
         .as_str()
-        .ok_or_else(|| HostError::Execution("demo note missing".into()))?;
+        .ok_or_else(|| std::io::Error::other("demo note missing"))?;
     store.set_setting("egui-demo", "note", note.into()).await?;
     store
         .complete_proposal(
@@ -95,7 +94,7 @@ pub async fn apply(store: &SqliteStore, id: &str) -> HostResult<()> {
             proposal
                 .operation_id
                 .as_deref()
-                .ok_or_else(|| HostError::Execution("operation id missing".into()))?,
+                .ok_or_else(|| std::io::Error::other("operation id missing"))?,
             ApplyOutcome {
                 status: "applied".into(),
                 applied_ops: 1,

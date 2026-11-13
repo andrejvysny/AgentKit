@@ -1,5 +1,5 @@
 [install]
-# Keep native install scripts on the pinned local node-gyp, including clean installs.
+# Hoisted layout: packages/native and the platform packages resolve each other from the root node_modules.
 linker = "hoisted"
 
 [test]

@@ -6,9 +6,10 @@ import { Type, type Static } from "@sinclair/typebox";
  * task status/history, event replay, and effective-run-profile
  * inspection.
  *
- * These DTOs MIRROR the host service boundary
- * (`AgentDefinitionService`, `TeammateService`, `RunProfileService` in
- * `rust/crates/host`) and the durable store rows beneath it; they add
+ * These DTOs MIRROR the service boundary
+ * (`AgentDefinitionService`, `TeammateService` in `rust/crates/agents`,
+ * `RunProfileService` in `rust/crates/sessions`) and the durable store rows
+ * beneath it; they add
  * nothing the services do not already guarantee. Everything here is
  * ADDITIVE to the existing contract: no pre-existing DTO changed, and
  * every task/agent route is a new operation on the same REST v1 surface.
@@ -179,7 +180,8 @@ export const SetAgentModelRequestSchema = Type.Object(
 );
 export type SetAgentModelRequest = Static<typeof SetAgentModelRequestSchema>;
 
-/** MIRROR of `TaskProfileOverrides` (`rust/crates/host/src/run_profiles.rs`).
+/** MIRROR of `TaskProfileOverrides`
+ * (`rust/crates/sessions/src/run_profiles.rs`).
  * The closed object IS the smuggling gate: there is no field for a secret
  * value, a credential, or a permission grant, and an envelope that tries
  * answers as invalid overrides. Requests can only ever NARROW (tools

@@ -1,0 +1,11 @@
+pub mod agentkit_napi
+pub async fn agentkit_napi::assert_provider_authority(alloc::string::String) -> napi::error::Result<()>
+pub fn agentkit_napi::binding_smoke() -> napi::error::Result<alloc::string::String>
+pub fn agentkit_napi::claim_call(alloc::string::String) -> bool
+pub fn agentkit_napi::end_run_provider(alloc::string::String) -> bool
+pub fn agentkit_napi::is_run_callback_active(alloc::string::String) -> bool
+pub fn agentkit_napi::list_native_profiles(core::option::Option<alloc::string::String>) -> napi::error::Result<alloc::string::String>
+pub async fn agentkit_napi::push_run_provider_event(alloc::string::String, alloc::string::String) -> napi::error::Result<bool>
+pub async fn agentkit_napi::reserve_run_provider_request(alloc::string::String) -> napi::error::Result<()>
+pub fn agentkit_napi::resolve_call(alloc::string::String, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> bool
+pub fn agentkit_napi::resolve_native_profile(alloc::string::String, core::option::Option<alloc::string::String>) -> napi::error::Result<alloc::string::String>

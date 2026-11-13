@@ -1,11 +1,12 @@
+use crate::ExampleResult;
 use crate::{bridge::*, proposals, provider, verification};
-use agentkit_core::ToolRegistry;
-use agentkit_host::{
-    AgentHost, ChatExecutor, HostOptions, HostResult, RunUpdate, Runtime, SubmitChat, SystemRuntime,
-};
+use agentkit_chat::{ChatHostExt, SubmitChat};
+use agentkit_engine::{RunUpdate, Runtime, SystemRuntime};
+use agentkit_runtime::AgentRuntime;
+use agentkit_sessions::AgentHost;
 use agentkit_store::SqliteStore;
 use serde_json::json;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 const CHAT_ID: &str = "egui-reference-chat";
 
@@ -20,15 +21,16 @@ async fn serve(
     commands: &mut Commands,
     ui: &UiSender,
     offline: bool,
-) -> HostResult<()> {
-    let host = create_host(path, ui, offline).await?;
-    let recovered = host.recover().await?;
-    ui.send(Update::Status(format!(
-        "Native host ready. {} expired runs recovered; interrupted work needs explicit Resume.",
-        recovered.len()
-    )));
+) -> ExampleResult<()> {
+    let mut runtime = create_runtime(path, ui, offline).await?;
+    let host = runtime.host().clone();
+    ui.send(Update::Status(
+        "Native host ready. Expired runs recovered; interrupted work needs explicit Resume.".into(),
+    ));
     refresh(&host, ui).await?;
-    let worker = host.start_worker();
+    let worker = runtime
+        .take_worker()
+        .ok_or_else(|| std::io::Error::other("runtime worker already taken"))?;
     while let Some(command) = commands.recv().await {
         if let Err(error) = dispatch(&host, command, ui).await {
             ui.send(Update::Error(error.to_string()));
@@ -37,10 +39,10 @@ async fn serve(
             ui.send(Update::Error(error.to_string()));
         }
     }
-    worker.shutdown().await
+    worker.shutdown().await.map_err(Into::into)
 }
 
-async fn dispatch(host: &AgentHost, command: Command, ui: &UiSender) -> HostResult<()> {
+async fn dispatch(host: &AgentHost, command: Command, ui: &UiSender) -> ExampleResult<()> {
     match command {
         Command::Send { content, model } => {
             let handle = host
@@ -104,7 +106,7 @@ fn follow(host: AgentHost, task_id: String, ui: UiSender) {
     });
 }
 
-async fn refresh(host: &AgentHost, ui: &UiSender) -> HostResult<()> {
+async fn refresh(host: &AgentHost, ui: &UiSender) -> ExampleResult<()> {
     let store = host.store();
     let note = store
         .get_setting("egui-demo", "note")
@@ -130,7 +132,11 @@ pub async fn run_demo(path: PathBuf, mut commands: Commands, ui: UiSender) {
     }
 }
 
-async fn create_host(path: PathBuf, ui: &UiSender, offline: bool) -> HostResult<AgentHost> {
+async fn create_runtime(
+    path: PathBuf,
+    ui: &UiSender,
+    offline: bool,
+) -> ExampleResult<AgentRuntime> {
     let store = SqliteStore::open(path, 128)?;
     let runtime = Arc::new(SystemRuntime);
     if store.get_chat(CHAT_ID).await?.is_none() {
@@ -147,35 +153,24 @@ async fn create_host(path: PathBuf, ui: &UiSender, offline: bool) -> HostResult<
         provider::offline(ui.clone())
     } else {
         provider::select(ui.clone())
-    })
-    .map_err(|error| agentkit_host::HostError::Execution(error.to_string()))?;
+    })?;
     pin_provider(&store, selection.binding).await?;
     ui.send(Update::Provider {
         models: selection.models,
         label: selection.label,
     });
-    let executor = Arc::new(ChatExecutor::new(
-        selection.provider,
-        Arc::new(ToolRegistry::default()),
-    ));
-    let executors: HashMap<String, Arc<dyn agentkit_host::TaskExecutor>> = HashMap::from([(
-        "chat.turn".into(),
-        executor as Arc<dyn agentkit_host::TaskExecutor>,
-    )]);
     let verification = Arc::new(verification::LocalVerifier::new(store.clone()));
-    AgentHost::new(
-        store,
-        executors,
-        runtime,
-        HostOptions {
-            lease_ttl_ms: 3_000,
-            verification: Some(verification),
-            ..HostOptions::default()
-        },
-    )
+    AgentRuntime::builder(store)
+        .clock(runtime)
+        .default_provider(selection.provider)
+        .lease_ttl_ms(3_000)
+        .verification(verification)
+        .build()
+        .await
+        .map_err(Into::into)
 }
 
-async fn pin_provider(store: &SqliteStore, binding: serde_json::Value) -> HostResult<()> {
+async fn pin_provider(store: &SqliteStore, binding: serde_json::Value) -> ExampleResult<()> {
     let previous = store.get_setting("egui-host", "provider-binding").await?;
     if previous
         .as_ref()
@@ -186,7 +181,7 @@ async fn pin_provider(store: &SqliteStore, binding: serde_json::Value) -> HostRe
             .iter()
             .any(|task| !task.status.is_terminal())
     {
-        return Err(agentkit_host::HostError::Execution("Provider configuration changed while unfinished runs exist. Reopen with the original provider settings, then cancel or finish those runs before switching.".into()));
+        return Err(std::io::Error::other("Provider configuration changed while unfinished runs exist. Reopen with the original provider settings, then cancel or finish those runs before switching.").into());
     }
     store
         .set_setting("egui-host", "provider-binding", binding)

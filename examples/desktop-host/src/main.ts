@@ -34,7 +34,7 @@
  * Submitting a chat message against an unreachable provider fails that one
  * run, not the server.
  */
-import type { Logger } from "@agentkit/host";
+import type { Logger } from "./system-types.js";
 import { buildApp, resolveBindHost, MCP_PATH } from "./wiring.js";
 
 const consoleLogger: Logger = {

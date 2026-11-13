@@ -1,7 +1,7 @@
 # AgentKit Rust
 
 This workspace is an independent native implementation alongside the TypeScript
-packages. The wire authority is AgentKit contract `0.7.0`, REST `v1`, frozen at
+packages. The wire authority is the Rust `agentkit-contracts` crate (ADR 0022): contract `0.7.0`, REST `v1`, frozen at
 `36577829cfbfd78e5b0492d826f46ba6131835b6`. It uses a new SQLite database identity
 and does not open or migrate the TypeScript schema-9 database.
 
@@ -13,12 +13,17 @@ remaining qualification requirements are in [the parity specification](../docs/r
 
 | Crate | Responsibility |
 | --- | --- |
+| `agentkit-kernel` | Foundation primitives: SHA-256 hex, canonical JSON and the conversation timestamp |
 | `agentkit-contracts` | Portable Serde contracts, offline schema validation, routes and idempotency |
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
+| `agentkit-engine` | Generic durable task execution (runner, retry, subscription), the task model and the `TaskRepository` port the store implements |
+| `agentkit-sessions` | Durable agent-session service (steering, human input, plan grants, receipts), agent/run profiles and run-content freezing |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
-| `agentkit-host` | Durable execution, agent sessions with steering/human input/plan grants, native run handles, proposal application and optional HTTP backend |
+| `agentkit-testkit` | Dev-only test fakes (`InMemoryTaskRepository`) and the `TaskRepository` conformance suite run against SQLite and in-memory; never a normal dependency |
+| `agentkit-chat` | Chat execution, tool governance and proposal application |
+| `agentkit-agents` | Agent definitions, teammate admission, subagent delegation and the advisor/watchdog over the host engine |
 | `agentkit-connections` | Application namespaces, immutable selection, consent, secret-store and network ports |
-| `agentkit-transport-http` | Axum REST/SSE boundary over an authenticated backend |
+| `agentkit-http` | Axum REST/SSE boundary, plus the desktop backend serving it from a local host |
 | `agentkit-client` | Native HTTP client, replay decoding and presentation state |
 | `agentkit-mcp` | Official `rmcp` transports with the frozen TypeScript protocol revisions |
 | `agentkit-rust` | Feature-selected integration facade; contracts only by default |
@@ -137,7 +142,7 @@ bun run lint
 bun scripts/export-rust-fixtures.ts --check
 bun test
 bun run typecheck
-AGENTKIT_TEST_BACKEND=rust bun test --timeout 60000 packages/client/tests packages/react/tests
+bun test --timeout 60000 packages/client/tests packages/react/tests # Rust fixture is the only backend
 AGENTKIT_RUN_RUST_CONFORMANCE=1 AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE=1 bun test scripts/tests/rust-store-conformance.test.ts scripts/tests/rust-runner-conformance.test.ts
 cd rust
 cargo fmt --all --check
@@ -146,11 +151,20 @@ cargo test --workspace --all-features --locked
 cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
 ```
 
+The HTTP teammates conformance lane lives in `agentkit-http`:
+`cargo test --locked -p agentkit-http --test http_teammates`.
+The napi lane exposes 14 of the 15 Hybrid M1 teammate operations;
+`streamAgentTask` (SSE) is intentionally absent on the native boundary
+(see `crates/napi/src/teammate_lane.rs`).
+
+Architecture rules (ADR 0021) are checked from the monorepo root with
+`bun run check:arch`.
+
 Environment: the release-projection and MCP stdio-peer suites spawn a real
-`node` (Node 22 on the CI runners); the workflow qualification gates evaluate
-`needs` results with `jq` and need no runtime. The wasm check requires the
+`node` (Node 22 is the qualified version). There is no hosted CI: all gates run
+locally, see [`DEVELOPING.md`](../DEVELOPING.md#local-gates-no-hosted-ci). The wasm check requires the
 `wasm32-unknown-unknown` rustup target.
 
 Mocked provider tests, loopback HTTP tests, local native builds, live provider
-qualification, real keychain qualification and remote platform CI are separate
+qualification, real keychain qualification and remote platform runs are separate
 evidence. None implies another. No performance advantage is claimed.

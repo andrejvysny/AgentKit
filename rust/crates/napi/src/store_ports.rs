@@ -322,7 +322,7 @@ async fn chats(store: &SqliteStore, operation: &str, input: Value) -> Result<Val
 impl NativeStore {
     /// Internal JSON port used by the compatibility facade. Rust owns validation,
     /// persistence, ordering, and atomicity; unknown operations never run effects.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn call_store(&self, operation: String, input_json: String) -> Result<String> {
         execute(self.handle()?, &operation, &input_json).await
     }

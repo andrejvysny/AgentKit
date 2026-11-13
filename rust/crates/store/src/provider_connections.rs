@@ -4,21 +4,16 @@ use crate::{
     Result, StoreError,
     util::{json, safe_integer},
 };
+use agentkit_kernel::sha256_hex as sha256;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 use std::path::Path;
-
-fn sha256(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
 
 /// Legacy key-only identity, retained solely for explicit legacy restoration.
 pub fn provider_connection_identity(connection_key: &str) -> String {
     format!(
         "conn_{}",
-        sha256(&format!("agentkit-connection-v1\0{connection_key}"))
+        sha256(format!("agentkit-connection-v1\0{connection_key}"))
     )
 }
 
@@ -138,13 +133,10 @@ fn write_registration(
         [],
         |row| row.get(0),
     )?;
-    let logical_key = sha256(&format!("agentkit-logical-key-v2\0{connection_key}"));
+    let logical_key = sha256(format!("agentkit-logical-key-v2\0{connection_key}"));
     let material = json!([namespace, connection_key, endpoint, account_scope]).to_string();
-    let connection_id = format!("conn2_{}", sha256(&material));
-    let digest = sha256(&format!(
-        "agentkit-credential-v1\0{}",
-        api_key.unwrap_or("")
-    ));
+    let connection_id = format!("conn2_{}", sha256(material));
+    let digest = sha256(format!("agentkit-credential-v1\0{}", api_key.unwrap_or("")));
     let existing: Option<(String, i64, bool)> = db.query_row(
         "SELECT credential_digest,generation,active FROM provider_connections WHERE connection_id=?",
         [&connection_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()?;
