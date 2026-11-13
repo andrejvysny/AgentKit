@@ -8,6 +8,11 @@
 //     (imports built dists) MUST run after `bun run build`.
 //   - the `api` step needs `cargo +nightly public-api` installed and the
 //     1.97.0 toolchain pinned by rust/rust-toolchain.toml.
+//   - `napi` (the Rust napi addon) MUST run before `build`, `check:api` and
+//     `smoke`: a clean runner has no prebuilt binding and they fail with
+//     "Cannot find native binding".
+//   - the `native` test step MUST run after `build` and with
+//     `AGENTKIT_REQUIRE_NATIVE=1` so a missing binding fails loudly.
 //
 // Usage:
 //   node scripts/gates.mjs                  # everything
@@ -74,7 +79,18 @@ const steps = [
   { name: "contracts", cmd: ["bun", "run", "contracts:check"] },
   { name: "typecheck", cmd: ["bun", "run", "typecheck"] },
   { name: "lint", cmd: ["bun", "run", "lint"] },
+  // The napi addon is what the root `build` step's tsc-only pass omits;
+  // build it first so checkapi/smoke find a real binding.
+  {
+    name: "napi",
+    cmd: ["bun", "run", "--cwd", "packages/native", "build:native"],
+  },
   { name: "build", cmd: ["bun", "run", "build"] },
+  {
+    name: "native",
+    cmd: ["bun", "test", "packages/native", "packages/core"],
+    env: { AGENTKIT_REQUIRE_NATIVE: "1" },
+  },
   // Keep these last: both consume what `build` emits.
   { name: "checkapi", cmd: ["bun", "run", "check:api"] },
   { name: "smoke", cmd: ["node", "scripts/node-smoke.mjs"] },
@@ -144,6 +160,7 @@ for (const step of selected) {
     cwd: join(ROOT, step.cwd ?? "."),
     encoding: "utf8",
     maxBuffer: 512 * 1024 * 1024,
+    ...(step.env ? { env: { ...process.env, ...step.env } } : {}),
   });
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   writeFileSync(join(LOGS, `${step.name}.log`), out);
