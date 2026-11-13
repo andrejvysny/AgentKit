@@ -609,9 +609,11 @@ fn lockdir_coordinator(dir: Option<&str>) -> Arc<dyn WorkspaceCoordinator> {
 fn default_coordination_dir() -> String {
     #[cfg(unix)]
     {
-        // SAFETY: `getuid` takes no arguments, touches no memory, and is
-        // always successful.
-        let uid = unsafe { libc::getuid() }.to_string();
+        // The id Node's `process.getuid()` reports is the REAL uid, which
+        // `agentkit-sys`'s `real_uid` mirrors (`getuid(2)`, not `geteuid`).
+        let uid = agentkit_sys::real_uid()
+            .expect("getuid never fails on unix")
+            .to_string();
         format!("/tmp/agentkit-workspace-locks-{uid}")
     }
     #[cfg(not(unix))]

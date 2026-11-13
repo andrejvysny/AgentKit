@@ -229,51 +229,18 @@ where
 
 /// Unix-only helpers that anchor every mutation to a directory descriptor, so
 /// an intermediate directory swapped for a symlink after confinement cannot
-/// redirect the write outside the workspace.
+/// redirect the write outside the workspace. The raw `openat`/`renameat`/
+/// `linkat`/`unlinkat` surface itself lives in `agentkit_sys::fs`; only the
+/// root-containment policy stays here.
 #[cfg(unix)]
 mod dirfd {
-    use std::ffi::CString;
     use std::fs::File;
     use std::io;
-    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-    #[cfg(target_os = "macos")]
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    use std::path::{Path, PathBuf};
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
     use std::sync::Arc;
 
     use crate::errors::CodingError;
-
-    /// The real filesystem location of an open DIRECTORY descriptor; `None`
-    /// where the platform offers no way to ask.
-    fn dir_real_path(fd: RawFd) -> io::Result<Option<PathBuf>> {
-        #[cfg(target_os = "macos")]
-        {
-            use std::ffi::OsStr;
-            let mut buffer = [0u8; libc::PATH_MAX as usize];
-            // SAFETY: `F_GETPATH` writes a NUL-terminated path of at most
-            // PATH_MAX bytes into the buffer, which is exactly PATH_MAX
-            // bytes; `fd` is a live descriptor borrowed from the caller.
-            let result = unsafe { libc::fcntl(fd, libc::F_GETPATH, buffer.as_mut_ptr()) };
-            if result == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            let len = buffer
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(buffer.len());
-            Ok(Some(PathBuf::from(OsStr::from_bytes(&buffer[..len]))))
-        }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        {
-            std::fs::read_link(format!("/proc/self/fd/{fd}")).map(Some)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
-        {
-            let _ = fd;
-            Ok(None)
-        }
-    }
 
     pub(super) fn outside(label: &str) -> CodingError {
         CodingError::new(
@@ -285,23 +252,6 @@ mod dirfd {
     /// Longest `..` chain followed before giving up (fails closed).
     const MAX_DEPTH: usize = 4096;
 
-    fn open_parent(dir: &File) -> io::Result<File> {
-        let name = c"..";
-        // SAFETY: valid directory descriptor and a static NUL-terminated name.
-        let fd = unsafe {
-            libc::openat(
-                dir.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
-        if fd == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `fd` was just returned by openat and is owned by no one else.
-        Ok(unsafe { File::from_raw_fd(fd) })
-    }
-
     /// Walks `..` from the directory descriptor comparing dev/ino with the
     /// root's. Needs no path lookup, so it works on every Unix.
     pub(super) fn is_below_by_identity(dir: &File, root: &Path) -> io::Result<bool> {
@@ -312,7 +262,7 @@ mod dirfd {
             if meta.dev() == root_meta.dev() && meta.ino() == root_meta.ino() {
                 return Ok(true);
             }
-            let parent = open_parent(&current)?;
+            let parent = agentkit_sys::fs::open_parent_dir(&current)?;
             let parent_meta = parent.metadata()?;
             if parent_meta.dev() == meta.dev() && parent_meta.ino() == meta.ino() {
                 return Ok(false); // reached the filesystem root
@@ -330,7 +280,7 @@ mod dirfd {
         label: &str,
     ) -> Result<(), CodingError> {
         let root = Path::new(root);
-        if let Ok(Some(real)) = dir_real_path(dir.as_raw_fd())
+        if let Ok(Some(real)) = agentkit_sys::fs::dir_real_path(dir)
             && real.starts_with(root)
         {
             return Ok(());
@@ -340,18 +290,6 @@ mod dirfd {
         match is_below_by_identity(dir, root) {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(outside(label)),
-        }
-    }
-
-    fn cstr(name: &str) -> io::Result<CString> {
-        CString::new(name.as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
-    }
-
-    fn check(result: libc::c_int) -> io::Result<()> {
-        if result == -1 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
         }
     }
 
@@ -365,12 +303,8 @@ mod dirfd {
         /// Opens `dir` itself without following a symlink at its last
         /// component.
         pub(super) fn open(dir: &str) -> io::Result<Self> {
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                .open(dir)?;
             Ok(Self {
-                file: Arc::new(file),
+                file: Arc::new(agentkit_sys::fs::open_dir_nofollow(Path::new(dir))?),
             })
         }
 
@@ -403,68 +337,24 @@ mod dirfd {
 
         /// `openat(O_RDONLY|O_NOFOLLOW|O_NONBLOCK)` relative to this directory.
         pub(super) fn open_read(&self, name: &str) -> io::Result<File> {
-            let name = cstr(name)?;
-            // SAFETY: the directory descriptor is alive for `&self` and
-            // `name` is a valid NUL-terminated string.
-            let fd = unsafe {
-                libc::openat(
-                    self.file.as_raw_fd(),
-                    name.as_ptr(),
-                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-                )
-            };
-            if fd == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: `fd` was just returned by openat and is owned by no one else.
-            Ok(unsafe { File::from_raw_fd(fd) })
+            agentkit_sys::fs::open_file_at_nofollow(&self.file, name)
         }
 
         /// `openat(O_CREAT|O_EXCL|O_NOFOLLOW)` relative to this directory.
         pub(super) fn create_new(&self, name: &str, mode: u32) -> io::Result<File> {
-            let name = cstr(name)?;
-            // SAFETY: the directory descriptor is alive for `&self`, `name`
-            // is a valid NUL-terminated string, and the returned descriptor
-            // is wrapped into an owning `File` exactly once.
-            let fd = unsafe {
-                libc::openat(
-                    self.file.as_raw_fd(),
-                    name.as_ptr(),
-                    libc::O_WRONLY
-                        | libc::O_CREAT
-                        | libc::O_EXCL
-                        | libc::O_NOFOLLOW
-                        | libc::O_CLOEXEC,
-                    mode as libc::c_uint,
-                )
-            };
-            if fd == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: `fd` was just returned by openat and is owned by no one else.
-            Ok(unsafe { File::from_raw_fd(fd) })
+            agentkit_sys::fs::create_new_file_at(&self.file, name, mode)
         }
 
         pub(super) fn rename(&self, from: &str, to: &str) -> io::Result<()> {
-            let (from, to) = (cstr(from)?, cstr(to)?);
-            let dir = self.file.as_raw_fd();
-            // SAFETY: valid directory descriptor and NUL-terminated names
-            // that outlive the call.
-            check(unsafe { libc::renameat(dir, from.as_ptr(), dir, to.as_ptr()) })
+            agentkit_sys::fs::rename_at(&self.file, from, to)
         }
 
         pub(super) fn link(&self, from: &str, to: &str) -> io::Result<()> {
-            let (from, to) = (cstr(from)?, cstr(to)?);
-            let dir = self.file.as_raw_fd();
-            // SAFETY: valid directory descriptor and NUL-terminated names
-            // that outlive the call.
-            check(unsafe { libc::linkat(dir, from.as_ptr(), dir, to.as_ptr(), 0) })
+            agentkit_sys::fs::link_at(&self.file, from, to)
         }
 
         pub(super) fn unlink(&self, name: &str) -> io::Result<()> {
-            let name = cstr(name)?;
-            // SAFETY: valid directory descriptor and NUL-terminated name.
-            check(unsafe { libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), 0) })
+            agentkit_sys::fs::unlink_at(&self.file, name)
         }
 
         pub(super) fn sync(&self) -> io::Result<()> {

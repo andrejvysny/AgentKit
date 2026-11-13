@@ -16,8 +16,8 @@
 
 use std::io;
 
-/// Errors from process-group control. Per ADR 0021 R7 the discriminant is
-/// the outcome class; strings are context only.
+/// Errors from the process and file primitives. Per ADR 0021 R7 the
+/// discriminant is the outcome class; strings are context only.
 #[derive(Debug, thiserror::Error)]
 pub enum SysError {
     /// The caller asked to signal a group it must not own (privileged,
@@ -43,6 +43,15 @@ pub enum SysError {
     RefusedPid {
         /// The rejected pid.
         pid: u32,
+    },
+    /// `flock(2)` failed for a reason other than lock contention
+    /// (contention is `try_lock_exclusive`'s `Ok(false)`, not an error).
+    #[error("flock({operation}) failed: {source}")]
+    Flock {
+        /// The attempted operation: "lock", "try-lock" or "unlock".
+        operation: &'static str,
+        /// The OS error `flock(2)` reported.
+        source: io::Error,
     },
     /// The platform does not implement POSIX process groups.
     #[error("process-group control is unsupported on this platform")]
@@ -426,6 +435,22 @@ pub fn effective_uid() -> Result<u32, SysError> {
     Err(SysError::Unsupported)
 }
 
+/// The caller's REAL uid (`getuid(2)`) — the id Node's `process.getuid()`
+/// reports, which the lock-directory coordinator name keys on; verify
+/// ownership with [`effective_uid`] instead. Non-POSIX platforms have no
+/// POSIX uid and refuse with `Unsupported`.
+#[cfg(unix)]
+pub fn real_uid() -> Result<u32, SysError> {
+    // SAFETY: getuid has no arguments, touches no memory and cannot fail.
+    Ok(unsafe { libc::getuid() })
+}
+
+/// See [`real_uid`].
+#[cfg(not(unix))]
+pub fn real_uid() -> Result<u32, SysError> {
+    Err(SysError::Unsupported)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -606,6 +631,14 @@ mod tests {
             peek_child_exit(std::process::id()),
             Ok(ChildExit::NoSuchChild)
         ));
+    }
+
+    #[test]
+    fn real_uid_reports_getuid_not_geteuid() {
+        // SAFETY: getuid has no arguments, touches no memory and cannot
+        // fail.
+        let expected = unsafe { libc::getuid() };
+        assert_eq!(real_uid().expect("unix has a uid"), expected);
     }
 
     #[test]

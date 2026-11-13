@@ -22,9 +22,9 @@ agentkit-native = { workspace = true }
 agentkit-native-exec = { workspace = true }
 agentkit-providers = { workspace = true }
 agentkit-store = { workspace = true }
+agentkit-sys = { workspace = true }
 agentkit-lsp = { workspace = true }
 agentkit-toolpacks-coding = { workspace = true }
-libc.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

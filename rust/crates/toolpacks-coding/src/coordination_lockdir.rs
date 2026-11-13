@@ -86,26 +86,12 @@ fn pid_alive(pid: i64) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return true; // not a signalable pid: never declared dead
     };
-    pid_probe_alive(pid)
-}
-
-#[cfg(unix)]
-fn pid_probe_alive(pid: i32) -> bool {
-    // SAFETY: kill(pid, 0) performs error checking only, sends no signal.
-    unsafe {
-        if libc::kill(pid, 0) == 0 {
-            return true;
-        }
-        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    }
-}
-
-/// No `kill` probe on Windows: a lock owner is never declared dead, so a
-/// crashed holder's lock stays quarantined for explicit recovery rather
-/// than being silently broken. Fail-closed.
-#[cfg(not(unix))]
-fn pid_probe_alive(_pid: i32) -> bool {
-    true
+    // `kill_probe` keeps `kill(2)`'s error classes: only ESRCH (`Gone`)
+    // proves death; EPERM (`NotPermitted`) means someone else's process is
+    // there and is never declared dead. Non-POSIX platforms report
+    // `Alive`, so a crashed holder's lock stays quarantined for explicit
+    // recovery rather than being silently broken. Fail-closed.
+    !matches!(agentkit_sys::kill_probe(pid), agentkit_sys::KillProbe::Gone)
 }
 
 type StartCache = Mutex<HashMap<i64, (Option<String>, Instant)>>;
@@ -332,70 +318,69 @@ enum Reclaimed {
 /// the guard is a no-op.
 struct ReclaimGuard {
     #[cfg(unix)]
-    file: std::os::fd::OwnedFd,
+    file: std::fs::File,
 }
 
 impl ReclaimGuard {
     fn acquire(path: &str) -> Result<Self, CodingError> {
-        Self::lock(path, libc::LOCK_EX)
+        #[cfg(unix)]
+        {
+            let file = open_guard_file(path)?;
+            // Blocks until the previous holder releases.
+            agentkit_sys::fs::lock_exclusive(&file)
+                .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+            Ok(Self { file })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(Self {})
+        }
     }
 
     /// Non-blocking variant for best-effort sweeps: `None` when an active
     /// reclaim/creation holds the guard — the sweep skips and the next
     /// acquisition retries; correctness never depends on it sweeping.
     fn try_acquire(path: &str) -> Option<Self> {
-        // SAFETY: `lock` only calls `flock(2)` with the given flag bits.
-        Self::lock(path, libc::LOCK_EX | libc::LOCK_NB).ok()
-    }
-
-    fn lock(path: &str, flags: i32) -> Result<Self, CodingError> {
         #[cfg(unix)]
         {
-            use std::os::fd::{FromRawFd, IntoRawFd};
-            use std::os::unix::fs::OpenOptionsExt;
-            let guard = format!("{path}.flock");
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(&guard)
-                .map_err(|error| io_error(&error))?;
-            let fd = file.into_raw_fd();
-            // SAFETY: `fd` is the valid descriptor just opened; `flock(2)`
-            // only needs the descriptor. LOCK_EX blocks until the previous
-            // holder releases; LOCK_NB makes contention an immediate error.
-            // On failure the descriptor is closed.
-            let locked = unsafe { libc::flock(fd, flags) };
-            if locked != 0 {
-                let error = std::io::Error::last_os_error();
-                // SAFETY: ownership returns to the runtime for closing.
-                unsafe { drop(std::fs::File::from_raw_fd(fd)) };
-                return Err(io_error(&error));
-            }
-            // SAFETY: ownership of the locked descriptor transfers to the
-            // OwnedFd; Drop unlocks before close.
-            Ok(Self {
-                file: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) },
-            })
+            let file = open_guard_file(path).ok()?;
+            agentkit_sys::fs::try_lock_exclusive(&file)
+                .ok()?
+                .then_some(Self { file })
         }
         #[cfg(not(unix))]
         {
-            let _ = (path, flags);
-            Ok(Self {})
+            let _ = path;
+            Some(Self {})
         }
     }
+}
+
+/// Open the `.flock` guard sidecar: 0600, contents unused, never truncated
+/// (the file is durable infrastructure). The `flock(2)` calls themselves
+/// live in `agentkit_sys::fs`.
+#[cfg(unix)]
+fn open_guard_file(path: &str) -> Result<std::fs::File, CodingError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let guard = format!("{path}.flock");
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(&guard)
+        .map_err(|error| io_error(&error))
 }
 
 impl Drop for ReclaimGuard {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd;
-            // SAFETY: the descriptor is ours; LOCK_UN is the documented
-            // release for a held LOCK_EX.
-            unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+            // Best-effort: closing the descriptor would drop the advisory
+            // lock anyway; an error here cannot mean continued ownership.
+            let _ = agentkit_sys::fs::unlock_exclusive(&self.file);
         }
     }
 }
@@ -1076,9 +1061,13 @@ fn verify_private_dir(path: &str) -> Result<(), CodingError> {
             format!("coordination directory {path} is not a directory (symlinks are refused)"),
         ));
     }
-    // SAFETY: `geteuid` takes no arguments, touches no memory, and is
-    // always successful.
-    if meta.uid() != unsafe { libc::geteuid() } {
+    let uid = agentkit_sys::effective_uid().map_err(|error| {
+        CodingError::new(
+            "io_error",
+            format!("cannot read effective uid for {path}: {error}"),
+        )
+    })?;
+    if meta.uid() != uid {
         return Err(CodingError::new(
             "io_error",
             format!("coordination directory {path} is not owned by the current user"),
