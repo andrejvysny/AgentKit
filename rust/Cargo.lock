@@ -83,6 +83,7 @@ name = "agentkit-claude"
 version = "0.1.0"
 dependencies = [
  "agentkit-native",
+ "agentkit-sys",
  "async-trait",
  "libc",
  "serde",
@@ -283,8 +284,8 @@ name = "agentkit-lsp"
 version = "0.1.0"
 dependencies = [
  "agentkit-core",
+ "agentkit-sys",
  "async-trait",
- "libc",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -530,6 +531,16 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "agentkit-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

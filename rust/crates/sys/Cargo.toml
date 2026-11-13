@@ -1,0 +1,23 @@
+[package]
+name = "agentkit-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "OS process-group and private-file primitives; the only crate allowed to hold platform unsafe (ADR 0021 R9)"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

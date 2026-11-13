@@ -1,0 +1,55 @@
+pub mod agentkit_sys
+pub mod agentkit_sys::private_fs
+pub fn agentkit_sys::private_fs::create_private_dir(&std::path::Path) -> core::io::error::Result<()>
+pub fn agentkit_sys::private_fs::create_private_file(&std::path::Path) -> core::io::error::Result<std::fs::File>
+pub mod agentkit_sys::process
+pub enum agentkit_sys::process::Signal
+pub agentkit_sys::process::Signal::Int
+pub agentkit_sys::process::Signal::Kill
+pub agentkit_sys::process::Signal::Term
+pub enum agentkit_sys::process::SignalOutcome
+pub agentkit_sys::process::SignalOutcome::AlreadyGone
+pub agentkit_sys::process::SignalOutcome::Delivered
+pub enum agentkit_sys::process::SysError
+pub agentkit_sys::process::SysError::Refused
+pub agentkit_sys::process::SysError::Refused::pgid: u32
+pub agentkit_sys::process::SysError::Signal
+pub agentkit_sys::process::SysError::Signal::pgid: u32
+pub agentkit_sys::process::SysError::Signal::signal: i32
+pub agentkit_sys::process::SysError::Signal::source: core::io::error::Error
+pub agentkit_sys::process::SysError::Unsupported
+pub struct agentkit_sys::process::ProcessGroup
+impl agentkit_sys::process::ProcessGroup
+pub fn agentkit_sys::process::ProcessGroup::from_leader_pid(u32) -> core::result::Result<Self, agentkit_sys::process::SysError>
+pub fn agentkit_sys::process::ProcessGroup::is_gone(&self) -> bool
+pub fn agentkit_sys::process::ProcessGroup::signal(&self, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
+pub fn agentkit_sys::process::own_process_group() -> u32
+pub fn agentkit_sys::process::pid_alive(u32) -> bool
+pub fn agentkit_sys::process::spawn_in_new_group(&mut std::process::Command)
+pub fn agentkit_sys::process::spawn_in_new_group_tokio(&mut tokio::process::Command)
+pub enum agentkit_sys::Signal
+pub agentkit_sys::Signal::Int
+pub agentkit_sys::Signal::Kill
+pub agentkit_sys::Signal::Term
+pub enum agentkit_sys::SignalOutcome
+pub agentkit_sys::SignalOutcome::AlreadyGone
+pub agentkit_sys::SignalOutcome::Delivered
+pub enum agentkit_sys::SysError
+pub agentkit_sys::SysError::Refused
+pub agentkit_sys::SysError::Refused::pgid: u32
+pub agentkit_sys::SysError::Signal
+pub agentkit_sys::SysError::Signal::pgid: u32
+pub agentkit_sys::SysError::Signal::signal: i32
+pub agentkit_sys::SysError::Signal::source: core::io::error::Error
+pub agentkit_sys::SysError::Unsupported
+pub struct agentkit_sys::ProcessGroup
+impl agentkit_sys::process::ProcessGroup
+pub fn agentkit_sys::process::ProcessGroup::from_leader_pid(u32) -> core::result::Result<Self, agentkit_sys::process::SysError>
+pub fn agentkit_sys::process::ProcessGroup::is_gone(&self) -> bool
+pub fn agentkit_sys::process::ProcessGroup::signal(&self, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
+pub fn agentkit_sys::create_private_dir(&std::path::Path) -> core::io::error::Result<()>
+pub fn agentkit_sys::create_private_file(&std::path::Path) -> core::io::error::Result<std::fs::File>
+pub fn agentkit_sys::own_process_group() -> u32
+pub fn agentkit_sys::pid_alive(u32) -> bool
+pub fn agentkit_sys::spawn_in_new_group(&mut std::process::Command)
+pub fn agentkit_sys::spawn_in_new_group_tokio(&mut tokio::process::Command)

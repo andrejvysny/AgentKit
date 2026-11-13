@@ -261,22 +261,10 @@ impl NativeBackend for ClaudeCodeBackend {
 
 /// Create a directory (0700), idempotently, tightening the leaf mode.
 fn ensure_private_dir(dir: &std::path::Path, field: &'static str) -> Result<(), NativeRefusal> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|e| {
-            NativeRefusal::new(field, format!("cannot create {}: {e}", dir.display()), true)
-        })?;
-    // recursive(true) can inherit umask for parents; tighten the leaf.
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
-        NativeRefusal::new(
-            field,
-            format!("cannot tighten {}: {e}", dir.display()),
-            true,
-        )
-    })
+    // `agentkit-sys` names the failing step in the error text ("cannot
+    // create …" / "cannot tighten …"); that text is the refusal detail.
+    agentkit_sys::create_private_dir(dir)
+        .map_err(|e| NativeRefusal::new(field, e.to_string(), true))
 }
 
 /// Create the private run directory (0700) and stage its files (0600).

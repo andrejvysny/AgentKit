@@ -366,21 +366,13 @@ fn kill_group(child: &tokio::process::Child) {
 /// reuses a pid while it is still a live group id, so the only residual
 /// risk is a recycled number after the whole group is gone, which the
 /// short window between exit and teardown makes negligible.
-#[cfg(unix)]
 fn kill_group_pid(pid: u32) {
-    let Ok(pid) = i32::try_from(pid) else { return };
-    if pid <= 1 {
-        return;
-    }
-    // SAFETY: the pid was our child, spawned into its own group; kill(2)
-    // of that group is well-defined, and a dead group just answers ESRCH.
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
+    // `agentkit-sys` re-validates the pid — privileged and self targets are
+    // refused — and an already-dead group just answers ESRCH.
+    if let Ok(group) = agentkit_sys::ProcessGroup::from_leader_pid(pid) {
+        let _ = group.signal(agentkit_sys::Signal::Kill);
     }
 }
-
-#[cfg(not(unix))]
-fn kill_group_pid(_pid: u32) {}
 
 /// Spawn one server generation and run the `initialize` handshake. On any
 /// handshake failure (including caller cancellation) the child is killed
@@ -428,12 +420,8 @@ async fn spawn_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        // Own process group so a runaway server can be taken down wholesale.
-        use std::os::unix::process::CommandExt;
-        std_cmd.process_group(0);
-    }
+    // Own process group so a runaway server can be taken down wholesale.
+    agentkit_sys::spawn_in_new_group(&mut std_cmd);
     let mut builder = tokio::process::Command::from(std_cmd);
     builder.kill_on_drop(true);
     let mut child = builder.spawn().map_err(|e| {

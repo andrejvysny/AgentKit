@@ -20,6 +20,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
+use agentkit_sys::{ProcessGroup, Signal, SignalOutcome, SysError};
 use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::ChildStdin;
@@ -65,10 +66,6 @@ pub(crate) fn credential_env_keys() -> Vec<std::ffi::OsString> {
         })
         .collect()
 }
-
-const SIGINT: i32 = 2;
-const SIGTERM: i32 = 15;
-const SIGKILL: i32 = 9;
 
 /// Exit facts captured once by the reaper task.
 #[derive(Clone, Copy, Debug)]
@@ -173,37 +170,18 @@ fn policy_label(policy: InterruptPolicy) -> &'static str {
     }
 }
 
-/// Send a signal to our own process group only. The recorded pgid equals
-/// the child pid (process_group(0)); we refuse privileged/self targets.
-fn group_kill(pgid: u32, sig: i32) -> Result<(), String> {
-    if pgid <= 1 || pgid > i32::MAX as u32 || pgid == std::process::id() {
-        return Err(format!("refusing to signal process group {pgid}"));
-    }
-    // SAFETY: kill receives only an owned, validated process-group ID.
-    let rc = unsafe { libc::kill(-(pgid as i32), sig) };
-    if rc == 0 {
-        return Ok(());
-    }
-    let err = std::io::Error::last_os_error();
-    if err.raw_os_error() == Some(libc::ESRCH) {
-        // Group already gone: nothing to kill, not an uncertainty.
-        return Ok(());
-    }
-    Err(format!("kill(-{pgid}, {sig}) failed: {err}"))
+/// Send a signal to our own process group only, via `agentkit-sys`. The
+/// recorded pgid equals the child pid (spawned in a new group);
+/// [`ProcessGroup::from_leader_pid`] refuses privileged/self targets, and
+/// the Display of its errors is the receipt-facing text.
+fn group_kill(pgid: u32, sig: Signal) -> Result<SignalOutcome, String> {
+    ProcessGroup::from_leader_pid(pgid)
+        .and_then(|group| group.signal(sig))
+        .map_err(|err| err.to_string())
 }
 
 fn kernel_group_absent(pgid: u32) -> bool {
-    if pgid <= 1 || pgid > i32::MAX as u32 || pgid == std::process::id() {
-        return false;
-    }
-    // SAFETY: signal zero probes an owned group without delivering a signal.
-    let result = unsafe { libc::kill(-(pgid as i32), 0) };
-    let error = std::io::Error::last_os_error();
-    #[cfg(test)]
-    if result != 0 && error.raw_os_error() != Some(libc::ESRCH) {
-        eprintln!("probe {pgid}: {error}");
-    }
-    result != 0 && error.raw_os_error() == Some(libc::ESRCH)
+    ProcessGroup::from_leader_pid(pgid).is_ok_and(|group| group.is_gone())
 }
 
 /// Live (non-zombie) members of our process group, via /proc, or `None`
@@ -409,7 +387,7 @@ async fn reconcile_group_after_leader_exit(
     if !group_liveness_observable() {
         // Nothing observable: best-effort sweep like the ladder's
         // unobservable-platform branch, and stay honest about it.
-        let _ = group_kill(shared.pgid, SIGKILL);
+        let _ = group_kill(shared.pgid, Signal::Kill);
         return success_receipt(
             label,
             false,
@@ -418,7 +396,7 @@ async fn reconcile_group_after_leader_exit(
         );
     }
     let Some(stragglers) = group_live_scan(shared.pgid) else {
-        let _ = group_kill(shared.pgid, SIGKILL);
+        let _ = group_kill(shared.pgid, Signal::Kill);
         if await_group_quiet(shared, limits.cleanup_timeout_ms).await {
             return success_receipt(label, false, true, "process group absent after SIGKILL");
         }
@@ -437,7 +415,7 @@ async fn reconcile_group_after_leader_exit(
             &format!("{cause}; process group already empty"),
         );
     }
-    if let Err(reason) = group_kill(shared.pgid, SIGTERM) {
+    if let Err(reason) = group_kill(shared.pgid, Signal::Term) {
         return uncertain_receipt(
             label,
             false,
@@ -453,7 +431,7 @@ async fn reconcile_group_after_leader_exit(
             &format!("{cause}; {stragglers} descendant(s) exited after SIGTERM"),
         );
     }
-    if let Err(reason) = group_kill(shared.pgid, SIGKILL) {
+    if let Err(reason) = group_kill(shared.pgid, Signal::Kill) {
         return uncertain_receipt(
             label,
             true,
@@ -496,8 +474,10 @@ async fn interrupt_shared(
     *shared.interrupt_policy.lock().unwrap() = Some(policy_label(policy).to_owned());
 
     let label = policy_label(policy);
-    if let Err(reason) = group_kill(shared.pgid, SIGINT) {
-        if reason.starts_with("refusing") {
+    if let Err(reason) =
+        ProcessGroup::from_leader_pid(shared.pgid).and_then(|group| group.signal(Signal::Int))
+    {
+        if matches!(reason, SysError::Refused { .. }) {
             let receipt = InterruptReceipt {
                 terminated: false,
                 escalated_to_sigterm: false,
@@ -508,8 +488,8 @@ async fn interrupt_shared(
             shared.store_receipt(&receipt);
             return receipt;
         }
-        // ESRCH is mapped to Ok above; other errors keep escalating but
-        // remain recorded as uncertainty.
+        // ESRCH reports SignalOutcome::AlreadyGone, never an error; other
+        // errors keep escalating but remain recorded as uncertainty.
         let receipt = InterruptReceipt {
             terminated: shared.exit_now().is_some(),
             escalated_to_sigterm: false,
@@ -525,25 +505,25 @@ async fn interrupt_shared(
         // Leader reaped: where group liveness is unobservable, sweep the
         // group one last time best-effort and stay honest in the receipt.
         if !group_liveness_observable() {
-            let _ = group_kill(shared.pgid, SIGKILL);
+            let _ = group_kill(shared.pgid, Signal::Kill);
         }
         let receipt = success_receipt(label, false, false, "exited after SIGINT");
         shared.store_receipt(&receipt);
         return receipt;
     }
 
-    let _ = group_kill(shared.pgid, SIGTERM);
+    let _ = group_kill(shared.pgid, Signal::Term);
     if await_rung(shared, limits.terminate_grace_ms).await {
         if !group_liveness_observable() {
             // Leader reaped: final best-effort group sweep (C6).
-            let _ = group_kill(shared.pgid, SIGKILL);
+            let _ = group_kill(shared.pgid, Signal::Kill);
         }
         let receipt = success_receipt(label, true, false, "exited after SIGTERM");
         shared.store_receipt(&receipt);
         return receipt;
     }
 
-    let _ = group_kill(shared.pgid, SIGKILL);
+    let _ = group_kill(shared.pgid, Signal::Kill);
     if await_rung(shared, limits.cleanup_timeout_ms).await {
         // The group SIGKILL above already swept unobservable descendants.
         let receipt = success_receipt(label, true, true, "exited after SIGKILL");
@@ -755,7 +735,7 @@ impl Drop for OwnedChild {
         // best-effort sweep the group like the success receipt does,
         // then deregister (review round-3 F2).
         if self.shared.exit_now().is_some() {
-            let _ = group_kill(self.shared.pgid, SIGKILL);
+            let _ = group_kill(self.shared.pgid, Signal::Kill);
             deregister(&self.live, &self.shared);
             return;
         }
@@ -770,7 +750,7 @@ impl Drop for OwnedChild {
                 });
             }
             Err(_) => {
-                let _ = group_kill(shared.pgid, SIGKILL);
+                let _ = group_kill(shared.pgid, Signal::Kill);
                 deregister(&live, &shared);
             }
         }
@@ -949,10 +929,9 @@ impl ProcessSupervisor for OwnedProcessSupervisor {
         // Ambient interrupted-turn resume is disabled for this scope, even
         // if the launch plan or ambient environment tries to set it.
         command.env_remove(INTERRUPTED_TURN_RESUME_ENV);
-        #[cfg(unix)]
-        {
-            command.process_group(0);
-        }
+        // Own process group so ladder kills and reconciliation reach the
+        // whole tree the CLI forks (pgid == child pid).
+        agentkit_sys::spawn_in_new_group_tokio(&mut command);
 
         let mut child = command.spawn().map_err(|err| NativeError::Transport {
             code: "spawn_failed".to_owned(),
@@ -1097,7 +1076,7 @@ impl Drop for OwnedProcessSupervisor {
             live
         };
         for shared in live {
-            let _ = group_kill(shared.pgid, SIGKILL);
+            let _ = group_kill(shared.pgid, Signal::Kill);
         }
     }
 }
@@ -1114,8 +1093,7 @@ mod tests {
     #[test]
     fn empty_or_missing_proc_never_proves_live_group_absent() {
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: getpgrp has no arguments and only reads process identity.
-        let group = unsafe { libc::getpgrp() } as u32;
+        let group = agentkit_sys::own_process_group();
         assert!(!kernel_group_absent(group));
         assert_eq!(group_live_scan_at(group, dir.path()), None);
         assert_eq!(group_live_scan_at(group, &dir.path().join("missing")), None);
@@ -1798,8 +1776,7 @@ mod tests {
 
     #[cfg(not(target_os = "linux"))]
     fn process_state(pid: u32) -> Option<String> {
-        // SAFETY: signal zero only probes existence of a test-owned process.
-        (unsafe { libc::kill(pid as i32, 0) } == 0).then(|| "S".to_owned())
+        agentkit_sys::pid_alive(pid).then(|| "S".to_owned())
     }
 
     /// Review round-4 F5 (real OS reproduction): the NORMAL completion path

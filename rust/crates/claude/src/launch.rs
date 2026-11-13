@@ -248,21 +248,14 @@ pub fn write_per_run_files(
 ) -> Result<(), NativeRefusal> {
     let write_private = |name: &str, bytes: &[u8]| -> Result<(), NativeRefusal> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let path = per_run_dir.join(name);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| {
-                NativeRefusal::new(
-                    "per_run_write",
-                    format!("cannot stage {}: {e}", path.display()),
-                    true,
-                )
-            })?;
+        let mut file = agentkit_sys::create_private_file(&path).map_err(|e| {
+            NativeRefusal::new(
+                "per_run_write",
+                format!("cannot stage {}: {e}", path.display()),
+                true,
+            )
+        })?;
         file.write_all(bytes).map_err(|e| {
             NativeRefusal::new(
                 "per_run_write",
