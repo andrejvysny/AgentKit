@@ -4,7 +4,8 @@
 
 use super::SessionsResult;
 use super::descriptor::session_turn_kind;
-use agentkit_store::TaskRecord;
+use crate::{SessionBackend, SessionFault};
+use agentkit_engine::{TaskRecord, TaskStatus};
 use serde_json::{Map, Value};
 
 pub const FALLBACK_CONTEXT_WINDOW_TOKENS: i64 = 32768;
@@ -22,11 +23,11 @@ const EXPORT_METADATA_KEYS: [&str; 5] = [
 ];
 
 /// The session's turns (any status), oldest first.
-pub async fn list_turn_tasks(
-    store: &agentkit_store::SqliteStore,
+pub async fn list_turn_tasks<R: SessionBackend>(
+    store: &R,
     session_id: &str,
     kind: &str,
-) -> SessionsResult<Vec<TaskRecord>> {
+) -> SessionsResult<Vec<TaskRecord>, SessionFault<R>> {
     let mut tasks: Vec<TaskRecord> = store
         .list_tasks(Some(session_id.to_owned()))
         .await?
@@ -84,10 +85,10 @@ fn num(data: &Value, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-async fn turn_usage(
-    store: &agentkit_store::SqliteStore,
+async fn turn_usage<R: SessionBackend>(
+    store: &R,
     task: &TaskRecord,
-) -> SessionsResult<Value> {
+) -> SessionsResult<Value, SessionFault<R>> {
     let mut last_admission = None;
     let mut requests = 0i64;
     let mut prompt_tokens = 0f64;
@@ -131,11 +132,11 @@ async fn turn_usage(
 }
 
 /// Provider-reported token usage per turn, plus the context window it fills.
-pub async fn session_usage(
-    store: &agentkit_store::SqliteStore,
+pub async fn session_usage<R: SessionBackend>(
+    store: &R,
     session_id: &str,
     descriptor: &Value,
-) -> SessionsResult<Value> {
+) -> SessionsResult<Value, SessionFault<R>> {
     let tasks = list_turn_tasks(store, session_id, &session_turn_kind(descriptor)).await?;
     let mut turns = vec![];
     for task in &tasks {
@@ -164,9 +165,7 @@ pub async fn session_usage(
         .find(|task| {
             matches!(
                 task.status,
-                agentkit_store::TaskStatus::Running
-                    | agentkit_store::TaskStatus::WaitingApproval
-                    | agentkit_store::TaskStatus::Interrupted
+                TaskStatus::Running | TaskStatus::WaitingApproval | TaskStatus::Interrupted
             )
         })
         .or_else(|| tasks.last());
@@ -195,12 +194,12 @@ pub async fn session_usage(
     Ok(Value::Object(out))
 }
 
-async fn report_window(
-    store: &agentkit_store::SqliteStore,
+async fn report_window<R: SessionBackend>(
+    store: &R,
     descriptor: &Value,
     task: Option<&TaskRecord>,
     admission: Option<&Value>,
-) -> SessionsResult<(Value, Value)> {
+) -> SessionsResult<(Value, Value), SessionFault<R>> {
     if let Some(admission) = admission {
         return Ok((
             admission["windowTokens"].clone(),
@@ -232,13 +231,13 @@ async fn report_window(
 
 /// A JSON-serializable history: active-path messages, turns, inputs. No
 /// secrets. Derived summaries are exported separately from canonical messages.
-pub async fn export_session(
-    store: &agentkit_store::SqliteStore,
+pub async fn export_session<R: SessionBackend>(
+    store: &R,
     session_id: &str,
     descriptor: &Value,
     chat_metadata: &Value,
     exported_at: &str,
-) -> SessionsResult<Value> {
+) -> SessionsResult<Value, SessionFault<R>> {
     let records = store.messages(session_id, false).await?;
     let messages: Vec<Value> = records
         .iter()
@@ -280,7 +279,7 @@ pub async fn export_session(
     out.insert("exportedAt".into(), exported_at.into());
     out.insert("sessionId".into(), session_id.into());
     out.insert("descriptor".into(), descriptor.clone());
-    if let Some(execution) = agentkit_store::read_execution_state(chat_metadata) {
+    if let Some(execution) = crate::read_execution_state(chat_metadata) {
         out.insert("execution".into(), execution);
     }
     out.insert("messages".into(), messages.into());
@@ -315,7 +314,7 @@ pub async fn export_session(
         .collect();
     out.insert("turns".into(), turns.into());
     let inputs = store
-        .list_inputs(agentkit_store::AgentInputQuery {
+        .list_inputs(crate::AgentInputQuery {
             session_id: session_id.to_owned(),
             ..Default::default()
         })

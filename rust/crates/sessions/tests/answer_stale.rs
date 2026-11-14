@@ -14,7 +14,7 @@ use std::sync::Arc;
 const SESSION: &str = "s1";
 const DIGEST: &str = "a5ffc907b0a2d9c0f8b9d1647a3e5cb13d24f7bd0f9a41e2c3d5e7f8091a2b3c";
 
-async fn fixture() -> (SqliteStore, AgentSessionService) {
+async fn fixture() -> (SqliteStore, AgentSessionService<SqliteStore>) {
     let store = SqliteStore::memory(8).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let service = AgentSessionService::new(AgentSessionServiceDeps {
@@ -472,7 +472,7 @@ async fn an_answered_request_answered_differently_still_conflicts() {
     assert_eq!(error.failure_event_code(), "answer_conflict");
 }
 
-fn session_message(error: &agentkit_sessions::SessionsError) -> String {
+fn session_message(error: &agentkit_sessions::SessionsError<agentkit_store::StoreError>) -> String {
     let display = error.to_string();
     let prefix = format!("{}: ", error.failure_event_code());
     display.strip_prefix(&prefix).unwrap_or(&display).to_owned()

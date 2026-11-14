@@ -1,9 +1,9 @@
 use crate::ExampleResult;
 use crate::{bridge::*, proposals, provider, verification};
+use agentkit_chat::AgentHost;
 use agentkit_chat::{ChatHostExt, SubmitChat};
 use agentkit_engine::{RunUpdate, Runtime, SystemRuntime};
 use agentkit_runtime::AgentRuntime;
-use agentkit_sessions::AgentHost;
 use agentkit_store::SqliteStore;
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc};

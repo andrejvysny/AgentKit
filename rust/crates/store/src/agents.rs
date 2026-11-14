@@ -70,16 +70,11 @@ const MAX_SECRET_REF_CHARS: usize = 512;
 const MAX_SECRET_REF_COUNT: usize = 64;
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-/// The complete lifecycle vocabulary. `Deleted` is a tombstone: identity,
-/// configuration, and revision ledger stay durable while every read path
-/// treats the row as absent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AgentLifecycle {
-    Active,
-    Archived,
-    Deleted,
-}
+/// The agent-record vocabulary the run-profile resolver reads is the sessions
+/// context's (ADR 0024 §2).
+pub use agentkit_sessions::{
+    AgentBudgets, AgentDefinition, AgentLifecycle, AgentRecord, AgentSkillSelection,
+};
 
 /// What produced one configuration revision. The ledger vocabulary is
 /// closed: `create` is written only by identity creation (including a
@@ -94,97 +89,6 @@ pub enum AgentRevisionSource {
     ModelChange,
     Restore,
 }
-
-/// One selected skill under an immutable revision, the same
-/// `{id, revision}` pairing the managed-content store keys published
-/// skill documents by.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentSkillSelection {
-    pub id: String,
-    pub revision: String,
-}
-
-/// Budget ceilings of a definition. Every present limit is a positive
-/// safe integer; absence means "this ceiling is unset, the host default
-/// governs".
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentBudgets {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tool_iterations: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tool_calls_per_iteration: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt_budget_ms: Option<i64>,
-}
-
-/// The effective configuration of one agent — the snapshot unit the
-/// revision ledger appends. `deny_unknown_fields` is the smuggling gate:
-/// there is no field that could carry a secret value or a foreign scope,
-/// and an envelope or payload that tries answers with a validation error.
-/// Credential material enters only through `secret_refs`: opaque,
-/// scheme-qualified references resolved by the secret store, never values.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentDefinition {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub avatar: Option<String>,
-    #[serde(default)]
-    pub purpose: String,
-    #[serde(default)]
-    pub instructions: String,
-    /// Scoped resource references this agent may use. These are GRANTS
-    /// (run-profile resolution treats membership as authority), so
-    /// duplicate and import clear them rather than copy them.
-    #[serde(default)]
-    pub resources: Vec<String>,
-    /// Skills selected under pinned revisions.
-    #[serde(default)]
-    pub skills: Vec<AgentSkillSelection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
-    /// The permission CEILING (`read_only|ask|auto_edit|full_auto|plan`,
-    /// the core permission vocabulary the host service validates); a
-    /// ceiling narrows what a run under this agent may ever attempt, it
-    /// grants nothing by itself.
-    #[serde(default)]
-    pub permission_mode: String,
-    /// Tool allow-list ceiling; empty means the host default set.
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
-    #[serde(default)]
-    pub budgets: AgentBudgets,
-    /// Secret REFERENCES only (e.g. `vault://...`); a value here is refused
-    /// at write time. Duplicate strips these by default.
-    #[serde(default)]
-    pub secret_refs: Vec<String>,
-}
-
-agentkit_contracts::impl_json_via_serde!(AgentDefinition);
-
-/// One durable agent row: identity, lifecycle, the current effective
-/// definition, and the timestamps. Serialized whole into `agents.record`;
-/// the indexed columns mirror exactly these fields at write time.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentRecord {
-    pub agent_id: String,
-    pub scope: String,
-    pub owner_id: String,
-    pub lifecycle: AgentLifecycle,
-    pub current_revision: i64,
-    pub definition: AgentDefinition,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-agentkit_contracts::impl_json_via_serde!(AgentRecord);
 
 /// One row of the append-only configuration ledger: the full effective
 /// definition snapshot at `revision`, with the source that produced it.

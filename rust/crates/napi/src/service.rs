@@ -16,10 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use agentkit_chat::RunHandle;
 use agentkit_core::permission::CodingMode;
 use agentkit_engine::RunUpdate;
 use agentkit_runtime::{AgentRuntime, CodingLane, ExternalToolsPolicy, PlanConfiguration};
-use agentkit_sessions::RunHandle;
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
@@ -189,8 +189,9 @@ impl SessionService {
             bridge.clone(),
         ));
         let provider_memory_secrets = Arc::new(agentkit_connections::MemorySecretStore::default());
-        let content_authority: Arc<dyn agentkit_sessions::ContentAuthority> =
-            Arc::new(crate::provider::JsContentAuthority(Arc::clone(&bridge)));
+        let content_authority: Arc<
+            dyn agentkit_sessions::ContentAuthority<agentkit_store::StoreError>,
+        > = Arc::new(crate::provider::JsContentAuthority(Arc::clone(&bridge)));
         let runtime = AgentRuntime::builder(store_handle)
             .default_provider(provider)
             .additional_providers(additional)
@@ -982,7 +983,7 @@ const HARD_STOP_WAIT: Duration = Duration::from_secs(5);
 /// Graceful drain, then a hard stop. `stop` + `join` instead of `shutdown`
 /// keeps the handle alive past the first deadline so it can be escalated.
 async fn drain_worker(
-    mut worker: agentkit_sessions::WorkerHandle,
+    mut worker: agentkit_chat::WorkerHandle,
     lane: &CodingLane,
     close_timeout: Duration,
     uncertain: &AtomicBool,

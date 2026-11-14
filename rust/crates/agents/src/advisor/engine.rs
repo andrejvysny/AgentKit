@@ -140,7 +140,7 @@ pub struct AdvisorEngine {
     config: Arc<Mutex<AdvisorConfig>>,
     tools: Arc<dyn AdvisorToolSource>,
     events: Option<Arc<dyn AdvisorEventSink>>,
-    session: agentkit_sessions::AgentSessionService,
+    session: agentkit_sessions::AgentSessionService<SqliteStore>,
     /// Resizable at `configure` time: the permit pool is swapped to honor a
     /// hot `maxReviewConcurrency` change ("applies to the next review").
     /// In-flight holders keep the old pool until they finish.
@@ -174,7 +174,7 @@ impl AdvisorEngine {
         config: AdvisorConfig,
         tools: Arc<dyn AdvisorToolSource>,
         events: Option<Arc<dyn AdvisorEventSink>>,
-        session: agentkit_sessions::AgentSessionService,
+        session: agentkit_sessions::AgentSessionService<SqliteStore>,
     ) -> Self {
         let config = config.effective();
         let reviews = Arc::new(tokio::sync::Semaphore::new(

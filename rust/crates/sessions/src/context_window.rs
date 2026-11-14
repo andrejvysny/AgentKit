@@ -1,21 +1,18 @@
 //! Shared context-window authority for admission and session usage reports.
-use agentkit_store::{SqliteStore, StoreError};
+use crate::{PROVIDER_MODELS_NAMESPACE, SessionFault, SessionRepository, SessionsError};
 use serde_json::Value;
 
-pub async fn resolve(
-    store: &SqliteStore,
+pub async fn resolve<R: SessionRepository>(
+    store: &R,
     descriptor: &Value,
     provider: Option<&str>,
     model: Option<&str>,
-) -> Result<(u64, &'static str), StoreError> {
+) -> Result<(u64, &'static str), SessionsError<SessionFault<R>>> {
     if let Some(window) = positive(&descriptor["context"]["windowTokens"]) {
         return Ok((window, "descriptor"));
     }
     if let (Some(provider), Some(model)) = (provider, model) {
-        for namespace in [
-            agentkit_store::PROVIDER_MODELS_NAMESPACE,
-            "http.provider-catalog",
-        ] {
+        for namespace in [PROVIDER_MODELS_NAMESPACE, "http.provider-catalog"] {
             let catalog = store.get_setting(namespace, provider).await?;
             let window = catalog.as_ref().and_then(|catalog| {
                 let row = catalog

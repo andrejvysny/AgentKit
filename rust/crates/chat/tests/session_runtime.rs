@@ -208,7 +208,7 @@ fn write_tool(calls: Arc<Mutex<Vec<String>>>) -> Arc<dyn Tool> {
 struct Fixture {
     store: SqliteStore,
     host: AgentHost,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     calls: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     fail_summary: Arc<AtomicBool>,
@@ -1870,7 +1870,7 @@ enum Race {
 /// transaction commits — lands the racing write. Nothing is mocked: the
 /// same service, store and runner the field uses.
 struct Racy {
-    inner: AgentSessionService,
+    inner: AgentSessionService<SqliteStore>,
     store: SqliteStore,
     mode: Race,
     armed: AtomicBool,
@@ -2606,7 +2606,7 @@ async fn a_repaired_config_after_planning_does_not_strand_a_later_input() {
 }
 
 struct ChangingEveryPlan {
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     calls: Arc<AtomicUsize>,
 }
 

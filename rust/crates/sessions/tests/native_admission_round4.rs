@@ -78,7 +78,7 @@ fn send_input(content: &str, input_id: &str, frozen: Map<String, Value>) -> Send
     }
 }
 
-fn fixture() -> (SqliteStore, AgentSessionService) {
+fn fixture() -> (SqliteStore, AgentSessionService<SqliteStore>) {
     let store = SqliteStore::memory(32).unwrap();
     let service = AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),
@@ -89,7 +89,7 @@ fn fixture() -> (SqliteStore, AgentSessionService) {
     (store, service)
 }
 
-async fn create(service: &AgentSessionService) {
+async fn create(service: &AgentSessionService<SqliteStore>) {
     service
         .create_session(&CreateSessionInput {
             session_id: Some("native-chat".into()),

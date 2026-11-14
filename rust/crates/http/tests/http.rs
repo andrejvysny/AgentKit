@@ -1,8 +1,8 @@
 use agentkit_chat::ChatExecutor;
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_engine::{SystemRuntime, TaskExecutor};
 use agentkit_http::{Actor, Config, DesktopBackend};
-use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::SqliteStore;
 use serde_json::{Value, json};
 use std::{

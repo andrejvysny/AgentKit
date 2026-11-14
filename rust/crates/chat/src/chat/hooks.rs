@@ -11,7 +11,7 @@ use std::{collections::HashMap, future::Future, time::Duration};
 #[derive(Clone)]
 pub struct ChatExecutorOptions {
     pub context: Option<Arc<dyn ContextProvider>>,
-    pub content_authority: Option<Arc<dyn crate::ContentAuthority>>,
+    pub content_authority: Option<Arc<dyn ContentAuthority<StoreError>>>,
     pub attachments: Option<Arc<dyn AttachmentResolver>>,
     pub usage: Option<Arc<dyn UsageAuthorizer>>,
     pub provider_factory: Option<Arc<dyn ChatProviderFactory>>,
@@ -456,7 +456,7 @@ pub(super) async fn stage_registry(
 
 struct ProviderRequestGuard {
     context: ExecutionContext,
-    authority: Option<Arc<dyn crate::ContentAuthority>>,
+    authority: Option<Arc<dyn ContentAuthority<StoreError>>>,
     previous: Option<Arc<dyn agentkit_core::DispatchGuard>>,
 }
 impl std::fmt::Debug for ProviderRequestGuard {

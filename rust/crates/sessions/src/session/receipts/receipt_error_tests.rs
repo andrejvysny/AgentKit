@@ -1,5 +1,5 @@
 use super::*;
-use agentkit_store::ReceiptTransitionReason;
+use agentkit_store::{ReceiptTransitionReason, StoreError};
 use std::error::Error;
 
 #[test]

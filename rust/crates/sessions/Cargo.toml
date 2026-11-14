@@ -14,12 +14,10 @@ workspace = true
 
 [dependencies]
 agentkit-core = { workspace = true }
+agentkit-contracts = { workspace = true }
 agentkit-engine = { workspace = true }
-agentkit-governance = { workspace = true }
 agentkit-kernel = { workspace = true }
 agentkit-native = { workspace = true }
-# Transitional: the session service still drives SqliteStore directly (ADR 0024).
-agentkit-store = { workspace = true }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,5 +27,6 @@ tokio-util = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 futures.workspace = true
+agentkit-store = { workspace = true }
 agentkit-testkit = { workspace = true }
 tempfile.workspace = true

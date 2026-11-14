@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use agentkit_agents::AdvisorEventSink;
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_chat::{ChatExecutor, ChatExecutorOptions, ProviderRegistry};
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
@@ -28,8 +29,8 @@ use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard}
 use agentkit_native_exec::{NativeAgentExecutor, NativeDispatchExecutor};
 use agentkit_providers::NativeProviderFactory;
 use agentkit_sessions::{
-    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ContentAuthority,
-    HostOptions, ProfileRegistry,
+    AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ContentAuthority,
+    ProfileRegistry,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -63,7 +64,7 @@ pub struct AgentRuntimeBuilder {
     additional_providers: Vec<Arc<dyn ChatProvider>>,
     extra_contributors: Vec<Arc<dyn ToolContributor>>,
     external_tools: Option<ExternalToolsPolicy>,
-    content_authority: Option<Arc<dyn ContentAuthority>>,
+    content_authority: Option<Arc<dyn ContentAuthority<agentkit_store::StoreError>>>,
     profiles: Vec<Value>,
     subagent_max_concurrency: i64,
     plan: PlanConfiguration,
@@ -137,7 +138,10 @@ impl AgentRuntimeBuilder {
         self
     }
 
-    pub fn content_authority(mut self, authority: Arc<dyn ContentAuthority>) -> Self {
+    pub fn content_authority(
+        mut self,
+        authority: Arc<dyn ContentAuthority<agentkit_store::StoreError>>,
+    ) -> Self {
         self.content_authority = Some(authority);
         self
     }
@@ -320,7 +324,9 @@ impl AgentRuntimeBuilder {
             NativeProviderFactory::default()
                 .with_static_provider_ids(registry.ids().map(str::to_owned).collect()),
         );
-        let profiles = Arc::new(ProfileRegistry::new(&profiles)?);
+        let profiles = Arc::new(ProfileRegistry::new(&profiles).map_err(|error| {
+            RuntimeError::Sessions(agentkit_sessions::SessionsError::from_faultless(error))
+        })?);
         let mut tool_contributors = extra_contributors;
         tool_contributors.extend([
             // The Rust coding toolpack, once registered, joins the SAME

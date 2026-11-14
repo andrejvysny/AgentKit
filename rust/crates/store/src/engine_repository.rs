@@ -2,10 +2,11 @@
 //! the `agentkit_engine::TaskRepository` port).
 
 use crate::{
-    ClaimInput, ClaimedTask, EventRecord, Lease, LeaseFence, RecoveryMode, RetryTask, SettleTask,
-    SqliteStore, StoreError, SubmitTask, TaskRecord,
+    ClaimInput, ClaimedTask, EventRecord, Lease, LeaseFence, ManagedInputReason,
+    ReceiptTransitionReason, RecoveryMode, RetryTask, SettleTask, SqliteStore, StoreError,
+    SubmitTask, TaskRecord,
 };
-use agentkit_engine::{EngineError, RepositoryFault, SessionSettlement, TaskRepository};
+use agentkit_engine::{EngineError, RepositoryFault, TaskRepository};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -58,6 +59,114 @@ impl RepositoryFault for StoreError {
             _ => None,
         }
     }
+
+    fn not_found(&self) -> Option<&str> {
+        match self {
+            Self::NotFound(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn input_conflict(&self) -> Option<&str> {
+        match self {
+            Self::Duplicate(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn answer_conflict(&self) -> Option<&str> {
+        match self {
+            Self::AnswerConflict(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn scope_busy(&self) -> Option<&str> {
+        match self {
+            Self::ScopeBusy(scope) => Some(scope),
+            _ => None,
+        }
+    }
+
+    fn answer_stale(&self) -> Option<&str> {
+        match self {
+            Self::AnswerStale(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn lease_lost_task(&self) -> Option<&str> {
+        match self {
+            Self::LeaseLost(task) => Some(task),
+            _ => None,
+        }
+    }
+
+    fn receipt_not_uncertain(&self) -> Option<&str> {
+        match self {
+            Self::ReceiptTransition {
+                reason: ReceiptTransitionReason::NotUncertain,
+                message,
+            } => Some(message),
+            _ => None,
+        }
+    }
+
+    fn receipt_run_active(&self) -> Option<&str> {
+        match self {
+            Self::ReceiptTransition {
+                reason: ReceiptTransitionReason::RunActive,
+                message,
+            } => Some(message),
+            _ => None,
+        }
+    }
+
+    fn selected_connector_required(&self) -> bool {
+        matches!(
+            self,
+            Self::ManagedInput {
+                reason: ManagedInputReason::SelectedConnectorRequired,
+                ..
+            }
+        )
+    }
+
+    fn invalid_transition(&self) -> Option<&str> {
+        match self {
+            Self::InvalidTransition(message) | Self::AgentInputTransition(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn concurrent_modification(&self) -> Option<&str> {
+        match self {
+            Self::Conflict(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn environmental_class(&self) -> Option<&'static str> {
+        match self {
+            Self::Database(_) => Some("database"),
+            Self::Io(_) => Some("filesystem"),
+            Self::Json(_) => Some("serialization"),
+            _ => None,
+        }
+    }
+
+    fn label(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidImport { .. } => Some("invalid import"),
+            Self::RecoveryUnreadable(_) => Some("recovery evidence unreadable"),
+            Self::Internal(_) => Some("internal store error"),
+            _ => None,
+        }
+    }
+
+    fn is_environmental(&self) -> bool {
+        matches!(self, Self::Database(_) | Self::Io(_) | Self::Json(_))
+    }
 }
 
 impl From<StoreError> for EngineError<StoreError> {
@@ -66,27 +175,11 @@ impl From<StoreError> for EngineError<StoreError> {
     }
 }
 
-impl SessionSettlement for crate::SessionSettle {
-    fn staged_kinds(&self) -> Vec<String> {
-        self.convert
-            .iter()
-            .map(|candidate| candidate.task.kind.clone())
-            .chain(self.staging.iter().map(|staging| staging.kind.clone()))
-            .collect()
-    }
-
-    fn without_promotion(self) -> Self {
-        Self {
-            convert: vec![],
-            staging: None,
-            expected_descriptor: self.expected_descriptor,
-        }
-    }
-}
-
 #[async_trait]
 impl TaskRepository for SqliteStore {
     type Error = StoreError;
+    /// The settlement record is the sessions context's; its
+    /// `SessionSettlement` implementation lives there (ADR 0024 §2).
     type SessionSettle = crate::SessionSettle;
 
     async fn submit(&self, input: SubmitTask) -> Result<TaskRecord, StoreError> {

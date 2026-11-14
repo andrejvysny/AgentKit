@@ -193,12 +193,12 @@ async fn deliver(
 /// Connector grants come only from the host callback, never the user request.
 pub(crate) struct JsContentAuthority(pub Arc<JsBridge>);
 #[async_trait::async_trait]
-impl agentkit_sessions::ContentAuthority for JsContentAuthority {
+impl agentkit_sessions::ContentAuthority<agentkit_store::StoreError> for JsContentAuthority {
     async fn authorized_connectors(
         &self,
         chat_id: &str,
         cancel: CancellationToken,
-    ) -> agentkit_sessions::SessionsResult<Vec<String>> {
+    ) -> agentkit_sessions::SessionsResult<Vec<String>, agentkit_store::StoreError> {
         let value = self
             .0
             .clone()
@@ -218,7 +218,7 @@ impl agentkit_sessions::ContentAuthority for JsContentAuthority {
         chat_id: &str,
         required_connectors: &[String],
         cancel: CancellationToken,
-    ) -> agentkit_sessions::SessionsResult<Value> {
+    ) -> agentkit_sessions::SessionsResult<Value, agentkit_store::StoreError> {
         self.0.clone().request(PendingKind::ContentAuthority, &uuid::Uuid::new_v4().to_string(), &json!({"operation":"identity","chatId":chat_id,"requiredConnectors":required_connectors}), &cancel).await.map_err(agentkit_sessions::SessionsError::ContentAuthorityCallback)
     }
 }

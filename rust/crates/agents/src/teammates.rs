@@ -1,7 +1,7 @@
 //! Durable teammate admission and run ownership (AGENTKIT-88): the
 //! service boundary over the store's admission ledger, mailbox, and
 //! attempt fencing — on the EXISTING [`agentkit_store`] task engine and
-//! the host [`agentkit_sessions::AgentHost`] runner. No second queue, no second task
+//! the host [`agentkit_chat::AgentHost`] runner. No second queue, no second task
 //! store.
 //!
 //! What this layer guarantees, on top of the store primitives:

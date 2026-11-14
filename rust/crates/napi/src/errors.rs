@@ -193,7 +193,7 @@ pub fn managed_store(error: agentkit_store::StoreError) -> Error {
     store_port(error, "invalid_state", "invalid_input")
 }
 
-pub fn session(error: agentkit_sessions::SessionsError) -> Error {
+pub fn session(error: agentkit_sessions::SessionsError<agentkit_store::StoreError>) -> Error {
     use agentkit_sessions::SessionsError as S;
     match error {
         S::InvalidInput(message) => stable("invalid_input", message, None),
@@ -262,7 +262,7 @@ pub fn host(error: agentkit_engine::EngineError<agentkit_store::StoreError>) -> 
         other => stable("internal_error", other.to_string(), None),
     }
 }
-pub fn sessions(error: agentkit_sessions::SessionsError) -> Error {
+pub fn sessions(error: agentkit_sessions::SessionsError<agentkit_store::StoreError>) -> Error {
     use agentkit_sessions::SessionsError as S;
     match error {
         S::Engine(error) => host(error),

@@ -10,15 +10,14 @@
 //! decision with process defaults.
 
 use agentkit_engine::SystemRuntime;
-use agentkit_sessions::{
-    AgentSessionService, AgentSessionServiceDeps, CodingPermissionAuthority, CreateSessionInput,
-    PermissionContext, SessionExecutionAuthority,
-};
+use agentkit_governance::{CodingPermissionAuthority, PermissionContext};
+use agentkit_runtime::SessionExecutionAuthority;
+use agentkit_sessions::{AgentSessionService, AgentSessionServiceDeps, CreateSessionInput};
 use agentkit_store::{EXECUTION_METADATA_KEY, SqliteStore};
 use serde_json::json;
 use std::sync::Arc;
 
-fn fixture() -> (SqliteStore, AgentSessionService) {
+fn fixture() -> (SqliteStore, AgentSessionService<SqliteStore>) {
     let store = SqliteStore::memory(8).unwrap();
     let service = AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),

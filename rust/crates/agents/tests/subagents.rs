@@ -89,7 +89,7 @@ impl ChatProvider for Child {
 
 struct Harness {
     store: SqliteStore,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     subagents: SubagentService,
     child: Arc<Child>,
     workspace: String,

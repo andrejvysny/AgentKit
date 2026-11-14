@@ -39,9 +39,19 @@ use tokio_util::sync::CancellationToken;
 use agentkit_engine::{ExecutionFailure, TaskExecutor, VerificationHook, VerificationReport};
 
 use agentkit_sessions::{
-    AgentHost, CHAT_TURN_TASK_KIND, ChatProviderFactory, ContentAuthority, ExecutionContext,
-    RunHandle, VerificationInput, read_session_descriptor,
+    CHAT_TURN_TASK_KIND, ChatProviderFactory, ContentAuthority, read_session_descriptor,
 };
+
+/// The engine's generic types at the one repository the product ships: the
+/// SQLite adapter (ADR 0024 §2). The adapter arrives from the composition
+/// root; these names exist so the context's signatures say the repository
+/// once, in this file, rather than at every call site.
+pub type AgentHost = agentkit_engine::AgentHost<agentkit_store::SqliteStore>;
+pub type ExecutionContext = agentkit_engine::ExecutionContext<agentkit_store::SqliteStore>;
+pub type HostOptions = agentkit_engine::HostOptions<agentkit_store::SqliteStore>;
+pub type RunHandle = agentkit_engine::RunHandle<agentkit_store::SqliteStore>;
+pub type VerificationInput = agentkit_engine::VerificationInput<agentkit_store::SqliteStore>;
+pub type WorkerHandle = agentkit_engine::WorkerHandle<agentkit_store::SqliteStore>;
 
 #[cfg(test)]
 use agentkit_engine::{Runtime, SystemRuntime};

@@ -3,13 +3,13 @@
 //! ledger), the project's context selection, and the task's overrides.
 //!
 //! This is the native profile service extended, not a parallel one: the
-//! resolver reads every input through the service that owns it —
-//! [`agentkit_store::SqliteStore::get_agent`] for the definition
+//! resolver reads every input through the repository port it is built on —
+//! `get_agent` for the definition
 //! revision, the AGENTKIT-65/68 provider catalogue and capability rows
 //! for model/provider capability, the AGENTKIT-80s managed-skill rows
 //! for pinned skill versions, the standing-grant machinery for approvals
-//! — and seals the result with the store's single digest authority
-//! ([`agentkit_store::run_profile_digest`]). The seal rides the SAME
+//! — and seals the result with the single digest authority
+//! ([`run_profile_digest`]). The seal rides the SAME
 //! admission transaction as the AGENTKIT-88 binding
 //! (`TeammateService::admit` (agentkit-agents)); revocation of anything referenced
 //! fences NEW dispatch through the store's one check-at-use evaluator.
@@ -36,9 +36,12 @@
 //! whitelisted metadata only (no `apiKey`, no headers), environment
 //! values are recorded as digests, and secret references stay references.
 
-use crate::{SessionsError, SessionsResult};
+use crate::{
+    AgentBudgets, AgentLifecycle, AgentRecord, RepositoryFault, SessionBackend, SessionFault,
+    SessionsError, SessionsResult, run_profile_digest,
+};
+use agentkit_engine::PinnedRunProfile;
 use agentkit_kernel::sha256_hex;
-use agentkit_store::{AgentBudgets, PinnedRunProfile, SqliteStore, run_profile_digest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
@@ -179,11 +182,11 @@ pub struct ApprovalGrantRef {
     pub digest: String,
 }
 
-fn refused(reason: impl std::fmt::Display) -> SessionsError {
+fn refused<E: RepositoryFault>(reason: impl std::fmt::Display) -> SessionsError<E> {
     SessionsError::RunProfileRefused(reason.to_string())
 }
 
-fn invalid_overrides(detail: impl std::fmt::Display) -> SessionsError {
+fn invalid_overrides<E: RepositoryFault>(detail: impl std::fmt::Display) -> SessionsError<E> {
     SessionsError::InvalidOverrides(detail.to_string())
 }
 
@@ -265,11 +268,11 @@ struct ResolvedProvider {
 
 /// Capability validated BEFORE admission against recorded/pinned
 /// evidence; returns continuation compatibility.
-fn check_capability(
+fn check_capability<E: RepositoryFault>(
     resolved: &ResolvedProvider,
     task: &TaskProfileOverrides,
     tools: &[String],
-) -> SessionsResult<bool> {
+) -> SessionsResult<bool, E> {
     if !tools.is_empty()
         && (!resolved.tool_calling || resolved.supports_tool_calling_model == Some(false))
     {
@@ -286,11 +289,11 @@ fn check_capability(
 
 /// Bounded compilation. Never seals an over-budget profile: the kept
 /// total is re-derived from the keep flags and asserted against budget.
-fn compile_context(
+fn compile_context<E: RepositoryFault>(
     compiled: &mut [CompiledSource],
     budget: u64,
     truncate: bool,
-) -> SessionsResult<Option<Value>> {
+) -> SessionsResult<Option<Value>, E> {
     let all = |compiled: &[CompiledSource]| -> Vec<(bool, u64)> {
         compiled
             .iter()
@@ -477,20 +480,20 @@ struct CompiledSource {
 }
 
 #[derive(Clone)]
-pub struct RunProfileService {
-    store: SqliteStore,
+pub struct RunProfileService<R: SessionBackend> {
+    store: R,
     defaults: RunProfileDefaults,
 }
 
-impl RunProfileService {
-    /// Build the resolver over the host's existing store and the host's
+impl<R: SessionBackend> RunProfileService<R> {
+    /// Build the resolver over the host's existing repository and the host's
     /// default layer. No new registry: every durable read goes to the
-    /// service that owns the data.
-    pub fn new(store: SqliteStore, defaults: RunProfileDefaults) -> Self {
+    /// port that owns the data.
+    pub fn new(store: R, defaults: RunProfileDefaults) -> Self {
         Self { store, defaults }
     }
 
-    pub fn store(&self) -> &SqliteStore {
+    pub fn store(&self) -> &R {
         &self.store
     }
 
@@ -506,7 +509,7 @@ impl RunProfileService {
         project: &ProjectSelection,
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
-    ) -> SessionsResult<PinnedRunProfile> {
+    ) -> SessionsResult<PinnedRunProfile, SessionFault<R>> {
         self.resolve_inner(agent_id, now, project, task, approvals, None)
             .await
     }
@@ -524,7 +527,7 @@ impl RunProfileService {
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
         host: &HostProviderPin,
-    ) -> SessionsResult<PinnedRunProfile> {
+    ) -> SessionsResult<PinnedRunProfile, SessionFault<R>> {
         self.resolve_inner(agent_id, now, project, task, approvals, Some(host))
             .await
     }
@@ -537,7 +540,7 @@ impl RunProfileService {
         task: &TaskProfileOverrides,
         approvals: &[ApprovalGrantRef],
         host: Option<&HostProviderPin>,
-    ) -> SessionsResult<PinnedRunProfile> {
+    ) -> SessionsResult<PinnedRunProfile, SessionFault<R>> {
         if task
             .truncation
             .as_ref()
@@ -550,7 +553,7 @@ impl RunProfileService {
             .get_agent(agent_id.to_string())
             .await
             .map_err(SessionsError::Store)?
-            .filter(|agent| agent.lifecycle != agentkit_store::AgentLifecycle::Deleted)
+            .filter(|agent| agent.lifecycle != AgentLifecycle::Deleted)
             .ok_or_else(|| SessionsError::AgentNotFound(agent_id.to_owned()))?;
         let mut provenance = serde_json::Map::new();
         let resolved = match host {
@@ -644,7 +647,7 @@ impl RunProfileService {
         host: &HostProviderPin,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> SessionsResult<ResolvedProvider> {
+    ) -> SessionsResult<ResolvedProvider, SessionFault<R>> {
         if host.provider_id.trim().is_empty() {
             return Err(refused("provider_unnamed"));
         }
@@ -693,10 +696,10 @@ impl RunProfileService {
     /// recorded-capability reads.
     async fn catalog_provider(
         &self,
-        agent: &agentkit_store::AgentRecord,
+        agent: &AgentRecord,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> SessionsResult<ResolvedProvider> {
+    ) -> SessionsResult<ResolvedProvider, SessionFault<R>> {
         // -- provider & routing: only explicitly configured fallbacks ---
         let provider_id = match task.provider_id.as_deref() {
             Some(requested) if requested != self.defaults.provider_id => {
@@ -786,10 +789,10 @@ impl RunProfileService {
     /// tool set, which must live inside the agent's ceiling.
     fn permissions(
         &self,
-        agent: &agentkit_store::AgentRecord,
+        agent: &AgentRecord,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> SessionsResult<(agentkit_core::permission::CodingMode, Vec<String>)> {
+    ) -> SessionsResult<(agentkit_core::permission::CodingMode, Vec<String>), SessionFault<R>> {
         let default_mode =
             agentkit_core::permission::CodingMode::parse(&self.defaults.permission_mode)
                 .ok_or_else(|| refused("default_permission_mode"))?;
@@ -870,8 +873,8 @@ impl RunProfileService {
     /// Skills: pinned versions resolve or the run refuses.
     async fn pinned_skills(
         &self,
-        agent: &agentkit_store::AgentRecord,
-    ) -> SessionsResult<Vec<Value>> {
+        agent: &AgentRecord,
+    ) -> SessionsResult<Vec<Value>, SessionFault<R>> {
         let mut skills = Vec::new();
         for selection in &agent.definition.skills {
             let entry = self
@@ -893,9 +896,9 @@ impl RunProfileService {
     /// Context sources: selection selects, grants authorize.
     async fn collect_sources(
         &self,
-        agent: &agentkit_store::AgentRecord,
+        agent: &AgentRecord,
         project: &ProjectSelection,
-    ) -> SessionsResult<Vec<CompiledSource>> {
+    ) -> SessionsResult<Vec<CompiledSource>, SessionFault<R>> {
         let mut compiled: Vec<CompiledSource> = Vec::new();
         for source in &project.sources {
             let granted = match source.kind {
@@ -940,10 +943,10 @@ impl RunProfileService {
 
     async fn skill_source_revision(
         &self,
-        agent: &agentkit_store::AgentRecord,
+        agent: &AgentRecord,
         source: &SelectedSource,
         units: &mut Vec<ContextUnit>,
-    ) -> SessionsResult<String> {
+    ) -> SessionsResult<String, SessionFault<R>> {
         let entry = self
             .store
             .get_skill(source.id.clone())
@@ -985,10 +988,10 @@ impl RunProfileService {
     /// requested and stored value must be positive.
     fn budgets(
         &self,
-        agent: &agentkit_store::AgentRecord,
+        agent: &AgentRecord,
         task: &TaskProfileOverrides,
         provenance: &mut serde_json::Map<String, Value>,
-    ) -> SessionsResult<serde_json::Map<String, Value>> {
+    ) -> SessionsResult<serde_json::Map<String, Value>, SessionFault<R>> {
         let mut budgets = serde_json::Map::new();
         let (a, d, t) = (
             &agent.definition.budgets,
@@ -1049,7 +1052,7 @@ impl RunProfileService {
     /// material (values, credentials, headers) and no private reasoning
     /// can ride along. The seal is recomputed before anything is said —
     /// an explanation never vouches for a tampered row.
-    pub async fn explain(&self, task_id: &str) -> SessionsResult<Option<Value>> {
+    pub async fn explain(&self, task_id: &str) -> SessionsResult<Option<Value>, SessionFault<R>> {
         let Some(task) = self
             .store
             .get_task(task_id)

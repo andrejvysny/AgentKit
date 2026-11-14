@@ -239,7 +239,7 @@ impl PlanApprovalPolicy for ModePolicy {
 struct Fixture {
     store: SqliteStore,
     host: AgentHost,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     hits: Arc<AtomicUsize>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     ask: Arc<AtomicBool>,

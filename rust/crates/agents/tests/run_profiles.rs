@@ -41,7 +41,7 @@ impl Runtime for FixedClock {
 }
 
 struct Fixture {
-    profiles: RunProfileService,
+    profiles: RunProfileService<SqliteStore>,
     teammates: TeammateService,
     store: SqliteStore,
 }
@@ -909,7 +909,7 @@ async fn host_resolve(
     project: &ProjectSelection,
     task: &TaskProfileOverrides,
     pin: &HostProviderPin,
-) -> Result<PinnedRunProfile, agentkit_sessions::SessionsError> {
+) -> Result<PinnedRunProfile, agentkit_sessions::SessionsError<agentkit_store::StoreError>> {
     fixture
         .profiles
         .resolve_with_host_provider("alice", 1_000, project, task, &[], pin)

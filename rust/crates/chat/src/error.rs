@@ -7,7 +7,7 @@ pub enum ChatError {
     #[error("{0}")]
     Engine(#[source] agentkit_engine::EngineError<StoreError>),
     #[error("{0}")]
-    Sessions(#[source] agentkit_sessions::SessionsError),
+    Sessions(#[source] agentkit_sessions::SessionsError<StoreError>),
     #[error("{0}")]
     Store(#[from] StoreError),
     #[error("{0}")]
@@ -216,13 +216,22 @@ impl From<agentkit_engine::EngineError<StoreError>> for ChatError {
         }
     }
 }
-impl From<agentkit_sessions::SessionsError> for ChatError {
-    fn from(error: agentkit_sessions::SessionsError) -> Self {
+impl From<agentkit_sessions::SessionsError<StoreError>> for ChatError {
+    fn from(error: agentkit_sessions::SessionsError<StoreError>) -> Self {
         match error {
             agentkit_sessions::SessionsError::Engine(error) => error.into(),
             agentkit_sessions::SessionsError::Cancelled => Self::Cancelled,
             other => Self::Sessions(other),
         }
+    }
+}
+
+/// The same for a refusal that reports no adapter fault (a validator, a
+/// faultless port): lifted into the fault the session service reports, which
+/// loses nothing because the fault-carrying variants are uninhabited there.
+impl From<agentkit_sessions::SessionsError> for ChatError {
+    fn from(error: agentkit_sessions::SessionsError) -> Self {
+        Self::from(agentkit_sessions::SessionsError::<StoreError>::from_faultless(error))
     }
 }
 

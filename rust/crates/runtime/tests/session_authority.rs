@@ -4,12 +4,14 @@
 //! per-call approval lets the real write tool touch the workspace — under a
 //! durable receipt, with the human approving the exact bytes.
 
+use agentkit_chat::AgentHost;
 use agentkit_chat::{ChatExecutor, ChatExecutorOptions};
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
+use agentkit_runtime::SessionExecutionAuthority;
 use agentkit_sessions::{
-    AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND,
-    CreateSessionInput, PlanApprovalPolicy, SessionExecutionAuthority, WhenBusy,
+    AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, CreateSessionInput,
+    PlanApprovalPolicy, WhenBusy,
 };
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, ExecutionReceiptStatus, SqliteStore,
@@ -101,7 +103,7 @@ impl PlanApprovalPolicy for ToAsk {
 struct Fixture {
     store: SqliteStore,
     host: AgentHost,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     workspace: std::path::PathBuf,
 }
@@ -185,7 +187,7 @@ async fn fixture_opts(
         store.clone(),
         HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
         runtime,
-        agentkit_sessions::HostOptions::default(),
+        agentkit_chat::HostOptions::default(),
     )
     .unwrap();
     host.set_session_flush_planner(Arc::new(service.clone()))

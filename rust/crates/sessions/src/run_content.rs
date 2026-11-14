@@ -1,8 +1,7 @@
 //! Selected managed content is frozen before turn admission, outside chat history.
-use crate::{ExecutionContext, SessionsError, SessionsResult};
+use crate::{RepositoryFault, SessionBackend, SessionFault, SessionsError, SessionsResult};
 use agentkit_core::ChatMessage;
 use agentkit_kernel::sha256_hex;
-use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,20 +9,20 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[async_trait]
-pub trait ContentAuthority: Send + Sync {
+pub trait ContentAuthority<E: RepositoryFault>: Send + Sync {
     /// Host-selected, authorized connector identities. User content grants nothing.
     async fn authorized_connectors(
         &self,
         chat_id: &str,
         cancel: CancellationToken,
-    ) -> SessionsResult<Vec<String>>;
+    ) -> SessionsResult<Vec<String>, E>;
     /// Hosts with account-scoped grants return their exact selected grant identities.
     async fn authority_identity(
         &self,
         _chat_id: &str,
         required_connectors: &[String],
         _cancel: CancellationToken,
-    ) -> SessionsResult<Value> {
+    ) -> SessionsResult<Value, E> {
         Ok(serde_json::json!(required_connectors))
     }
 }
@@ -53,12 +52,12 @@ pub struct FrozenRunContent {
     pub digest: String,
 }
 
-pub async fn freeze_run_content(
-    store: &SqliteStore,
+pub async fn freeze_run_content<R: SessionBackend>(
+    store: &R,
     selection: Value,
     chat_id: &str,
-    authority: Option<&Arc<dyn ContentAuthority>>,
-) -> SessionsResult<Value> {
+    authority: Option<&Arc<dyn ContentAuthority<SessionFault<R>>>>,
+) -> SessionsResult<Value, SessionFault<R>> {
     let selection: RunContentSelection = serde_json::from_value(selection)
         .map_err(|e| SessionsError::InvalidContentSelectionDetail(e.to_string()))?;
     if selection.skills.len() > 20
@@ -77,10 +76,9 @@ pub async fn freeze_run_content(
         .await
     {
         Ok(resolved) => resolved,
-        Err(agentkit_store::StoreError::ManagedInput {
-            reason: agentkit_store::ManagedInputReason::SelectedConnectorRequired,
-            ..
-        }) => {
+        // The selection names managed content the host has not authorized
+        // yet: ask the host for its grants and resolve once more.
+        Err(error) if error.selected_connector_required() => {
             let grants = match authority {
                 Some(authority) => tokio::time::timeout(
                     std::time::Duration::from_secs(10),
@@ -139,10 +137,10 @@ pub async fn freeze_run_content(
     serde_json::to_value(snapshot).map_err(SessionsError::Json)
 }
 
-pub async fn selected_messages(
-    context: &ExecutionContext,
-    authority: Option<&Arc<dyn ContentAuthority>>,
-) -> SessionsResult<Vec<ChatMessage>> {
+pub async fn selected_messages<R: SessionBackend>(
+    context: &agentkit_engine::ExecutionContext<R>,
+    authority: Option<&Arc<dyn ContentAuthority<SessionFault<R>>>>,
+) -> SessionsResult<Vec<ChatMessage>, SessionFault<R>> {
     let Some(value) = context
         .task
         .payload
@@ -159,7 +157,7 @@ pub async fn selected_messages(
         }
         return Ok(vec![]);
     };
-    let snapshot = validate_frozen_run_content(value)?;
+    let snapshot = validate_frozen_run_content(value).map_err(SessionsError::from_faultless)?;
     // Recheck authorization at every dispatch; frozen text never freezes a revoked grant.
     let cancel = context.cancellation.child_token();
     let _cancel_on_drop = cancel.clone().drop_guard();

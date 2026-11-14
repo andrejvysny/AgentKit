@@ -6,17 +6,18 @@
 //! it is audited inside the receipt itself.
 
 use super::AgentSessionService;
-use crate::{SessionsError, SessionsResult};
-use agentkit_core::{ToolLimits, ToolResult};
-use agentkit_store::{
-    ExecutionReceiptRecord, ExecutionReceiptStatus, ResolutionOutcome, ResolveExecution, StoreError,
+use crate::{
+    ExecutionReceiptRecord, ExecutionReceiptStatus, ReceiptStoreError, RepositoryFault,
+    ResolutionOutcome, ResolveExecution, SessionBackend, SessionFault, SessionsError,
+    SessionsResult,
 };
+use agentkit_core::{ToolLimits, ToolResult};
 use serde_json::Value;
 
 /// Wrap an operator-supplied completion in the model-facing `ToolResult`
 /// shape, so replay and history reconciliation read it like any recorded
 /// result. A string becomes the summary; any other JSON value becomes data.
-fn operator_tool_result(result: Value) -> Result<Value, SessionsError> {
+fn operator_tool_result<E: RepositoryFault>(result: Value) -> Result<Value, SessionsError<E>> {
     let (summary, data) = match result {
         Value::String(text) => (Some(text.clone()), Value::String(text)),
         other => (None, other),
@@ -36,17 +37,17 @@ fn operator_tool_result(result: Value) -> Result<Value, SessionsError> {
     .map_err(|error| SessionsError::invalid_input(format!("unserializable result: {error}")))
 }
 
-fn map_store_error(error: StoreError) -> SessionsError {
-    SessionsError::ReceiptStore(crate::ReceiptStoreError(error))
+fn map_store_error<E: RepositoryFault>(error: E) -> SessionsError<E> {
+    SessionsError::ReceiptStore(ReceiptStoreError(error))
 }
 
-impl AgentSessionService {
+impl<R: SessionBackend> AgentSessionService<R> {
     /// Uncertain receipts (`admitted`, no result) of the session's chat,
     /// oldest first.
     pub async fn list_uncertain_executions(
         &self,
         session_id: &str,
-    ) -> SessionsResult<Vec<ExecutionReceiptRecord>> {
+    ) -> SessionsResult<Vec<ExecutionReceiptRecord>, SessionFault<R>> {
         self.require_session(session_id).await?;
         let receipts = self
             .store()
@@ -70,7 +71,7 @@ impl AgentSessionService {
         result: Option<Value>,
         note: Option<String>,
         resolved_by: Option<String>,
-    ) -> SessionsResult<ExecutionReceiptRecord> {
+    ) -> SessionsResult<ExecutionReceiptRecord, SessionFault<R>> {
         self.require_session(session_id).await?;
         let receipt = self
             .store()
@@ -129,7 +130,7 @@ impl AgentSessionService {
         result: Option<Value>,
         note: Option<String>,
         resolved_by: Option<String>,
-    ) -> SessionsResult<ExecutionReceiptRecord> {
+    ) -> SessionsResult<ExecutionReceiptRecord, SessionFault<R>> {
         crate::receipts::resolve_uncertain_execution(
             self.store(),
             chat_id,

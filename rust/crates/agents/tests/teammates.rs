@@ -5,8 +5,8 @@
 //! that releases executor capacity while keeping run ownership.
 
 use agentkit_agents::*;
+use agentkit_chat::{AgentHost, ExecutionContext, HostOptions};
 use agentkit_engine::{Runtime, TaskExecutor};
-use agentkit_sessions::*;
 use agentkit_store::{
     AgentDefinition, AgentInputKind, AgentInputStatus, ClaimInput, CreateAgent, CreateAgentMailbox,
     SettleTask, SqliteStore, SubmitTask, TaskStatus,

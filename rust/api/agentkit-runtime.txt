@@ -7,7 +7,7 @@ pub agentkit_runtime::RuntimeError::Coded::code: alloc::string::String
 pub agentkit_runtime::RuntimeError::Coded::message: alloc::string::String
 pub agentkit_runtime::RuntimeError::Engine(agentkit_engine::error::EngineError<agentkit_store::StoreError>)
 pub agentkit_runtime::RuntimeError::InvalidInput(alloc::string::String)
-pub agentkit_runtime::RuntimeError::Sessions(agentkit_sessions::error::SessionsError)
+pub agentkit_runtime::RuntimeError::Sessions(agentkit_sessions::error::SessionsError<agentkit_store::StoreError>)
 pub struct agentkit_runtime::AdvisorLane
 impl agentkit_runtime::AdvisorLane
 pub fn agentkit_runtime::AdvisorLane::configure(&self, agentkit_agents::advisor::config::AdvisorConfig)
@@ -25,22 +25,22 @@ impl agentkit_runtime::AgentRuntime
 pub fn agentkit_runtime::AgentRuntime::advisor_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::AdvisorLane>
 pub fn agentkit_runtime::AgentRuntime::builder(agentkit_store::actor::SqliteStore) -> agentkit_runtime::AgentRuntimeBuilder
 pub fn agentkit_runtime::AgentRuntime::coding_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::CodingLane>
-pub fn agentkit_runtime::AgentRuntime::content_authority(&self) -> core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>>
-pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_sessions::store_aliases::AgentHost
+pub fn agentkit_runtime::AgentRuntime::content_authority(&self) -> core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>>
+pub fn agentkit_runtime::AgentRuntime::host(&self) -> &agentkit_chat::AgentHost
 pub fn agentkit_runtime::AgentRuntime::lsp_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::LspLane>
 pub fn agentkit_runtime::AgentRuntime::native_provider_factory(&self) -> &alloc::rcs::arc::Arc<agentkit_providers::native_provider_factory::NativeProviderFactory>
 pub fn agentkit_runtime::AgentRuntime::profiles(&self) -> &alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>
 pub fn agentkit_runtime::AgentRuntime::providers(&self) -> &alloc::rcs::arc::Arc<agentkit_chat::provider_registry::ProviderRegistry>
-pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_sessions::session::AgentSessionService
+pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_sessions::session::AgentSessionService<agentkit_store::actor::SqliteStore>
 pub fn agentkit_runtime::AgentRuntime::subagent_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::SubagentLane>
-pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_sessions::store_aliases::WorkerHandle>
+pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_chat::WorkerHandle>
 pub struct agentkit_runtime::AgentRuntimeBuilder
 impl agentkit_runtime::AgentRuntimeBuilder
 pub fn agentkit_runtime::AgentRuntimeBuilder::additional_providers(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::advisor_sink(self, alloc::rcs::arc::Arc<dyn agentkit_agents::advisor::engine::AdvisorEventSink>) -> Self
 pub async fn agentkit_runtime::AgentRuntimeBuilder::build(self) -> core::result::Result<agentkit_runtime::AgentRuntime, agentkit_runtime::RuntimeError>
 pub fn agentkit_runtime::AgentRuntimeBuilder::clock(self, agentkit_engine::ports::SharedRuntime) -> Self
-pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::default_provider(self, alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::executor(self, impl core::convert::Into<alloc::string::String>, alloc::rcs::arc::Arc<dyn agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::external_tools(self, agentkit_runtime::ExternalToolsPolicy) -> Self
@@ -81,6 +81,13 @@ pub fn agentkit_runtime::RefusingExecutor::new(impl core::convert::Into<alloc::s
 pub fn agentkit_runtime::RefusingExecutor::no_model_provider() -> Self
 impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_runtime::RefusingExecutor
 pub fn agentkit_runtime::RefusingExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_runtime::SessionExecutionAuthority<R: agentkit_sessions::repository::SessionBackend>
+impl<R: agentkit_sessions::repository::SessionBackend> agentkit_runtime::SessionExecutionAuthority<R>
+pub fn agentkit_runtime::SessionExecutionAuthority<R>::new(agentkit_sessions::session::AgentSessionService<R>) -> Self
+impl<R: agentkit_sessions::repository::SessionBackend> agentkit_governance::authority::CodingPermissionAuthority for agentkit_runtime::SessionExecutionAuthority<R>
+pub fn agentkit_runtime::SessionExecutionAuthority<R>::mode_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::authority::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<agentkit_core::permission::CodingMode>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_runtime::SessionExecutionAuthority<R>::plan_approved<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<bool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_runtime::SessionExecutionAuthority<R>::role_of<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::authority::PermissionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<agentkit_core::permission::CodingRole>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_runtime::SubagentLane
 impl agentkit_runtime::SubagentLane
 pub fn agentkit_runtime::SubagentLane::configure(&self, agentkit_agents::subagents::config::SubagentConfig)

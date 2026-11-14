@@ -8,13 +8,22 @@
 //! memory, for engine tests that need no database. [`scripted`] holds the
 //! scripted native ports (backend, supervisor, child, frame adapter,
 //! locator) and the scripted chat provider, so exactly one copy of them
-//! exists for the whole workspace.
+//! exists for the whole workspace. [`InMemorySessionRepository`] is the
+//! sessions context's `SessionRepository` held in memory; both it and
+//! [`InMemoryTaskRepository`] run one conformance suite each.
 
 pub mod conformance;
 mod memory;
 pub mod scripted;
+mod session_memory;
 
 pub use memory::{InMemoryRepositoryError, InMemorySessionSettle, InMemoryTaskRepository};
+pub use session_memory::{
+    CONTEXT_SUMMARIES_NAMESPACE, InMemorySessionFixture, InMemorySessionRepository,
+    InMemorySessionRepositoryError, PROMPT_TEMPLATES_NAMESPACE, PROVIDER_CAPABILITIES_NAMESPACE,
+    PROVIDERS_NAMESPACE, ReceiptRefusal,
+};
+
 pub use scripted::{
     SCRIPTED_BACKEND_ID, SCRIPTED_OBSERVED_MODEL, SCRIPTED_VERSION, ScriptedAdapter,
     ScriptedBackend, ScriptedChatProvider, ScriptedChild, ScriptedLocator, ScriptedSupervisor,

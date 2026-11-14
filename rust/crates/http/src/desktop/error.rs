@@ -2,9 +2,10 @@ use crate::Problem;
 use agentkit_agents::AgentsError;
 use agentkit_chat::ChatError;
 use agentkit_engine::EngineError as E;
-use agentkit_sessions::SessionsError as S;
+use agentkit_sessions::SessionsError;
 use agentkit_store::StoreError;
 type EngineStoreError = E<StoreError>;
+type SessionStoreFault = SessionsError<StoreError>;
 
 pub(super) fn store_error(error: StoreError) -> Problem {
     let code = match &error {
@@ -40,18 +41,20 @@ pub(super) fn host_error(error: EngineStoreError) -> Problem {
     }
 }
 
-pub(super) fn session_error(error: S) -> Problem {
+pub(super) fn session_error(error: SessionStoreFault) -> Problem {
     match error {
-        S::Engine(error) => host_error(error),
-        S::Store(error) => store_error(error),
+        SessionsError::Engine(error) => host_error(error),
+        SessionsError::Store(error) => store_error(error),
         other => Problem::host("internal_error", other.to_string()),
     }
 }
-pub(super) fn session_service_error(error: S) -> Problem {
+pub(super) fn session_service_error(error: SessionStoreFault) -> Problem {
     match error {
-        S::InvalidInput(message) => Problem::new(400, "invalid_request", message),
-        S::InvalidInputContext(source) => Problem::new(400, "invalid_request", source.to_string()),
-        S::SessionStore(agentkit_sessions::SessionStoreError(
+        SessionsError::InvalidInput(message) => Problem::new(400, "invalid_request", message),
+        SessionsError::InvalidInputContext(source) => {
+            Problem::new(400, "invalid_request", source.to_string())
+        }
+        SessionsError::SessionStore(agentkit_sessions::SessionStoreError(
             StoreError::InvalidInput(message)
             | StoreError::TaskInput { message, .. }
             | StoreError::ManagedInput { message, .. },
@@ -94,23 +97,25 @@ pub(super) fn teammate_problem(error: impl Into<AgentsError>) -> Problem {
         AgentsError::SubagentNotFound(id) => {
             Problem::new(404, "not_found", format!("subagent_not_found: {id}"))
         }
-        AgentsError::Sessions(S::InvalidOverrides(message)) => Problem::new(
+        AgentsError::Sessions(SessionsError::InvalidOverrides(message)) => Problem::new(
             400,
             "invalid_request",
             format!("invalid_overrides: {message}"),
         ),
-        AgentsError::Sessions(S::RunProfileRefused(message)) => Problem::new(
+        AgentsError::Sessions(SessionsError::RunProfileRefused(message)) => Problem::new(
             400,
             "invalid_request",
             format!("run_profile_refused:{message}"),
         ),
-        AgentsError::Sessions(S::AgentNotFound(id)) => {
+        AgentsError::Sessions(SessionsError::AgentNotFound(id)) => {
             Problem::new(404, "not_found", format!("agent {id}"))
         }
-        AgentsError::Sessions(S::TaskNotFound(id)) => {
+        AgentsError::Sessions(SessionsError::TaskNotFound(id)) => {
             Problem::new(404, "not_found", format!("task {id}"))
         }
-        AgentsError::Sessions(S::Store(error)) | AgentsError::Store(error) => teammate_store(error),
+        AgentsError::Sessions(SessionsError::Store(error)) | AgentsError::Store(error) => {
+            teammate_store(error)
+        }
         AgentsError::Engine(E::Store(error)) => teammate_store(error),
         AgentsError::Engine(error) => host_error(error),
         other => Problem::host("internal_error", other.to_string()),
@@ -173,14 +178,16 @@ pub(super) fn managed_validation_error(error: StoreError) -> Problem {
         other => managed_store_error(other),
     }
 }
-pub(super) fn provider_snapshot_error(error: S) -> Problem {
+/// A provider-snapshot authority refused the binding. The factory port
+/// reports no repository fault, so this is the faultless error flavour.
+pub(super) fn provider_snapshot_error(error: SessionsError) -> Problem {
     match error {
-        S::UnknownProvider => Problem::new(
+        SessionsError::UnknownProvider => Problem::new(
             400,
             "provider_not_bound",
             "Requested provider is not bound to this host executor.",
         ),
-        other => session_error(other),
+        other => session_error(SessionsError::from_faultless(other)),
     }
 }
 

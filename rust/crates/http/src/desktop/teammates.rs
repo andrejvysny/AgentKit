@@ -31,7 +31,7 @@ use agentkit_sessions::{
     ContextUnit, ContextUnitKind, ProjectSelection, RunProfileService, SelectedSource,
     SelectedSourceKind, TaskProfileOverrides,
 };
-use agentkit_store::{AgentDefinition, AgentRecord, TaskRecord, redact_event};
+use agentkit_store::{AgentDefinition, AgentRecord, SqliteStore, TaskRecord, redact_event};
 use serde_json::{Value, json};
 
 /// The caller's scope, derived ONLY from the authenticated actor: an
@@ -64,7 +64,7 @@ impl DesktopBackend {
         TeammateService::with_runtime(self.host.store().clone(), self.host.runtime().clone())
     }
 
-    fn profiles(&self) -> RunProfileService {
+    fn profiles(&self) -> RunProfileService<SqliteStore> {
         RunProfileService::new(
             self.host.store().clone(),
             self.run_profile_defaults.clone().unwrap_or_default(),

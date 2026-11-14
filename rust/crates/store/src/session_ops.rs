@@ -25,17 +25,22 @@ use crate::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
-/// Chat metadata key holding the session descriptor (ADR 0016 §1).
-pub const SESSION_METADATA_KEY: &str = "agentkit.session";
-/// Chat metadata key holding the compact-request marker (ADR 0017 part 2).
-pub const COMPACT_REQUESTED_METADATA_KEY: &str = "agentkit.session.compactRequestedAt";
-/// Chat metadata key holding the durable execution state (ADR 0019 part 2).
-pub const EXECUTION_METADATA_KEY: &str = "agentkit.session.execution";
-/// Chat metadata key holding the standing approvals.
-pub const STANDING_APPROVALS_METADATA_KEY: &str = "agentkit.session.approvals";
-
-/// Marks an approve answer in `appliedMessageId`: no tool record backs it.
-pub const APPROVE_MARKER: &str = "approval:";
+/// The chat-metadata vocabulary and its read/write rules are the sessions
+/// context's (ADR 0024 §2); this adapter applies them inside one transaction.
+pub use agentkit_sessions::{
+    APPROVE_MARKER, COMPACT_REQUESTED_METADATA_KEY, Decision, EXECUTION_METADATA_KEY,
+    ExecutionStateRead, SESSION_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY,
+    find_active_standing_grant, inspect_execution_state, is_approval_request, is_hex64,
+    parse_answer_expiry, plan_request_of, read_execution_state, read_standing_key, standing_grants,
+    with_execution, with_standing,
+};
+/// The settlement, admission and answer payloads are the sessions context's
+/// (ADR 0024 §2): the port speaks them, this adapter reads and writes them.
+pub use agentkit_sessions::{
+    AnswerHumanRequest, AnswerOutcome, AnswerReceipt, QueueAdmission, QueueOrStage, SessionSettle,
+    StageQueuedTurn, StagedCandidate, TurnStaging,
+};
+use agentkit_sessions::{execution_state_for_grant, read_decision as shared_read_decision};
 
 // ---------------------------------------------------------------------------
 // Chat metadata helpers (shared by the transactional writers below and by
@@ -52,316 +57,23 @@ fn set_metadata(db: &Connection, chat: &mut ChatRecord, metadata: Value, now: i6
     Ok(())
 }
 
-/// The state for a fresh explicit mode switch (entering plan mode drops the
-/// grant); `None` for an invalid mode (mirrors the `invalid_input` throws of
-/// `executionStateForMode`).
-pub fn execution_state_for_mode(
-    mode: &str,
-    updated_at: &str,
-    prior: Option<&Value>,
-) -> Option<Value> {
-    if mode.is_empty() {
-        return None;
-    }
-    let history = prior
-        .and_then(|state| state.get("history"))
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-    Some(json!({
-        "version": 1,
-        "mode": mode,
-        "updatedAt": updated_at,
-        "history": history,
-    }))
-}
-
-/// The session's execution state, or `None` when absent or malformed.
-pub fn read_execution_state(metadata: &Value) -> Option<Value> {
-    inspect_execution_state(metadata).ok()
-}
-
-/// Three-state read of the execution state. `Malformed` must be handled as
-/// blocking evidence — corrupt permission state is never "no decision yet",
-/// because a permissive configured fallback would then silently replace a
-/// human's recorded authority.
-#[derive(Debug)]
-pub enum ExecutionStateRead {
-    Absent,
-    Malformed,
-    Valid(Value),
-}
-
-impl ExecutionStateRead {
-    fn ok(self) -> Option<Value> {
-        match self {
-            Self::Valid(state) => Some(state),
-            Self::Absent | Self::Malformed => None,
-        }
-    }
-}
-
-pub fn inspect_execution_state(metadata: &Value) -> ExecutionStateRead {
-    if metadata
-        .get(EXECUTION_METADATA_KEY)
-        .is_none_or(Value::is_null)
-    {
-        return ExecutionStateRead::Absent;
-    }
-    match read_execution_state_inner(metadata) {
-        Some(state) => ExecutionStateRead::Valid(state),
-        None => ExecutionStateRead::Malformed,
-    }
-}
-
-fn read_execution_state_inner(metadata: &Value) -> Option<Value> {
-    let raw = metadata.get(EXECUTION_METADATA_KEY)?.as_object()?;
-    if raw.get("version")?.as_i64()? != 1 {
-        return None;
-    }
-    let mode = raw
-        .get("mode")?
-        .as_str()
-        .filter(|value| !value.is_empty())?;
-    let updated_at = raw.get("updatedAt")?.as_str()?;
-    let history_raw = match raw.get("history") {
-        None => None,
-        Some(Value::Array(entries)) => Some(entries),
-        Some(_) => return None,
-    };
-    let mut history = vec![];
-    // A malformed entry invalidates the whole state: a truncated audit trail
-    // is not something to hand a permission decision.
-    for entry in history_raw.unwrap_or(&vec![]) {
-        history.push(read_grant(entry)?);
-    }
-    let mut state =
-        json!({"version": 1, "mode": mode, "updatedAt": updated_at, "history": history});
-    if let Some(grant) = raw.get("grantedPlan") {
-        state["grantedPlan"] = read_grant(grant)?;
-    }
-    Some(state)
-}
-
-fn read_grant(raw: &Value) -> Option<Value> {
-    let grant = raw.as_object()?;
-    for key in ["mode", "planDigest"] {
-        if !grant
-            .get(key)?
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-        {
-            return None;
-        }
-    }
-    for key in ["requestId", "turnId", "approvedAt"] {
-        if !grant.get(key)?.is_string() {
-            return None;
-        }
-    }
-    for key in ["requestedMode", "plan"] {
-        // Compatibility note: early M2 could persist an absent optional as
-        // an explicit `null`. Neither field is ever authority (the mode a
-        // plan REQUESTED is recorded for the human, never obeyed; the plan
-        // text is a display copy), so reading a legacy null as "absent"
-        // repairs those records without widening any permission. A null
-        // on a REQUIRED field stays malformed.
-        if grant.get(key).is_some_and(|value| !value.is_null())
-            && grant.get(key).and_then(Value::as_str).is_none()
-        {
-            return None;
-        }
-    }
-    let mut grant = Value::Object(grant.clone());
-    if let Value::Object(object) = &mut grant {
-        for key in ["requestedMode", "plan"] {
-            if object.get(key).is_some_and(Value::is_null) {
-                object.remove(key);
-            }
-        }
-    }
-    Some(grant)
-}
-
-/// The metadata with its execution state replaced (`None` clears it).
-pub fn with_execution(metadata: &Value, state: Option<Value>) -> Value {
-    let mut next = metadata.as_object().cloned().unwrap_or_default();
-    match state {
-        None => {
-            next.remove(EXECUTION_METADATA_KEY);
-        }
-        Some(state) => {
-            next.insert(EXECUTION_METADATA_KEY.into(), state);
-        }
-    }
-    Value::Object(next)
-}
-
-const MAX_HISTORY: usize = 8;
-const MAX_STANDING_APPROVALS: usize = 256;
-
-/// The state produced by approving a plan; `None` for an invalid grant
-/// (mirrors the `invalid_input` throws of `executionStateForGrant`).
-fn execution_state_for_grant(grant: &Value, now_text: &str, prior: Option<Value>) -> Option<Value> {
-    let mode = grant.get("mode")?.as_str()?;
-    if mode == "plan" || mode.is_empty() {
-        return None;
-    }
-    let history = prior
-        .as_ref()
-        .and_then(|prior| prior.get("history"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut next = vec![grant.clone()];
-    next.extend(history);
-    next.truncate(MAX_HISTORY);
-    Some(json!({
-        "version": 1,
-        "mode": mode,
-        "grantedPlan": grant,
-        "updatedAt": now_text,
-        "history": next,
-    }))
-}
-
-fn is_hex64(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-}
-
-fn read_standing_grant(raw: &Value) -> Option<Value> {
-    let grant = raw.as_object()?;
-    if !grant
-        .get("grantId")?
-        .as_str()
-        .is_some_and(|value| !value.is_empty())
-    {
-        return None;
-    }
-    for key in [
-        "label",
-        "toolName",
-        "sourceRequestId",
-        "answerId",
-        "grantedAt",
-    ] {
-        if !grant.get(key)?.is_string() {
-            return None;
-        }
-    }
-    if !grant.get("digest")?.as_str().is_some_and(is_hex64) {
-        return None;
-    }
-    if let Some(revoked) = grant.get("revokedAt")
-        && revoked.as_str().is_none()
-    {
-        return None;
-    }
-    Some(Value::Object(grant.clone()))
-}
-
-enum StandingParse {
-    Ok(Vec<Value>),
-    Malformed,
-}
-
-fn parse_standing(metadata: &Value) -> StandingParse {
-    let Some(raw) = metadata.get(STANDING_APPROVALS_METADATA_KEY) else {
-        return StandingParse::Ok(vec![]);
-    };
-    let Some(raw) = raw.as_object() else {
-        return StandingParse::Malformed;
-    };
-    if raw.get("version").and_then(Value::as_i64) != Some(1) {
-        return StandingParse::Malformed;
-    }
-    let Some(list) = raw.get("grants").and_then(Value::as_array) else {
-        return StandingParse::Malformed;
-    };
-    if list.len() > MAX_STANDING_APPROVALS {
-        return StandingParse::Malformed;
-    }
-    let mut grants = vec![];
-    // One bad entry invalidates the whole list: a partly readable permission
-    // record is not something to match calls against.
-    for entry in list {
-        match read_standing_grant(entry) {
-            Some(grant) => grants.push(grant),
-            None => return StandingParse::Malformed,
-        }
-    }
-    StandingParse::Ok(grants)
-}
-
-/// The session's grants, oldest first. Absent is empty; MALFORMED IS ALSO
-/// EMPTY (fail closed for matching: unreadable permission data grants
-/// nothing). Writers use [`write_standing_grant`], which refuses malformed
-/// data instead.
-pub fn standing_grants(metadata: &Value) -> Vec<Value> {
-    match parse_standing(metadata) {
-        StandingParse::Ok(grants) => grants,
-        StandingParse::Malformed => vec![],
-    }
-}
-
-/// The active (not revoked) grant covering this digest, when there is one.
-pub fn find_active_standing_grant(metadata: &Value, digest: &str) -> Option<Value> {
-    standing_grants(metadata).into_iter().find(|grant| {
-        grant.get("digest").and_then(Value::as_str) == Some(digest)
-            && grant.get("revokedAt").is_none_or(Value::is_null)
-    })
-}
-
 fn writable_standing(metadata: &Value, session_id: &str) -> Result<Vec<Value>> {
-    match parse_standing(metadata) {
-        StandingParse::Ok(grants) => Ok(grants),
-        StandingParse::Malformed => Err(StoreError::InvalidInput(format!(
+    agentkit_sessions::writable_standing_grants(metadata).ok_or_else(|| {
+        StoreError::InvalidInput(format!(
             "The session's standing approvals are unreadable and were not overwritten. ({session_id})"
-        ))),
-    }
-}
-
-fn with_standing(metadata: &Value, grants: Vec<Value>) -> Value {
-    let mut next = metadata.as_object().cloned().unwrap_or_default();
-    next.insert(
-        STANDING_APPROVALS_METADATA_KEY.into(),
-        json!({"version": 1, "grants": grants}),
-    );
-    Value::Object(next)
+        ))
+    })
 }
 
 /// The grants after making room for one more; revoked grants drop oldest
 /// first, a full list of active ones refuses.
-fn make_room(mut grants: Vec<Value>, session_id: &str) -> Result<Vec<Value>> {
-    while grants.len() >= MAX_STANDING_APPROVALS {
-        let index = grants
-            .iter()
-            .position(|grant| grant.get("revokedAt").is_some_and(|value| !value.is_null()));
-        match index {
-            None => {
-                return Err(StoreError::InvalidInput(format!(
-                    "A session keeps at most {MAX_STANDING_APPROVALS} standing approvals; revoke one first. ({session_id})"
-                )));
-            }
-            Some(index) => {
-                grants.remove(index);
-            }
-        }
-    }
-    Ok(grants)
-}
-
-/// The `standing` object of a request's content, validated.
-pub fn read_standing_key(content: &Value) -> Option<(String, String)> {
-    let standing = content.get("standing")?.as_object()?;
-    let digest = standing.get("digest")?.as_str()?;
-    let label = standing.get("label")?.as_str()?;
-    if !is_hex64(digest) || label.is_empty() || label.chars().count() > 512 {
-        return None;
-    }
-    Some((digest.to_owned(), label.to_owned()))
+fn make_room(grants: Vec<Value>, session_id: &str) -> Result<Vec<Value>> {
+    agentkit_sessions::make_room(grants).ok_or_else(|| {
+        StoreError::InvalidInput(format!(
+            "A session keeps at most {} standing approvals; revoke one first. ({session_id})",
+            agentkit_sessions::MAX_STANDING_APPROVALS
+        ))
+    })
 }
 
 fn write_standing_grant(db: &Connection, session_id: &str, grant: &Value, now: i64) -> Result<()> {
@@ -386,78 +98,10 @@ fn write_standing_grant(db: &Connection, session_id: &str, grant: &Value, now: i
 // Approval request content helpers (shared with the host).
 // ---------------------------------------------------------------------------
 
-/// True when an answer to this request can only be `{ decision }`.
-pub fn is_approval_request(content: &Value) -> bool {
-    content.get("kind").and_then(Value::as_str) == Some("approval")
-}
-
-/// The plan a pending request asks to approve, per the tool-name policy
-/// (mirrors `planRequestOf`).
-pub fn plan_request_of(content: &Value, plan_tool_names: &[String]) -> Option<Value> {
-    if plan_tool_names.is_empty() || content.get("kind").and_then(Value::as_str) != Some("approval")
-    {
-        return None;
-    }
-    let tool_name = content.get("toolName")?.as_str()?;
-    if !plan_tool_names.iter().any(|name| name == tool_name) {
-        return None;
-    }
-    let plan_digest = content.get("argsSha256")?.as_str()?;
-    let mut plan = json!({"planDigest": plan_digest});
-    if let Some(mode) = content.get("requestedMode").and_then(Value::as_str) {
-        plan["requestedMode"] = mode.into();
-    }
-    if let Some(text) = content.get("prompt").and_then(Value::as_str) {
-        plan["plan"] = text.into();
-    }
-    Some(plan)
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct Decision {
-    approve: bool,
-    note: Option<String>,
-    remember: Option<bool>,
-}
-
-/// `{ decision: "approve" | "deny", note?, remember? }` only; anything else
-/// is `invalid_input`. `remember` is a boolean and only an approval may
-/// carry it: a denial has nothing to remember, and accepting the field there
-/// would let a typo read as consent.
+/// The answer-shape rule is the sessions context's; this adapter renders its
+/// refusal as its own invalid-input fault.
 fn read_decision(response: &Value) -> Result<Decision> {
-    let bad = || {
-        StoreError::InvalidInput(
-            "An approval answer must be { decision: \"approve\" | \"deny\", note?: string, remember?: boolean }; remember is only allowed with \"approve\".".into(),
-        )
-    };
-    let object = response.as_object().ok_or_else(bad)?;
-    let decision = object.get("decision").and_then(Value::as_str);
-    if decision != Some("approve") && decision != Some("deny") {
-        return Err(bad());
-    }
-    for key in object.keys() {
-        if !["decision", "note", "remember"].contains(&key.as_str()) {
-            return Err(bad());
-        }
-    }
-    let note = match object.get("note") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(note)) => Some(note.clone()),
-        Some(_) => return Err(bad()),
-    };
-    let remember = match object.get("remember") {
-        None | Some(Value::Null) => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => return Err(bad()),
-    };
-    if remember.is_some() && decision == Some("deny") {
-        return Err(bad());
-    }
-    Ok(Decision {
-        approve: decision == Some("approve"),
-        note,
-        remember,
-    })
+    shared_read_decision(response).map_err(StoreError::InvalidInput)
 }
 
 fn answer_envelope(response: &Value) -> String {
@@ -521,13 +165,6 @@ pub fn check_approval_answer_shape(content: &Value, response: &Value) -> Result<
     }
 }
 
-/// The epoch-millis instant a request's `expiresAt` wire text names (UTC
-/// when it carries no offset). The session layer's expiry gate shares the
-/// store's parser so both boundaries read the field identically.
-pub fn parse_answer_expiry(value: &str) -> Option<i64> {
-    parse_iso_millis(value)
-}
-
 fn append_answer(db: &Connection, input: &AppendAnswer, now: i64) -> Result<()> {
     let envelope = &input.envelope_json;
     let message = MessageInput {
@@ -583,49 +220,6 @@ pub(crate) fn last_message_of_run(
 // ---------------------------------------------------------------------------
 // Answer
 // ---------------------------------------------------------------------------
-
-/// One human answer to a `human_request` input, committed with every effect
-/// it authorizes (ADR 0016 §5). The host resolves the plan policy BEFORE the
-/// transaction (`policy_denial`, `granted_mode`); the authoritative grant
-/// write still happens here, against the record re-read inside.
-#[derive(Clone)]
-pub struct AnswerHumanRequest {
-    pub request_id: String,
-    pub answer_id: String,
-    /// The caller's JSON response (raw, before envelope wrapping).
-    pub response: Value,
-    /// sha-256 hex of the serialized response; duplicate detection and the
-    /// approve marker compare against it.
-    pub response_hash: String,
-    pub now: i64,
-    /// Id for the tool record a non-approval answer appends.
-    pub message_id: String,
-    /// Tool names whose approvable refusal is a PLAN approval.
-    pub plan_tool_names: Vec<String>,
-    /// Host plan-veto resolved before the transaction: the answer is forced
-    /// to deny with `plan_not_authorized: {reason}`.
-    pub policy_denial: Option<String>,
-    /// The mode already resolved from the plan policy; required when this
-    /// answer approves a plan.
-    pub granted_mode: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnswerReceipt {
-    pub request_id: String,
-    pub answer_id: String,
-    pub turn_id: String,
-    pub message_id: String,
-    /// True when this exact answer had already been recorded.
-    pub duplicate: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnswerOutcome {
-    pub receipt: AnswerReceipt,
-    /// Task to hand to the queue after the transaction commits.
-    pub enqueue: Option<(String, String)>,
-}
 
 impl SqliteStore {
     /// Record a human's answer and re-admit the parked task, all in ONE
@@ -1315,55 +909,6 @@ impl SqliteStore {
 // Session-aware settle (ADR 0016 §5): the store-side half of settling.
 // ---------------------------------------------------------------------------
 
-/// A follow-up the settling turn converts into a task on its way out.
-#[derive(Clone)]
-pub struct StagedCandidate {
-    pub input_id: String,
-    pub task: SubmitTask,
-    pub messages: Vec<MessageInput>,
-}
-
-/// The config every NEWLY STAGED turn of a session carries, captured from
-/// the session descriptor at the moment the task is created.
-///
-/// This is THE staging contract: normal submission, an explicit queue flush,
-/// settlement promotion, and the recovery of a half-admitted input all stamp
-/// a turn from this snapshot, so a promoted turn is what a submission made
-/// NOW would have staged. It exists because a settlement used to template
-/// its missed staging off the SETTLING task's payload — a turn created
-/// before a mid-flight `set_model` — and so handed the next turn a stale
-/// model. Nothing may clone a live task's payload to stage a new turn.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TurnStaging {
-    /// The task kind this session's turns run under.
-    pub kind: String,
-    /// The payload keys the descriptor carries at task creation (`chatId`,
-    /// `model`, `providerId`, `reasoningEffort`). Message ids are added per
-    /// promotion by [`stage_missed`].
-    pub config: Value,
-}
-
-/// The host-supplied conversion candidates, in queue order (follow-ups
-/// first, then steers not marked `cancel`). They are the settlement's
-/// preferred staging, not its whole decision: the settle transaction re-reads
-/// the queue itself and stages anything the snapshot could not have named
-/// (see `settle_session_inputs`), so no interleaving can leave a promotable
-/// input pending behind a terminal turn.
-#[derive(Clone)]
-pub struct SessionSettle {
-    pub convert: Vec<StagedCandidate>,
-    /// The exact persisted descriptor used by the session planner. The
-    /// transaction validates both promotion and refusal decisions against
-    /// this snapshot; even an unsupported config may become supported before
-    /// commit. `None` is for callers without a session descriptor.
-    pub expected_descriptor: Option<Value>,
-    /// The authoritative config for inputs the snapshot missed. `None`
-    /// promotes nothing missed — fail-closed, the inputs stay Pending and
-    /// visible for an explicit flush — because promoting without a current
-    /// descriptor is how a stale model gets stamped onto the next turn.
-    pub staging: Option<TurnStaging>,
-}
-
 pub(crate) fn settle_session_inputs(
     db: &Connection,
     task: &TaskRecord,
@@ -1788,22 +1333,6 @@ fn unrelated_live_task(
 // Queue flushing (the service's `flushQueue`)
 // ---------------------------------------------------------------------------
 
-/// Stage one queued input into a turn when the session's scope is free.
-/// The busy check and the conversion share one actor job, so a flush can
-/// never stage a second turn behind a running one.
-pub struct StageQueuedTurn {
-    pub session_id: String,
-    /// Task kind the busy check matches against (the session's turn kind).
-    pub task_kind: String,
-    /// The turn whose settlement triggered this flush (excluded from busy).
-    pub exclude_task_id: Option<String>,
-    pub input_id: String,
-    pub expected_kind: crate::agent_inputs::AgentInputKind,
-    pub task: SubmitTask,
-    pub messages: Vec<MessageInput>,
-    pub now: i64,
-}
-
 impl SqliteStore {
     /// Convert the given queued input into a turn, or return `None` when
     /// the scope is busy or the input is no longer pending in this session.
@@ -1946,30 +1475,6 @@ impl SqliteStore {
         })
         .await
     }
-}
-
-/// The input the unified admission writes, and the turn it becomes when the
-/// scope turns out to be free. See [`SqliteStore::queue_or_stage_turn`].
-pub struct QueueOrStage {
-    pub session_id: String,
-    /// The session's turn kind, whose settlement owns this input's promotion.
-    pub task_kind: String,
-    pub input: CreateAgentInput,
-    /// Fill a queued steer's target with the live turn the check finds.
-    pub target_the_live_turn: bool,
-    /// The fully staged turn, built by the host under [`TurnStaging`];
-    /// `None` when the content can never become a turn (the input then only
-    /// ever queues, and stays visible).
-    pub candidate: Option<StagedCandidate>,
-    pub now: i64,
-}
-
-/// What [`SqliteStore::queue_or_stage_turn`] committed.
-pub enum QueueAdmission {
-    /// Stored Pending behind a live turn (or already settled).
-    Queued(AgentInputRecord),
-    /// No active turn could claim it, so this write staged it.
-    Staged(TaskRecord),
 }
 
 impl SqliteStore {

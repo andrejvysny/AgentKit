@@ -1,8 +1,8 @@
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_chat::{ChatExecutor, ChatHostExt, SubmitChat};
 use agentkit_core::*;
 use agentkit_engine::TaskExecutor;
 use agentkit_providers::*;
-use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;
 use axum::{Json, Router, extract::State, routing::post};
@@ -192,7 +192,7 @@ struct VerifyOnce(std::sync::atomic::AtomicUsize);
 impl agentkit_engine::VerificationHook<agentkit_store::SqliteStore> for VerifyOnce {
     async fn verify(
         &self,
-        _: agentkit_sessions::ExecutionContext,
+        _: agentkit_chat::ExecutionContext,
     ) -> agentkit_engine::EngineResult<
         agentkit_engine::VerificationReport,
         agentkit_store::StoreError,

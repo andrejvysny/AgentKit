@@ -15,7 +15,7 @@ use agentkit_governance::{
     ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
 };
 use agentkit_sessions::AgentSessionService;
-use agentkit_store::TaskRecord;
+use agentkit_store::{SqliteStore, TaskRecord};
 use std::sync::Mutex as StdMutex;
 
 use crate::error::RuntimeError;
@@ -110,7 +110,7 @@ impl AdvisorLane {
         runtime: SharedRuntime,
         tools: Arc<dyn AdvisorToolSource>,
         events: Option<Arc<dyn AdvisorEventSink>>,
-        session: AgentSessionService,
+        session: AgentSessionService<SqliteStore>,
     ) -> Result<(), RuntimeError> {
         let mut slot = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_some() {

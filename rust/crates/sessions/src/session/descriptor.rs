@@ -42,7 +42,7 @@
 //! `null`-malformed split, so a malformed value can never be confused with an
 //! absent one.
 
-use agentkit_store::SESSION_METADATA_KEY;
+use crate::SESSION_METADATA_KEY;
 use serde_json::{Map, Value};
 
 pub const CHAT_TURN_TASK_KIND: &str = "chat.turn";
@@ -325,7 +325,7 @@ pub fn session_turn_kind(descriptor: &Value) -> String {
 /// recovery all stamp the same keys, and nothing else a turn may inherit.
 pub const TURN_CONFIG_KEYS: [&str; 3] = ["model", "reasoningEffort", "providerId"];
 
-/// The descriptor half of the staging contract ([`agentkit_store::TurnStaging`]):
+/// The descriptor half of the staging contract ([`crate::TurnStaging`]):
 /// the config a turn created NOW carries. Absent keys stay absent — a session
 /// with no `providerId` submits exactly what it always did.
 pub fn turn_config(descriptor: &Value) -> serde_json::Map<String, Value> {

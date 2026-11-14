@@ -19,20 +19,8 @@ const MAX_ACTOR_CHARS: usize = 200;
 /// Largest serialized operator-supplied result the receipt will carry.
 pub const MAX_RESOLUTION_RESULT_BYTES: usize = 262_144;
 
-/// Stable message prefix for "this receipt is not (or no longer) uncertain".
-pub const RECEIPT_NOT_UNCERTAIN: &str = "receipt_not_uncertain";
-/// Stable message prefix: the receipt's run may still execute its tool body.
-pub const RECEIPT_RUN_ACTIVE: &str = "receipt_run_active";
-
-#[derive(Clone, Debug)]
-pub struct ResolveExecution {
-    pub outcome: ResolutionOutcome,
-    /// Required (a tool-result object) for `Completed`; forbidden otherwise.
-    pub result: Option<serde_json::Value>,
-    pub note: Option<String>,
-    pub resolved_by: Option<String>,
-    pub now: i64,
-}
+/// The operator-resolution vocabulary is the sessions context's (ADR 0024 §2).
+pub use agentkit_sessions::{RECEIPT_NOT_UNCERTAIN, RECEIPT_RUN_ACTIVE, ResolveExecution};
 
 fn validate(request: &ResolveExecution) -> Result<(), StoreError> {
     let invalid = |message: &str| Err(StoreError::InvalidInput(message.into()));

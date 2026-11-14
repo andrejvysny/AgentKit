@@ -8,6 +8,7 @@ mod builder;
 mod error;
 mod lanes;
 mod runtime;
+mod session_execution_authority;
 mod workspace;
 
 pub use authority::{PlanConfiguration, effective_class};
@@ -19,3 +20,4 @@ pub use lanes::lsp::LspLane;
 pub use lanes::native::NativeLane;
 pub use lanes::subagent::SubagentLane;
 pub use runtime::AgentRuntime;
+pub use session_execution_authority::SessionExecutionAuthority;

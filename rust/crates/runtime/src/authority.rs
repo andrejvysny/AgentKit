@@ -12,6 +12,7 @@
 
 use std::sync::OnceLock;
 
+use crate::session_execution_authority::SessionExecutionAuthority;
 use agentkit_core::permission::{
     BlockedFinal, CodingMode, PLAN_MODE_BLOCKED_HINT, PermissionDecision, ToolClass,
     classify_capability, decide,
@@ -21,9 +22,9 @@ use agentkit_governance::{
     ToolGuardContext, ToolGuardVerdict,
 };
 use agentkit_sessions::{
-    AgentSessionService, PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent,
-    SessionExecutionAuthority, SessionsResult,
+    AgentSessionService, PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent, SessionsResult,
 };
+use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -37,7 +38,7 @@ pub(crate) const JS_NAMESPACE: &str = "js";
 /// Unbound means "no session-level decision yet": the guard falls back to
 /// its configured mode instead of guessing.
 pub(crate) struct BindingAuthority {
-    service: OnceLock<AgentSessionService>,
+    service: OnceLock<AgentSessionService<SqliteStore>>,
 }
 
 impl BindingAuthority {
@@ -48,11 +49,11 @@ impl BindingAuthority {
     }
 
     /// Called once during construction, before the worker starts.
-    pub(crate) fn bind(&self, service: AgentSessionService) {
+    pub(crate) fn bind(&self, service: AgentSessionService<SqliteStore>) {
         let _ = self.service.set(service);
     }
 
-    fn inner(&self) -> Option<SessionExecutionAuthority> {
+    fn inner(&self) -> Option<SessionExecutionAuthority<SqliteStore>> {
         self.service
             .get()
             .cloned()

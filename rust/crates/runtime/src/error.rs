@@ -17,7 +17,7 @@ pub enum RuntimeError {
     #[error("{0}")]
     Engine(#[from] EngineError<StoreError>),
     #[error("{0}")]
-    Sessions(#[from] agentkit_sessions::SessionsError),
+    Sessions(#[from] agentkit_sessions::SessionsError<StoreError>),
     #[error("{0}")]
     Chat(#[from] agentkit_chat::ChatError),
     /// Agents-context failures, including the unconfigured-lane sentinels
@@ -45,7 +45,7 @@ mod tests {
         let sessions = error
             .source()
             .unwrap()
-            .downcast_ref::<agentkit_sessions::SessionsError>()
+            .downcast_ref::<agentkit_sessions::SessionsError<agentkit_store::StoreError>>()
             .unwrap();
         assert!(
             sessions

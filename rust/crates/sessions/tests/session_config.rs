@@ -2,8 +2,8 @@
 
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_sessions::{
-    AgentHost, AgentSendResult, AgentSessionService, AgentSessionServiceDeps, CreateSessionInput,
-    ExecutionContext, HostOptions, SendInput, WhenBusy,
+    AgentSendResult, AgentSessionService, AgentSessionServiceDeps, CreateSessionInput, SendInput,
+    WhenBusy,
 };
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
@@ -16,9 +16,13 @@ use std::{
     },
 };
 
+type AgentHost = agentkit_engine::AgentHost<SqliteStore>;
+type ExecutionContext = agentkit_engine::ExecutionContext<SqliteStore>;
+type HostOptions = agentkit_engine::HostOptions<SqliteStore>;
+
 struct Fixture {
     store: SqliteStore,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
 }
 
 fn fixture() -> Fixture {
@@ -628,7 +632,7 @@ async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
     assert_eq!(turns.load(Ordering::SeqCst), 1);
 }
 
-fn session_message(error: &agentkit_sessions::SessionsError) -> String {
+fn session_message(error: &agentkit_sessions::SessionsError<agentkit_store::StoreError>) -> String {
     let display = error.to_string();
     let prefix = format!("{}: ", error.failure_event_code());
     display.strip_prefix(&prefix).unwrap_or(&display).to_owned()

@@ -57,7 +57,7 @@ pub agentkit_chat::ChatError::SessionContextInvalid
 pub agentkit_chat::ChatError::SessionDisappeared
 pub agentkit_chat::ChatError::SessionNotFound
 pub agentkit_chat::ChatError::SessionSubmissionRequired
-pub agentkit_chat::ChatError::Sessions(agentkit_sessions::error::SessionsError)
+pub agentkit_chat::ChatError::Sessions(agentkit_sessions::error::SessionsError<agentkit_store::StoreError>)
 pub agentkit_chat::ChatError::StatInstructionFile(core::io::error::Error)
 pub agentkit_chat::ChatError::Store(agentkit_store::StoreError)
 pub agentkit_chat::ChatError::SummarySourceHashFailed
@@ -69,6 +69,8 @@ impl core::convert::From<agentkit_chat::ChatError> for agentkit_engine::error::E
 pub fn agentkit_engine::error::EngineError<agentkit_store::StoreError>::from(agentkit_chat::ChatError) -> Self
 impl core::convert::From<agentkit_engine::error::EngineError<agentkit_store::StoreError>> for agentkit_chat::ChatError
 pub fn agentkit_chat::ChatError::from(agentkit_engine::error::EngineError<agentkit_store::StoreError>) -> Self
+impl core::convert::From<agentkit_sessions::error::SessionsError<agentkit_store::StoreError>> for agentkit_chat::ChatError
+pub fn agentkit_chat::ChatError::from(agentkit_sessions::error::SessionsError<agentkit_store::StoreError>) -> Self
 impl core::convert::From<agentkit_sessions::error::SessionsError> for agentkit_chat::ChatError
 pub fn agentkit_chat::ChatError::from(agentkit_sessions::error::SessionsError) -> Self
 pub struct agentkit_chat::AttachmentBudgets
@@ -85,7 +87,7 @@ pub fn agentkit_chat::ChatExecutor::new(alloc::rcs::arc::Arc<dyn agentkit_core::
 pub fn agentkit_chat::ChatExecutor::with_options(self, agentkit_chat::ChatExecutorOptions) -> Self
 pub fn agentkit_chat::ChatExecutor::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>) -> Self
 impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_chat::ChatExecutor
-pub fn agentkit_chat::ChatExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_sessions::store_aliases::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_chat::ChatExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_chat::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_chat::ChatExecutor::handles_verification(&self) -> bool
 pub fn agentkit_chat::ChatExecutor::resolves_provider_snapshots(&self) -> bool
 pub struct agentkit_chat::ChatExecutorOptions
@@ -94,7 +96,7 @@ pub agentkit_chat::ChatExecutorOptions::actor_id: core::option::Option<alloc::st
 pub agentkit_chat::ChatExecutorOptions::attachment_budgets: agentkit_chat::AttachmentBudgets
 pub agentkit_chat::ChatExecutorOptions::attachments: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::AttachmentResolver>>
 pub agentkit_chat::ChatExecutorOptions::auto_compaction: bool
-pub agentkit_chat::ChatExecutorOptions::content_authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>>
+pub agentkit_chat::ChatExecutorOptions::content_authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>>
 pub agentkit_chat::ChatExecutorOptions::context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ContextProvider>>
 pub agentkit_chat::ChatExecutorOptions::correction: core::option::Option<agentkit_chat::CorrectionConfig>
 pub agentkit_chat::ChatExecutorOptions::default_tool_timeout_ms: core::option::Option<u64>
@@ -166,10 +168,10 @@ pub trait agentkit_chat::AttachmentResolver: core::marker::Send + core::marker::
 pub fn agentkit_chat::AttachmentResolver::resolve<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_chat::AttachmentResolveContext, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ResolvedAttachment>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_chat::ChatHostExt
 pub fn agentkit_chat::ChatHostExt::resolves_provider_snapshots(&self) -> bool
-pub fn agentkit_chat::ChatHostExt::submit_chat<'life0, 'async_trait>(&'life0 self, agentkit_chat::SubmitChat) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_sessions::store_aliases::RunHandle>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl agentkit_chat::ChatHostExt for agentkit_sessions::store_aliases::AgentHost
-pub fn agentkit_sessions::store_aliases::AgentHost::resolves_provider_snapshots(&self) -> bool
-pub fn agentkit_sessions::store_aliases::AgentHost::submit_chat<'life0, 'async_trait>(&'life0 self, agentkit_chat::SubmitChat) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_sessions::store_aliases::RunHandle>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_chat::ChatHostExt::submit_chat<'life0, 'async_trait>(&'life0 self, agentkit_chat::SubmitChat) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_chat::RunHandle>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_chat::ChatHostExt for agentkit_chat::AgentHost
+pub fn agentkit_chat::AgentHost::resolves_provider_snapshots(&self) -> bool
+pub fn agentkit_chat::AgentHost::submit_chat<'life0, 'async_trait>(&'life0 self, agentkit_chat::SubmitChat) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_chat::RunHandle>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait agentkit_chat::ContextProvider: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::ContextProvider::resolve<'life0, 'async_trait>(&'life0 self, serde_json::value::Value, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<serde_json::value::Value>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait agentkit_chat::DelegationGuidance: core::marker::Send + core::marker::Sync
@@ -186,6 +188,12 @@ pub fn agentkit_chat::is_mutating_subagent_tool(&str) -> bool
 pub async fn agentkit_chat::load_project_instructions(&dyn agentkit_chat::ProjectInstructionsSource, &str, bool) -> core::option::Option<agentkit_chat::ProjectInstructionsBlock>
 pub fn agentkit_chat::looks_like_emulated_tool_call(&str, &std::collections::hash::set::HashSet<alloc::string::String>) -> bool
 pub fn agentkit_chat::parse_budget_limits(core::option::Option<&serde_json::value::Value>) -> agentkit_chat::ChatResult<agentkit_core::budget::BudgetLimits>
-pub async fn agentkit_chat::restore_execution_budget(&agentkit_sessions::store_aliases::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
+pub async fn agentkit_chat::restore_execution_budget(&agentkit_chat::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
 pub async fn agentkit_chat::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_chat::ChatResult<agentkit_chat::RoleTaskOverrides>
+pub type agentkit_chat::AgentHost = agentkit_engine::runner::AgentHost<agentkit_store::actor::SqliteStore>
 pub type agentkit_chat::ChatResult<T> = core::result::Result<T, agentkit_chat::ChatError>
+pub type agentkit_chat::ExecutionContext = agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>
+pub type agentkit_chat::HostOptions = agentkit_engine::runner::HostOptions<agentkit_store::actor::SqliteStore>
+pub type agentkit_chat::RunHandle = agentkit_engine::subscription::RunHandle<agentkit_store::actor::SqliteStore>
+pub type agentkit_chat::VerificationInput = agentkit_engine::ports::VerificationInput<agentkit_store::actor::SqliteStore>
+pub type agentkit_chat::WorkerHandle = agentkit_engine::runner::WorkerHandle<agentkit_store::actor::SqliteStore>

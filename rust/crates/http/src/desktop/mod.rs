@@ -18,7 +18,7 @@ mod teammates;
 mod turns;
 
 use crate::{Actor, Backend, OperationRequest, OperationResponse, Problem};
-use agentkit_sessions::AgentHost;
+use agentkit_chat::AgentHost;
 use agentkit_store::StoreError;
 use async_trait::async_trait;
 use axum::http::HeaderMap;
@@ -36,7 +36,8 @@ pub struct DesktopBackend {
     token: String,
     default_model: String,
     session_profile: Option<String>,
-    content_authority: Option<Arc<dyn agentkit_sessions::ContentAuthority>>,
+    content_authority:
+        Option<Arc<dyn agentkit_sessions::ContentAuthority<agentkit_store::StoreError>>>,
     profiles: Arc<agentkit_sessions::ProfileRegistry>,
     pinned_provider_id: Option<String>,
     allow_insecure_http: bool,
@@ -186,7 +187,7 @@ impl DesktopBackend {
 
     pub fn with_content_authority(
         mut self,
-        authority: Arc<dyn agentkit_sessions::ContentAuthority>,
+        authority: Arc<dyn agentkit_sessions::ContentAuthority<agentkit_store::StoreError>>,
     ) -> Self {
         self.content_authority = Some(authority);
         self

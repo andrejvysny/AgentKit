@@ -72,7 +72,7 @@ fn send_input(content: &str, input_id: &str, frozen: Map<String, Value>) -> Send
     }
 }
 
-fn fixture() -> (SqliteStore, AgentSessionService) {
+fn fixture() -> (SqliteStore, AgentSessionService<SqliteStore>) {
     let store = SqliteStore::memory(32).unwrap();
     let service = AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),
@@ -83,7 +83,7 @@ fn fixture() -> (SqliteStore, AgentSessionService) {
     (store, service)
 }
 
-async fn create(service: &AgentSessionService, native_execution: Option<Value>) {
+async fn create(service: &AgentSessionService<SqliteStore>, native_execution: Option<Value>) {
     let metadata = native_execution
         .map(|native| json!({"agentkit.nativeExecution": native}))
         .unwrap_or_else(|| json!({}));

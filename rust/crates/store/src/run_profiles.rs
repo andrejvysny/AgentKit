@@ -53,7 +53,6 @@
 use crate::{
     AgentRecord, ChatRecord, Result, StoreError, TaskRecord, find_active_standing_grant, util,
 };
-use agentkit_kernel::sha256_hex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -63,32 +62,10 @@ fn refused(reason: impl std::fmt::Display) -> StoreError {
     StoreError::InvalidInput(format!("run_profile_refused:{reason}"))
 }
 
-/// Canonical (recursively key-sorted) serialization digest of a profile
-/// document. The single digest authority: the resolver seals with it, the
-/// store recomputes it on every read, and a seal that does not match the
-/// bytes fails closed.
-pub fn run_profile_digest(profile: &Value) -> String {
-    let canonical = canonicalize(profile);
-    // Value serialization cannot fail; sorting keys makes it order-stable.
-    let text = serde_json::to_string(&canonical).expect("canonical profile serialization");
-    sha256_hex(text)
-}
-
-fn canonicalize(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut out = serde_json::Map::with_capacity(map.len());
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            for key in keys {
-                out.insert(key.clone(), canonicalize(&map[key]));
-            }
-            Value::Object(out)
-        }
-        Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
+/// The run-profile digest authority is the sessions context's (ADR 0024 §2):
+/// the resolver that seals the profile and this store that recomputes it on
+/// every read read it from one place.
+pub use agentkit_sessions::run_profile_digest;
 
 fn is_hex64(value: &Value) -> bool {
     value.as_str().is_some_and(|text| {

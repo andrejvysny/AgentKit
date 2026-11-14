@@ -70,3 +70,42 @@ the ports in `agentkit-native` the tests keep their concrete
 `NativeDispatchExecutor` are generic over the repository; the executor names
 neither `agentkit-store` nor `agentkit-native-broker` in its normal
 dependency graph.
+
+## Addendum (P5e-1): the sessions port (2026-11-14)
+
+Decision 1 is delivered for sessions: `agentkit_sessions::SessionRepository`
+(chats and their history, the steering input queue, the profile and catalog
+reads a turn is compiled from, and the execution receipts the service
+resolves) lives in `agentkit-sessions`, with `SessionBackend` / `SessionFault`
+tying it to `TaskRepository` — one backend, ONE shared fault type, so a
+session call always reports `SessionsError<SessionFault<R>>`. Decision 2 came
+with it: the records the port speaks in are sessions' own (`ChatRecord`,
+`MessageRecord`, `AgentInputRecord`, `AgentRecord`, `ExecutionReceiptRecord`,
+the queue/staging payloads); `agentkit-store` re-exports them, so no caller
+sees two types.
+
+One trait, not the `SessionRepo`/`InputQueue`/`ProfileRepo` split decision 1
+allowed for: those aggregates share their transactions (`queue_or_stage_turn`
+reads the chat to choose between queueing and staging; `patch_session`
+validates the descriptor it writes) and every consumer needs the whole
+surface, so a split would add bounds without narrowing anything.
+
+`RepositoryFault` gained the payload accessors a context needs to NAME a
+refusal (`not_found`, `input_conflict`, `answer_conflict`, `scope_busy`,
+`answer_stale`, `lease_lost_task`, `receipt_not_uncertain`,
+`receipt_run_active`, `selected_connector_required`) next to the `is_*`
+predicates that decide what to DO: `Display` renders the adapter's sentence,
+not the refusal's payload, so a context that reports a client-facing code
+needs the payload itself. Defaults are `None`/`false`; the conformance suite
+pins the answers, so an adapter cannot answer `None` and silently degrade a
+code. `StoreError::Duplicate` no longer crosses the boundary: re-presenting an
+input identity with different bytes is the session context's own refusal,
+`SessionsError::InputConflict`.
+
+`store_aliases.rs` is deleted, closing decision 5 for this context:
+`AgentHost`, `ExecutionContext`, `HostOptions`, `RunHandle`,
+`VerificationInput` and `WorkerHandle` are `agentkit-chat`'s aliases (it keeps
+its store edge), and `agentkit-sessions`' normal dependency graph no longer
+contains `agentkit-store` — the `R1b` allowlist entry for that edge is gone.
+Per decision 6, `agentkit-testkit` holds the in-memory twin and the suite both
+it and the SQLite adapter run.

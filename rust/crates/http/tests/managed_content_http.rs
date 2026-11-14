@@ -3,9 +3,9 @@
 //! now run on the shared store engine. These tests pin the frozen route
 //! contract: statuses, problem codes, redaction, and the documented
 //! MCP-OAuth reduction.
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_engine::SystemRuntime;
 use agentkit_http::{Actor, Config, DesktopBackend};
-use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::SqliteStore;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};

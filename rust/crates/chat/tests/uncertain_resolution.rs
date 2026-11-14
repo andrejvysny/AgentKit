@@ -99,7 +99,7 @@ impl Tool for Mutate {
 struct Fixture {
     store: SqliteStore,
     host: AgentHost,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     hits: Arc<AtomicUsize>,
     fail: Arc<AtomicBool>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
@@ -354,7 +354,7 @@ impl Fixture {
         id: &str,
         outcome: ResolutionOutcome,
         result: Option<Value>,
-    ) -> SessionsResult<agentkit_store::ExecutionReceiptRecord> {
+    ) -> SessionsResult<agentkit_store::ExecutionReceiptRecord, agentkit_store::StoreError> {
         self.service
             .resolve_uncertain_execution(
                 "s1",

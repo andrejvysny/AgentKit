@@ -23,6 +23,7 @@ mod provider_connections;
 mod run_profiles;
 mod schema;
 mod session_ops;
+mod sessions_repository;
 mod settings_commit;
 mod subagents;
 mod tasks;

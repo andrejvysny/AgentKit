@@ -42,7 +42,7 @@ struct TeammateServices {
     store: SqliteStore,
     agents: AgentDefinitionService,
     teammates: TeammateService,
-    profiles: RunProfileService,
+    profiles: RunProfileService<SqliteStore>,
 }
 
 impl NativeTeammates {

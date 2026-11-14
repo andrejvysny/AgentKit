@@ -11,7 +11,7 @@ pub enum AgentsError {
     #[error("{0}")]
     Engine(#[from] EngineError<StoreError>),
     #[error("{0}")]
-    Sessions(#[from] agentkit_sessions::SessionsError),
+    Sessions(#[source] agentkit_sessions::SessionsError<StoreError>),
     #[error("{0}")]
     Chat(#[from] agentkit_chat::ChatError),
     #[error("{0}")]
@@ -161,6 +161,12 @@ pub enum SnapshotError {
 #[error("workspace lease held by {holder}")]
 pub struct LeaseHeld {
     pub holder: String,
+}
+
+impl From<agentkit_sessions::SessionsError<StoreError>> for AgentsError {
+    fn from(error: agentkit_sessions::SessionsError<StoreError>) -> Self {
+        Self::Sessions(error)
+    }
 }
 
 /// Task observer boundaries unwrap engine, store, and cancellation failures.

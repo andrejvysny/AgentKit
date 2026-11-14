@@ -33,6 +33,87 @@ pub trait RepositoryFault: std::error::Error + Send + Sync + 'static {
     /// The scope whose session descriptor changed while staging a
     /// settlement, when this fault is that conflict.
     fn session_conflict(&self) -> Option<&str>;
+
+    // --- payloads of the refusals a CONTEXT projects ----------------------
+    //
+    // Branching on `is_*` is enough to decide what to DO; a context that
+    // also has to NAME the refusal (a failure code, a client message) needs
+    // the refusal's own text, which is not recoverable from `Display` —
+    // that renders the adapter's sentence, not the payload. One method per
+    // refusal any context projects; `None` means "this fault is not that
+    // refusal". The conformance suite pins every one of them, so a new
+    // adapter cannot answer `None` and silently degrade a client's code.
+
+    /// The record that was not found, when this fault is a `not found`.
+    fn not_found(&self) -> Option<&str> {
+        None
+    }
+    /// The rejected bytes of an idempotency replay: same identity,
+    /// different content. Distinct from an answer conflict.
+    fn input_conflict(&self) -> Option<&str> {
+        None
+    }
+    /// The refusal of a second answer to a request already answered.
+    fn answer_conflict(&self) -> Option<&str> {
+        None
+    }
+    /// The busy scope whose mutation was refused.
+    fn scope_busy(&self) -> Option<&str> {
+        None
+    }
+    /// Why an answer can no longer be recorded.
+    fn answer_stale(&self) -> Option<&str> {
+        None
+    }
+    /// The task whose lease this fault says is gone.
+    fn lease_lost_task(&self) -> Option<&str> {
+        None
+    }
+    /// The refusal of an operator resolution for a receipt that is not
+    /// uncertain, when this fault is that refusal.
+    fn receipt_not_uncertain(&self) -> Option<&str> {
+        None
+    }
+    /// The refusal of an operator resolution while the run may still record
+    /// its own result, when this fault is that refusal.
+    fn receipt_run_active(&self) -> Option<&str> {
+        None
+    }
+    /// The managed-content refusal that asks the caller for the connector
+    /// grants its selection needs, when this fault is that refusal.
+    fn selected_connector_required(&self) -> bool {
+        false
+    }
+    /// The message of a state-machine refusal, when this fault is one.
+    fn invalid_transition(&self) -> Option<&str> {
+        None
+    }
+    /// The message of a lost optimistic-concurrency version, when this fault
+    /// is one: the write applied NOTHING and the caller re-reads.
+    fn concurrent_modification(&self) -> Option<&str> {
+        None
+    }
+    /// The class of an environmental fault: `database`, `filesystem` or
+    /// `serialization`. `None` when the fault is not environmental.
+    fn environmental_class(&self) -> Option<&'static str> {
+        if self.is_transient() {
+            Some("database")
+        } else {
+            None
+        }
+    }
+    /// The adapter's own stable label for a fault the port has no predicate
+    /// for — an adapter-internal failure whose name the context persists but
+    /// cannot enumerate. `None` means "render the error's `Display`".
+    fn label(&self) -> Option<&'static str> {
+        None
+    }
+    /// An environmental fault around the substrate itself (database,
+    /// filesystem or serialization): nothing the caller sent is wrong, and
+    /// the failure is reported as an external one rather than classified.
+    fn is_environmental(&self) -> bool {
+        self.is_transient()
+    }
 }
 
 /// A session-aware settlement payload: the work a settling turn promotes

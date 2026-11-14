@@ -4,7 +4,7 @@ use agentkit_store::{ClaimInput, ClaimedTask, SqliteStore, SubmitTask};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-async fn fixture() -> (SqliteStore, AgentSessionService) {
+async fn fixture() -> (SqliteStore, AgentSessionService<SqliteStore>) {
     let store = SqliteStore::memory(16).unwrap();
     let service = AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),

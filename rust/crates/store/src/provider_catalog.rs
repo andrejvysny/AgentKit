@@ -6,7 +6,9 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 pub const PROVIDERS_NAMESPACE: &str = "agentkit.compat.providers";
-pub const PROVIDER_MODELS_NAMESPACE: &str = "agentkit.compat.provider-models";
+/// The compat provider-model catalog namespace: the sessions context's
+/// context-window authority reads it, the importer writes it.
+pub use agentkit_sessions::PROVIDER_MODELS_NAMESPACE;
 pub const PROVIDER_CAPABILITIES_NAMESPACE: &str = "agentkit.compat.provider-capabilities";
 
 fn invalid(kind: &str) -> StoreError {

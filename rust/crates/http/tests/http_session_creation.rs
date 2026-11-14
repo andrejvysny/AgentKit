@@ -1,6 +1,6 @@
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_engine::SystemRuntime;
 use agentkit_http::{Actor, Config, DesktopBackend};
-use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::SqliteStore;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
@@ -92,7 +92,7 @@ struct NoopTurn;
 impl agentkit_engine::TaskExecutor<agentkit_store::SqliteStore> for NoopTurn {
     async fn execute(
         &self,
-        _: agentkit_sessions::ExecutionContext,
+        _: agentkit_chat::ExecutionContext,
     ) -> agentkit_engine::EngineResult<(), agentkit_store::StoreError> {
         Ok(())
     }

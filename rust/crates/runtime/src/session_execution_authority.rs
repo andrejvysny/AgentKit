@@ -11,10 +11,10 @@
 use agentkit_core::permission::CodingMode;
 use agentkit_core::permission::CodingRole;
 
-use super::AgentSessionService;
 use agentkit_governance::{
     CodingPermissionAuthority, GovernanceError, GovernanceResult, PermissionContext,
 };
+use agentkit_sessions::{AgentSessionService, LegacySessionDebug, SessionBackend, SessionsError};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -22,18 +22,18 @@ use serde_json::Value;
 /// Absent state means "no session-level decision yet": the guard falls back
 /// to its configured mode. An unreadable or malformed state is an ERROR,
 /// not an absence — the guard then fails closed instead of guessing.
-pub struct SessionExecutionAuthority {
-    service: AgentSessionService,
+pub struct SessionExecutionAuthority<R: SessionBackend> {
+    service: AgentSessionService<R>,
 }
 
-impl SessionExecutionAuthority {
-    pub fn new(service: AgentSessionService) -> Self {
+impl<R: SessionBackend> SessionExecutionAuthority<R> {
+    pub fn new(service: AgentSessionService<R>) -> Self {
         Self { service }
     }
 }
 
 #[async_trait]
-impl CodingPermissionAuthority for SessionExecutionAuthority {
+impl<R: SessionBackend> CodingPermissionAuthority for SessionExecutionAuthority<R> {
     async fn mode_of(&self, ctx: &PermissionContext) -> GovernanceResult<Option<CodingMode>> {
         let Some(session_id) = ctx.chat_id.as_deref() else {
             return Ok(None); // a chat that is not a session has no session mode
@@ -48,7 +48,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             // chat must be able to run its tools). Only a real read failure
             // stays an error; the guard then fails closed.
             .or_else(|error| {
-                if matches!(error, crate::SessionsError::SessionNotFound(_)) {
+                if matches!(error, SessionsError::SessionNotFound(_)) {
                     Ok(None)
                 } else {
                     Err(error)
@@ -56,7 +56,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             })
             .map_err(|error| {
                 GovernanceError::Port(format!(
-                    "Cannot read the session's execution state; permissions stay with the guard. ({:?})", crate::error::LegacySessionDebug(&error)
+                    "Cannot read the session's execution state; permissions stay with the guard. ({:?})", LegacySessionDebug(&error)
                 ))
             })?;
         let Some(state) = state else {
@@ -82,7 +82,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
         };
         let state = match self.service.get_state(session_id).await {
             Ok(state) => state,
-            Err(crate::SessionsError::SessionNotFound(_)) => {
+            Err(SessionsError::SessionNotFound(_)) => {
                 return Ok(None);
             }
             Err(error) => return Err(GovernanceError::Port(error.to_string())),
@@ -116,13 +116,13 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             // Not an agent session: nothing can have approved this plan —
             // the same answer as a chat without a session at all, and never
             // a silent pass.
-            Err(crate::SessionsError::SessionNotFound(_)) => {
+            Err(SessionsError::SessionNotFound(_)) => {
                 return Ok(None);
             }
             Err(error) => {
                 return Err(GovernanceError::Port(format!(
                     "Cannot read the session's execution state; the plan stays unjudged. ({:?})",
-                    crate::error::LegacySessionDebug(&error)
+                    LegacySessionDebug(&error)
                 )));
             }
         };

@@ -33,7 +33,7 @@ pub agentkit_agents::AgentsError::RegistrationConcurrencyLimit
 pub agentkit_agents::AgentsError::ResumeParentTurnRequired
 pub agentkit_agents::AgentsError::RoleCannotSpawn(alloc::string::String)
 pub agentkit_agents::AgentsError::RoleDenied(agentkit_agents::RoleDenial)
-pub agentkit_agents::AgentsError::Sessions(agentkit_sessions::error::SessionsError)
+pub agentkit_agents::AgentsError::Sessions(agentkit_sessions::error::SessionsError<agentkit_store::StoreError>)
 pub agentkit_agents::AgentsError::SpawnIdentityConflict(alloc::string::String)
 pub agentkit_agents::AgentsError::SpawnParentTurnRequired
 pub agentkit_agents::AgentsError::Store(agentkit_store::StoreError)
@@ -59,6 +59,8 @@ impl core::convert::From<agentkit_agents::AgentsError> for agentkit_engine::erro
 pub fn agentkit_engine::error::EngineError<agentkit_store::StoreError>::from(agentkit_agents::AgentsError) -> Self
 impl core::convert::From<agentkit_agents::AgentsError> for agentkit_governance::error::GovernanceError
 pub fn agentkit_governance::error::GovernanceError::from(agentkit_agents::AgentsError) -> Self
+impl core::convert::From<agentkit_sessions::error::SessionsError<agentkit_store::StoreError>> for agentkit_agents::AgentsError
+pub fn agentkit_agents::AgentsError::from(agentkit_sessions::error::SessionsError<agentkit_store::StoreError>) -> Self
 pub enum agentkit_agents::FindingCategory
 pub agentkit_agents::FindingCategory::ImplementationRisk
 pub agentkit_agents::FindingCategory::OutputInvalid
@@ -133,7 +135,7 @@ pub struct agentkit_agents::AdvisorEngine
 impl agentkit_agents::AdvisorEngine
 pub fn agentkit_agents::AdvisorEngine::config(&self) -> agentkit_agents::AdvisorConfig
 pub fn agentkit_agents::AdvisorEngine::configure(&self, agentkit_agents::AdvisorConfig)
-pub fn agentkit_agents::AdvisorEngine::new(alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, agentkit_store::actor::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>, agentkit_agents::AdvisorConfig, alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorToolSource>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorEventSink>>, agentkit_sessions::session::AgentSessionService) -> Self
+pub fn agentkit_agents::AdvisorEngine::new(alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, agentkit_store::actor::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>, agentkit_agents::AdvisorConfig, alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorToolSource>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_agents::AdvisorEventSink>>, agentkit_sessions::session::AgentSessionService<agentkit_store::actor::SqliteStore>) -> Self
 pub async fn agentkit_agents::AdvisorEngine::reserve(&self, &str, &agentkit_agents::ReviewOrigin) -> agentkit_agents::AgentsResult<agentkit_agents::ReviewReservation>
 pub async fn agentkit_agents::AdvisorEngine::review(&self, &agentkit_agents::ReviewRequest, agentkit_agents::ReviewOrigin, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_agents::AgentsResult<agentkit_agents::AdvisorReport>
 pub async fn agentkit_agents::AdvisorEngine::review_reserved(&self, &agentkit_agents::ReviewRequest, agentkit_agents::ReviewOrigin, tokio_util::sync::cancellation_token::CancellationToken, agentkit_agents::ReviewReservation) -> agentkit_agents::AgentsResult<agentkit_agents::AdvisorReport>
@@ -155,23 +157,23 @@ pub fn agentkit_agents::AdvisorTools::into_tool(self) -> alloc::rcs::arc::Arc<dy
 pub fn agentkit_agents::AdvisorTools::new(agentkit_agents::AdvisorEngine, alloc::rcs::arc::Arc<std::sync::poison::mutex::Mutex<agentkit_agents::AdvisorConfig>>) -> Self
 pub struct agentkit_agents::AgentDefinitionService
 impl agentkit_agents::AgentDefinitionService
-pub async fn agentkit_agents::AgentDefinitionService::archive(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
-pub async fn agentkit_agents::AgentDefinitionService::check_admission(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
-pub async fn agentkit_agents::AgentDefinitionService::create(&self, agentkit_store::agents::CreateAgent) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
-pub async fn agentkit_agents::AgentDefinitionService::delete(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::archive(&self, &str) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::check_admission(&self, &str) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::create(&self, agentkit_store::agents::CreateAgent) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::delete(&self, &str) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
 pub async fn agentkit_agents::AgentDefinitionService::deletion_preview(&self, &str) -> agentkit_agents::AgentsResult<core::option::Option<agentkit_store::agents::AgentDeletionPreview>>
-pub async fn agentkit_agents::AgentDefinitionService::duplicate(&self, &str, core::option::Option<alloc::string::String>) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::duplicate(&self, &str, core::option::Option<alloc::string::String>) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
 pub async fn agentkit_agents::AgentDefinitionService::export(&self, &str) -> agentkit_agents::AgentsResult<alloc::string::String>
-pub async fn agentkit_agents::AgentDefinitionService::get(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
-pub async fn agentkit_agents::AgentDefinitionService::import(&self, &str, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_store::agents::AgentRecord>>
-pub async fn agentkit_agents::AgentDefinitionService::list(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_store::agents::AgentRecord>>
+pub async fn agentkit_agents::AgentDefinitionService::get(&self, &str) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::import(&self, &str, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_sessions::model::AgentRecord>>
+pub async fn agentkit_agents::AgentDefinitionService::list(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_sessions::model::AgentRecord>>
 pub fn agentkit_agents::AgentDefinitionService::new(agentkit_store::actor::SqliteStore) -> Self
 pub fn agentkit_agents::AgentDefinitionService::parse_envelope(&str) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentExportEnvelope>
-pub async fn agentkit_agents::AgentDefinitionService::restore(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::restore(&self, &str) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
 pub async fn agentkit_agents::AgentDefinitionService::revisions(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_store::agents::AgentRevision>>
-pub async fn agentkit_agents::AgentDefinitionService::set_model(&self, &str, i64, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::set_model(&self, &str, i64, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
 pub fn agentkit_agents::AgentDefinitionService::store(&self) -> &agentkit_store::actor::SqliteStore
-pub async fn agentkit_agents::AgentDefinitionService::update(&self, &str, i64, agentkit_store::agents::AgentDefinition) -> agentkit_agents::AgentsResult<agentkit_store::agents::AgentRecord>
+pub async fn agentkit_agents::AgentDefinitionService::update(&self, &str, i64, agentkit_sessions::model::AgentDefinition) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentRecord>
 pub fn agentkit_agents::AgentDefinitionService::with_runtime(agentkit_store::actor::SqliteStore, agentkit_engine::ports::SharedRuntime) -> Self
 pub struct agentkit_agents::AwaitOutcome
 pub agentkit_agents::AwaitOutcome::results: alloc::vec::Vec<agentkit_agents::AwaitResult>
@@ -296,7 +298,7 @@ pub async fn agentkit_agents::SubagentService::effective_role_of(&self, &agentki
 pub fn agentkit_agents::SubagentService::leases(&self) -> &agentkit_agents::WorkspaceLeaseRegistry
 pub async fn agentkit_agents::SubagentService::list(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_agents::SubagentView>>
 pub async fn agentkit_agents::SubagentService::message(&self, &str, serde_json::value::Value, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::MessageReceipt>
-pub fn agentkit_agents::SubagentService::new(agentkit_store::actor::SqliteStore, agentkit_sessions::session::AgentSessionService, agentkit_engine::ports::SharedRuntime, agentkit_agents::SubagentConfig) -> Self
+pub fn agentkit_agents::SubagentService::new(agentkit_store::actor::SqliteStore, agentkit_sessions::session::AgentSessionService<agentkit_store::actor::SqliteStore>, agentkit_engine::ports::SharedRuntime, agentkit_agents::SubagentConfig) -> Self
 pub fn agentkit_agents::SubagentService::now_ms(&self) -> i64
 pub async fn agentkit_agents::SubagentService::observe_settled(&self, &agentkit_engine::model::TaskRecord) -> agentkit_agents::AgentsResult<()>
 pub async fn agentkit_agents::SubagentService::reap_orphans(&self) -> agentkit_agents::AgentsResult<usize>
@@ -304,7 +306,7 @@ pub async fn agentkit_agents::SubagentService::refresh(&self, &agentkit_store::s
 pub async fn agentkit_agents::SubagentService::restore_leases(&self) -> agentkit_agents::AgentsResult<usize>
 pub async fn agentkit_agents::SubagentService::resume(&self, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub async fn agentkit_agents::SubagentService::resume_for_parent(&self, &str, &str, core::option::Option<&str>) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
-pub fn agentkit_agents::SubagentService::session(&self) -> &agentkit_sessions::session::AgentSessionService
+pub fn agentkit_agents::SubagentService::session(&self) -> &agentkit_sessions::session::AgentSessionService<agentkit_store::actor::SqliteStore>
 pub async fn agentkit_agents::SubagentService::spawn(&self, &agentkit_agents::SpawnRequest) -> agentkit_agents::AgentsResult<agentkit_agents::SpawnedChild>
 pub async fn agentkit_agents::SubagentService::status(&self, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub fn agentkit_agents::SubagentService::store(&self) -> &agentkit_store::actor::SqliteStore
@@ -345,13 +347,13 @@ pub struct agentkit_agents::TeammateService
 impl agentkit_agents::TeammateService
 pub async fn agentkit_agents::TeammateService::admit(&self, agentkit_agents::TeammateAdmission) -> agentkit_agents::AgentsResult<agentkit_store::teammates::AdmittedTask>
 pub async fn agentkit_agents::TeammateService::cancel(&self, &str) -> agentkit_agents::AgentsResult<agentkit_engine::model::TaskRecord>
-pub async fn agentkit_agents::TeammateService::cancel_input(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::agent_inputs::AgentInputRecord>
+pub async fn agentkit_agents::TeammateService::cancel_input(&self, &str) -> agentkit_agents::AgentsResult<agentkit_sessions::model::AgentInputRecord>
 pub async fn agentkit_agents::TeammateService::continue_after_children(&self, &str) -> agentkit_agents::AgentsResult<agentkit_engine::model::TaskRecord>
 pub async fn agentkit_agents::TeammateService::display_state(&self, &str) -> agentkit_agents::AgentsResult<agentkit_store::teammates::AgentDisplayState>
-pub async fn agentkit_agents::TeammateService::enqueue_input(&self, &str, agentkit_store::teammates::CreateAgentMailbox) -> agentkit_agents::AgentsResult<(agentkit_store::agent_inputs::AgentInputRecord, bool)>
+pub async fn agentkit_agents::TeammateService::enqueue_input(&self, &str, agentkit_store::teammates::CreateAgentMailbox) -> agentkit_agents::AgentsResult<(agentkit_sessions::model::AgentInputRecord, bool)>
 pub async fn agentkit_agents::TeammateService::mark_uncertain(&self, agentkit_engine::model::LeaseFence, &str) -> agentkit_agents::AgentsResult<agentkit_engine::model::TaskRecord>
-pub async fn agentkit_agents::TeammateService::pending_inputs(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_store::agent_inputs::AgentInputRecord>>
-pub async fn agentkit_agents::TeammateService::promote_next_input(&self, &str, &str, i32) -> agentkit_agents::AgentsResult<core::option::Option<(agentkit_store::agent_inputs::AgentInputRecord, agentkit_engine::model::TaskRecord)>>
+pub async fn agentkit_agents::TeammateService::pending_inputs(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_sessions::model::AgentInputRecord>>
+pub async fn agentkit_agents::TeammateService::promote_next_input(&self, &str, &str, i32) -> agentkit_agents::AgentsResult<core::option::Option<(agentkit_sessions::model::AgentInputRecord, agentkit_engine::model::TaskRecord)>>
 pub async fn agentkit_agents::TeammateService::reconcile(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
 pub async fn agentkit_agents::TeammateService::resolve_uncertain(&self, &str, agentkit_engine::model::TaskStatus, core::option::Option<alloc::string::String>) -> agentkit_agents::AgentsResult<agentkit_engine::model::TaskRecord>
 pub fn agentkit_agents::TeammateService::store(&self) -> &agentkit_store::actor::SqliteStore
@@ -405,5 +407,5 @@ pub fn agentkit_agents::default_role_specs() -> alloc::collections::btree::map::
 pub fn agentkit_agents::effective_role(core::option::Option<&agentkit_agents::RoleSnapshot>, core::option::Option<&agentkit_agents::RoleSpec>) -> core::option::Option<agentkit_agents::EffectiveRole>
 pub async fn agentkit_agents::explicit_review(&agentkit_agents::AdvisorEngine, &str, alloc::string::String, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_agents::AgentsResult<agentkit_agents::AdvisorReport>
 pub fn agentkit_agents::is_advisor_chat_id(&str) -> bool
-pub fn agentkit_agents::validate_agent_definition(&agentkit_store::agents::AgentDefinition) -> agentkit_agents::AgentsResult<()>
+pub fn agentkit_agents::validate_agent_definition(&agentkit_sessions::model::AgentDefinition) -> agentkit_agents::AgentsResult<()>
 pub type agentkit_agents::AgentsResult<T> = core::result::Result<T, agentkit_agents::AgentsError>

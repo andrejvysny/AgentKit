@@ -25,10 +25,39 @@ pub agentkit_engine::EngineError::TaskNotFound
 pub agentkit_engine::EngineError::UnknownKind(alloc::string::String)
 pub agentkit_engine::EngineError::VerificationTimeout
 pub agentkit_engine::EngineError::Worker(tokio::runtime::task::error::JoinError)
+impl<E: core::error::Error> agentkit_engine::EngineError<E>
+pub fn agentkit_engine::EngineError<E>::from_faultless(agentkit_engine::EngineError<agentkit_engine::NeverFault>) -> Self
 pub enum agentkit_engine::ExecutionErrorKind
 pub agentkit_engine::ExecutionErrorKind::Cancelled
 pub agentkit_engine::ExecutionErrorKind::Terminal
 pub agentkit_engine::ExecutionErrorKind::Transient
+pub enum agentkit_engine::NeverFault
+impl agentkit_engine::RepositoryFault for agentkit_engine::NeverFault
+pub fn agentkit_engine::NeverFault::answer_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::answer_stale(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::concurrent_modification(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::environmental_class(&self) -> core::option::Option<&'static str>
+pub fn agentkit_engine::NeverFault::input_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::invalid_input(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::invalid_transition(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::is_duplicate(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_environmental(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_invalid_transition(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_lease_lost(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_not_found(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_transient(&self) -> bool
+pub fn agentkit_engine::NeverFault::label(&self) -> core::option::Option<&'static str>
+pub fn agentkit_engine::NeverFault::lease_lost_task(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::not_found(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::receipt_not_uncertain(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::receipt_run_active(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::scope_busy(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::selected_connector_required(&self) -> bool
+pub fn agentkit_engine::NeverFault::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::task_input_reason(&self) -> core::option::Option<agentkit_engine::TaskInputReason>
+impl core::error::Error for agentkit_engine::NeverFault
+impl core::fmt::Display for agentkit_engine::NeverFault
+pub fn agentkit_engine::NeverFault::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum agentkit_engine::RecoveryMode
 pub agentkit_engine::RecoveryMode::Automatic
 pub agentkit_engine::RecoveryMode::Manual
@@ -289,14 +318,51 @@ pub async fn agentkit_engine::WorkerHandle<R>::join(&mut self) -> agentkit_engin
 pub async fn agentkit_engine::WorkerHandle<R>::shutdown(self) -> agentkit_engine::EngineResult<(), <R as agentkit_engine::TaskRepository>::Error>
 pub async fn agentkit_engine::WorkerHandle<R>::stop(&self)
 pub trait agentkit_engine::RepositoryFault: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+pub fn agentkit_engine::RepositoryFault::answer_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::answer_stale(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::concurrent_modification(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::environmental_class(&self) -> core::option::Option<&'static str>
+pub fn agentkit_engine::RepositoryFault::input_conflict(&self) -> core::option::Option<&str>
 pub fn agentkit_engine::RepositoryFault::invalid_input(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::invalid_transition(&self) -> core::option::Option<&str>
 pub fn agentkit_engine::RepositoryFault::is_duplicate(&self) -> bool
+pub fn agentkit_engine::RepositoryFault::is_environmental(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_invalid_transition(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_lease_lost(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_not_found(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::is_transient(&self) -> bool
+pub fn agentkit_engine::RepositoryFault::label(&self) -> core::option::Option<&'static str>
+pub fn agentkit_engine::RepositoryFault::lease_lost_task(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::not_found(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::receipt_not_uncertain(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::receipt_run_active(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::scope_busy(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::RepositoryFault::selected_connector_required(&self) -> bool
 pub fn agentkit_engine::RepositoryFault::session_conflict(&self) -> core::option::Option<&str>
 pub fn agentkit_engine::RepositoryFault::task_input_reason(&self) -> core::option::Option<agentkit_engine::TaskInputReason>
+impl agentkit_engine::RepositoryFault for agentkit_engine::NeverFault
+pub fn agentkit_engine::NeverFault::answer_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::answer_stale(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::concurrent_modification(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::environmental_class(&self) -> core::option::Option<&'static str>
+pub fn agentkit_engine::NeverFault::input_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::invalid_input(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::invalid_transition(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::is_duplicate(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_environmental(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_invalid_transition(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_lease_lost(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_not_found(&self) -> bool
+pub fn agentkit_engine::NeverFault::is_transient(&self) -> bool
+pub fn agentkit_engine::NeverFault::label(&self) -> core::option::Option<&'static str>
+pub fn agentkit_engine::NeverFault::lease_lost_task(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::not_found(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::receipt_not_uncertain(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::receipt_run_active(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::scope_busy(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::selected_connector_required(&self) -> bool
+pub fn agentkit_engine::NeverFault::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_engine::NeverFault::task_input_reason(&self) -> core::option::Option<agentkit_engine::TaskInputReason>
 pub trait agentkit_engine::SessionFlushPlanner<R: agentkit_engine::TaskRepository>: core::marker::Send + core::marker::Sync
 pub fn agentkit_engine::SessionFlushPlanner::settle_plan<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::TaskRecord, bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::EngineResult<<R as agentkit_engine::TaskRepository>::SessionSettle, <R as agentkit_engine::TaskRepository>::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_engine::SessionSettlement: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static

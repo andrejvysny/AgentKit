@@ -2,8 +2,8 @@
 // each target exercises a subset of what is here.
 #![allow(dead_code)]
 use super::support::*;
+use agentkit_chat::ExecutionContext;
 use agentkit_engine::{ExecutionFailure, TaskExecutor, VerificationHook, VerificationReport};
-use agentkit_sessions::*;
 use agentkit_store::{SqliteStore, StoreError};
 use async_trait::async_trait;
 use serde_json::{Value, json};

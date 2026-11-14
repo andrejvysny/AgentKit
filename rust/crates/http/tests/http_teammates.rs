@@ -13,9 +13,9 @@
 //! the event page, and a projection that agrees with canonical host
 //! state after both cancellation and a process restart.
 
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_engine::{Runtime, SystemRuntime};
 use agentkit_http::{Actor, Config, DesktopBackend};
-use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::{AgentDefinition, ClaimInput, SqliteStore, TaskStatus};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};

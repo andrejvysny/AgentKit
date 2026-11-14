@@ -1,4 +1,5 @@
 use super::*;
+use agentkit_sessions::SessionsError as S;
 use agentkit_store::{ManagedInputReason as R, ReceiptTransitionReason};
 
 #[test]

@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use agentkit_chat::ProviderRegistry;
+use agentkit_chat::{AgentHost, WorkerHandle};
 use agentkit_providers::NativeProviderFactory;
-use agentkit_sessions::{
-    AgentHost, AgentSessionService, ContentAuthority, ProfileRegistry, WorkerHandle,
-};
+use agentkit_sessions::{AgentSessionService, ContentAuthority, ProfileRegistry};
+use agentkit_store::SqliteStore;
 
 use crate::builder::AgentRuntimeBuilder;
 use crate::lanes::advisor::AdvisorLane;
@@ -16,8 +16,8 @@ use crate::lanes::subagent::SubagentLane;
 
 pub struct AgentRuntime {
     pub(crate) host: AgentHost,
-    pub(crate) service: AgentSessionService,
-    pub(crate) content_authority: Option<Arc<dyn ContentAuthority>>,
+    pub(crate) service: AgentSessionService<SqliteStore>,
+    pub(crate) content_authority: Option<Arc<dyn ContentAuthority<agentkit_store::StoreError>>>,
     pub(crate) native_provider_factory: Arc<NativeProviderFactory>,
     pub(crate) profiles: Arc<ProfileRegistry>,
     pub(crate) registry: Arc<ProviderRegistry>,
@@ -37,11 +37,13 @@ impl AgentRuntime {
         &self.host
     }
 
-    pub fn service(&self) -> &AgentSessionService {
+    pub fn service(&self) -> &AgentSessionService<SqliteStore> {
         &self.service
     }
 
-    pub fn content_authority(&self) -> Option<&Arc<dyn ContentAuthority>> {
+    pub fn content_authority(
+        &self,
+    ) -> Option<&Arc<dyn ContentAuthority<agentkit_store::StoreError>>> {
         self.content_authority.as_ref()
     }
 

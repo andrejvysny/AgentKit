@@ -36,12 +36,12 @@ impl ChatProvider for Provider {
 }
 struct Authority(AtomicBool);
 #[async_trait]
-impl ContentAuthority for Authority {
+impl ContentAuthority<agentkit_store::StoreError> for Authority {
     async fn authorized_connectors(
         &self,
         _: &str,
         _: CancellationToken,
-    ) -> agentkit_sessions::SessionsResult<Vec<String>> {
+    ) -> agentkit_sessions::SessionsResult<Vec<String>, agentkit_store::StoreError> {
         Ok(if self.0.load(Ordering::SeqCst) {
             vec!["github".into()]
         } else {
@@ -69,7 +69,7 @@ fn tools() -> ToolRegistry {
 fn host(
     store: &SqliteStore,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
-    authority: Arc<dyn ContentAuthority>,
+    authority: Arc<dyn ContentAuthority<agentkit_store::StoreError>>,
 ) -> AgentHost {
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(Arc::new(Provider(requests)), Arc::new(tools())).with_options(
@@ -90,9 +90,9 @@ fn host(
 }
 fn service(
     store: &SqliteStore,
-    authority: Arc<dyn ContentAuthority>,
+    authority: Arc<dyn ContentAuthority<agentkit_store::StoreError>>,
     overrides: &[Value],
-) -> AgentSessionService {
+) -> AgentSessionService<SqliteStore> {
     AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),
         runtime: Arc::new(SystemRuntime),
@@ -102,7 +102,7 @@ fn service(
     .with_profiles(Arc::new(ProfileRegistry::new(overrides).unwrap()))
     .with_content_authority(authority)
 }
-async fn send(service: &AgentSessionService, id: &str) -> String {
+async fn send(service: &AgentSessionService<SqliteStore>, id: &str) -> String {
     match service
         .send(
             "chat",
@@ -122,7 +122,7 @@ async fn send(service: &AgentSessionService, id: &str) -> String {
         other => panic!("expected turn: {other:?}"),
     }
 }
-async fn create(service: &AgentSessionService, skills: Option<Vec<Value>>) {
+async fn create(service: &AgentSessionService<SqliteStore>, skills: Option<Vec<Value>>) {
     service
         .create_session(&CreateSessionInput {
             session_id: Some("chat".into()),
@@ -319,12 +319,12 @@ struct ScopedAuthority {
     generation: std::sync::atomic::AtomicU64,
 }
 #[async_trait]
-impl ContentAuthority for ScopedAuthority {
+impl ContentAuthority<agentkit_store::StoreError> for ScopedAuthority {
     async fn authorized_connectors(
         &self,
         _: &str,
         _: CancellationToken,
-    ) -> agentkit_sessions::SessionsResult<Vec<String>> {
+    ) -> agentkit_sessions::SessionsResult<Vec<String>, agentkit_store::StoreError> {
         Ok(self.grants.lock().unwrap().clone())
     }
     async fn authority_identity(
@@ -332,7 +332,7 @@ impl ContentAuthority for ScopedAuthority {
         _: &str,
         required: &[String],
         _: CancellationToken,
-    ) -> agentkit_sessions::SessionsResult<Value> {
+    ) -> agentkit_sessions::SessionsResult<Value, agentkit_store::StoreError> {
         Ok(json!({"required":required,"generation":self.generation.load(Ordering::SeqCst)}))
     }
 }

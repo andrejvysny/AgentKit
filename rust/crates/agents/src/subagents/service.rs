@@ -9,7 +9,9 @@ use agentkit_sessions::{
     AgentSendResult, AgentSessionService, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput,
     SendInput, SteerInput, WhenBusy, read_session_descriptor,
 };
-use agentkit_store::{RegisterSubagent, SqliteStore, SubagentRecord, TaskRecord, TaskStatus};
+use agentkit_store::{
+    RegisterSubagent, SqliteStore, StoreError, SubagentRecord, TaskRecord, TaskStatus,
+};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -109,7 +111,7 @@ pub struct MessageReceipt {
 #[derive(Clone)]
 pub struct SubagentService {
     store: SqliteStore,
-    session: AgentSessionService,
+    session: AgentSessionService<SqliteStore>,
     runtime: SharedRuntime,
     config: Arc<Mutex<SubagentConfig>>,
     leases: WorkspaceLeaseRegistry,
@@ -144,7 +146,7 @@ impl Drop for LeaseRelease {
     }
 }
 
-fn session_error(error: agentkit_sessions::SessionsError) -> AgentsError {
+fn session_error(error: agentkit_sessions::SessionsError<StoreError>) -> AgentsError {
     AgentsError::Sessions(error)
 }
 
@@ -185,7 +187,7 @@ fn compose_child_prompt(role: &RoleSpec, request: &SpawnRequest) -> Value {
 impl SubagentService {
     pub fn new(
         store: SqliteStore,
-        session: AgentSessionService,
+        session: AgentSessionService<SqliteStore>,
         runtime: SharedRuntime,
         config: SubagentConfig,
     ) -> Self {
@@ -272,7 +274,7 @@ impl SubagentService {
         &self.store
     }
 
-    pub fn session(&self) -> &AgentSessionService {
+    pub fn session(&self) -> &AgentSessionService<SqliteStore> {
         &self.session
     }
 

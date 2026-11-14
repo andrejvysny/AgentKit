@@ -124,7 +124,7 @@ impl WorkspaceResolver for Resolver {
 
 struct Fixture {
     store: SqliteStore,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     host: AgentHost,
     hits: Arc<AtomicUsize>,
 }
@@ -213,7 +213,7 @@ async fn fixture_inner(
         hits,
     }
 }
-async fn create_session(service: &AgentSessionService) {
+async fn create_session(service: &AgentSessionService<SqliteStore>) {
     service
         .create_session(&CreateSessionInput {
             session_id: Some("chat".into()),

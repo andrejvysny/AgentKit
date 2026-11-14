@@ -1,3 +1,4 @@
+use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_contracts::{
     CreateMcpServerRequest, GrantAllowanceRequest, McpServerDto, UpdateMcpServerRequest,
     WriteAllowanceDto,
@@ -6,7 +7,6 @@ use agentkit_engine::SystemRuntime;
 use agentkit_http::{
     Actor, Config, DesktopBackend, McpConfigurationPort, Problem, WritePolicyPort,
 };
-use agentkit_sessions::{AgentHost, HostOptions};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};

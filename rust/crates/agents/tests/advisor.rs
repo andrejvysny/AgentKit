@@ -209,7 +209,7 @@ fn config() -> AdvisorConfig {
 
 struct Harness {
     store: SqliteStore,
-    service: AgentSessionService,
+    service: AgentSessionService<SqliteStore>,
     engine: AdvisorEngine,
     oracle: Arc<Oracle>,
     events: Arc<Sink>,

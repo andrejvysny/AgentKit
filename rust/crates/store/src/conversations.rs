@@ -6,55 +6,12 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-agentkit_contracts::impl_json_via_serde!(ChatRecord);
-agentkit_contracts::impl_json_via_serde!(MessageRecord);
-
 mod history;
 mod order;
+/// The chat and message records are the sessions context's (ADR 0024 §2).
+pub use agentkit_sessions::{ChatRecord, MessageRecord};
 pub use history::ImportConversation;
 pub use order::order_messages_for_provider;
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatRecord {
-    pub id: String,
-    pub title: Option<String>,
-    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
-    pub metadata: Value,
-    pub archived: bool,
-    pub created_at: ConversationTimestamp,
-    pub updated_at: ConversationTimestamp,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageRecord {
-    pub id: String,
-    pub chat_id: String,
-    pub run_id: Option<String>,
-    pub role: String,
-    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
-    pub content: Value,
-    pub parent_message_id: Option<String>,
-    pub tool_call_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "agentkit_contracts::deserialize_preserving"
-    )]
-    pub tool_calls: Option<Value>,
-    pub model_result_json: Option<String>,
-    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
-    pub metadata: Value,
-    pub order_key: u64,
-    pub depth: u32,
-    pub branch_index: u32,
-    pub active: bool,
-    /// Archived messages remain readable by id for audit but never replay:
-    /// `archive_branch` marks a whole branch and the listing ports hide them.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub archived: bool,
-    pub created_at: ConversationTimestamp,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

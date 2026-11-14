@@ -14,7 +14,6 @@
     "R1b agentkit-agents -> agentkit-store",
     "R1b agentkit-chat -> agentkit-store",
     "R1b agentkit-governance -> agentkit-store",
-    "R1b agentkit-sessions -> agentkit-store",
     "R5 agentkit-agents src/advisor/engine.rs static ATTEMPTS",
     "R5 agentkit-claude src/discovery.rs static RECORDED_QUALIFICATIONS",
     "R5 agentkit-client src/lib.rs pub use presentation::*",

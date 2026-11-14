@@ -2,8 +2,8 @@
 // (`m0_fault_*`, `runner_conformance`); each target exercises a subset.
 // Precedent: `tests/governance/support.rs`, `store/tests/support/mod.rs`.
 #![allow(dead_code)]
+use agentkit_chat::{AgentHost, ExecutionContext, HostOptions};
 use agentkit_engine::{RetryBackoff, Runtime, TaskExecutor, VerificationHook};
-use agentkit_sessions::*;
 use agentkit_store::{Lease, OutboxRecord, SqliteStore, SubmitTask};
 use serde::Deserialize;
 use serde_json::{Value, json};

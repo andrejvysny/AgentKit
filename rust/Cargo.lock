@@ -185,7 +185,6 @@ dependencies = [
  "agentkit-engine",
  "agentkit-providers",
  "agentkit-runtime",
- "agentkit-sessions",
  "agentkit-store",
  "async-stream",
  "async-trait",
@@ -494,9 +493,9 @@ dependencies = [
 name = "agentkit-sessions"
 version = "0.1.0"
 dependencies = [
+ "agentkit-contracts",
  "agentkit-core",
  "agentkit-engine",
- "agentkit-governance",
  "agentkit-kernel",
  "agentkit-native",
  "agentkit-store",
@@ -519,6 +518,7 @@ dependencies = [
  "agentkit-engine",
  "agentkit-kernel",
  "agentkit-native",
+ "agentkit-sessions",
  "agentkit-testkit",
  "async-trait",
  "chrono",
@@ -565,7 +565,9 @@ version = "0.1.0"
 dependencies = [
  "agentkit-core",
  "agentkit-engine",
+ "agentkit-kernel",
  "agentkit-native",
+ "agentkit-sessions",
  "async-trait",
  "futures",
  "serde_json",

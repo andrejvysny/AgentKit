@@ -13,7 +13,7 @@ mod runner;
 mod subscription;
 
 pub use context::ExecutionContext;
-pub use error::{ContextClassification, EngineError, EngineResult};
+pub use error::{ContextClassification, EngineError, EngineResult, NeverFault};
 pub use model::{
     AttemptRecord, ClaimInput, ClaimedTask, EventRecord, Lease, LeaseFence, MessageInput,
     PinnedRunProfile, RecoveryMode, RetryTask, SettleTask, SubmitTask, TaskBinding, TaskRecord,

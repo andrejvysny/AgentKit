@@ -1,8 +1,11 @@
 //! Chat-keyed operator resolution of uncertain execution receipts (ADR 0020),
 //! shared by the session service and the host's static fast path.
 
+use crate::{
+    ExecutionReceiptRecord, ResolutionOutcome, ResolveExecution, SessionFault, SessionRepository,
+    SessionsError,
+};
 use agentkit_core::ToolResult;
-use agentkit_store::SqliteStore;
 use serde_json::Value;
 
 /// Wrap an operator-supplied completion in the model-facing `ToolResult`
@@ -57,21 +60,21 @@ fn operator_completed_result(result: Value) -> Result<Value, String> {
 /// idempotent repeat of an earlier decision; `invalid_input` for a
 /// malformed result contract.
 #[allow(clippy::too_many_arguments)] // the full audit record, passed once
-pub async fn resolve_uncertain_execution(
-    store: &SqliteStore,
+pub async fn resolve_uncertain_execution<R: SessionRepository>(
+    store: &R,
     chat_id: &str,
     execution_id: &str,
-    outcome: agentkit_store::ResolutionOutcome,
+    outcome: ResolutionOutcome,
     result: Option<Value>,
     note: Option<String>,
     resolved_by: Option<String>,
     now: i64,
-) -> crate::SessionsResult<agentkit_store::ExecutionReceiptRecord> {
+) -> crate::SessionsResult<ExecutionReceiptRecord, SessionFault<R>> {
     let invalid = |message: &str| crate::SessionsError::ReceiptInvalidInput(message.to_owned());
     let receipt = store
         .list_executions_by_chat(chat_id.to_owned())
         .await
-        .map_err(crate::SessionsError::Store)?
+        .map_err(SessionsError::Store)?
         .into_iter()
         .find(|record| record.execution_id == execution_id)
         // Same answer for "no such receipt" and "another chat's receipt":
@@ -81,10 +84,10 @@ pub async fn resolve_uncertain_execution(
             chat_id: chat_id.to_owned(),
         })?;
     let result = match (outcome, result) {
-        (agentkit_store::ResolutionOutcome::Completed, Some(value)) => {
+        (ResolutionOutcome::Completed, Some(value)) => {
             Some(operator_completed_result(value).map_err(|error| invalid(&error))?)
         }
-        (agentkit_store::ResolutionOutcome::Completed, None) => {
+        (ResolutionOutcome::Completed, None) => {
             return Err(invalid("A completed resolution requires a result."));
         }
         (_, Some(_)) => {
@@ -95,7 +98,7 @@ pub async fn resolve_uncertain_execution(
     store
         .resolve_execution(
             receipt.execution_id,
-            agentkit_store::ResolveExecution {
+            ResolveExecution {
                 outcome,
                 result,
                 note,
@@ -104,5 +107,5 @@ pub async fn resolve_uncertain_execution(
             },
         )
         .await
-        .map_err(crate::SessionsError::Store)
+        .map_err(SessionsError::Store)
 }

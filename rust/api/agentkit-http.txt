@@ -25,10 +25,10 @@ pub fn agentkit_http::CorsConfig::preflight(&self, &str, &[&str]) -> axum_core::
 pub struct agentkit_http::DesktopBackend
 impl agentkit_http::DesktopBackend
 pub fn agentkit_http::DesktopBackend::into_router(alloc::rcs::arc::Arc<Self>, agentkit_http::Config) -> axum::routing::Router
-pub fn agentkit_http::DesktopBackend::new(agentkit_sessions::store_aliases::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
-pub async fn agentkit_http::DesktopBackend::open(agentkit_sessions::store_aliases::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub fn agentkit_http::DesktopBackend::new(agentkit_chat::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
+pub async fn agentkit_http::DesktopBackend::open(agentkit_chat::AgentHost, agentkit_http::Actor, &str, &str) -> core::result::Result<Self, agentkit_http::Problem>
 pub fn agentkit_http::DesktopBackend::with_connections(self, agentkit_connections::repository::AppConnections, core::option::Option<alloc::rcs::arc::Arc<agentkit_connections::execution::NativeConnections>>, core::option::Option<agentkit_connections::secrets::SharedSecretStore>) -> Self
-pub fn agentkit_http::DesktopBackend::with_content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority>) -> Self
+pub fn agentkit_http::DesktopBackend::with_content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>) -> Self
 pub fn agentkit_http::DesktopBackend::with_insecure_http(self, bool) -> Self
 pub fn agentkit_http::DesktopBackend::with_mcp_configuration(self, alloc::rcs::arc::Arc<dyn agentkit_http::McpConfigurationPort>) -> Self
 pub fn agentkit_http::DesktopBackend::with_pinned_provider(self, &str) -> Self
