@@ -27,3 +27,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }
+
+agentkit-providers = { workspace = true }
+agentkit-governance = { workspace = true }
+serde.workspace = true
+http.workspace = true
+reqwest.workspace = true

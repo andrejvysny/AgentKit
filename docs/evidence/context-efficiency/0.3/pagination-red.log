@@ -1,0 +1,24 @@
+   Compiling agentkit-testkit v0.1.0 (/private/tmp/agentkit-context-03-candidate/rust/crates/testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/context_events.rs (rust/target/debug/deps/context_events-d195a9c9d867b67e)
+
+running 1 test
+test complete_log_includes_events_after_first_page ... FAILED
+
+failures:
+
+---- complete_log_includes_events_after_first_page stdout ----
+
+thread 'complete_log_includes_events_after_first_page' (34670050) panicked at crates/testkit/tests/context_events.rs:22:5:
+assertion `left == right` failed
+  left: 1000
+ right: 1001
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    complete_log_includes_events_after_first_page
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p agentkit-testkit --test context_events`

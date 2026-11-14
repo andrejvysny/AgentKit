@@ -1,0 +1,3879 @@
+{
+  "mode": "report-only",
+  "profiles": "custom AgentKit fixtures; tool-result elision enabled",
+  "capture": "provider-assembled Values, not literal HTTP wire bytes",
+  "comparison": "literal provider-assembled serialization through previous last input item; zero-based UTF-8 byte offsets; source hypotheses require corroboration",
+  "scope": "scripted offline sessions; not a full CE-02 or live-provider claim; Anthropic deferred",
+  "scenarios": [
+    {
+      "scenario": "control",
+      "protocol": "chat-completions",
+      "profile": "chat",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [
+        {
+          "previousRequest": 4,
+          "nextRequest": 5,
+          "byteOffset": 2390,
+          "path": "/messages/3/content",
+          "sourceHypothesis": "Stale tool-result elision: crates/chat/src/chat.rs:352 and chat/elision.rs:159"
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "scenario": "combined",
+      "protocol": "chat-completions",
+      "profile": "chat",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [
+        {
+          "previousRequest": 4,
+          "nextRequest": 5,
+          "byteOffset": 2390,
+          "path": "/messages/3/content",
+          "sourceHypothesis": "Stale tool-result elision: crates/chat/src/chat.rs:352 and chat/elision.rs:159"
+        },
+        {
+          "previousRequest": 8,
+          "nextRequest": 9,
+          "byteOffset": 121,
+          "path": "/messages/0/content",
+          "sourceHypothesis": "Project instructions reloaded: crates/chat/src/chat.rs:278"
+        },
+        {
+          "previousRequest": 12,
+          "nextRequest": 13,
+          "byteOffset": 57,
+          "path": "/messages/0/content",
+          "sourceHypothesis": "Managed selection applied: crates/chat/src/chat.rs:182,462"
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "scenario": "control",
+      "protocol": "chat-completions",
+      "profile": "coding",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [
+        {
+          "previousRequest": 4,
+          "nextRequest": 5,
+          "byteOffset": 2390,
+          "path": "/messages/3/content",
+          "sourceHypothesis": "Stale tool-result elision: crates/chat/src/chat.rs:352 and chat/elision.rs:159"
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "scenario": "combined",
+      "protocol": "chat-completions",
+      "profile": "coding",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [
+        {
+          "previousRequest": 4,
+          "nextRequest": 5,
+          "byteOffset": 2390,
+          "path": "/messages/3/content",
+          "sourceHypothesis": "Stale tool-result elision: crates/chat/src/chat.rs:352 and chat/elision.rs:159"
+        },
+        {
+          "previousRequest": 8,
+          "nextRequest": 9,
+          "byteOffset": 121,
+          "path": "/messages/0/content",
+          "sourceHypothesis": "Project instructions reloaded: crates/chat/src/chat.rs:278"
+        },
+        {
+          "previousRequest": 12,
+          "nextRequest": 13,
+          "byteOffset": 57,
+          "path": "/messages/0/content",
+          "sourceHypothesis": "Managed selection applied: crates/chat/src/chat.rs:182,462"
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "scenario": "control",
+      "protocol": "responses",
+      "profile": "chat",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [],
+      "exceptions": []
+    },
+    {
+      "scenario": "combined",
+      "protocol": "responses",
+      "profile": "chat",
+      "turnCount": 30,
+      "requestCount": 8,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed"
+      ],
+      "failures": [
+        {
+          "turn": 5,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d703-776b-8e78-a72d5262b77e",
+              "timestamp": "2026-11-14T17:31:02.801Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d711-733d-8fd0-8a5f2442fe5b",
+              "seq": 0,
+              "attemptId": "01a1db1c-d706-7386-85f7-1d7ffe12e69f",
+              "data": {
+                "requestId": "01a1db1c-d711-733d-8fd0-8a5e76ec0010",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 1999,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d703-776b-8e78-a72d5262b77e",
+              "timestamp": "2026-11-14T17:31:02.803Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d713-7320-b7af-6a3bbc5f49fa",
+              "seq": 1,
+              "attemptId": "01a1db1c-d706-7386-85f7-1d7ffe12e69f",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d703-776b-8e78-a72d5262b77e",
+              "timestamp": "2026-11-14T17:31:02.804Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d714-759d-9ac6-730ef37cea44",
+              "seq": 2,
+              "attemptId": "01a1db1c-d706-7386-85f7-1d7ffe12e69f",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d703-776b-8e78-a72d5262b77e",
+              "seq": 3,
+              "eventId": "01a1db1c-d715-73b6-88cc-cd2354dfe21a",
+              "timestamp": "2026-11-14T17:31:02.805Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d706-7386-85f7-1d7ffe12e69f"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 6,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d719-7403-abd2-d61c7eda07da",
+              "timestamp": "2026-11-14T17:31:02.823Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d727-76bd-9e51-47e8b38ef721",
+              "seq": 0,
+              "attemptId": "01a1db1c-d71c-77fc-aded-f60d9de5c219",
+              "data": {
+                "requestId": "01a1db1c-d727-76bd-9e51-47e76000335e",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2001,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d719-7403-abd2-d61c7eda07da",
+              "timestamp": "2026-11-14T17:31:02.825Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d729-755c-a52f-ff8f0cb66e60",
+              "seq": 1,
+              "attemptId": "01a1db1c-d71c-77fc-aded-f60d9de5c219",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d719-7403-abd2-d61c7eda07da",
+              "timestamp": "2026-11-14T17:31:02.827Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d72b-70ab-96ce-5e92acbfb219",
+              "seq": 2,
+              "attemptId": "01a1db1c-d71c-77fc-aded-f60d9de5c219",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d719-7403-abd2-d61c7eda07da",
+              "seq": 3,
+              "eventId": "01a1db1c-d72c-764f-a26b-3eedc639e7f1",
+              "timestamp": "2026-11-14T17:31:02.828Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d71c-77fc-aded-f60d9de5c219"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 7,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d731-75f7-ad98-83ad1aab5709",
+              "timestamp": "2026-11-14T17:31:02.848Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d740-742b-8a88-2a4e4ff95db0",
+              "seq": 0,
+              "attemptId": "01a1db1c-d734-77c7-9937-7bd818412720",
+              "data": {
+                "requestId": "01a1db1c-d740-742b-8a88-2a4d4595ecae",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2010,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d731-75f7-ad98-83ad1aab5709",
+              "timestamp": "2026-11-14T17:31:02.850Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d742-7126-a94c-ab142d04a2b4",
+              "seq": 1,
+              "attemptId": "01a1db1c-d734-77c7-9937-7bd818412720",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d731-75f7-ad98-83ad1aab5709",
+              "timestamp": "2026-11-14T17:31:02.852Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d744-726d-8aa8-32abf483a29d",
+              "seq": 2,
+              "attemptId": "01a1db1c-d734-77c7-9937-7bd818412720",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d731-75f7-ad98-83ad1aab5709",
+              "seq": 3,
+              "eventId": "01a1db1c-d745-756c-8f22-965eb98f3ca0",
+              "timestamp": "2026-11-14T17:31:02.853Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d734-77c7-9937-7bd818412720"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 8,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d749-77f5-a596-76fbeffba89f",
+              "timestamp": "2026-11-14T17:31:02.873Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d759-72f4-b1a0-6ed5e5d5c615",
+              "seq": 0,
+              "attemptId": "01a1db1c-d74d-7564-a755-6190689f5a76",
+              "data": {
+                "requestId": "01a1db1c-d759-72f4-b1a0-6ed40ef856b9",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2012,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d749-77f5-a596-76fbeffba89f",
+              "timestamp": "2026-11-14T17:31:02.875Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d75b-7542-99f7-5d62fd940466",
+              "seq": 1,
+              "attemptId": "01a1db1c-d74d-7564-a755-6190689f5a76",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d749-77f5-a596-76fbeffba89f",
+              "timestamp": "2026-11-14T17:31:02.877Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d75d-70a4-b9cd-18c90a83a729",
+              "seq": 2,
+              "attemptId": "01a1db1c-d74d-7564-a755-6190689f5a76",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d749-77f5-a596-76fbeffba89f",
+              "seq": 3,
+              "eventId": "01a1db1c-d75e-764b-bf45-08362b0cc798",
+              "timestamp": "2026-11-14T17:31:02.878Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d74d-7564-a755-6190689f5a76"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 9,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d763-7744-956b-fabf433a40b7",
+              "timestamp": "2026-11-14T17:31:02.900Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d774-717c-a139-67d08ec18fdc",
+              "seq": 0,
+              "attemptId": "01a1db1c-d767-7567-a41c-1ebf41b001b1",
+              "data": {
+                "requestId": "01a1db1c-d774-717c-a139-67cfbf01696b",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2048,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d763-7744-956b-fabf433a40b7",
+              "timestamp": "2026-11-14T17:31:02.904Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d778-74bf-9b0e-12540fd2090c",
+              "seq": 1,
+              "attemptId": "01a1db1c-d767-7567-a41c-1ebf41b001b1",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d763-7744-956b-fabf433a40b7",
+              "timestamp": "2026-11-14T17:31:02.906Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d77a-7542-a12d-994f5a0c5411",
+              "seq": 2,
+              "attemptId": "01a1db1c-d767-7567-a41c-1ebf41b001b1",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d763-7744-956b-fabf433a40b7",
+              "seq": 3,
+              "eventId": "01a1db1c-d77b-7671-9748-739093fd78ff",
+              "timestamp": "2026-11-14T17:31:02.907Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d767-7567-a41c-1ebf41b001b1"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 10,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d780-7249-9f65-53a73441f291",
+              "timestamp": "2026-11-14T17:31:02.930Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d792-7608-a00b-255842d7012e",
+              "seq": 0,
+              "attemptId": "01a1db1c-d784-715d-9519-75adfafe1391",
+              "data": {
+                "requestId": "01a1db1c-d791-76cd-ade3-cdc1ab13e6de",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2050,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d780-7249-9f65-53a73441f291",
+              "timestamp": "2026-11-14T17:31:02.931Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d793-7782-aa7a-3412e3253f76",
+              "seq": 1,
+              "attemptId": "01a1db1c-d784-715d-9519-75adfafe1391",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d780-7249-9f65-53a73441f291",
+              "timestamp": "2026-11-14T17:31:02.933Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d795-72b2-9cf2-d48a04634858",
+              "seq": 2,
+              "attemptId": "01a1db1c-d784-715d-9519-75adfafe1391",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d780-7249-9f65-53a73441f291",
+              "seq": 3,
+              "eventId": "01a1db1c-d797-7096-ab19-16996f170c8e",
+              "timestamp": "2026-11-14T17:31:02.935Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d784-715d-9519-75adfafe1391"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 11,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d79b-74a1-af4e-88a7a0187b47",
+              "timestamp": "2026-11-14T17:31:02.956Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7ac-71f7-ba69-4bea2bc6257e",
+              "seq": 0,
+              "attemptId": "01a1db1c-d79f-7340-9a82-2f8d232c6d4c",
+              "data": {
+                "requestId": "01a1db1c-d7ac-71f7-ba69-4be9755837a6",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2052,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d79b-74a1-af4e-88a7a0187b47",
+              "timestamp": "2026-11-14T17:31:02.958Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7ae-7528-98ec-fdc4e0a1b132",
+              "seq": 1,
+              "attemptId": "01a1db1c-d79f-7340-9a82-2f8d232c6d4c",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d79b-74a1-af4e-88a7a0187b47",
+              "timestamp": "2026-11-14T17:31:02.960Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7b0-7785-86c3-4522e0f5ae4d",
+              "seq": 2,
+              "attemptId": "01a1db1c-d79f-7340-9a82-2f8d232c6d4c",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d79b-74a1-af4e-88a7a0187b47",
+              "seq": 3,
+              "eventId": "01a1db1c-d7b1-71f3-8813-edaec416e1b4",
+              "timestamp": "2026-11-14T17:31:02.961Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d79f-7340-9a82-2f8d232c6d4c"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 12,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d7b5-7645-801d-637eafcbcdec",
+              "timestamp": "2026-11-14T17:31:02.982Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7c6-7245-9407-99a035814438",
+              "seq": 0,
+              "attemptId": "01a1db1c-d7b9-715c-82c7-ed99589b4731",
+              "data": {
+                "requestId": "01a1db1c-d7c6-7245-9407-999fc2945c2d",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2054,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d7b5-7645-801d-637eafcbcdec",
+              "timestamp": "2026-11-14T17:31:02.984Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7c8-70d7-8142-993cf198e78e",
+              "seq": 1,
+              "attemptId": "01a1db1c-d7b9-715c-82c7-ed99589b4731",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d7b5-7645-801d-637eafcbcdec",
+              "timestamp": "2026-11-14T17:31:02.986Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7ca-76c0-af3d-658c9fbae76e",
+              "seq": 2,
+              "attemptId": "01a1db1c-d7b9-715c-82c7-ed99589b4731",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d7b5-7645-801d-637eafcbcdec",
+              "seq": 3,
+              "eventId": "01a1db1c-d7cb-7027-aa1f-ca24ab1abbe2",
+              "timestamp": "2026-11-14T17:31:02.987Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d7b9-715c-82c7-ed99589b4731"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 13,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d7cf-7444-bf45-4b24737e9f5c",
+              "timestamp": "2026-11-14T17:31:03.008Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7e0-7641-acd7-21393c08ff28",
+              "seq": 0,
+              "attemptId": "01a1db1c-d7d3-76a5-bb77-0eb642570acd",
+              "data": {
+                "requestId": "01a1db1c-d7e0-7641-acd7-2138997d4201",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2056,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d7cf-7444-bf45-4b24737e9f5c",
+              "timestamp": "2026-11-14T17:31:03.010Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7e2-7413-98f9-5de5bee7ff70",
+              "seq": 1,
+              "attemptId": "01a1db1c-d7d3-76a5-bb77-0eb642570acd",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d7cf-7444-bf45-4b24737e9f5c",
+              "timestamp": "2026-11-14T17:31:03.012Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7e4-74c0-b863-34ff537f8c94",
+              "seq": 2,
+              "attemptId": "01a1db1c-d7d3-76a5-bb77-0eb642570acd",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d7cf-7444-bf45-4b24737e9f5c",
+              "seq": 3,
+              "eventId": "01a1db1c-d7e5-7069-a28d-47b79a570ea1",
+              "timestamp": "2026-11-14T17:31:03.013Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d7d3-76a5-bb77-0eb642570acd"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 14,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d7e9-71b9-a918-06dc15573068",
+              "timestamp": "2026-11-14T17:31:03.035Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7fb-769d-9bec-2c316361c893",
+              "seq": 0,
+              "attemptId": "01a1db1c-d7ee-714f-860e-af99b9d40b33",
+              "data": {
+                "requestId": "01a1db1c-d7fb-769d-9bec-2c30e4ae872d",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2058,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d7e9-71b9-a918-06dc15573068",
+              "timestamp": "2026-11-14T17:31:03.037Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7fd-70c6-83fa-da6444972335",
+              "seq": 1,
+              "attemptId": "01a1db1c-d7ee-714f-860e-af99b9d40b33",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d7e9-71b9-a918-06dc15573068",
+              "timestamp": "2026-11-14T17:31:03.039Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d7ff-7748-b3b3-20598f95e4a0",
+              "seq": 2,
+              "attemptId": "01a1db1c-d7ee-714f-860e-af99b9d40b33",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d7e9-71b9-a918-06dc15573068",
+              "seq": 3,
+              "eventId": "01a1db1c-d800-76e3-a3f4-63f940f325c4",
+              "timestamp": "2026-11-14T17:31:03.040Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d7ee-714f-860e-af99b9d40b33"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 15,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d804-7656-9726-97cb6b445fa3",
+              "timestamp": "2026-11-14T17:31:03.062Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d816-7369-8874-92f662d19959",
+              "seq": 0,
+              "attemptId": "01a1db1c-d809-7259-a1c5-d6b3a84097b3",
+              "data": {
+                "requestId": "01a1db1c-d815-7368-9be3-24fa39ed7776",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2060,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d804-7656-9726-97cb6b445fa3",
+              "timestamp": "2026-11-14T17:31:03.063Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d817-77b2-b588-fc4288ea6e32",
+              "seq": 1,
+              "attemptId": "01a1db1c-d809-7259-a1c5-d6b3a84097b3",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d804-7656-9726-97cb6b445fa3",
+              "timestamp": "2026-11-14T17:31:03.065Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d819-76da-8ab6-f89e0dc97bdb",
+              "seq": 2,
+              "attemptId": "01a1db1c-d809-7259-a1c5-d6b3a84097b3",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d804-7656-9726-97cb6b445fa3",
+              "seq": 3,
+              "eventId": "01a1db1c-d81b-72fb-9c4c-87dea4d1859f",
+              "timestamp": "2026-11-14T17:31:03.066Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d809-7259-a1c5-d6b3a84097b3"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 16,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d81f-73c9-b9e7-988274775bb3",
+              "timestamp": "2026-11-14T17:31:03.088Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d830-7021-b7e3-3c02335b7d99",
+              "seq": 0,
+              "attemptId": "01a1db1c-d823-77d9-8e46-6f46d8f62e94",
+              "data": {
+                "requestId": "01a1db1c-d830-7021-b7e3-3c017507707f",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2062,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d81f-73c9-b9e7-988274775bb3",
+              "timestamp": "2026-11-14T17:31:03.090Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d832-77a2-b98f-96ad01096733",
+              "seq": 1,
+              "attemptId": "01a1db1c-d823-77d9-8e46-6f46d8f62e94",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d81f-73c9-b9e7-988274775bb3",
+              "timestamp": "2026-11-14T17:31:03.092Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d834-7711-b455-9544714d7cd1",
+              "seq": 2,
+              "attemptId": "01a1db1c-d823-77d9-8e46-6f46d8f62e94",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d81f-73c9-b9e7-988274775bb3",
+              "seq": 3,
+              "eventId": "01a1db1c-d835-7351-920b-467fe92b0816",
+              "timestamp": "2026-11-14T17:31:03.093Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d823-77d9-8e46-6f46d8f62e94"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 17,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d839-746b-b236-e7c56232f29c",
+              "timestamp": "2026-11-14T17:31:03.114Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d84a-7214-8606-74fbc30d323c",
+              "seq": 0,
+              "attemptId": "01a1db1c-d83d-7717-a9d2-e5f7509d20c0",
+              "data": {
+                "requestId": "01a1db1c-d84a-7214-8606-74fad45669fd",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2064,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d839-746b-b236-e7c56232f29c",
+              "timestamp": "2026-11-14T17:31:03.116Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d84c-7301-a196-d1e39e30e92e",
+              "seq": 1,
+              "attemptId": "01a1db1c-d83d-7717-a9d2-e5f7509d20c0",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d839-746b-b236-e7c56232f29c",
+              "timestamp": "2026-11-14T17:31:03.118Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d84e-7072-aa47-67702c597b0b",
+              "seq": 2,
+              "attemptId": "01a1db1c-d83d-7717-a9d2-e5f7509d20c0",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d839-746b-b236-e7c56232f29c",
+              "seq": 3,
+              "eventId": "01a1db1c-d84f-71f4-a8ca-cd016c47fa9d",
+              "timestamp": "2026-11-14T17:31:03.119Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d83d-7717-a9d2-e5f7509d20c0"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 18,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d853-712d-bb51-3ab8699c3899",
+              "timestamp": "2026-11-14T17:31:03.141Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d865-7400-ba45-de07c190c141",
+              "seq": 0,
+              "attemptId": "01a1db1c-d858-7755-bcb3-79c7ad0c9963",
+              "data": {
+                "requestId": "01a1db1c-d865-7400-ba45-de06cad5b7c3",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2066,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d853-712d-bb51-3ab8699c3899",
+              "timestamp": "2026-11-14T17:31:03.142Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d866-72b5-be2c-4002f6369a4f",
+              "seq": 1,
+              "attemptId": "01a1db1c-d858-7755-bcb3-79c7ad0c9963",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d853-712d-bb51-3ab8699c3899",
+              "timestamp": "2026-11-14T17:31:03.144Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d868-75c6-81fa-707b4bcde645",
+              "seq": 2,
+              "attemptId": "01a1db1c-d858-7755-bcb3-79c7ad0c9963",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d853-712d-bb51-3ab8699c3899",
+              "seq": 3,
+              "eventId": "01a1db1c-d86a-71a4-bbf2-32229d5b730c",
+              "timestamp": "2026-11-14T17:31:03.146Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d858-7755-bcb3-79c7ad0c9963"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 19,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d86e-71c6-838f-1fde63069cfa",
+              "timestamp": "2026-11-14T17:31:03.167Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d87f-7474-8215-0b993036ea7b",
+              "seq": 0,
+              "attemptId": "01a1db1c-d872-71f9-85f8-b34a7f3d649e",
+              "data": {
+                "requestId": "01a1db1c-d87f-7474-8215-0b983de252b5",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2068,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d86e-71c6-838f-1fde63069cfa",
+              "timestamp": "2026-11-14T17:31:03.169Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d881-736c-b5e7-f10fe2bdc6e6",
+              "seq": 1,
+              "attemptId": "01a1db1c-d872-71f9-85f8-b34a7f3d649e",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d86e-71c6-838f-1fde63069cfa",
+              "timestamp": "2026-11-14T17:31:03.171Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d883-7389-b40b-ddf61f7b69d8",
+              "seq": 2,
+              "attemptId": "01a1db1c-d872-71f9-85f8-b34a7f3d649e",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d86e-71c6-838f-1fde63069cfa",
+              "seq": 3,
+              "eventId": "01a1db1c-d884-7751-b8bc-8f676dcc131e",
+              "timestamp": "2026-11-14T17:31:03.172Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d872-71f9-85f8-b34a7f3d649e"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 20,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d888-7458-a430-2c7ff39562ff",
+              "timestamp": "2026-11-14T17:31:03.194Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d89a-75ee-a23a-c88daab7ddb4",
+              "seq": 0,
+              "attemptId": "01a1db1c-d88d-77a8-8639-07a0f0eeb2f0",
+              "data": {
+                "requestId": "01a1db1c-d899-7763-9c25-0113864b5bb0",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2070,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d888-7458-a430-2c7ff39562ff",
+              "timestamp": "2026-11-14T17:31:03.195Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d89b-72c9-abaf-7890f96be771",
+              "seq": 1,
+              "attemptId": "01a1db1c-d88d-77a8-8639-07a0f0eeb2f0",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d888-7458-a430-2c7ff39562ff",
+              "timestamp": "2026-11-14T17:31:03.197Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d89d-76e6-b9a7-3d75b3c9025c",
+              "seq": 2,
+              "attemptId": "01a1db1c-d88d-77a8-8639-07a0f0eeb2f0",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d888-7458-a430-2c7ff39562ff",
+              "seq": 3,
+              "eventId": "01a1db1c-d89f-774d-b5ad-6b16641060ef",
+              "timestamp": "2026-11-14T17:31:03.199Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d88d-77a8-8639-07a0f0eeb2f0"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 21,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d8a3-71ad-90d1-93c8ff73ad8d",
+              "timestamp": "2026-11-14T17:31:03.220Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8b4-71fc-a661-b2e57464b887",
+              "seq": 0,
+              "attemptId": "01a1db1c-d8a7-75fe-8a4b-432f0b432074",
+              "data": {
+                "requestId": "01a1db1c-d8b4-71fc-a661-b2e479920441",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2072,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d8a3-71ad-90d1-93c8ff73ad8d",
+              "timestamp": "2026-11-14T17:31:03.222Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8b6-7594-a7cb-361a1c88141d",
+              "seq": 1,
+              "attemptId": "01a1db1c-d8a7-75fe-8a4b-432f0b432074",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d8a3-71ad-90d1-93c8ff73ad8d",
+              "timestamp": "2026-11-14T17:31:03.224Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8b8-7514-a1ab-88df6d571a3b",
+              "seq": 2,
+              "attemptId": "01a1db1c-d8a7-75fe-8a4b-432f0b432074",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d8a3-71ad-90d1-93c8ff73ad8d",
+              "seq": 3,
+              "eventId": "01a1db1c-d8b9-761d-b462-b92c1807f5ae",
+              "timestamp": "2026-11-14T17:31:03.225Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d8a7-75fe-8a4b-432f0b432074"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 22,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d8bd-770c-9215-aab58eb0294a",
+              "timestamp": "2026-11-14T17:31:03.247Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8cf-7298-8eb2-5089712e0e10",
+              "seq": 0,
+              "attemptId": "01a1db1c-d8c2-7629-b633-0987dc19b2a2",
+              "data": {
+                "requestId": "01a1db1c-d8cf-7298-8eb2-5088a05904a7",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2074,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d8bd-770c-9215-aab58eb0294a",
+              "timestamp": "2026-11-14T17:31:03.249Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8d1-745b-b3ae-1478c5903b38",
+              "seq": 1,
+              "attemptId": "01a1db1c-d8c2-7629-b633-0987dc19b2a2",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d8bd-770c-9215-aab58eb0294a",
+              "timestamp": "2026-11-14T17:31:03.250Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8d2-772a-a1bd-a6a3fd68eafc",
+              "seq": 2,
+              "attemptId": "01a1db1c-d8c2-7629-b633-0987dc19b2a2",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d8bd-770c-9215-aab58eb0294a",
+              "seq": 3,
+              "eventId": "01a1db1c-d8d4-7603-9427-5827aa3a7866",
+              "timestamp": "2026-11-14T17:31:03.252Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d8c2-7629-b633-0987dc19b2a2"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 23,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d8d8-744e-9f7e-a5ea9c891f0b",
+              "timestamp": "2026-11-14T17:31:03.274Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8ea-7393-b8b3-c3df19d12cfe",
+              "seq": 0,
+              "attemptId": "01a1db1c-d8dd-7674-9ec9-46b09ca93b0c",
+              "data": {
+                "requestId": "01a1db1c-d8ea-7393-b8b3-c3dee83e019c",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2076,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d8d8-744e-9f7e-a5ea9c891f0b",
+              "timestamp": "2026-11-14T17:31:03.275Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8eb-7545-bc47-e67f7a38fb2b",
+              "seq": 1,
+              "attemptId": "01a1db1c-d8dd-7674-9ec9-46b09ca93b0c",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d8d8-744e-9f7e-a5ea9c891f0b",
+              "timestamp": "2026-11-14T17:31:03.277Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d8ed-7371-adbb-f1fb358ef064",
+              "seq": 2,
+              "attemptId": "01a1db1c-d8dd-7674-9ec9-46b09ca93b0c",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d8d8-744e-9f7e-a5ea9c891f0b",
+              "seq": 3,
+              "eventId": "01a1db1c-d8ef-7234-abce-56618004e43a",
+              "timestamp": "2026-11-14T17:31:03.279Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d8dd-7674-9ec9-46b09ca93b0c"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 24,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d8f3-77a9-8983-2c0c8715cb1a",
+              "timestamp": "2026-11-14T17:31:03.301Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d905-73ef-ab21-22900701c370",
+              "seq": 0,
+              "attemptId": "01a1db1c-d8f8-70eb-a83b-486e63b8d0a2",
+              "data": {
+                "requestId": "01a1db1c-d905-73ef-ab21-228f1f5daa60",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2078,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d8f3-77a9-8983-2c0c8715cb1a",
+              "timestamp": "2026-11-14T17:31:03.302Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d906-7516-9701-55f704e68e8c",
+              "seq": 1,
+              "attemptId": "01a1db1c-d8f8-70eb-a83b-486e63b8d0a2",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d8f3-77a9-8983-2c0c8715cb1a",
+              "timestamp": "2026-11-14T17:31:03.304Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d908-7667-89de-1d5cb5254981",
+              "seq": 2,
+              "attemptId": "01a1db1c-d8f8-70eb-a83b-486e63b8d0a2",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d8f3-77a9-8983-2c0c8715cb1a",
+              "seq": 3,
+              "eventId": "01a1db1c-d90a-77a3-b7a1-f55dfb0a6a01",
+              "timestamp": "2026-11-14T17:31:03.306Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d8f8-70eb-a83b-486e63b8d0a2"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 25,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d90e-741a-9242-0c845a61f6f6",
+              "timestamp": "2026-11-14T17:31:03.328Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d920-7577-a679-42436ee8fcb9",
+              "seq": 0,
+              "attemptId": "01a1db1c-d913-75a9-9aca-e01d06a74d8e",
+              "data": {
+                "requestId": "01a1db1c-d920-7577-a679-42424dff537d",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2080,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d90e-741a-9242-0c845a61f6f6",
+              "timestamp": "2026-11-14T17:31:03.330Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d922-774e-94f2-b6fb46f60786",
+              "seq": 1,
+              "attemptId": "01a1db1c-d913-75a9-9aca-e01d06a74d8e",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d90e-741a-9242-0c845a61f6f6",
+              "timestamp": "2026-11-14T17:31:03.332Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d924-7267-9955-0a19e6fc6e0e",
+              "seq": 2,
+              "attemptId": "01a1db1c-d913-75a9-9aca-e01d06a74d8e",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d90e-741a-9242-0c845a61f6f6",
+              "seq": 3,
+              "eventId": "01a1db1c-d925-715f-823e-d50be4616ccd",
+              "timestamp": "2026-11-14T17:31:03.333Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d913-75a9-9aca-e01d06a74d8e"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 26,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d929-75cd-b161-3fa38c9097d6",
+              "timestamp": "2026-11-14T17:31:03.355Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d93b-76b1-935e-15940ed4618f",
+              "seq": 0,
+              "attemptId": "01a1db1c-d92e-72c4-aae8-b6b5c4fbeee3",
+              "data": {
+                "requestId": "01a1db1c-d93b-76b1-935e-1593e4688fd4",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2082,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d929-75cd-b161-3fa38c9097d6",
+              "timestamp": "2026-11-14T17:31:03.357Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d93d-7545-904c-6d59c049f870",
+              "seq": 1,
+              "attemptId": "01a1db1c-d92e-72c4-aae8-b6b5c4fbeee3",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d929-75cd-b161-3fa38c9097d6",
+              "timestamp": "2026-11-14T17:31:03.359Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d93f-7601-b424-cbe493391a75",
+              "seq": 2,
+              "attemptId": "01a1db1c-d92e-72c4-aae8-b6b5c4fbeee3",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d929-75cd-b161-3fa38c9097d6",
+              "seq": 3,
+              "eventId": "01a1db1c-d940-7756-927c-8c897439caee",
+              "timestamp": "2026-11-14T17:31:03.360Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d92e-72c4-aae8-b6b5c4fbeee3"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 27,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d944-726e-9470-e6bc9aa782f6",
+              "timestamp": "2026-11-14T17:31:03.383Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d957-7618-849e-b2b50b338968",
+              "seq": 0,
+              "attemptId": "01a1db1c-d949-74c6-a29e-cc6405df4441",
+              "data": {
+                "requestId": "01a1db1c-d956-7499-84ce-d1f3f7d553c3",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2084,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d944-726e-9470-e6bc9aa782f6",
+              "timestamp": "2026-11-14T17:31:03.384Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d958-7374-afc4-b29d4b804599",
+              "seq": 1,
+              "attemptId": "01a1db1c-d949-74c6-a29e-cc6405df4441",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d944-726e-9470-e6bc9aa782f6",
+              "timestamp": "2026-11-14T17:31:03.386Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d95a-71a9-9bf8-1e2c87961b7c",
+              "seq": 2,
+              "attemptId": "01a1db1c-d949-74c6-a29e-cc6405df4441",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d944-726e-9470-e6bc9aa782f6",
+              "seq": 3,
+              "eventId": "01a1db1c-d95b-700f-b145-0f4aa9cef58d",
+              "timestamp": "2026-11-14T17:31:03.387Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d949-74c6-a29e-cc6405df4441"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 28,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d960-7438-8caa-bd91c044bdb7",
+              "timestamp": "2026-11-14T17:31:03.411Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d973-7078-bbd5-30584957e226",
+              "seq": 0,
+              "attemptId": "01a1db1c-d965-724f-82b4-c1054c005721",
+              "data": {
+                "requestId": "01a1db1c-d973-7078-bbd5-3057e4e1b2e5",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2086,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d960-7438-8caa-bd91c044bdb7",
+              "timestamp": "2026-11-14T17:31:03.412Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d974-7330-9eda-7753d203fd3b",
+              "seq": 1,
+              "attemptId": "01a1db1c-d965-724f-82b4-c1054c005721",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d960-7438-8caa-bd91c044bdb7",
+              "timestamp": "2026-11-14T17:31:03.414Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d976-75ed-b972-a22ea0e56276",
+              "seq": 2,
+              "attemptId": "01a1db1c-d965-724f-82b4-c1054c005721",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d960-7438-8caa-bd91c044bdb7",
+              "seq": 3,
+              "eventId": "01a1db1c-d978-7132-b0eb-1ca90ce999d9",
+              "timestamp": "2026-11-14T17:31:03.416Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d965-724f-82b4-c1054c005721"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 29,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d97c-7421-a4f0-06cb3497823f",
+              "timestamp": "2026-11-14T17:31:03.438Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d98e-7221-9a40-cb3b1fb0be3a",
+              "seq": 0,
+              "attemptId": "01a1db1c-d981-7202-aeb6-c528874573ec",
+              "data": {
+                "requestId": "01a1db1c-d98e-7221-9a40-cb3ad401f843",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2088,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d97c-7421-a4f0-06cb3497823f",
+              "timestamp": "2026-11-14T17:31:03.440Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d990-72ef-bc2a-3585af9e9d83",
+              "seq": 1,
+              "attemptId": "01a1db1c-d981-7202-aeb6-c528874573ec",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d97c-7421-a4f0-06cb3497823f",
+              "timestamp": "2026-11-14T17:31:03.442Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d992-70dd-8cf3-2dd4f77b5879",
+              "seq": 2,
+              "attemptId": "01a1db1c-d981-7202-aeb6-c528874573ec",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d97c-7421-a4f0-06cb3497823f",
+              "seq": 3,
+              "eventId": "01a1db1c-d993-719e-b672-c44cd96560af",
+              "timestamp": "2026-11-14T17:31:03.443Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d981-7202-aeb6-c528874573ec"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 30,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1c-d997-767e-b42b-da6860a4870c",
+              "timestamp": "2026-11-14T17:31:03.466Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d9aa-74f5-8132-32a2a7516ad2",
+              "seq": 0,
+              "attemptId": "01a1db1c-d99c-7033-b021-7476e64c6587",
+              "data": {
+                "requestId": "01a1db1c-d9aa-74f5-8132-32a1ae58057f",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2090,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1c-d997-767e-b42b-da6860a4870c",
+              "timestamp": "2026-11-14T17:31:03.467Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d9ab-7365-a228-72755cf3087e",
+              "seq": 1,
+              "attemptId": "01a1db1c-d99c-7033-b021-7476e64c6587",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1c-d997-767e-b42b-da6860a4870c",
+              "timestamp": "2026-11-14T17:31:03.470Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1c-d9ae-7322-a6d7-b597f8a84a67",
+              "seq": 2,
+              "attemptId": "01a1db1c-d99c-7033-b021-7476e64c6587",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1c-d997-767e-b42b-da6860a4870c",
+              "seq": 3,
+              "eventId": "01a1db1c-d9af-7708-85ff-36ab51be13dd",
+              "timestamp": "2026-11-14T17:31:03.471Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1c-d99c-7033-b021-7476e64c6587"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        }
+      ],
+      "cacheBreakEvents": [],
+      "breaks": [],
+      "exceptions": []
+    },
+    {
+      "scenario": "selection",
+      "protocol": "responses",
+      "profile": "chat",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [
+        {
+          "previousRequest": 12,
+          "nextRequest": 13,
+          "byteOffset": 111,
+          "path": "/input/1/@order",
+          "sourceHypothesis": null
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "scenario": "tools",
+      "protocol": "responses",
+      "profile": "chat",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [],
+      "exceptions": []
+    },
+    {
+      "scenario": "control",
+      "protocol": "responses",
+      "profile": "coding",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [],
+      "exceptions": []
+    },
+    {
+      "scenario": "combined",
+      "protocol": "responses",
+      "profile": "coding",
+      "turnCount": 30,
+      "requestCount": 8,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed",
+        "Failed"
+      ],
+      "failures": [
+        {
+          "turn": 5,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-007e-77b3-8e47-75f433be85a5",
+              "timestamp": "2026-11-14T17:31:13.419Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-008b-756a-89fb-0423e692afec",
+              "seq": 0,
+              "attemptId": "01a1db1d-0081-74bc-8574-4ff654f525ff",
+              "data": {
+                "requestId": "01a1db1d-008b-756a-89fb-0422d3ab6dd7",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 1999,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-007e-77b3-8e47-75f433be85a5",
+              "timestamp": "2026-11-14T17:31:13.421Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-008d-736a-8bb5-bcc48d294305",
+              "seq": 1,
+              "attemptId": "01a1db1d-0081-74bc-8574-4ff654f525ff",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-007e-77b3-8e47-75f433be85a5",
+              "timestamp": "2026-11-14T17:31:13.422Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-008e-7586-9a4e-a6b81d6e90cf",
+              "seq": 2,
+              "attemptId": "01a1db1d-0081-74bc-8574-4ff654f525ff",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-007e-77b3-8e47-75f433be85a5",
+              "seq": 3,
+              "eventId": "01a1db1d-008f-77a3-9747-cba65b76df73",
+              "timestamp": "2026-11-14T17:31:13.423Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0081-74bc-8574-4ff654f525ff"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 6,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0093-7679-8e45-8b9096b15921",
+              "timestamp": "2026-11-14T17:31:13.440Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00a0-71fd-858e-b3e780d71e82",
+              "seq": 0,
+              "attemptId": "01a1db1d-0096-7221-90d0-13860726df7e",
+              "data": {
+                "requestId": "01a1db1d-00a0-71fd-858e-b3e670e90b58",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2001,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0093-7679-8e45-8b9096b15921",
+              "timestamp": "2026-11-14T17:31:13.442Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00a2-7228-999b-76daeeca105b",
+              "seq": 1,
+              "attemptId": "01a1db1d-0096-7221-90d0-13860726df7e",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0093-7679-8e45-8b9096b15921",
+              "timestamp": "2026-11-14T17:31:13.443Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00a3-73d6-8430-7b91c0b98283",
+              "seq": 2,
+              "attemptId": "01a1db1d-0096-7221-90d0-13860726df7e",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0093-7679-8e45-8b9096b15921",
+              "seq": 3,
+              "eventId": "01a1db1d-00a4-75bb-a7f2-6fb1015348ff",
+              "timestamp": "2026-11-14T17:31:13.444Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0096-7221-90d0-13860726df7e"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 7,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-00a9-73ed-a611-c258cd77f444",
+              "timestamp": "2026-11-14T17:31:13.465Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00b9-7668-b336-c165a3df37ef",
+              "seq": 0,
+              "attemptId": "01a1db1d-00ad-74b1-bbfc-6842410ce615",
+              "data": {
+                "requestId": "01a1db1d-00b9-7668-b336-c164ad1c707c",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2010,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-00a9-73ed-a611-c258cd77f444",
+              "timestamp": "2026-11-14T17:31:13.466Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00ba-7048-bd82-d78ce2e73dbf",
+              "seq": 1,
+              "attemptId": "01a1db1d-00ad-74b1-bbfc-6842410ce615",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-00a9-73ed-a611-c258cd77f444",
+              "timestamp": "2026-11-14T17:31:13.468Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00bc-75c6-acb5-ed9a3be13192",
+              "seq": 2,
+              "attemptId": "01a1db1d-00ad-74b1-bbfc-6842410ce615",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-00a9-73ed-a611-c258cd77f444",
+              "seq": 3,
+              "eventId": "01a1db1d-00be-7362-a03c-57ae5cc992c9",
+              "timestamp": "2026-11-14T17:31:13.470Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-00ad-74b1-bbfc-6842410ce615"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 8,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-00c2-74c1-bd79-e61110d62030",
+              "timestamp": "2026-11-14T17:31:13.489Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00d1-7102-b77a-113ff9feb297",
+              "seq": 0,
+              "attemptId": "01a1db1d-00c5-74a8-89b7-3f62b9c27166",
+              "data": {
+                "requestId": "01a1db1d-00d1-7102-b77a-113ef4d319d5",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 32,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2012,
+                "budgetTokens": 16352,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-00c2-74c1-bd79-e61110d62030",
+              "timestamp": "2026-11-14T17:31:13.490Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00d2-720c-adc9-b211f4be5dcd",
+              "seq": 1,
+              "attemptId": "01a1db1d-00c5-74a8-89b7-3f62b9c27166",
+              "data": { "model": "model", "toolCount": 1 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-00c2-74c1-bd79-e61110d62030",
+              "timestamp": "2026-11-14T17:31:13.492Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00d4-7389-8b16-0d78a48efe0d",
+              "seq": 2,
+              "attemptId": "01a1db1d-00c5-74a8-89b7-3f62b9c27166",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-00c2-74c1-bd79-e61110d62030",
+              "seq": 3,
+              "eventId": "01a1db1d-00d6-7026-9413-85b5d0985624",
+              "timestamp": "2026-11-14T17:31:13.494Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-00c5-74a8-89b7-3f62b9c27166"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 9,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-00da-751a-a6b6-a7c8c321e890",
+              "timestamp": "2026-11-14T17:31:13.514Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00ea-71f7-89cb-e3b975941c2e",
+              "seq": 0,
+              "attemptId": "01a1db1d-00de-76d4-9447-42f040c5d740",
+              "data": {
+                "requestId": "01a1db1d-00ea-71f7-89cb-e3b856521d71",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2048,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-00da-751a-a6b6-a7c8c321e890",
+              "timestamp": "2026-11-14T17:31:13.515Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00eb-76dd-9d4d-bbfc315dbcbb",
+              "seq": 1,
+              "attemptId": "01a1db1d-00de-76d4-9447-42f040c5d740",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-00da-751a-a6b6-a7c8c321e890",
+              "timestamp": "2026-11-14T17:31:13.517Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-00ed-77ce-bdbc-7611dc31d40f",
+              "seq": 2,
+              "attemptId": "01a1db1d-00de-76d4-9447-42f040c5d740",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-00da-751a-a6b6-a7c8c321e890",
+              "seq": 3,
+              "eventId": "01a1db1d-00ee-7042-8b18-b63327af1650",
+              "timestamp": "2026-11-14T17:31:13.518Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-00de-76d4-9447-42f040c5d740"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 10,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-00f2-7370-8467-402f51a3909a",
+              "timestamp": "2026-11-14T17:31:13.538Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0102-7697-976f-045857b5f15e",
+              "seq": 0,
+              "attemptId": "01a1db1d-00f6-767c-87f6-af20ba450b59",
+              "data": {
+                "requestId": "01a1db1d-0102-7697-976f-0457c4687a8c",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2050,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-00f2-7370-8467-402f51a3909a",
+              "timestamp": "2026-11-14T17:31:13.540Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0104-77b3-a301-ec57e84ce9ec",
+              "seq": 1,
+              "attemptId": "01a1db1d-00f6-767c-87f6-af20ba450b59",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-00f2-7370-8467-402f51a3909a",
+              "timestamp": "2026-11-14T17:31:13.542Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0106-7517-a584-710230790b53",
+              "seq": 2,
+              "attemptId": "01a1db1d-00f6-767c-87f6-af20ba450b59",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-00f2-7370-8467-402f51a3909a",
+              "seq": 3,
+              "eventId": "01a1db1d-0107-77ad-823f-f400fa5bc8b7",
+              "timestamp": "2026-11-14T17:31:13.543Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-00f6-767c-87f6-af20ba450b59"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 11,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-010b-74d0-99e7-3d2978ea5642",
+              "timestamp": "2026-11-14T17:31:13.563Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-011b-732f-bd18-9cbd6e7ed997",
+              "seq": 0,
+              "attemptId": "01a1db1d-010f-75aa-871e-5dcf8d9ffa7c",
+              "data": {
+                "requestId": "01a1db1d-011b-732f-bd18-9cbcd021f7b1",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2052,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-010b-74d0-99e7-3d2978ea5642",
+              "timestamp": "2026-11-14T17:31:13.564Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-011c-7121-9df2-778ef7f48b93",
+              "seq": 1,
+              "attemptId": "01a1db1d-010f-75aa-871e-5dcf8d9ffa7c",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-010b-74d0-99e7-3d2978ea5642",
+              "timestamp": "2026-11-14T17:31:13.566Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-011e-7778-a1a4-5c37b17dcbe3",
+              "seq": 2,
+              "attemptId": "01a1db1d-010f-75aa-871e-5dcf8d9ffa7c",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-010b-74d0-99e7-3d2978ea5642",
+              "seq": 3,
+              "eventId": "01a1db1d-011f-71b9-89cb-198b4d9a6281",
+              "timestamp": "2026-11-14T17:31:13.567Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-010f-75aa-871e-5dcf8d9ffa7c"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 12,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0123-74c6-9272-45f772f01f60",
+              "timestamp": "2026-11-14T17:31:13.587Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0133-77ba-b416-3d79bee3f5e4",
+              "seq": 0,
+              "attemptId": "01a1db1d-0127-7589-9188-8a60e897afaf",
+              "data": {
+                "requestId": "01a1db1d-0133-77ba-b416-3d78b6246103",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2054,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0123-74c6-9272-45f772f01f60",
+              "timestamp": "2026-11-14T17:31:13.589Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0135-71ba-baf8-a24431e09e4b",
+              "seq": 1,
+              "attemptId": "01a1db1d-0127-7589-9188-8a60e897afaf",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0123-74c6-9272-45f772f01f60",
+              "timestamp": "2026-11-14T17:31:13.591Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0137-70f2-8bab-c0c093aa576c",
+              "seq": 2,
+              "attemptId": "01a1db1d-0127-7589-9188-8a60e897afaf",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0123-74c6-9272-45f772f01f60",
+              "seq": 3,
+              "eventId": "01a1db1d-0138-7403-b5d9-d103b2c3471a",
+              "timestamp": "2026-11-14T17:31:13.592Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0127-7589-9188-8a60e897afaf"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 13,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-013c-7288-bed4-d660314b99a2",
+              "timestamp": "2026-11-14T17:31:13.612Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-014c-77df-9968-eebec58d4018",
+              "seq": 0,
+              "attemptId": "01a1db1d-0140-70e0-8764-b79b91423355",
+              "data": {
+                "requestId": "01a1db1d-014c-77df-9968-eebdd82ee61e",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2056,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-013c-7288-bed4-d660314b99a2",
+              "timestamp": "2026-11-14T17:31:13.613Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-014d-7203-8919-82efbab00ef5",
+              "seq": 1,
+              "attemptId": "01a1db1d-0140-70e0-8764-b79b91423355",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-013c-7288-bed4-d660314b99a2",
+              "timestamp": "2026-11-14T17:31:13.615Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-014f-76f9-931d-9b017e6847a8",
+              "seq": 2,
+              "attemptId": "01a1db1d-0140-70e0-8764-b79b91423355",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-013c-7288-bed4-d660314b99a2",
+              "seq": 3,
+              "eventId": "01a1db1d-0151-727a-8c51-8b904f2decf3",
+              "timestamp": "2026-11-14T17:31:13.617Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0140-70e0-8764-b79b91423355"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 14,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0154-73fd-87d1-734325c1c47b",
+              "timestamp": "2026-11-14T17:31:13.636Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0164-71c9-9148-f361563061dc",
+              "seq": 0,
+              "attemptId": "01a1db1d-0158-75e3-8bb5-69273d18477d",
+              "data": {
+                "requestId": "01a1db1d-0164-71c9-9148-f360e93cdbdc",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2058,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0154-73fd-87d1-734325c1c47b",
+              "timestamp": "2026-11-14T17:31:13.638Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0166-7398-8afa-28ff08e58d13",
+              "seq": 1,
+              "attemptId": "01a1db1d-0158-75e3-8bb5-69273d18477d",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0154-73fd-87d1-734325c1c47b",
+              "timestamp": "2026-11-14T17:31:13.640Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0168-7732-9144-67044a44d7c5",
+              "seq": 2,
+              "attemptId": "01a1db1d-0158-75e3-8bb5-69273d18477d",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0154-73fd-87d1-734325c1c47b",
+              "seq": 3,
+              "eventId": "01a1db1d-0169-75de-8cf4-de0f76e3b95e",
+              "timestamp": "2026-11-14T17:31:13.641Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0158-75e3-8bb5-69273d18477d"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 15,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-016d-77d0-881f-c47e5f5baa02",
+              "timestamp": "2026-11-14T17:31:13.661Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-017d-7066-a236-bc5ba7ac1077",
+              "seq": 0,
+              "attemptId": "01a1db1d-0171-739d-95f6-677658420dea",
+              "data": {
+                "requestId": "01a1db1d-017d-7066-a236-bc5a2b7a2ebb",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2060,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-016d-77d0-881f-c47e5f5baa02",
+              "timestamp": "2026-11-14T17:31:13.662Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-017e-7351-8a54-8c54789d6628",
+              "seq": 1,
+              "attemptId": "01a1db1d-0171-739d-95f6-677658420dea",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-016d-77d0-881f-c47e5f5baa02",
+              "timestamp": "2026-11-14T17:31:13.664Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0180-71fd-9fa0-b825bedd843e",
+              "seq": 2,
+              "attemptId": "01a1db1d-0171-739d-95f6-677658420dea",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-016d-77d0-881f-c47e5f5baa02",
+              "seq": 3,
+              "eventId": "01a1db1d-0181-73b6-9895-ec47cdf62a01",
+              "timestamp": "2026-11-14T17:31:13.665Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0171-739d-95f6-677658420dea"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 16,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0185-769f-9cab-c3fc0b113c64",
+              "timestamp": "2026-11-14T17:31:13.685Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0195-7775-9e01-0ab231639b45",
+              "seq": 0,
+              "attemptId": "01a1db1d-0189-730c-a8a9-05d2013d7b5d",
+              "data": {
+                "requestId": "01a1db1d-0195-7775-9e01-0ab1e649bde8",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2062,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0185-769f-9cab-c3fc0b113c64",
+              "timestamp": "2026-11-14T17:31:13.687Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0197-7381-9478-0cd22726dfcc",
+              "seq": 1,
+              "attemptId": "01a1db1d-0189-730c-a8a9-05d2013d7b5d",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0185-769f-9cab-c3fc0b113c64",
+              "timestamp": "2026-11-14T17:31:13.689Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0199-775b-9538-73c429f695cf",
+              "seq": 2,
+              "attemptId": "01a1db1d-0189-730c-a8a9-05d2013d7b5d",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0185-769f-9cab-c3fc0b113c64",
+              "seq": 3,
+              "eventId": "01a1db1d-019a-70fe-8bc8-882eb1d5be79",
+              "timestamp": "2026-11-14T17:31:13.690Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0189-730c-a8a9-05d2013d7b5d"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 17,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-019e-7419-9d27-4cccd41cace6",
+              "timestamp": "2026-11-14T17:31:13.711Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01af-778f-9e7b-b505fe02724b",
+              "seq": 0,
+              "attemptId": "01a1db1d-01a2-76c7-8f42-490449a0936d",
+              "data": {
+                "requestId": "01a1db1d-01af-778f-9e7b-b504ab1cadea",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2064,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-019e-7419-9d27-4cccd41cace6",
+              "timestamp": "2026-11-14T17:31:13.712Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01b0-74c3-9205-9b86e94f73ac",
+              "seq": 1,
+              "attemptId": "01a1db1d-01a2-76c7-8f42-490449a0936d",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-019e-7419-9d27-4cccd41cace6",
+              "timestamp": "2026-11-14T17:31:13.714Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01b2-710c-a255-85db3bd0fdcd",
+              "seq": 2,
+              "attemptId": "01a1db1d-01a2-76c7-8f42-490449a0936d",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-019e-7419-9d27-4cccd41cace6",
+              "seq": 3,
+              "eventId": "01a1db1d-01b3-715a-9998-74e21d90ba1e",
+              "timestamp": "2026-11-14T17:31:13.715Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-01a2-76c7-8f42-490449a0936d"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 18,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-01b7-7529-a00e-7f055a7aaf09",
+              "timestamp": "2026-11-14T17:31:13.736Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01c8-7164-a369-8edbce86160d",
+              "seq": 0,
+              "attemptId": "01a1db1d-01bc-71ac-b440-9f9fb151d410",
+              "data": {
+                "requestId": "01a1db1d-01c8-7164-a369-8edaaaacb4c3",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2066,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-01b7-7529-a00e-7f055a7aaf09",
+              "timestamp": "2026-11-14T17:31:13.738Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01ca-7655-b93b-cbc1fa30b503",
+              "seq": 1,
+              "attemptId": "01a1db1d-01bc-71ac-b440-9f9fb151d410",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-01b7-7529-a00e-7f055a7aaf09",
+              "timestamp": "2026-11-14T17:31:13.740Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01cc-7673-b9d4-11992d247144",
+              "seq": 2,
+              "attemptId": "01a1db1d-01bc-71ac-b440-9f9fb151d410",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-01b7-7529-a00e-7f055a7aaf09",
+              "seq": 3,
+              "eventId": "01a1db1d-01cd-7782-a795-b03414251d5e",
+              "timestamp": "2026-11-14T17:31:13.741Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-01bc-71ac-b440-9f9fb151d410"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 19,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-01d1-7335-b887-a00e024ab485",
+              "timestamp": "2026-11-14T17:31:13.761Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01e1-72ce-99fe-f01636db33a2",
+              "seq": 0,
+              "attemptId": "01a1db1d-01d5-7137-87c2-bf2d1a90c2a7",
+              "data": {
+                "requestId": "01a1db1d-01e1-72ce-99fe-f015e8a7911a",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2068,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-01d1-7335-b887-a00e024ab485",
+              "timestamp": "2026-11-14T17:31:13.763Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01e3-7601-b33d-15a4dfe75065",
+              "seq": 1,
+              "attemptId": "01a1db1d-01d5-7137-87c2-bf2d1a90c2a7",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-01d1-7335-b887-a00e024ab485",
+              "timestamp": "2026-11-14T17:31:13.765Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01e5-7101-9e4f-37e1a3ec05c5",
+              "seq": 2,
+              "attemptId": "01a1db1d-01d5-7137-87c2-bf2d1a90c2a7",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-01d1-7335-b887-a00e024ab485",
+              "seq": 3,
+              "eventId": "01a1db1d-01e6-77b9-8de0-65a5f2a033e1",
+              "timestamp": "2026-11-14T17:31:13.766Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-01d5-7137-87c2-bf2d1a90c2a7"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 20,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-01ea-71ed-a928-d0997bbf52d8",
+              "timestamp": "2026-11-14T17:31:13.786Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01fa-71fe-8b4c-12b4942f2a6f",
+              "seq": 0,
+              "attemptId": "01a1db1d-01ee-7568-ab2b-39c4bcbd9048",
+              "data": {
+                "requestId": "01a1db1d-01fa-71fe-8b4c-12b39d9daa18",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2070,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-01ea-71ed-a928-d0997bbf52d8",
+              "timestamp": "2026-11-14T17:31:13.788Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01fc-7086-8ed1-99bd020f1d6a",
+              "seq": 1,
+              "attemptId": "01a1db1d-01ee-7568-ab2b-39c4bcbd9048",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-01ea-71ed-a928-d0997bbf52d8",
+              "timestamp": "2026-11-14T17:31:13.790Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-01fe-718a-ae0b-139529f08175",
+              "seq": 2,
+              "attemptId": "01a1db1d-01ee-7568-ab2b-39c4bcbd9048",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-01ea-71ed-a928-d0997bbf52d8",
+              "seq": 3,
+              "eventId": "01a1db1d-01ff-7164-97de-95d935b2abd8",
+              "timestamp": "2026-11-14T17:31:13.791Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-01ee-7568-ab2b-39c4bcbd9048"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 21,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0203-74c9-b17f-bf44f48020cf",
+              "timestamp": "2026-11-14T17:31:13.812Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0214-776f-bdc0-449b3a285c04",
+              "seq": 0,
+              "attemptId": "01a1db1d-0207-70f2-b109-af17c84d83e0",
+              "data": {
+                "requestId": "01a1db1d-0214-776f-bdc0-449a2416e730",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2072,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0203-74c9-b17f-bf44f48020cf",
+              "timestamp": "2026-11-14T17:31:13.813Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0215-768e-85b7-9612e345efc9",
+              "seq": 1,
+              "attemptId": "01a1db1d-0207-70f2-b109-af17c84d83e0",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0203-74c9-b17f-bf44f48020cf",
+              "timestamp": "2026-11-14T17:31:13.815Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0217-7037-a56d-4ca7ffbd9886",
+              "seq": 2,
+              "attemptId": "01a1db1d-0207-70f2-b109-af17c84d83e0",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0203-74c9-b17f-bf44f48020cf",
+              "seq": 3,
+              "eventId": "01a1db1d-0218-708f-8776-cf14259427f0",
+              "timestamp": "2026-11-14T17:31:13.816Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0207-70f2-b109-af17c84d83e0"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 22,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-021c-7107-9453-8c3138dd00ec",
+              "timestamp": "2026-11-14T17:31:13.837Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-022d-72b8-85fb-f3ec7890e30b",
+              "seq": 0,
+              "attemptId": "01a1db1d-0221-76f8-8880-0f2b366a9fc6",
+              "data": {
+                "requestId": "01a1db1d-022d-72b8-85fb-f3eb4e1126b4",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2074,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-021c-7107-9453-8c3138dd00ec",
+              "timestamp": "2026-11-14T17:31:13.839Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-022f-7595-bcd4-1591b4982b80",
+              "seq": 1,
+              "attemptId": "01a1db1d-0221-76f8-8880-0f2b366a9fc6",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-021c-7107-9453-8c3138dd00ec",
+              "timestamp": "2026-11-14T17:31:13.841Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0231-703c-8e67-819f9a5f1905",
+              "seq": 2,
+              "attemptId": "01a1db1d-0221-76f8-8880-0f2b366a9fc6",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-021c-7107-9453-8c3138dd00ec",
+              "seq": 3,
+              "eventId": "01a1db1d-0232-760d-b639-10c72609888e",
+              "timestamp": "2026-11-14T17:31:13.842Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0221-76f8-8880-0f2b366a9fc6"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 23,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0236-732a-8d23-40a989a0bc5b",
+              "timestamp": "2026-11-14T17:31:13.863Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0247-74c3-804b-ae8c660983f3",
+              "seq": 0,
+              "attemptId": "01a1db1d-023b-7018-9595-35a3d2124d42",
+              "data": {
+                "requestId": "01a1db1d-0247-74c3-804b-ae8bf1fb6894",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2076,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0236-732a-8d23-40a989a0bc5b",
+              "timestamp": "2026-11-14T17:31:13.864Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0248-7436-8ef5-c3513f72f24d",
+              "seq": 1,
+              "attemptId": "01a1db1d-023b-7018-9595-35a3d2124d42",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0236-732a-8d23-40a989a0bc5b",
+              "timestamp": "2026-11-14T17:31:13.866Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-024a-7019-9c41-65ed7c1c3ac8",
+              "seq": 2,
+              "attemptId": "01a1db1d-023b-7018-9595-35a3d2124d42",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0236-732a-8d23-40a989a0bc5b",
+              "seq": 3,
+              "eventId": "01a1db1d-024b-71e3-90fc-6e577e639adb",
+              "timestamp": "2026-11-14T17:31:13.867Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-023b-7018-9595-35a3d2124d42"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 24,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-024f-7162-b4eb-dd45f6901bdb",
+              "timestamp": "2026-11-14T17:31:13.888Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0260-748f-9b93-ac82387da487",
+              "seq": 0,
+              "attemptId": "01a1db1d-0254-745a-819f-0ecb474fa2e6",
+              "data": {
+                "requestId": "01a1db1d-0260-748f-9b93-ac8114f847d4",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2078,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-024f-7162-b4eb-dd45f6901bdb",
+              "timestamp": "2026-11-14T17:31:13.890Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0262-73c2-bd52-4ef27cca0235",
+              "seq": 1,
+              "attemptId": "01a1db1d-0254-745a-819f-0ecb474fa2e6",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-024f-7162-b4eb-dd45f6901bdb",
+              "timestamp": "2026-11-14T17:31:13.892Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0264-7138-b0ca-c3246fcd443a",
+              "seq": 2,
+              "attemptId": "01a1db1d-0254-745a-819f-0ecb474fa2e6",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-024f-7162-b4eb-dd45f6901bdb",
+              "seq": 3,
+              "eventId": "01a1db1d-0265-7262-9488-96b5c622c992",
+              "timestamp": "2026-11-14T17:31:13.893Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0254-745a-819f-0ecb474fa2e6"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 25,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0269-7742-9305-82a5a99cfba9",
+              "timestamp": "2026-11-14T17:31:13.914Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-027a-7736-8cda-60b84f6d7e12",
+              "seq": 0,
+              "attemptId": "01a1db1d-026e-73b9-9132-d31d1be4b123",
+              "data": {
+                "requestId": "01a1db1d-027a-7736-8cda-60b75b9e1390",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2080,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0269-7742-9305-82a5a99cfba9",
+              "timestamp": "2026-11-14T17:31:13.916Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-027c-7311-8dd5-ef4c9179d4e7",
+              "seq": 1,
+              "attemptId": "01a1db1d-026e-73b9-9132-d31d1be4b123",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0269-7742-9305-82a5a99cfba9",
+              "timestamp": "2026-11-14T17:31:13.917Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-027d-7709-8d36-9ff980aed740",
+              "seq": 2,
+              "attemptId": "01a1db1d-026e-73b9-9132-d31d1be4b123",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0269-7742-9305-82a5a99cfba9",
+              "seq": 3,
+              "eventId": "01a1db1d-027f-748d-a7b2-a34784000f05",
+              "timestamp": "2026-11-14T17:31:13.919Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-026e-73b9-9132-d31d1be4b123"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 26,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-0283-7083-8c6b-f32aef201035",
+              "timestamp": "2026-11-14T17:31:13.940Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0294-75aa-a1e3-dad7aaea7479",
+              "seq": 0,
+              "attemptId": "01a1db1d-0288-736e-a77f-0787649921cc",
+              "data": {
+                "requestId": "01a1db1d-0294-75aa-a1e3-dad62e5017d2",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2082,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-0283-7083-8c6b-f32aef201035",
+              "timestamp": "2026-11-14T17:31:13.942Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0296-75b4-b362-ffb2c1274b10",
+              "seq": 1,
+              "attemptId": "01a1db1d-0288-736e-a77f-0787649921cc",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-0283-7083-8c6b-f32aef201035",
+              "timestamp": "2026-11-14T17:31:13.944Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0298-730b-8400-e259736dddb6",
+              "seq": 2,
+              "attemptId": "01a1db1d-0288-736e-a77f-0787649921cc",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-0283-7083-8c6b-f32aef201035",
+              "seq": 3,
+              "eventId": "01a1db1d-0299-773d-ba7b-f220b06a73d9",
+              "timestamp": "2026-11-14T17:31:13.945Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-0288-736e-a77f-0787649921cc"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 27,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-029d-70c9-a957-6ed890c21793",
+              "timestamp": "2026-11-14T17:31:13.966Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02ae-706d-a506-451ce6b90b40",
+              "seq": 0,
+              "attemptId": "01a1db1d-02a2-71b2-987f-e8ba3a24ebd5",
+              "data": {
+                "requestId": "01a1db1d-02ae-706d-a506-451b6bd0a22c",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2084,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-029d-70c9-a957-6ed890c21793",
+              "timestamp": "2026-11-14T17:31:13.968Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02b0-7345-8309-f05f66b0b844",
+              "seq": 1,
+              "attemptId": "01a1db1d-02a2-71b2-987f-e8ba3a24ebd5",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-029d-70c9-a957-6ed890c21793",
+              "timestamp": "2026-11-14T17:31:13.970Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02b2-7238-8da3-71e56ee5086b",
+              "seq": 2,
+              "attemptId": "01a1db1d-02a2-71b2-987f-e8ba3a24ebd5",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-029d-70c9-a957-6ed890c21793",
+              "seq": 3,
+              "eventId": "01a1db1d-02b3-74a8-8e99-8b78bc091ee0",
+              "timestamp": "2026-11-14T17:31:13.971Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-02a2-71b2-987f-e8ba3a24ebd5"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 28,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-02b7-70a7-8309-ebc3e5dd6bf7",
+              "timestamp": "2026-11-14T17:31:13.993Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02c9-71b0-b9d3-0f6d117e178a",
+              "seq": 0,
+              "attemptId": "01a1db1d-02bc-74c8-ae05-6aa0f2db9358",
+              "data": {
+                "requestId": "01a1db1d-02c9-71b0-b9d3-0f6c4493952f",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2086,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-02b7-70a7-8309-ebc3e5dd6bf7",
+              "timestamp": "2026-11-14T17:31:13.994Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02ca-7744-9784-55011668930a",
+              "seq": 1,
+              "attemptId": "01a1db1d-02bc-74c8-ae05-6aa0f2db9358",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-02b7-70a7-8309-ebc3e5dd6bf7",
+              "timestamp": "2026-11-14T17:31:13.996Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02cc-7275-bb75-518ffb49ce96",
+              "seq": 2,
+              "attemptId": "01a1db1d-02bc-74c8-ae05-6aa0f2db9358",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-02b7-70a7-8309-ebc3e5dd6bf7",
+              "seq": 3,
+              "eventId": "01a1db1d-02cd-7673-b5aa-0fd3995c4b59",
+              "timestamp": "2026-11-14T17:31:13.997Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-02bc-74c8-ae05-6aa0f2db9358"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 29,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-02d1-7519-a45b-0b5be5e407f0",
+              "timestamp": "2026-11-14T17:31:14.019Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02e3-7043-b823-63027a47c209",
+              "seq": 0,
+              "attemptId": "01a1db1d-02d6-7253-af46-9e3850dd364b",
+              "data": {
+                "requestId": "01a1db1d-02e3-7043-b823-630112fcbfff",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2088,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-02d1-7519-a45b-0b5be5e407f0",
+              "timestamp": "2026-11-14T17:31:14.021Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02e5-75c5-a9d2-7f04465713dd",
+              "seq": 1,
+              "attemptId": "01a1db1d-02d6-7253-af46-9e3850dd364b",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-02d1-7519-a45b-0b5be5e407f0",
+              "timestamp": "2026-11-14T17:31:14.023Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02e7-712f-b844-23cf68d18d3d",
+              "seq": 2,
+              "attemptId": "01a1db1d-02d6-7253-af46-9e3850dd364b",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-02d1-7519-a45b-0b5be5e407f0",
+              "seq": 3,
+              "eventId": "01a1db1d-02e8-75ba-8d32-a902dfcdbd4c",
+              "timestamp": "2026-11-14T17:31:14.024Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-02d6-7253-af46-9e3850dd364b"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        },
+        {
+          "turn": 30,
+          "status": "Failed",
+          "events": [
+            {
+              "type": "run.context.admitted",
+              "runId": "task_01a1db1d-02ec-76f3-a1e8-26e14b12f7b7",
+              "timestamp": "2026-11-14T17:31:14.046Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02fe-71ca-bd83-585a0377c901",
+              "seq": 0,
+              "attemptId": "01a1db1d-02f1-742b-adb4-86ee2be60154",
+              "data": {
+                "requestId": "01a1db1d-02fe-71ca-bd83-5859fa94ee12",
+                "windowTokens": 32768,
+                "windowSource": "fallback",
+                "reserveTokens": 16384,
+                "toolTokens": 66,
+                "extraTokens": 0,
+                "estimatedInputTokens": 2090,
+                "budgetTokens": 16318,
+                "maxOutputTokens": 16384
+              }
+            },
+            {
+              "type": "run.started",
+              "runId": "task_01a1db1d-02ec-76f3-a1e8-26e14b12f7b7",
+              "timestamp": "2026-11-14T17:31:14.047Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-02ff-7126-a6e0-cc6ccfdbc22e",
+              "seq": 1,
+              "attemptId": "01a1db1d-02f1-742b-adb4-86ee2be60154",
+              "data": { "model": "model", "toolCount": 2 }
+            },
+            {
+              "type": "run.failed",
+              "runId": "task_01a1db1d-02ec-76f3-a1e8-26e14b12f7b7",
+              "timestamp": "2026-11-14T17:31:14.049Z",
+              "contractVersion": "0.7.0",
+              "eventId": "evt_01a1db1d-0301-7278-b769-0e4d49060735",
+              "seq": 2,
+              "attemptId": "01a1db1d-02f1-742b-adb4-86ee2be60154",
+              "data": {
+                "errorMessage": "Responses provider failed: continuation_history_mismatch",
+                "errorCode": "continuation_history_mismatch"
+              }
+            },
+            {
+              "type": "run.warning",
+              "data": {
+                "code": "empty_response",
+                "message": "The model returned no answer."
+              },
+              "runId": "task_01a1db1d-02ec-76f3-a1e8-26e14b12f7b7",
+              "seq": 3,
+              "eventId": "01a1db1d-0302-7415-ad44-8495ed0d75d5",
+              "timestamp": "2026-11-14T17:31:14.050Z",
+              "contractVersion": "0.7.0",
+              "attemptId": "01a1db1d-02f1-742b-adb4-86ee2be60154"
+            }
+          ],
+          "sourceHint": "Continuation selection and history digest guards: crates/providers/src/responses_request.rs:68,169; event does not identify which guard failed"
+        }
+      ],
+      "cacheBreakEvents": [],
+      "breaks": [],
+      "exceptions": []
+    },
+    {
+      "scenario": "selection",
+      "protocol": "responses",
+      "profile": "coding",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [
+        {
+          "previousRequest": 12,
+          "nextRequest": 13,
+          "byteOffset": 111,
+          "path": "/input/1/@order",
+          "sourceHypothesis": null
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "scenario": "tools",
+      "protocol": "responses",
+      "profile": "coding",
+      "turnCount": 30,
+      "requestCount": 60,
+      "statuses": [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed",
+        "Completed"
+      ],
+      "failures": [],
+      "cacheBreakEvents": [],
+      "breaks": [],
+      "exceptions": []
+    }
+  ]
+}

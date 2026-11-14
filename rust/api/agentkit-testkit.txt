@@ -77,6 +77,39 @@ pub async fn agentkit_testkit::conformance::session_repository::run<T, F, Fut>(F
 pub mod agentkit_testkit::conformance::task_repository
 pub const agentkit_testkit::conformance::task_repository::CASES: &[&str]
 pub async fn agentkit_testkit::conformance::task_repository::run<R, F, Fut>(F) where R: agentkit_engine::repository::TaskRepository, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = R>
+pub mod agentkit_testkit::context_fixtures
+pub struct agentkit_testkit::context_fixtures::RecordingTransport<R: agentkit_engine::repository::TaskRepository>
+impl<R: agentkit_engine::repository::TaskRepository> agentkit_testkit::context_fixtures::RecordingTransport<R>
+pub fn agentkit_testkit::context_fixtures::RecordingTransport<R>::new(&'static str, alloc::vec::Vec<alloc::string::String>, R) -> Self
+pub fn agentkit_testkit::context_fixtures::RecordingTransport<R>::requests(&self) -> alloc::vec::Vec<(serde_json::value::Value, agentkit_testkit::prefix_harness::EventMark)>
+pub fn agentkit_testkit::context_fixtures::RecordingTransport<R>::set_current(&self, usize, &str)
+impl<R: agentkit_engine::repository::TaskRepository> agentkit_providers::transport::TrustedTransport for agentkit_testkit::context_fixtures::RecordingTransport<R>
+pub fn agentkit_testkit::context_fixtures::RecordingTransport<R>::auth_kind(&self) -> agentkit_core::provider_identity::AuthKind
+pub fn agentkit_testkit::context_fixtures::RecordingTransport<R>::identity(&self) -> agentkit_core::provider_identity::ConnectionIdentity
+pub fn agentkit_testkit::context_fixtures::RecordingTransport<R>::request<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::provider_identity::ConnectionIdentity, &'life2 str, core::option::Option<serde_json::value::Value>, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<reqwest::async_impl::response::Response, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_testkit::context_fixtures::ScriptedReadTool
+impl agentkit_testkit::context_fixtures::ScriptedReadTool
+pub fn agentkit_testkit::context_fixtures::ScriptedReadTool::new(&str, &str, alloc::vec::Vec<alloc::string::String>) -> Self
+impl agentkit_core::types::Tool for agentkit_testkit::context_fixtures::ScriptedReadTool
+pub fn agentkit_testkit::context_fixtures::ScriptedReadTool::definition(&self) -> &agentkit_core::types::ToolDefinition
+pub fn agentkit_testkit::context_fixtures::ScriptedReadTool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::types::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::types::ToolResult, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_testkit::context_fixtures::SwitchableContributor
+impl agentkit_testkit::context_fixtures::SwitchableContributor
+pub fn agentkit_testkit::context_fixtures::SwitchableContributor::new(alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>, alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>) -> Self
+impl agentkit_governance::contribution::ToolContributor for agentkit_testkit::context_fixtures::SwitchableContributor
+pub fn agentkit_testkit::context_fixtures::SwitchableContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::context_fixtures::SwitchableContributor::namespace(&self) -> &str
+pub async fn agentkit_testkit::context_fixtures::recorded_events<R: agentkit_engine::repository::TaskRepository>(&R, &str) -> core::result::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>, <R as agentkit_engine::repository::TaskRepository>::Error>
+pub mod agentkit_testkit::prefix_harness
+pub struct agentkit_testkit::prefix_harness::Break
+pub agentkit_testkit::prefix_harness::Break::path: alloc::string::String
+pub agentkit_testkit::prefix_harness::Break::position: usize
+pub struct agentkit_testkit::prefix_harness::EventMark
+pub agentkit_testkit::prefix_harness::EventMark::seq: f64
+pub agentkit_testkit::prefix_harness::EventMark::turn: usize
+pub fn agentkit_testkit::prefix_harness::compare(&serde_json::value::Value, &serde_json::value::Value, &str) -> core::option::Option<agentkit_testkit::prefix_harness::Break>
+pub fn agentkit_testkit::prefix_harness::compare_recorded(&serde_json::value::Value, &serde_json::value::Value, &str, agentkit_testkit::prefix_harness::EventMark, agentkit_testkit::prefix_harness::EventMark, &[agentkit_testkit::prefix_harness::EventMark]) -> core::option::Option<agentkit_testkit::prefix_harness::Break>
+pub fn agentkit_testkit::prefix_harness::exception_between(agentkit_testkit::prefix_harness::EventMark, agentkit_testkit::prefix_harness::EventMark, &[agentkit_testkit::prefix_harness::EventMark]) -> bool
 pub mod agentkit_testkit::scripted
 pub struct agentkit_testkit::scripted::ScriptedAdapter
 impl agentkit_testkit::scripted::ScriptedAdapter

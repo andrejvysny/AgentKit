@@ -16,8 +16,10 @@
 
 pub mod cache_provider;
 pub mod conformance;
+pub mod context_fixtures;
 mod mcp_memory;
 mod memory;
+pub mod prefix_harness;
 pub mod scripted;
 mod session_memory;
 

@@ -1,0 +1,34 @@
+   Compiling agentkit-testkit v0.1.0 (/private/tmp/agentkit-context-03-candidate/rust/crates/testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.32s
+     Running tests/prefix_comparison.rs (target/debug/deps/prefix_comparison-c6cfc097f4eebf81)
+
+running 7 tests
+test exception_requires_a_recorded_event_between_requests ... ok
+test fractional_event_marks_remain_between_dispatches ... FAILED
+test top_level_order_and_byte_offsets_use_actual_serialization ... FAILED
+test exception_must_change_comparison_result ... ok
+test detects_nested_object_order_and_preserves_argument_string_bytes ... ok
+test detects_removed_messages_and_changed_metadata ... ok
+test accepts_appends_but_reports_rewrites ... ok
+
+failures:
+
+---- fractional_event_marks_remain_between_dispatches stdout ----
+
+thread 'fractional_event_marks_remain_between_dispatches' (34667265) panicked at crates/testkit/tests/prefix_comparison.rs:94:78:
+called `Result::unwrap()` on an `Err` value: Error("invalid type: floating point `1.25`, expected i64", line: 1, column: 20)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- top_level_order_and_byte_offsets_use_actual_serialization stdout ----
+
+thread 'top_level_order_and_byte_offsets_use_actual_serialization' (34667266) panicked at crates/testkit/tests/prefix_comparison.rs:85:49:
+wire order must change prefix
+
+
+failures:
+    fractional_event_marks_remain_between_dispatches
+    top_level_order_and_byte_offsets_use_actual_serialization
+
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p agentkit-testkit --test prefix_comparison`
