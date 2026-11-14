@@ -86,6 +86,7 @@ const steps = [
     cmd: ["bun", "run", "--cwd", "packages/native", "build:native"],
   },
   { name: "build", cmd: ["bun", "run", "build"] },
+  { name: "umbrella", cmd: ["bun", "run", "build:umbrella"] },
   {
     name: "native",
     cmd: [

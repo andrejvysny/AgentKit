@@ -1,4 +1,16 @@
 pub mod agentkit_testkit
+pub mod agentkit_testkit::cache_provider
+pub struct agentkit_testkit::cache_provider::CacheSimulatingProvider
+impl agentkit_testkit::cache_provider::CacheSimulatingProvider
+pub fn agentkit_testkit::cache_provider::CacheSimulatingProvider::new(alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>, u64, u64, impl core::ops::function::Fn(&agentkit_core::types::ChatRequest) -> alloc::string::String + core::marker::Send + core::marker::Sync + 'static) -> Self
+impl agentkit_core::types::ChatProvider for agentkit_testkit::cache_provider::CacheSimulatingProvider
+pub fn agentkit_testkit::cache_provider::CacheSimulatingProvider::id(&self) -> &str
+pub fn agentkit_testkit::cache_provider::CacheSimulatingProvider::stream_chat(&self, agentkit_core::types::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::types::ProviderStream
+pub struct agentkit_testkit::cache_provider::WireObserver
+impl agentkit_testkit::cache_provider::WireObserver
+pub fn agentkit_testkit::cache_provider::WireObserver::observe(&self, &[u8])
+pub fn agentkit_testkit::cache_provider::WireObserver::snapshot(&self) -> alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub fn agentkit_testkit::cache_provider::mock_request_bytes(&agentkit_core::types::ChatRequest) -> alloc::vec::Vec<u8>
 pub mod agentkit_testkit::conformance
 pub mod agentkit_testkit::conformance::mcp_repository
 pub const agentkit_testkit::conformance::mcp_repository::CASES: &[&str]

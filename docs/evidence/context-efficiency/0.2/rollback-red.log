@@ -1,0 +1,24 @@
+   Compiling cache-prep v0.1.0 (/tmp/agentkit-context-02-prep)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/cache.rs (/tmp/agentkit-context-02-prep/target/debug/deps/cache-84d4295f1b8e94d9)
+
+running 1 test
+test rollback_clears_all_warm_prefixes_even_older_entries ... FAILED
+
+failures:
+
+---- rollback_clears_all_warm_prefixes_even_older_entries stdout ----
+
+thread 'rollback_clears_all_warm_prefixes_even_older_entries' (34392285) panicked at tests/cache.rs:190:5:
+assertion `left == right` failed
+  left: Some(46)
+ right: Some(0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    rollback_clears_all_warm_prefixes_even_older_entries
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test cache`

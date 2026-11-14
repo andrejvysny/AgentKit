@@ -1,0 +1,163 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling libc v0.2.191
+   Compiling stable_deref_trait v1.2.1
+   Compiling version_check v0.9.5
+   Compiling memchr v2.8.3
+   Compiling cfg-if v1.0.5
+   Compiling autocfg v1.5.1
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling smallvec v1.16.4
+   Compiling utf8_iter v1.0.4
+   Compiling futures-core v0.3.34
+   Compiling getrandom v0.4.3
+   Compiling icu_normalizer_data v2.4.0
+   Compiling zmij v1.0.23
+   Compiling icu_properties_data v2.4.0
+   Compiling typenum v1.20.1
+   Compiling pin-project-lite v0.2.17
+   Compiling parking_lot_core v0.9.12
+   Compiling generic-array v0.14.7
+   Compiling num-traits v0.2.19
+   Compiling ref-cast v1.0.27
+   Compiling serde_json v1.0.150
+   Compiling hashbrown v0.17.1
+   Compiling zerocopy v0.8.63
+   Compiling equivalent v1.0.3
+   Compiling getrandom v0.3.4
+   Compiling indexmap v2.14.2
+   Compiling aho-corasick v1.1.5
+   Compiling ahash v0.8.12
+   Compiling syn v3.0.10
+   Compiling syn v2.0.119
+   Compiling itoa v1.0.19
+   Compiling futures-sink v0.3.34
+   Compiling regex-syntax v0.8.11
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling thiserror v2.0.18
+   Compiling bit-vec v0.8.0
+   Compiling once_cell v1.21.4
+   Compiling borrow-or-share v0.2.4
+   Compiling bit-set v0.8.0
+   Compiling futures-channel v0.3.34
+   Compiling regex-automata v0.4.18
+   Compiling synstructure v0.14.0
+   Compiling uuid v1.28.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling cpufeatures v0.2.17
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling outref v0.5.2
+   Compiling vsimd v0.8.0
+   Compiling serde_derive v1.0.228
+   Compiling thiserror-impl v2.0.18
+   Compiling futures-task v0.3.34
+   Compiling num-integer v0.1.47
+   Compiling num-complex v0.4.6
+   Compiling lazy_static v1.5.1
+   Compiling futures-io v0.3.34
+   Compiling num-bigint v0.4.8
+   Compiling num-iter v0.1.46
+   Compiling slab v0.4.12
+   Compiling percent-encoding v2.3.2
+   Compiling bytes v1.12.1
+   Compiling uuid-simd v0.8.0
+   Compiling sha2 v0.10.9
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.7
+   Compiling displaydoc v0.2.7
+   Compiling ref-cast-impl v1.0.27
+   Compiling futures-macro v0.3.34
+   Compiling num-rational v0.4.2
+   Compiling tokio-macros v2.7.2
+   Compiling zerofrom v0.1.8
+   Compiling fancy-regex v0.16.2
+   Compiling futures-util v0.3.34
+   Compiling regex v1.13.1
+   Compiling num v0.4.3
+   Compiling fraction v0.15.4
+   Compiling ryu-js v1.0.3
+   Compiling tokio v1.54.1
+   Compiling base64 v0.22.1
+   Compiling bytecount v0.6.9
+   Compiling num-cmp v0.1.0
+   Compiling async-stream-impl v0.3.6
+   Compiling regress v0.12.0
+   Compiling async-trait v0.1.89
+   Compiling async-stream v0.3.6
+   Compiling parking_lot v0.12.5
+   Compiling yoke v0.8.4
+   Compiling fluent-uri v0.3.2
+   Compiling email_address v0.2.9
+   Compiling referencing v0.33.0
+   Compiling futures-executor v0.3.34
+   Compiling futures v0.3.32
+   Compiling tokio-util v0.7.20
+   Compiling tokio-stream v0.1.19
+   Compiling agentkit-kernel v0.1.0 (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/rust/crates/kernel)
+   Compiling zerovec v0.11.9
+   Compiling zerotrie v0.2.5
+   Compiling tinystr v0.8.5
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.4.0
+   Compiling icu_locale_core v2.4.0
+   Compiling icu_provider v2.4.0
+   Compiling icu_normalizer v2.4.0
+   Compiling icu_properties v2.4.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling jsonschema v0.33.0
+   Compiling agentkit-contracts v0.1.0 (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/rust/crates/contracts)
+   Compiling agentkit-core v0.1.0 (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/rust/crates/core)
+   Compiling cache-prep v0.1.0 (/tmp/agentkit-context-02-prep)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.89s
+     Running unittests src/lib.rs (/tmp/agentkit-context-02-prep/target/debug/deps/cache_prep-a6b25c6baa41448a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cache.rs (/tmp/agentkit-context-02-prep/target/debug/deps/cache-84d4295f1b8e94d9)
+
+running 7 tests
+test observer_preserves_actual_bytes_and_tool_arguments ... ok
+test partial_hit_reports_exact_common_prefix ... ok
+test hits_and_key_isolation ... ok
+test minimum_is_inclusive_and_prefix_count_is_floored ... ok
+test changed_prefix_and_expiry ... ok
+test retains_distinct_warm_prefixes_for_each_key ... FAILED
+test provider_usage_survives_real_run_chat ... FAILED
+
+failures:
+
+---- retains_distinct_warm_prefixes_for_each_key stdout ----
+
+thread 'retains_distinct_warm_prefixes_for_each_key' (34390024) panicked at tests/cache.rs:139:5:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(46)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- provider_usage_survives_real_run_chat stdout ----
+
+thread 'provider_usage_survives_real_run_chat' (34390023) panicked at tests/cache.rs:156:5:
+assertion `left == right` failed
+  left: Null
+ right: 0
+
+
+failures:
+    provider_usage_survives_real_run_chat
+    retains_distinct_warm_prefixes_for_each_key
+
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test cache`

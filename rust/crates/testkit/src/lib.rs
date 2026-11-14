@@ -14,6 +14,7 @@
 //! [`InMemoryMcpConfigRepository`] is the MCP configuration context's
 //! `McpConfigRepository` held in memory, with its own suite.
 
+pub mod cache_provider;
 pub mod conformance;
 mod mcp_memory;
 mod memory;
