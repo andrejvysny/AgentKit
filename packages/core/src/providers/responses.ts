@@ -1,3 +1,4 @@
+import { normalizedUsage } from "./usage.js";
 import type {
   AiProviderCapabilities,
   AiProviderKind,
@@ -376,6 +377,14 @@ function detailCount<K extends string>(
 function usageCounts(usage: Record<string, unknown> | undefined) {
   return usage
     ? {
+        ...normalizedUsage(
+          usage,
+          "input_tokens",
+          "output_tokens",
+          "input_tokens_details",
+          "output_tokens_details",
+          () => responsesError("malformed_usage"),
+        ),
         promptTokens: tokenCount(usage.input_tokens),
         completionTokens: tokenCount(usage.output_tokens),
         totalTokens: tokenCount(usage.total_tokens),

@@ -1160,7 +1160,7 @@ async fn chat_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));
-    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==10&&data["cachedPromptTokens"]==6&&data["reasoningTokens"]==3)));
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==10&&data["cachedPromptTokens"]==6&&data["reasoningTokens"]==3&&data["input_uncached"]==4&&data["cache_read"]==6&&data["output"]==1&&data["reasoning"]==3&&data["provider_raw"]["prompt_tokens_details"]["audio_tokens"]==1)));
     let untracked = sse(&[
         json!({"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}),
         json!({"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_tokens_details":null,"completion_tokens_details":{"cached_tokens":null,"reasoning_tokens":"3"}}}),
@@ -1311,7 +1311,7 @@ async fn responses_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));
-    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==8&&data["completionTokens"]==5&&data["cachedPromptTokens"]==4&&data["reasoningTokens"]==2)));
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==8&&data["completionTokens"]==5&&data["cachedPromptTokens"]==4&&data["reasoningTokens"]==2&&data["input_uncached"]==4&&data["cache_read"]==4&&data["output"]==3&&data["reasoning"]==2&&data["provider_raw"]["input_tokens_details"]["audio_tokens"]==1)));
     let untracked = json!({"type":"response.completed","response":{"status":"completed","output":[message()],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":null,"output_tokens_details":{"reasoning_tokens":"2"}}}});
     let provider = ResponsesProvider::new(Transport::new(
         "responses",

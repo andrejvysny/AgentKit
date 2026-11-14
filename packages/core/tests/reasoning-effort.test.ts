@@ -117,6 +117,11 @@ describe("chat completions reasoning_effort", () => {
     expect(usage?.type === "run.usage" && usage.data).toMatchObject({
       cachedPromptTokens: 7,
       reasoningTokens: 3,
+      input_uncached: 3,
+      cache_read: 7,
+      output: 2,
+      reasoning: 3,
+      provider_raw: { prompt_tokens: 10 },
     });
   });
 
@@ -174,6 +179,11 @@ describe("Responses reasoning effort and usage details", () => {
     expect(usage?.type === "run.usage" && usage.data).toMatchObject({
       cachedPromptTokens: 8,
       reasoningTokens: 2,
+      input_uncached: 2,
+      cache_read: 8,
+      output: 3,
+      reasoning: 2,
+      provider_raw: { input_tokens: 10 },
     });
   });
 });

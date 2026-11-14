@@ -79,3 +79,25 @@ fn private_serde_number_key_remains_an_ordinary_json_object() {
         assert_eq!(stringify_javascript_value(&value).unwrap(), input);
     }
 }
+
+#[test]
+fn normalized_usage_counters_reject_values_above_safe_integer() {
+    use agentkit_contracts::AiRunUsageEventData;
+    for field in [
+        "input_uncached",
+        "cache_read",
+        "cache_write_short",
+        "cache_write_long",
+        "output",
+        "reasoning",
+    ] {
+        let mut data = json!({"callId":"c","attempt":1,"step":0,"model":"m","source":"stream","finalForCall":true});
+        data[field] = json!(9_007_199_254_740_991_u64);
+        assert!(serde_json::from_value::<AiRunUsageEventData>(data.clone()).is_ok());
+        data[field] = json!(9_007_199_254_740_992_u64);
+        assert!(
+            serde_json::from_value::<AiRunUsageEventData>(data).is_err(),
+            "{field}"
+        );
+    }
+}

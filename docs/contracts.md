@@ -300,6 +300,17 @@ the server actually reported usage (it sets `stream_options: { include_usage:
 true }` on every streamed request to ask for it, but not every
 OpenAI-compatible server honors that).
 
+Normalized `run.usage` counters are additive snake_case fields:
+`input_uncached`, `cache_read`, `cache_write_short`, `cache_write_long`,
+`output`, and `reasoning`. An absent counter is unknown, not zero. `output`
+excludes reasoning; `completionTokens` retains the provider's original total.
+For OpenAI-compatible transports, uncached input and visible output are derived
+only when their respective cached and reasoning details are reported. The
+`provider_raw` field preserves the original provider usage object for audit.
+Claude Code reports uncached input directly. Its cache writes use the reported
+5-minute and 1-hour classes; when no lifetime split is reported, the aggregate
+is classified as the provider-default short class.
+
 ## Generic kinds: `AiSourceRef<K>` / `AiContextBinding<K>`
 
 Both `AiSourceRef` (a citation on a tool result) and `AiContextBinding` (an
@@ -378,8 +389,8 @@ hooks over that client (see
 0013](adr/0013-serving-surfaces.md)).
 
 - `REST_API_VERSION` (`"v1"`) is the URL-visible version, distinct from
-  `CONTRACT_VERSION`: an additive DTO field bumps the contract version and
-  leaves the URL alone, because a client written against `/v1` keeps working.
+  `CONTRACT_VERSION`: additive DTO fields leave both versions unchanged;
+  breaking DTO changes follow the contract-version policy above.
 - `REST_ROUTES` is the route table as data — 38 operations keyed by name,
   `{ method, path }` each, `as const satisfies Readonly<Record<string,
   RouteDef>>` — so a router, a client generator, and the documentation

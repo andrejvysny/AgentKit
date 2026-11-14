@@ -5,7 +5,7 @@ use crate::{
 };
 use agentkit_core::{
     ChatProvider, ChatRequest, ConnectionIdentity, CoreError, ProviderEvent, ProviderStream,
-    ToolCall,
+    ToolCall, UsageRecord,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -726,5 +726,34 @@ pub(crate) fn usage_data(
             data[target] = value.clone();
         }
     }
+    let record = normalized_usage(&data, usage)?;
+    if let Value::Object(fields) = serde_json::to_value(record).expect("usage record serializes") {
+        data.as_object_mut()
+            .expect("usage event is an object")
+            .extend(fields);
+    }
     Ok(data)
+}
+
+fn normalized_usage(data: &Value, raw: &Value) -> Result<UsageRecord, CoreError> {
+    let cache_read = data["cachedPromptTokens"].as_u64();
+    let reasoning = data["reasoningTokens"].as_u64();
+    Ok(UsageRecord {
+        input_uncached: usage_difference(data["promptTokens"].as_u64(), cache_read)?,
+        cache_read,
+        output: usage_difference(data["completionTokens"].as_u64(), reasoning)?,
+        reasoning,
+        provider_raw: raw.clone(),
+        ..UsageRecord::default()
+    })
+}
+
+fn usage_difference(total: Option<u64>, subset: Option<u64>) -> Result<Option<u64>, CoreError> {
+    match (total, subset) {
+        (Some(total), Some(subset)) => total
+            .checked_sub(subset)
+            .map(Some)
+            .ok_or_else(|| CoreError::responses("malformed_usage")),
+        _ => Ok(None),
+    }
 }

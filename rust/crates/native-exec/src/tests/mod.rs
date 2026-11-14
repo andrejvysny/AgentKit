@@ -243,6 +243,15 @@ impl StreamFrameAdapter for ScriptAdapter {
                     })
                     .unwrap_or_default(),
             }]),
+            "usage_unknown" => Ok(vec![NativeEvent::Usage(Default::default())]),
+            "usage" => Ok(vec![NativeEvent::Usage(agentkit_native::NativeUsage {
+                normalized: Some(agentkit_native::NativeNormalizedUsage {
+                    input_uncached: Some(4),
+                    ..Default::default()
+                }),
+                provider_raw: Some(json!({"reported": true})),
+                ..Default::default()
+            })]),
             "delta" => Ok(vec![NativeEvent::TextDelta {
                 text: value["t"].as_str().unwrap_or_default().to_string(),
             }]),

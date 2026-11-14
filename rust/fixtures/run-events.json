@@ -794,6 +794,21 @@
               "attempt": {
                 "type": "number"
               },
+              "cache_read": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cache_write_long": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cache_write_short": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "cachedPromptTokens": {
                 "type": "number"
               },
@@ -806,11 +821,27 @@
               "finalForCall": {
                 "type": "boolean"
               },
+              "input_uncached": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "model": {
                 "type": "string"
               },
+              "output": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "promptTokens": {
                 "type": "number"
+              },
+              "provider_raw": {},
+              "reasoning": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               },
               "reasoningTokens": {
                 "type": "number"

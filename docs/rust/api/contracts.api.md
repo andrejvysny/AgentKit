@@ -836,6 +836,13 @@ completionTokens: TOptional<TNumber>;
 totalTokens: TOptional<TNumber>;
 cachedPromptTokens: TOptional<TNumber>;
 reasoningTokens: TOptional<TNumber>;
+input_uncached: TOptional<TInteger>;
+cache_read: TOptional<TInteger>;
+cache_write_short: TOptional<TInteger>;
+cache_write_long: TOptional<TInteger>;
+output: TOptional<TInteger>;
+reasoning: TOptional<TInteger>;
+provider_raw: TOptional<TUnknown>;
 source: TUnion<[TLiteral<"stream">, TLiteral<"response">]>;
 finalForCall: TBoolean;
 }>;
@@ -1254,6 +1261,13 @@ completionTokens: TOptional<TNumber>;
 totalTokens: TOptional<TNumber>;
 cachedPromptTokens: TOptional<TNumber>;
 reasoningTokens: TOptional<TNumber>;
+input_uncached: TOptional<TInteger>;
+cache_read: TOptional<TInteger>;
+cache_write_short: TOptional<TInteger>;
+cache_write_long: TOptional<TInteger>;
+output: TOptional<TInteger>;
+reasoning: TOptional<TInteger>;
+provider_raw: TOptional<TUnknown>;
 source: TUnion<[TLiteral<"stream">, TLiteral<"response">]>;
 finalForCall: TBoolean;
 }>;
@@ -2615,6 +2629,13 @@ completionTokens: TOptional<TNumber>;
 totalTokens: TOptional<TNumber>;
 cachedPromptTokens: TOptional<TNumber>;
 reasoningTokens: TOptional<TNumber>;
+input_uncached: TOptional<TInteger>;
+cache_read: TOptional<TInteger>;
+cache_write_short: TOptional<TInteger>;
+cache_write_long: TOptional<TInteger>;
+output: TOptional<TInteger>;
+reasoning: TOptional<TInteger>;
+provider_raw: TOptional<TUnknown>;
 source: TUnion<[TLiteral<"stream">, TLiteral<"response">]>;
 finalForCall: TBoolean;
 }>;
@@ -3277,6 +3298,11 @@ maxToolIterations: TOptional<TNumber>;
 toolCalling: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"on">, TLiteral<"off">]>>;
 metadata: TOptional<TRecord<TString, TUnknown>>;
 }>;
+
+// @public
+export type UsageRecord = Pick<AiRunUsageEvent["data"], "input_uncached" | "cache_read" | "cache_write_short" | "cache_write_long" | "output" | "reasoning"> & {
+    provider_raw: unknown;
+};
 
 // @public (undocumented)
 export type VersionDto = Static<typeof VersionDtoSchema>;

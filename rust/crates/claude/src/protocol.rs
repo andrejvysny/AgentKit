@@ -973,6 +973,32 @@ fn retry_error_class(error: Option<&str>) -> Option<FailureClass> {
     }
 }
 
+fn normalized_usage(raw: &Value) -> agentkit_native::NativeNormalizedUsage {
+    let count = |value: &Value| value.as_u64().filter(|n| *n <= 9_007_199_254_740_991);
+    let split = raw.get("cache_creation").and_then(Value::as_object);
+    let short = split
+        .and_then(|value| value.get("ephemeral_5m_input_tokens"))
+        .and_then(count);
+    let long = split
+        .and_then(|value| value.get("ephemeral_1h_input_tokens"))
+        .and_then(count);
+    let reasoning = raw
+        .get("output_tokens_details")
+        .and_then(|v| v.get("thinking_tokens"))
+        .and_then(count);
+    let total = raw.get("output_tokens").and_then(count);
+    agentkit_native::NativeNormalizedUsage {
+        input_uncached: raw.get("input_tokens").and_then(count),
+        cache_read: raw.get("cache_read_input_tokens").and_then(count),
+        cache_write_short: short,
+        cache_write_long: long,
+        output: total
+            .zip(reasoning)
+            .and_then(|(total, reasoning)| total.checked_sub(reasoning)),
+        reasoning,
+    }
+}
+
 /// Usage from a `result` frame: per-turn scope only, `cumulative` stays
 /// `None` unless a future cumulative field is present; cost is an estimate
 /// provenance, and billing inclusion is never inferred (AGENTKIT-107 §4).
@@ -989,6 +1015,8 @@ fn result_usage(frame: &Value) -> Option<NativeUsage> {
     };
     Some(NativeUsage {
         per_turn: Some(tokens),
+        provider_raw: Some(usage.clone()),
+        normalized: Some(normalized_usage(usage)),
         cumulative: cumulative_tokens(frame),
         api_equivalent_estimate_usd: cost,
         estimate_provenance: if cost.is_some() {

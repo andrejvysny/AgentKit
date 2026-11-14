@@ -1237,13 +1237,20 @@ impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunUsageEve
 pub fn agentkit_contracts::AiRunUsageEvent::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::AiRunUsageEventData
 pub agentkit_contracts::AiRunUsageEventData::attempt: f64
+pub agentkit_contracts::AiRunUsageEventData::cache_read: agentkit_contracts::Optional<u64>
+pub agentkit_contracts::AiRunUsageEventData::cache_write_long: agentkit_contracts::Optional<u64>
+pub agentkit_contracts::AiRunUsageEventData::cache_write_short: agentkit_contracts::Optional<u64>
 pub agentkit_contracts::AiRunUsageEventData::cached_prompt_tokens: agentkit_contracts::Optional<f64>
 pub agentkit_contracts::AiRunUsageEventData::call_id: alloc::string::String
 pub agentkit_contracts::AiRunUsageEventData::completion_tokens: agentkit_contracts::Optional<f64>
 pub agentkit_contracts::AiRunUsageEventData::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
 pub agentkit_contracts::AiRunUsageEventData::final_for_call: bool
+pub agentkit_contracts::AiRunUsageEventData::input_uncached: agentkit_contracts::Optional<u64>
 pub agentkit_contracts::AiRunUsageEventData::model: alloc::string::String
+pub agentkit_contracts::AiRunUsageEventData::output: agentkit_contracts::Optional<u64>
 pub agentkit_contracts::AiRunUsageEventData::prompt_tokens: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiRunUsageEventData::provider_raw: agentkit_contracts::Optional<serde_json::value::Value>
+pub agentkit_contracts::AiRunUsageEventData::reasoning: agentkit_contracts::Optional<u64>
 pub agentkit_contracts::AiRunUsageEventData::reasoning_tokens: agentkit_contracts::Optional<f64>
 pub agentkit_contracts::AiRunUsageEventData::source: agentkit_contracts::AiRunUsageEventDataSource
 pub agentkit_contracts::AiRunUsageEventData::step: f64

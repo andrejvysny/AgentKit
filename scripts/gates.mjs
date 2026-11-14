@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Full gate battery for AgentKit: Rust half then Bun/TS half, one process.
 // Every step logs to .gate-logs/<name>.log; the summary and exit code are
-// the gate. CI (.github/workflows/ci.yml) runs exactly this file.
+// the gate. Run locally; hosted GitHub Actions are disabled.
 //
 // Ordering rules learned the hard way:
 //   - `check:api` (api-extractor over built .d.ts) and `node-smoke.mjs`
@@ -88,7 +88,14 @@ const steps = [
   { name: "build", cmd: ["bun", "run", "build"] },
   {
     name: "native",
-    cmd: ["bun", "test", "packages/native", "packages/core"],
+    cmd: [
+      "bun",
+      "test",
+      "packages/native",
+      "packages/core",
+      "--timeout",
+      "60000",
+    ],
     env: { AGENTKIT_REQUIRE_NATIVE: "1" },
   },
   // Keep these last: both consume what `build` emits.

@@ -64,6 +64,20 @@ pub struct AiRunUsageEventData {
         serialize_with = "crate::serialize_optional_number"
     )]
     pub reasoning_tokens: Optional<f64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub input_uncached: Optional<u64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub cache_read: Optional<u64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub cache_write_short: Optional<u64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub cache_write_long: Optional<u64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub output: Optional<u64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub reasoning: Optional<u64>,
+    #[serde(default, skip_serializing_if = "Optional::is_absent")]
+    pub provider_raw: Optional<Value>,
     #[serde(rename = "source")]
     pub source: AiRunUsageEventDataSource,
     #[serde(rename = "finalForCall")]
@@ -83,6 +97,13 @@ crate::impl_json_deserialize!(AiRunUsageEventData, |value: Value| {
         total_tokens: crate::optional_field(&mut object, "totalTokens")?,
         cached_prompt_tokens: crate::optional_field(&mut object, "cachedPromptTokens")?,
         reasoning_tokens: crate::optional_field(&mut object, "reasoningTokens")?,
+        input_uncached: optional_safe_counter(&mut object, "input_uncached")?,
+        cache_read: optional_safe_counter(&mut object, "cache_read")?,
+        cache_write_short: optional_safe_counter(&mut object, "cache_write_short")?,
+        cache_write_long: optional_safe_counter(&mut object, "cache_write_long")?,
+        output: optional_safe_counter(&mut object, "output")?,
+        reasoning: optional_safe_counter(&mut object, "reasoning")?,
+        provider_raw: crate::optional_field(&mut object, "provider_raw")?,
         source: crate::required_field(&mut object, "source")?,
         final_for_call: crate::required_field(&mut object, "finalForCall")?,
         extra: object.into_iter().collect(),
@@ -130,3 +151,21 @@ crate::impl_json_deserialize!(AiRunUsageEvent, |value: Value| {
     };
     Ok(output)
 });
+
+fn optional_safe_counter(
+    object: &mut serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Optional<u64>, serde_json::Error> {
+    let Some(value) = object.remove(name) else {
+        return Ok(Optional::Absent);
+    };
+    let number = value
+        .as_f64()
+        .filter(|number| {
+            number.is_finite()
+                && number.fract() == 0.0
+                && (0.0..=9_007_199_254_740_991.0).contains(number)
+        })
+        .ok_or_else(|| crate::json_error("usage counter must be a non-negative safe integer"))?;
+    Ok(Optional::Present(number as u64))
+}

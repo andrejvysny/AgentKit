@@ -128,6 +128,24 @@ fn mcp_slow_approval_completes() {
 #[test]
 fn mcp_tool_denied_with_thinking_tokens_is_tolerated_and_flagged() {
     let r = assert_completed("mcp_tool_denied_with_thinking_tokens");
+    let usage = r
+        .events
+        .iter()
+        .find_map(|event| match event {
+            NativeEvent::Usage(usage) => Some(usage),
+            _ => None,
+        })
+        .expect("usage event");
+    let normalized = usage.normalized.as_ref().expect("normalized usage");
+    assert_eq!(normalized.input_uncached, Some(4));
+    assert_eq!(normalized.cache_read, Some(1734));
+    assert_eq!(normalized.cache_write_short, Some(0));
+    assert_eq!(normalized.cache_write_long, Some(813));
+    assert_eq!(normalized.output, Some(117));
+    assert_eq!(normalized.reasoning, Some(48));
+    let raw = usage.provider_raw.as_ref().expect("original usage");
+    assert_eq!(raw["output_tokens_details"]["thinking_tokens"], 48);
+    assert_eq!(raw["cache_creation"]["ephemeral_1h_input_tokens"], 813);
     assert!(
         r.adapter
             .ignored_frames()

@@ -177,10 +177,32 @@ pub enum BillingInclusion {
     Unknown,
 }
 
+/// Provider-normalized token counters; absent means unknown.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NativeNormalizedUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_uncached: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_short: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_long: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
+}
+
 /// Usage provenance for a turn or a session.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized: Option<NativeNormalizedUsage>,
+    /// Original provider usage object, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_raw: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_turn: Option<TokenSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

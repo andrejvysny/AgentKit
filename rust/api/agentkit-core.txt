@@ -285,6 +285,14 @@ pub agentkit_core::ToolResult::truncated: bool
 pub agentkit_core::ToolResult::warnings: alloc::vec::Vec<alloc::string::String>
 impl agentkit_core::ToolResult
 pub fn agentkit_core::ToolResult::serialize_data<T: serde_core::ser::Serialize>(&str, &T) -> core::result::Result<serde_json::value::Value, agentkit_core::CoreError>
+pub struct agentkit_core::UsageRecord
+pub agentkit_core::UsageRecord::cache_read: core::option::Option<u64>
+pub agentkit_core::UsageRecord::cache_write_long: core::option::Option<u64>
+pub agentkit_core::UsageRecord::cache_write_short: core::option::Option<u64>
+pub agentkit_core::UsageRecord::input_uncached: core::option::Option<u64>
+pub agentkit_core::UsageRecord::output: core::option::Option<u64>
+pub agentkit_core::UsageRecord::provider_raw: serde_json::value::Value
+pub agentkit_core::UsageRecord::reasoning: core::option::Option<u64>
 pub const agentkit_core::TOOL_RESULT_MISSING_CODE: &str
 pub trait agentkit_core::BudgetCheckpoint: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::BudgetCheckpoint::checkpoint<'life0, 'async_trait>(&'life0 self, agentkit_core::BudgetSnapshot) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait

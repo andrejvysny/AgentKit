@@ -41,8 +41,9 @@ pub use capability::{
 };
 pub use error::{NativeError, NativeRefusal, NativeResult};
 pub use events::{
-    BillingInclusion, FailureClass, McpServerStatus, NativeEvent, NativeTerminalOutcome,
-    NativeUsage, ProcessTerminalEvidence, TokenSet, UsageProvenance, VendorToolPhase,
+    BillingInclusion, FailureClass, McpServerStatus, NativeEvent, NativeNormalizedUsage,
+    NativeTerminalOutcome, NativeUsage, ProcessTerminalEvidence, TokenSet, UsageProvenance,
+    VendorToolPhase,
 };
 pub use frozen::{
     BROKER_PAYLOAD_KEY, BrokerLimitsSpec, BrokerSpec, BrokerToolSpec,

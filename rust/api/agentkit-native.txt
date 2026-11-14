@@ -363,6 +363,13 @@ pub agentkit_native::NativeExecutionTarget::schema_version: u32
 pub agentkit_native::NativeExecutionTarget::system_prompt_revision: core::option::Option<alloc::string::String>
 impl agentkit_native::NativeExecutionTarget
 pub fn agentkit_native::NativeExecutionTarget::digest(&self) -> alloc::string::String
+pub struct agentkit_native::NativeNormalizedUsage
+pub agentkit_native::NativeNormalizedUsage::cache_read: core::option::Option<u64>
+pub agentkit_native::NativeNormalizedUsage::cache_write_long: core::option::Option<u64>
+pub agentkit_native::NativeNormalizedUsage::cache_write_short: core::option::Option<u64>
+pub agentkit_native::NativeNormalizedUsage::input_uncached: core::option::Option<u64>
+pub agentkit_native::NativeNormalizedUsage::output: core::option::Option<u64>
+pub agentkit_native::NativeNormalizedUsage::reasoning: core::option::Option<u64>
 pub struct agentkit_native::NativeRefusal
 pub agentkit_native::NativeRefusal::code: alloc::string::String
 pub agentkit_native::NativeRefusal::message: alloc::string::String
@@ -386,7 +393,9 @@ pub agentkit_native::NativeUsage::api_equivalent_estimate_usd: core::option::Opt
 pub agentkit_native::NativeUsage::billing_inclusion: agentkit_native::BillingInclusion
 pub agentkit_native::NativeUsage::cumulative: core::option::Option<agentkit_native::TokenSet>
 pub agentkit_native::NativeUsage::estimate_provenance: agentkit_native::UsageProvenance
+pub agentkit_native::NativeUsage::normalized: core::option::Option<agentkit_native::NativeNormalizedUsage>
 pub agentkit_native::NativeUsage::per_turn: core::option::Option<agentkit_native::TokenSet>
+pub agentkit_native::NativeUsage::provider_raw: core::option::Option<serde_json::value::Value>
 pub struct agentkit_native::PendingInteraction
 pub agentkit_native::PendingInteraction::actor_id: alloc::string::String
 pub agentkit_native::PendingInteraction::attempt_id: alloc::string::String

@@ -1,3 +1,4 @@
+import { normalizedUsage } from "./usage.js";
 import { newCallId, nowIso } from "../ids.js";
 import { createEventStamper } from "../events.js";
 import { messageContentToText } from "../messages/content.js";
@@ -312,6 +313,13 @@ export class OpenAiCompatibleClient implements AiProviderClient {
                 reasoningTokens:
                   counts.completion_tokens_details.reasoning_tokens,
               }),
+          ...normalizedUsage(
+            counts,
+            "prompt_tokens",
+            "completion_tokens",
+            "prompt_tokens_details",
+            "completion_tokens_details",
+          ),
           source: "stream" as const,
           finalForCall,
         },
@@ -334,7 +342,16 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         // Usage may ride on its own trailing chunk (choices empty/absent) or
         // alongside choices — read it before the choice guard so the former
         // isn't skipped.
-        if (event.usage) usage = event.usage;
+        if (event.usage) {
+          normalizedUsage(
+            event.usage,
+            "prompt_tokens",
+            "completion_tokens",
+            "prompt_tokens_details",
+            "completion_tokens_details",
+          );
+          usage = event.usage;
+        }
         const choice = event.choices?.[0];
         if (!choice) continue;
         const delta = choice.delta ?? {};

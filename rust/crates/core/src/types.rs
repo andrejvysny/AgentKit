@@ -5,6 +5,24 @@ use serde_json::{Map, Value};
 use std::{pin::Pin, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
+/// Provider usage with unknown counters omitted. Output excludes reasoning.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct UsageRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_uncached: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_short: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_long: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
+    pub provider_raw: Value,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCall {

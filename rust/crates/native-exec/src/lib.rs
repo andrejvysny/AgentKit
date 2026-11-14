@@ -20,6 +20,8 @@
 //!   interrupt the owned child with distinct policies and are reaped to
 //!   completion before settling.
 
+mod usage;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1045,6 +1047,11 @@ where
 
         let started = Instant::now();
         let overall = Duration::from_millis(input.turn_deadline_ms.max(1) as u64);
+        let mut usage_model = target
+            .requested_model
+            .clone()
+            .unwrap_or_else(|| "unknown".into());
+        let mut pending_usage = None;
         let startup = Duration::from_millis(self.options.limits.startup_timeout_ms.max(1) as u64);
         let idle = Duration::from_millis(self.options.limits.idle_timeout_ms.max(1) as u64);
         // One cleanup round may escalate through every rung; bound the wait.
@@ -1080,8 +1087,14 @@ where
                         match frame {
                             None => break,
                             Some(FrameLine::Line(line)) => {
-                                if let Err(violation) = adapter.push_line(&line) {
-                                    protocol_violation = Some((violation.code, violation.message));
+                                match adapter.push_line(&line) {
+                                    Ok(events) => for event in events {
+                                        if let NativeEvent::Usage(usage) = &event {
+                                            try_reap!(self.emit(&context, "native.event", json!({"event": event, "fingerprint": plan.fingerprint})));
+                                            usage::remember(&mut pending_usage, usage);
+                                        }
+                                    },
+                                    Err(violation) => protocol_violation = Some((violation.code, violation.message)),
                                 }
                             }
                             Some(FrameLine::Fault(fault)) => transport_faults.push(fault),
@@ -1099,6 +1112,9 @@ where
                         Ok(new) => {
                             for event in new {
                                 saw_event = true;
+                                if let NativeEvent::Init { observed_model: Some(model), .. } = &event {
+                                    usage_model = model.clone();
+                                }
                                 if let NativeEvent::Init { session_id, .. } = &event {
                                     if let Some(bound) = &bound_session {
                                         if bound != session_id {
@@ -1162,6 +1178,9 @@ where
                                         "fingerprint": plan.fingerprint,
                                     }),
                                 ));
+                                if let NativeEvent::Usage(usage) = &event {
+                                    usage::remember(&mut pending_usage, usage);
+                                }
                                 // Evidence is durable (above) before failing.
                                 if let (Some(broker), NativeEvent::Init { mcp_servers, .. }) =
                                     (broker.as_ref(), &event)
@@ -1220,6 +1239,15 @@ where
                     interrupt_receipt = Some(child.interrupt(InterruptPolicy::UserStop).await);
                 },
             }
+        }
+        if let Some(usage) = pending_usage {
+            let data = usage::event_data(
+                &usage,
+                &context.attempt_id,
+                context.task.attempt_count,
+                &usage_model,
+            );
+            try_reap!(self.emit(&context, "run.usage", data));
         }
         watcher.abort();
         drop(rx);

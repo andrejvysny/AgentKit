@@ -449,11 +449,41 @@ export const AiRunUsageEventSchema = Type.Object({
     cachedPromptTokens: Type.Optional(Type.Number()),
     /** Completion tokens spent on hidden reasoning; set only when reported. */
     reasoningTokens: Type.Optional(Type.Number()),
+    input_uncached: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    cache_read: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    cache_write_short: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    cache_write_long: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    output: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    reasoning: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    provider_raw: Type.Optional(Type.Unknown()),
     source: Type.Union([Type.Literal("stream"), Type.Literal("response")]),
     finalForCall: Type.Boolean(),
   }),
 });
 export type AiRunUsageEvent = Static<typeof AiRunUsageEventSchema>;
+
+/** Normalized counters omit unknown values; output excludes reasoning. */
+export type UsageRecord = Pick<
+  AiRunUsageEvent["data"],
+  | "input_uncached"
+  | "cache_read"
+  | "cache_write_short"
+  | "cache_write_long"
+  | "output"
+  | "reasoning"
+> & { provider_raw: unknown };
 
 /**
  * An agent-session turn compacted its older history into a derived summary

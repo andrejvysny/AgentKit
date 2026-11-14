@@ -567,3 +567,65 @@ async fn unobserved_assigned_session_is_never_resumable() {
         "the phantom resume never spawned"
     );
 }
+
+#[tokio::test]
+async fn native_usage_is_emitted_once_with_normalized_counters() {
+    let h = harness();
+    h.shared.queue(&[
+        r#"{"e":"init","s":"vendor-1","m":"sonnet-x"}"#,
+        r#"{"e":"usage"}"#,
+        r#"{"e":"usage"}"#,
+    ]);
+    h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
+    h.submit(
+        "t1",
+        &payload(
+            &native_target(NativeProfile::PlainChat, false),
+            &fresh_input(),
+            None,
+        ),
+    )
+    .await;
+    let claimed = h.claim("t1").await;
+    h.executor()
+        .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+        .await
+        .unwrap();
+    let events = h.store.events("t1", None, 4096).await.unwrap();
+    let usage: Vec<_> = events
+        .iter()
+        .filter(|event| event.event["type"] == "run.usage")
+        .collect();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].event["data"]["input_uncached"], 4);
+    assert_eq!(usage[0].event["data"]["provider_raw"]["reported"], true);
+    assert_eq!(usage[0].event["data"]["model"], "sonnet-x");
+}
+
+#[tokio::test]
+async fn unknown_native_usage_does_not_create_a_billable_request() {
+    let h = harness();
+    h.shared
+        .queue(&[r#"{"e":"init","s":"vendor-1"}"#, r#"{"e":"usage_unknown"}"#]);
+    h.shared.set_outcome(Shared::completed("vendor-1", "hello"));
+    h.submit(
+        "t1",
+        &payload(
+            &native_target(NativeProfile::PlainChat, false),
+            &fresh_input(),
+            None,
+        ),
+    )
+    .await;
+    let claimed = h.claim("t1").await;
+    h.executor()
+        .execute(h.context(&claimed, CancellationToken::new(), CancellationToken::new()))
+        .await
+        .unwrap();
+    let events = h.store.events("t1", None, 4096).await.unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event["type"] == "run.usage")
+    );
+}

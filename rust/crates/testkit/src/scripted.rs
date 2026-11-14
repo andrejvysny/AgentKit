@@ -280,6 +280,8 @@ impl StreamFrameAdapter for ScriptedAdapter {
                     .clone()
                     .unwrap_or_else(|| self.default_session.clone()),
                 usage: Some(NativeUsage {
+                    provider_raw: None,
+                    normalized: None,
                     per_turn: Some(TokenSet {
                         input_tokens: Some(7),
                         output_tokens: Some(5),

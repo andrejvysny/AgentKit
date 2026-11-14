@@ -439,5 +439,7 @@ fn response_usage(
             mapped[target] = value.clone();
         }
     }
-    usage_data(&mapped, model, call_id, final_for_call)
+    let mut data = usage_data(&mapped, model, call_id, final_for_call)?;
+    data["provider_raw"] = usage.clone();
+    Ok(data)
 }
