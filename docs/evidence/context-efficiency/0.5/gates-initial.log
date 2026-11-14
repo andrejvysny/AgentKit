@@ -1,0 +1,40 @@
+PASS fmt (2s)
+PASS clippy (1s)
+gates: test: 2049 passed across 242 binaries
+FAIL test (305s): exit 101; 1 test binary(ies) FAILED — .gate-logs/test.log
+   Doc-tests agentkit_engine
+   Doc-tests agentkit_governance
+   Doc-tests agentkit_http
+   Doc-tests agentkit_kernel
+   Doc-tests agentkit_lsp
+   Doc-tests agentkit_mcp
+   Doc-tests agentkit_napi
+   Doc-tests agentkit_native
+   Doc-tests agentkit_native_broker
+   Doc-tests agentkit_native_exec
+   Doc-tests agentkit_providers
+   Doc-tests agentkit_runtime
+   Doc-tests agentkit_rust
+   Doc-tests agentkit_sessions
+   Doc-tests agentkit_store
+   Doc-tests agentkit_sys
+   Doc-tests agentkit_testkit
+   Doc-tests agentkit_toolpacks_coding
+error: 1 target failed:
+    `-p agentkit-claude --lib`
+PASS machete (0s)
+PASS deny (1s)
+PASS arch (0s)
+PASS api (50s)
+PASS buildfix (1s)
+PASS clientreact (51s)
+PASS contracts (1s)
+PASS typecheck (9s)
+PASS lint (1s)
+PASS napi (135s)
+PASS build (5s)
+PASS umbrella (0s)
+PASS native (51s)
+PASS checkapi (8s)
+PASS smoke (0s)
+OVERALL=1 (17/18 passed)

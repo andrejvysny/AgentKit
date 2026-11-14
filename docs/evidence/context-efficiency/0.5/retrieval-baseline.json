@@ -1,0 +1,987 @@
+{
+  "provenance": "Synthetic, template-generated fixtures; no real owner data.",
+  "method": "SQLite FTS5 unicode61, OR tokens, bm25, top 5; validity filter before ranking",
+  "metrics": {
+    "direct": {
+      "count": 40,
+      "answerable": 40,
+      "noAnswer": 0,
+      "recallAt5": 1,
+      "mrr": 0.9875,
+      "noAnswerAccuracy": null
+    },
+    "paraphrase": {
+      "count": 20,
+      "answerable": 20,
+      "noAnswer": 0,
+      "recallAt5": 1,
+      "mrr": 0.8933333333333333,
+      "noAnswerAccuracy": null
+    },
+    "cross-language": {
+      "count": 20,
+      "answerable": 20,
+      "noAnswer": 0,
+      "recallAt5": 0.9,
+      "mrr": 0.3933333333333333,
+      "noAnswerAccuracy": null
+    },
+    "slovak": {
+      "count": 20,
+      "answerable": 20,
+      "noAnswer": 0,
+      "recallAt5": 1,
+      "mrr": 1,
+      "noAnswerAccuracy": null
+    },
+    "supersession": {
+      "count": 20,
+      "answerable": 20,
+      "noAnswer": 0,
+      "recallAt5": 1,
+      "mrr": 1,
+      "noAnswerAccuracy": null
+    },
+    "as_of": {
+      "count": 20,
+      "answerable": 20,
+      "noAnswer": 0,
+      "recallAt5": 1,
+      "mrr": 1,
+      "noAnswerAccuracy": null
+    },
+    "no-answer": {
+      "count": 20,
+      "answerable": 0,
+      "noAnswer": 20,
+      "recallAt5": null,
+      "mrr": null,
+      "noAnswerAccuracy": 0
+    }
+  },
+  "predictions": {
+    "question-a86ab74dfb9fba57": [
+      "record-3916ce7554946759",
+      "record-1695262fbafe8bec",
+      "record-2a56f42f7a6b327b",
+      "record-2cab01cb68ed8067",
+      "record-30bd930520978802"
+    ],
+    "question-10eb855e7903bec5": [
+      "record-3916ce7554946759",
+      "record-0157f06d7cd21ce8",
+      "record-0c3cf762215e640c",
+      "record-286818112be0b4cc",
+      "record-5f632286e5f0785f"
+    ],
+    "question-fe1792ac2e01fe58": [
+      "record-4536968c685b7956",
+      "record-0f2c10bf3d128c71",
+      "record-ecd7d148fad65068",
+      "record-fa9f8308339d6590",
+      "record-3916ce7554946759"
+    ],
+    "question-c72d4298ed60896e": [
+      "record-64b572a9dcb561e7",
+      "record-1695262fbafe8bec",
+      "record-2a56f42f7a6b327b",
+      "record-2cab01cb68ed8067",
+      "record-30bd930520978802"
+    ],
+    "question-42662965a150894f": [
+      "record-64b572a9dcb561e7",
+      "record-045a2dfe11511bd9",
+      "record-0853fc188a9ab1a9",
+      "record-3f03d91cba478f13",
+      "record-46f77a3179f6b5bd"
+    ],
+    "question-4295f7ec9159bae0": [
+      "record-4536968c685b7956",
+      "record-64b572a9dcb561e7"
+    ],
+    "question-b8bc9e53352082c6": [
+      "record-d9cffd07fa73a672",
+      "record-5caf60a97c7f2f15",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9"
+    ],
+    "question-609e873e7a8adaea": [
+      "record-d9cffd07fa73a672",
+      "record-5caf60a97c7f2f15",
+      "record-ca6ebe9f0045c706"
+    ],
+    "question-c8079063b78cb0c1": [
+      "record-b622c8f5b19eb615",
+      "record-c2d648bf80a85615",
+      "record-d9cffd07fa73a672",
+      "record-939b04dd4ccb3f56",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-cf66e55fcd192b78": [
+      "record-432df5859aab9074",
+      "record-ddb0cd2ae1badd91",
+      "record-061a19682dfa68e2",
+      "record-0ff5d3c25b3721bd",
+      "record-2a69b4ecbbf248b7"
+    ],
+    "question-83fbad5a47786dbf": [
+      "record-432df5859aab9074",
+      "record-249e6ad1d8607caa",
+      "record-ddb0cd2ae1badd91",
+      "record-061a19682dfa68e2",
+      "record-0b27eb79a4df247f"
+    ],
+    "question-f505e8e04ebea098": [
+      "record-277d29460b28cdbb",
+      "record-9044c8d7949f24bd",
+      "record-432df5859aab9074"
+    ],
+    "question-d134161ad36c3a3c": [
+      "record-ce8f27fefaf826c7",
+      "record-83980c9d73bf6782",
+      "record-64b572a9dcb561e7"
+    ],
+    "question-858a49d97e87752e": [
+      "record-ce8f27fefaf826c7",
+      "record-9c65193991e93720",
+      "record-83980c9d73bf6782",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-3bf5bc4a06e4cc7b": [
+      "record-ecd7d148fad65068",
+      "record-4d89207fc2eafddf",
+      "record-ce8f27fefaf826c7"
+    ],
+    "question-7047a57e11370c09": [
+      "record-249e6ad1d8607caa",
+      "record-64b572a9dcb561e7",
+      "record-0b27eb79a4df247f",
+      "record-10b07be32be9f348",
+      "record-1e2f719e58c5d849"
+    ],
+    "question-f506d45bb0ee2d48": ["record-249e6ad1d8607caa"],
+    "question-6686a852fadb4251": [
+      "record-e30f1b58489b18cb",
+      "record-aedac626a4de5087",
+      "record-249e6ad1d8607caa",
+      "record-337b853bd6acb221",
+      "record-bbaae8c99d8c9710"
+    ],
+    "question-acd048cc9d4e7782": [
+      "record-ca6ebe9f0045c706",
+      "record-9c65193991e93720",
+      "record-d86bd9fa759d6e03",
+      "record-64b572a9dcb561e7",
+      "record-79eab57341c9224e"
+    ],
+    "question-3cb9248a1243100e": [
+      "record-ca6ebe9f0045c706",
+      "record-9c65193991e93720",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-3130893350ca996c": [
+      "record-c2d648bf80a85615",
+      "record-337b853bd6acb221",
+      "record-ca6ebe9f0045c706"
+    ],
+    "question-0a4134413d524806": [
+      "record-0157f06d7cd21ce8",
+      "record-939b04dd4ccb3f56"
+    ],
+    "question-90b8c7e3e5787df8": [
+      "record-0157f06d7cd21ce8",
+      "record-939b04dd4ccb3f56",
+      "record-047783a3fcee5012",
+      "record-0c45f6ee60da1487",
+      "record-1d622a507bade579"
+    ],
+    "question-d3712e84ab5ceee6": [
+      "record-939b04dd4ccb3f56",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-bb108040666ac4c9",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-7e6cc991705cb7e6": [
+      "record-d86bd9fa759d6e03",
+      "record-ca6ebe9f0045c706"
+    ],
+    "question-f19c667a8408704a": [
+      "record-0f396c7a6e71f0fa",
+      "record-819acf4b6223d84d",
+      "record-d86bd9fa759d6e03",
+      "record-249e6ad1d8607caa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-c26bf4deb8007373": ["record-d86bd9fa759d6e03"],
+    "question-ac023a73a1a50189": [
+      "record-1abdd5a8bf376b92",
+      "record-5caf60a97c7f2f15"
+    ],
+    "question-f175de1978620be3": ["record-1abdd5a8bf376b92"],
+    "question-b24ee0207a4c2fdf": [
+      "record-94012778bc12e03e",
+      "record-1abdd5a8bf376b92"
+    ],
+    "question-0cd95398b995cf7e": [
+      "record-7642f326c35671d9",
+      "record-8f2b494c31a1ba99",
+      "record-b99e29f02c6899d6",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-36aeb54fa63b8bf7": [
+      "record-7642f326c35671d9",
+      "record-035885cd52a66de5",
+      "record-147ac53f52b0e36d",
+      "record-28fd15e33e728d64",
+      "record-3de7b3d9898e9e66"
+    ],
+    "question-c5cbb79f4e9773c5": [
+      "record-b622c8f5b19eb615",
+      "record-939b04dd4ccb3f56",
+      "record-7642f326c35671d9",
+      "record-c2d648bf80a85615",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-73967671a642961f": [
+      "record-84e7c241f071ca6b",
+      "record-05389c2d72ba18de",
+      "record-09dbc80ecc556475",
+      "record-0d4593ef43197d5a",
+      "record-298153edd22bd735"
+    ],
+    "question-6943060e32421056": [
+      "record-84e7c241f071ca6b",
+      "record-15720c6ad2de5730",
+      "record-05389c2d72ba18de",
+      "record-09dbc80ecc556475",
+      "record-0d4593ef43197d5a"
+    ],
+    "question-b585a098a335ded6": [
+      "record-277d29460b28cdbb",
+      "record-9044c8d7949f24bd",
+      "record-84e7c241f071ca6b",
+      "record-337b853bd6acb221",
+      "record-e30f1b58489b18cb"
+    ],
+    "question-4b400f33c97b41fd": [
+      "record-d6b55934561a0348",
+      "record-933bfced22f52afb",
+      "record-d9cffd07fa73a672",
+      "record-0b3250815a6529ff",
+      "record-296cca5465884160"
+    ],
+    "question-75a825f9cf90de1c": [
+      "record-d6b55934561a0348",
+      "record-1695262fbafe8bec",
+      "record-2a56f42f7a6b327b",
+      "record-2cab01cb68ed8067",
+      "record-30bd930520978802"
+    ],
+    "question-08ecf55c32099612": ["record-d6b55934561a0348"],
+    "question-2a9ebc739aae4325": [
+      "record-8d309e3beee8d5c0",
+      "record-64b572a9dcb561e7"
+    ],
+    "question-9f989af90b3260a6": [
+      "record-3f38bd03896e8cde",
+      "record-ddb0cd2ae1badd91",
+      "record-8d309e3beee8d5c0",
+      "record-0f396c7a6e71f0fa",
+      "record-249e6ad1d8607caa"
+    ],
+    "question-c4ba1039bbf7a017": [
+      "record-939b04dd4ccb3f56",
+      "record-8d309e3beee8d5c0",
+      "record-337b853bd6acb221",
+      "record-e30f1b58489b18cb",
+      "record-bbaae8c99d8c9710"
+    ],
+    "question-e51e23c8bcc6bcb6": [
+      "record-79eab57341c9224e",
+      "record-72c5dc6f253abe4c",
+      "record-212533ea884b5dfe",
+      "record-d86bd9fa759d6e03",
+      "record-9cfbe71007ca2619"
+    ],
+    "question-bd2c5b1751806f4f": [
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03",
+      "record-0f396c7a6e71f0fa"
+    ],
+    "question-91a3165a0508a0fb": [
+      "record-277d29460b28cdbb",
+      "record-9044c8d7949f24bd"
+    ],
+    "question-2030488b23dfa1c4": ["record-9cfbe71007ca2619"],
+    "question-64d6ca36a7bfa656": ["record-9cfbe71007ca2619"],
+    "question-7649d392c7c473d9": [
+      "record-ecd7d148fad65068",
+      "record-4d89207fc2eafddf",
+      "record-9cfbe71007ca2619"
+    ],
+    "question-5b8a2d359c3f570f": [
+      "record-23c9db48d003d9ab",
+      "record-64b572a9dcb561e7"
+    ],
+    "question-ecc2a1ef5fa50a6e": [
+      "record-23c9db48d003d9ab",
+      "record-9c65193991e93720"
+    ],
+    "question-8a723640ce3407e0": [
+      "record-f0be8c42ba3bc7bf",
+      "record-23c9db48d003d9ab",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-bb108040666ac4c9"
+    ],
+    "question-8eadbd83d8e88397": [
+      "record-4ab575b925b3621a",
+      "record-933bfced22f52afb",
+      "record-ca6ebe9f0045c706"
+    ],
+    "question-5967705a12d7a512": [
+      "record-933bfced22f52afb",
+      "record-d9cffd07fa73a672"
+    ],
+    "question-a055f3affdde5049": [
+      "record-0f2c10bf3d128c71",
+      "record-ecd7d148fad65068",
+      "record-fa9f8308339d6590",
+      "record-933bfced22f52afb"
+    ],
+    "question-ca120cf76eedd9cc": ["record-5ad34cb934cbedd1"],
+    "question-695e38b8f67b6a26": [
+      "record-5ad34cb934cbedd1",
+      "record-045a2dfe11511bd9",
+      "record-0853fc188a9ab1a9",
+      "record-3f03d91cba478f13",
+      "record-46f77a3179f6b5bd"
+    ],
+    "question-a212e7ae4e3f4d6d": [
+      "record-277d29460b28cdbb",
+      "record-9044c8d7949f24bd",
+      "record-4d89207fc2eafddf",
+      "record-5ad34cb934cbedd1"
+    ],
+    "question-877c1776db12b1ff": [
+      "record-212533ea884b5dfe",
+      "record-4358ffba49c1c2b0",
+      "record-64b572a9dcb561e7",
+      "record-72c5dc6f253abe4c",
+      "record-79eab57341c9224e"
+    ],
+    "question-27dd9c86f732d6c5": [
+      "record-9c65193991e93720",
+      "record-4358ffba49c1c2b0",
+      "record-72c5dc6f253abe4c",
+      "record-79eab57341c9224e",
+      "record-212533ea884b5dfe"
+    ],
+    "question-311b3e792a6a280a": [
+      "record-277d29460b28cdbb",
+      "record-212533ea884b5dfe"
+    ],
+    "question-dd83800c23419ad9": ["record-778615fef0578ba6"],
+    "question-23618cf986447bc6": ["record-778615fef0578ba6"],
+    "question-a90710b85343fc4e": [
+      "record-0f2c10bf3d128c71",
+      "record-fa9f8308339d6590",
+      "record-337b853bd6acb221",
+      "record-ecd7d148fad65068"
+    ],
+    "question-ef6b3cb9ae8373b2": [
+      "record-0f2c10bf3d128c71",
+      "record-fa9f8308339d6590",
+      "record-337b853bd6acb221",
+      "record-ecd7d148fad65068"
+    ],
+    "question-2a49d5367c611099": ["record-bbaae8c99d8c9710"],
+    "question-ad39945720fc9bbd": ["record-bbaae8c99d8c9710"],
+    "question-32d38b93c823a043": [
+      "record-4d89207fc2eafddf",
+      "record-ecd7d148fad65068",
+      "record-e30f1b58489b18cb",
+      "record-bb108040666ac4c9",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-ab6f222ca0821460": [
+      "record-4d89207fc2eafddf",
+      "record-ecd7d148fad65068",
+      "record-e30f1b58489b18cb",
+      "record-bb108040666ac4c9",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-ab45df9d3ffc370f": [
+      "record-bb108040666ac4c9",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-f0be8c42ba3bc7bf",
+      "record-aedac626a4de5087"
+    ],
+    "question-14478ce04faeeeb5": [
+      "record-bb108040666ac4c9",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-f0be8c42ba3bc7bf",
+      "record-aedac626a4de5087"
+    ],
+    "question-75dfe595e3a03344": ["record-4536968c685b7956"],
+    "question-fc2e9f4570c5c57c": ["record-4536968c685b7956"],
+    "question-0f9f89dc17c221e9": [
+      "record-fa9f8308339d6590",
+      "record-0f2c10bf3d128c71",
+      "record-337b853bd6acb221",
+      "record-ecd7d148fad65068"
+    ],
+    "question-3feb85728c40e413": [
+      "record-fa9f8308339d6590",
+      "record-0f2c10bf3d128c71",
+      "record-337b853bd6acb221",
+      "record-ecd7d148fad65068"
+    ],
+    "question-58fe503a29a671a5": [
+      "record-e30f1b58489b18cb",
+      "record-aedac626a4de5087",
+      "record-337b853bd6acb221",
+      "record-bbaae8c99d8c9710",
+      "record-4d89207fc2eafddf"
+    ],
+    "question-577bbe0dee7ac65d": [
+      "record-e30f1b58489b18cb",
+      "record-aedac626a4de5087",
+      "record-337b853bd6acb221",
+      "record-bbaae8c99d8c9710",
+      "record-4d89207fc2eafddf"
+    ],
+    "question-0ac4d345f36935cd": ["record-90d8170bbf1641b1"],
+    "question-4422cc5d4f992c15": ["record-90d8170bbf1641b1"],
+    "question-37d7dd06122c7e00": [
+      "record-9044c8d7949f24bd",
+      "record-277d29460b28cdbb"
+    ],
+    "question-22be1531dfa505e9": [
+      "record-9044c8d7949f24bd",
+      "record-277d29460b28cdbb"
+    ],
+    "question-24eff4f35abf4da9": [
+      "record-c2d648bf80a85615",
+      "record-337b853bd6acb221",
+      "record-b622c8f5b19eb615"
+    ],
+    "question-21377bad31dc344c": [
+      "record-c2d648bf80a85615",
+      "record-337b853bd6acb221",
+      "record-b622c8f5b19eb615"
+    ],
+    "question-056dffe3c4f5a41f": ["record-94012778bc12e03e"],
+    "question-942cf1f3267e2740": ["record-94012778bc12e03e"],
+    "question-a1dfa3fd7eb4326c": [
+      "record-b622c8f5b19eb615",
+      "record-c2d648bf80a85615"
+    ],
+    "question-caa621ee2a91fea8": [
+      "record-b622c8f5b19eb615",
+      "record-c2d648bf80a85615"
+    ],
+    "question-ef6a0b9b02258d84": ["record-22f11a420d10dca2"],
+    "question-ef580ad4f93bd8c1": ["record-22f11a420d10dca2"],
+    "question-7291218ceb938893": [
+      "record-ecd7d148fad65068",
+      "record-0f2c10bf3d128c71",
+      "record-fa9f8308339d6590",
+      "record-4d89207fc2eafddf"
+    ],
+    "question-25c5dd12436c9eca": [
+      "record-ecd7d148fad65068",
+      "record-0f2c10bf3d128c71",
+      "record-fa9f8308339d6590",
+      "record-4d89207fc2eafddf"
+    ],
+    "question-f469b14eaa56f6c2": [
+      "record-939b04dd4ccb3f56",
+      "record-0157f06d7cd21ce8"
+    ],
+    "question-6b03470d5df2ba27": [
+      "record-939b04dd4ccb3f56",
+      "record-0157f06d7cd21ce8"
+    ],
+    "question-a44fd5c61f1ac2aa": [
+      "record-277d29460b28cdbb",
+      "record-9044c8d7949f24bd"
+    ],
+    "question-092fd6a09f64bf32": [
+      "record-277d29460b28cdbb",
+      "record-9044c8d7949f24bd"
+    ],
+    "question-fbe92e2dd16afb98": [
+      "record-aedac626a4de5087",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-bb108040666ac4c9",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-557d0cf3ea337f69": [
+      "record-aedac626a4de5087",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-bb108040666ac4c9",
+      "record-f0be8c42ba3bc7bf"
+    ],
+    "question-137f40527558a552": [
+      "record-337b853bd6acb221",
+      "record-0f2c10bf3d128c71",
+      "record-fa9f8308339d6590",
+      "record-c2d648bf80a85615",
+      "record-e30f1b58489b18cb"
+    ],
+    "question-c5de278e44675cde": [
+      "record-337b853bd6acb221",
+      "record-0f2c10bf3d128c71",
+      "record-fa9f8308339d6590",
+      "record-c2d648bf80a85615",
+      "record-e30f1b58489b18cb"
+    ],
+    "question-a4765e9431d575ca": [
+      "record-f0be8c42ba3bc7bf",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-bb108040666ac4c9",
+      "record-aedac626a4de5087"
+    ],
+    "question-eb4711d13827ad1c": [
+      "record-f0be8c42ba3bc7bf",
+      "record-e30f1b58489b18cb",
+      "record-4d89207fc2eafddf",
+      "record-bb108040666ac4c9",
+      "record-aedac626a4de5087"
+    ],
+    "question-c384537b33d331ab": [
+      "record-ddb0cd2ae1badd91",
+      "record-3f38bd03896e8cde",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-7e87fdc11a9bb7da": [
+      "record-a1d9823b9dd70a29",
+      "record-69508e7847f37f4d",
+      "record-432df5859aab9074",
+      "record-061a19682dfa68e2",
+      "record-0ff5d3c25b3721bd"
+    ],
+    "question-a0845e7625a32da5": [
+      "record-ddb0cd2ae1badd91",
+      "record-3f38bd03896e8cde",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-c65a417573fd1ff4": [
+      "record-a680d1c998b593f4",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-83a2bef9c15acd31": [
+      "record-6e99d1912563f141",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-1292da48fdecd9ed": [
+      "record-a680d1c998b593f4",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-1555f17c25fa6472": [
+      "record-9c65193991e93720",
+      "record-ca6ebe9f0045c706",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-044fcf6378df7d92": [
+      "record-feaedce15852eb93",
+      "record-ca6ebe9f0045c706",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9"
+    ],
+    "question-ee16e1300a715a89": [
+      "record-9c65193991e93720",
+      "record-ca6ebe9f0045c706",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-4b21bff3a506d08e": [
+      "record-b99e29f02c6899d6",
+      "record-8f2b494c31a1ba99",
+      "record-7642f326c35671d9",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-d1cb38d109f087eb": [
+      "record-62936528938d1a13",
+      "record-729fdef9ac878a05",
+      "record-7642f326c35671d9",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619"
+    ],
+    "question-7189325cf239dd33": [
+      "record-b99e29f02c6899d6",
+      "record-8f2b494c31a1ba99",
+      "record-7642f326c35671d9",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-dd3fe1e598e63659": [
+      "record-451a93dbba3f40ef",
+      "record-9cfbe71007ca2619",
+      "record-ce8f27fefaf826c7",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-c1a95298aca87973": [
+      "record-a73130b32da9d578",
+      "record-9cfbe71007ca2619",
+      "record-ce8f27fefaf826c7",
+      "record-79eab57341c9224e",
+      "record-7642f326c35671d9"
+    ],
+    "question-cfa6e690a7036a48": [
+      "record-451a93dbba3f40ef",
+      "record-9cfbe71007ca2619",
+      "record-ce8f27fefaf826c7",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-c2760909a80e97b4": [
+      "record-4ab575b925b3621a",
+      "record-ca6ebe9f0045c706",
+      "record-0f396c7a6e71f0fa",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-49de5299186a3015": [
+      "record-96ca46e1dce5a765",
+      "record-ca6ebe9f0045c706",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9"
+    ],
+    "question-da1e351e85e8c33a": [
+      "record-4ab575b925b3621a",
+      "record-ca6ebe9f0045c706",
+      "record-0f396c7a6e71f0fa",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-1634a0ee62ef3575": [
+      "record-4358ffba49c1c2b0",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-071eaeffc2e98598": [
+      "record-ea3e1bd0815df8ec",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-b3a68f9e5ef38818": [
+      "record-4358ffba49c1c2b0",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-a6b969e35d037897": [
+      "record-0f396c7a6e71f0fa",
+      "record-9933989e81a44cbc",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-fe1ca07082bb5b14": [
+      "record-a6ade9cb6075925a",
+      "record-7a1fd458942e0805",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9"
+    ],
+    "question-e73a02d130d807a9": [
+      "record-0f396c7a6e71f0fa",
+      "record-9933989e81a44cbc",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-540dcff4ebd7a27f": [
+      "record-8f5f33ec22ef3814",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-7be940aa6d00fdce": [
+      "record-81f58aaa7b77e3c5",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-93fe6fa12c3def6b": [
+      "record-8f5f33ec22ef3814",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-8ec111a0c70fc950": [
+      "record-72c5dc6f253abe4c",
+      "record-79eab57341c9224e",
+      "record-212533ea884b5dfe",
+      "record-d86bd9fa759d6e03",
+      "record-0f396c7a6e71f0fa"
+    ],
+    "question-92a07256825bdb38": [
+      "record-942077ab50b92d65",
+      "record-79eab57341c9224e",
+      "record-212533ea884b5dfe",
+      "record-d86bd9fa759d6e03",
+      "record-d9cffd07fa73a672"
+    ],
+    "question-c72ebf16122ed501": [
+      "record-72c5dc6f253abe4c",
+      "record-79eab57341c9224e",
+      "record-212533ea884b5dfe",
+      "record-d86bd9fa759d6e03",
+      "record-d9cffd07fa73a672"
+    ],
+    "question-c0db7beb1e63e977": [
+      "record-15afb50ae9372fed",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-3f38bd03896e8cde"
+    ],
+    "question-0d45a82d2d2c58e3": [
+      "record-49135c14db9dfd53",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-cb0c5d257e6531fc": [
+      "record-15afb50ae9372fed",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-3f38bd03896e8cde"
+    ],
+    "question-21cb9ff99ca659e6": [
+      "record-3f38bd03896e8cde",
+      "record-ddb0cd2ae1badd91",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-593c775d857c6f51": [
+      "record-69508e7847f37f4d",
+      "record-a1d9823b9dd70a29",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9"
+    ],
+    "question-9447bdba2724dfca": [
+      "record-3f38bd03896e8cde",
+      "record-ddb0cd2ae1badd91",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-c7a98254e83ee094": [
+      "record-8f2b494c31a1ba99",
+      "record-b99e29f02c6899d6",
+      "record-7642f326c35671d9",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-6aa7ad029facdd10": [
+      "record-729fdef9ac878a05",
+      "record-62936528938d1a13",
+      "record-7642f326c35671d9",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619"
+    ],
+    "question-43a0071f5f29516b": [
+      "record-8f2b494c31a1ba99",
+      "record-b99e29f02c6899d6",
+      "record-7642f326c35671d9",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a"
+    ],
+    "question-3a5c13d93417c289": [
+      "record-f4bf8e315898f950",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-428856b79acefa83": [
+      "record-81679ee87bba59dd",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-7965825905fd2f5a": [
+      "record-f4bf8e315898f950",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-c4d5065b479f3e5b": [
+      "record-79591c962111c9f6",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-366bfb08819dc8b8": [
+      "record-d21dbb14bc11193d",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-def44581718f1b93": [
+      "record-79591c962111c9f6",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-2d46ed1eca772426": [
+      "record-5caf60a97c7f2f15",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-e04ea85dc6c8a1cf": [
+      "record-21ab30d1f1595664",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-58d22510d8d2de1b": [
+      "record-5caf60a97c7f2f15",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-53c8173562e5c21a": [
+      "record-83980c9d73bf6782",
+      "record-ce8f27fefaf826c7",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-b23c2ba9e2c839fd": [
+      "record-10f0e5892516017a",
+      "record-ce8f27fefaf826c7",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9"
+    ],
+    "question-9defd72ac5c6e3f6": [
+      "record-83980c9d73bf6782",
+      "record-ce8f27fefaf826c7",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-e4fbc40ae2058b46": [
+      "record-819acf4b6223d84d",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-44900b2f9c05d2fb": [
+      "record-6f82863367d4484e",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-423725de721f4283": [
+      "record-819acf4b6223d84d",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730",
+      "record-15afb50ae9372fed"
+    ],
+    "question-c048aadb5dc197b5": [
+      "record-15720c6ad2de5730",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15afb50ae9372fed",
+      "record-3f38bd03896e8cde"
+    ],
+    "question-3f553a188b665d1a": [
+      "record-e81052e96952fd60",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619",
+      "record-7642f326c35671d9",
+      "record-d86bd9fa759d6e03"
+    ],
+    "question-b654b7664024a971": [
+      "record-15720c6ad2de5730",
+      "record-0f396c7a6e71f0fa",
+      "record-4ab575b925b3621a",
+      "record-15afb50ae9372fed",
+      "record-3f38bd03896e8cde"
+    ],
+    "question-6cb36693a1e6caea": [
+      "record-9933989e81a44cbc",
+      "record-0f396c7a6e71f0fa",
+      "record-933bfced22f52afb",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ],
+    "question-513cb444f5832dd2": [
+      "record-7a1fd458942e0805",
+      "record-a6ade9cb6075925a",
+      "record-933bfced22f52afb",
+      "record-79eab57341c9224e",
+      "record-9cfbe71007ca2619"
+    ],
+    "question-d2e364986b974627": [
+      "record-9933989e81a44cbc",
+      "record-0f396c7a6e71f0fa",
+      "record-933bfced22f52afb",
+      "record-4ab575b925b3621a",
+      "record-15720c6ad2de5730"
+    ]
+  }
+}

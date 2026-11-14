@@ -1,0 +1,26 @@
+bun test v1.4.0 (34cbb9a40)
+
+scripts/evals/eval.test.ts:
+4 | 
+5 | const data = buildDataset();
+6 | describe("synthetic evaluation", () => {
+7 |   test("record identifiers do not disclose language or validity labels", () => {
+8 |     for (const record of data.records) {
+9 |       expect(record.id).not.toMatch(/^(en|sk|old|new|context)-/);
+                                ^
+error: expect(received).not.toMatch(expected)
+
+Expected substring or pattern: not /^(en|sk|old|new|context)-/
+Received: "en-0"
+
+      at <anonymous> (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/scripts/evals/eval.test.ts:9:29)
+(fail) synthetic evaluation > record identifiers do not disclose language or validity labels [0.23ms]
+(pass) synthetic evaluation > covers required sizes and labels with valid provenance [0.23ms]
+(pass) synthetic evaluation > inference export hides labels and fixture ordering [15.28ms]
+(pass) synthetic evaluation > uses FTS5 with current and historical validity [23.70ms]
+(pass) synthetic evaluation > retrieval and capture metrics count errors and abstentions [0.34ms]
+
+ 4 pass
+ 1 fail
+ 165 expect() calls
+Ran 5 tests across 1 file. [2.62s]

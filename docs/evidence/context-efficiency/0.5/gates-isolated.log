@@ -1,0 +1,4 @@
+gates: test: 2157 passed across 243 binaries
+PASS test (244s)
+PASS lint (1s)
+OVERALL=0 (2/2 passed)
