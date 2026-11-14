@@ -1150,7 +1150,7 @@ async fn chat_stream_without_annotations_never_adds_a_citations_field() {
 async fn chat_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
     let reported = sse(&[
         json!({"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}),
-        json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":6,"audio_tokens":1},"completion_tokens_details":{"reasoning_tokens":3}}}),
+        json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":6,"cache_write_tokens":0,"audio_tokens":1},"completion_tokens_details":{"reasoning_tokens":3}}}),
     ]) + "data: [DONE]\n\n";
     let provider =
         ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, reported)]))
@@ -1300,7 +1300,7 @@ async fn responses_stream_level_failure_shares_the_retryable_taxonomy() {
 async fn responses_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
     let added = json!({"type":"response.output_item.added","output_index":0,"item":{"id":"message1","type":"message","role":"assistant","content":[]}});
     let delta = json!({"type":"response.output_text.delta","output_index":0,"item_id":"message1","content_index":0,"delta":"answer"});
-    let reported = json!({"type":"response.completed","response":{"status":"completed","output":[message()],"usage":{"input_tokens":8,"output_tokens":5,"total_tokens":13,"input_tokens_details":{"cached_tokens":4,"audio_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}});
+    let reported = json!({"type":"response.completed","response":{"status":"completed","output":[message()],"usage":{"input_tokens":8,"output_tokens":5,"total_tokens":13,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":0,"audio_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}});
     let provider = ResponsesProvider::new(Transport::new(
         "responses",
         vec![(200, sse(&[added.clone(), delta.clone(), reported]))],
@@ -1325,4 +1325,127 @@ async fn responses_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones
     assert!(events.iter().all(Result::is_ok));
     // Like the chat lane: the event contract is a number or absent, never null.
     assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==1&&data.get("cachedPromptTokens").is_none()&&data.get("reasoningTokens").is_none())));
+}
+
+async fn cache_write_usage(protocol: &str, usage: Value) -> Vec<Result<ProviderEvent, CoreError>> {
+    let stream = if protocol == "responses" {
+        sse(&[
+            json!({"type":"response.completed","response":{"status":"completed","output":[message()],"usage":usage}}),
+        ])
+    } else {
+        sse(&[
+            json!({"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}),
+            json!({"choices":[],"usage":usage}),
+        ]) + "data: [DONE]\n\n"
+    };
+    let transport = Transport::new(protocol, vec![(200, stream)]);
+    if protocol == "responses" {
+        ResponsesProvider::new(transport)
+            .unwrap()
+            .stream_chat(request(), CancellationToken::new())
+            .collect()
+            .await
+    } else {
+        ChatCompletionsProvider::new(transport)
+            .unwrap()
+            .stream_chat(request(), CancellationToken::new())
+            .collect()
+            .await
+    }
+}
+
+#[tokio::test]
+async fn cache_write_usage_maps_split_and_preserves_raw() {
+    let raw = json!({"input_tokens":100,"output_tokens":10,"total_tokens":110,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":30,"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":20}},"output_tokens_details":{"reasoning_tokens":3}});
+    let events = cache_write_usage("responses", raw.clone()).await;
+    assert!(events.iter().any(|event| matches!(event, Ok(ProviderEvent::Usage(data)) if data["input_uncached"] == 50 && data["cache_read"] == 20 && data["cache_write_short"] == 10 && data["cache_write_long"] == 20 && data["output"] == 7 && data["reasoning"] == 3 && data["promptTokens"] == 100 && data["provider_raw"] == raw)));
+    let raw = json!({"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":30},"completion_tokens_details":{"reasoning_tokens":3}});
+    let events = cache_write_usage("chat-completions", raw.clone()).await;
+    assert!(events.iter().any(|event| matches!(event, Ok(ProviderEvent::Usage(data)) if data["input_uncached"] == 50 && data.get("cache_write_short").is_none() && data.get("cache_write_long").is_none() && data["provider_raw"] == raw)));
+}
+
+#[tokio::test]
+async fn cache_write_usage_rejects_invalid_counts() {
+    for details in [
+        json!({"cached_tokens":80,"cache_write_tokens":30}),
+        json!({"cached_tokens":20,"cache_write_tokens":29,"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":20}}),
+        json!({"cache_write_tokens":-1}),
+        json!({"cache_write_tokens":1.5}),
+        json!({"cache_write_tokens":9007199254740992_u64}),
+        json!({"cache_write_tokens_details":{"ttl_30m_tokens":9007199254740991_u64,"ttl_12h_tokens":1}}),
+    ] {
+        let events = cache_write_usage(
+            "responses",
+            json!({"input_tokens":100,"input_tokens_details":details}),
+        )
+        .await;
+        assert!(
+            events.iter().any(
+                |event| matches!(event, Err(error) if error.message.contains("malformed_usage"))
+            ),
+            "{events:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cache_write_usage_handles_unknown_zero_and_partial_splits() {
+    for (details, expected) in [
+        (
+            json!({"cached_tokens":20,"cache_write_tokens":0}),
+            json!({"input_uncached":80,"cache_write_short":0,"cache_write_long":0}),
+        ),
+        (
+            json!({"cached_tokens":20,"cache_write_tokens":30}),
+            json!({"input_uncached":50}),
+        ),
+        (
+            json!({"cached_tokens":20,"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":20}}),
+            json!({"input_uncached":50,"cache_write_short":10,"cache_write_long":20}),
+        ),
+        (
+            json!({"cached_tokens":20,"cache_write_tokens":null}),
+            json!({}),
+        ),
+        (
+            json!({"cached_tokens":20,"cache_write_tokens_details":{"ttl_30m_tokens":10}}),
+            json!({"cache_write_short":10}),
+        ),
+    ] {
+        let events = cache_write_usage(
+            "responses",
+            json!({"input_tokens":100.0,"input_tokens_details":details}),
+        )
+        .await;
+        let data = events
+            .iter()
+            .find_map(|event| match event {
+                Ok(ProviderEvent::Usage(data)) => Some(data),
+                _ => None,
+            })
+            .expect("usage event");
+        for key in ["input_uncached", "cache_write_short", "cache_write_long"] {
+            assert_eq!(data.get(key), expected.get(key), "{key}: {data}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn cache_write_usage_rejects_impossible_partial_writes() {
+    for details in [
+        json!({"cached_tokens":60,"cache_write_tokens_details":{"ttl_30m_tokens":60}}),
+        json!({"cache_write_tokens_details":{"ttl_30m_tokens":120}}),
+    ] {
+        let events = cache_write_usage(
+            "responses",
+            json!({"input_tokens":100,"input_tokens_details":details}),
+        )
+        .await;
+        assert!(
+            events.iter().any(
+                |event| matches!(event, Err(error) if error.message.contains("malformed_usage"))
+            ),
+            "{events:?}"
+        );
+    }
 }

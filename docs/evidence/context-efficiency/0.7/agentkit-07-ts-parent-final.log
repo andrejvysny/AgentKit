@@ -1,0 +1,27 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/normalized-usage.test.ts:
+(pass) normalized usage > leaves unknown counts absent [0.91ms]
+(pass) normalized usage > rejects contradictory provider counts [0.41ms]
+(pass) rejects numeric counters outside the safe integer range [0.25ms]
+(pass) maps cache-write lifetime splits and preserves raw usage [0.22ms]
+(pass) maps zero, aggregate and complete cache-write counts [0.03ms]
+(pass) keeps missing cache-write counts unknown [0.33ms]
+(pass) rejects contradictory or malformed cache writes [0.04ms]
+(pass) keeps unreported output and chat lifetime classes unknown [0.01ms]
+(pass) rejects partial writes that already exceed input [0.02ms]
+
+packages/core/tests/reasoning-effort.test.ts:
+(pass) chat completions reasoning_effort > sends reasoning_effort when requested and omits it otherwise [5.33ms]
+(pass) chat completions reasoning_effort > drops it once on a 400 naming it and warns [1.00ms]
+(pass) chat completions reasoning_effort > does not retry a second time when the server still rejects [0.19ms]
+(pass) chat completions reasoning_effort > parses cached and reasoning token details [0.30ms]
+(pass) chat completions reasoning_effort > leaves the detail fields out when the server sends none [0.07ms]
+(pass) Responses reasoning effort and usage details > sends reasoning.effort alongside encrypted content include [6.79ms]
+(pass) Responses reasoning effort and usage details > omits reasoning when no effort is requested [0.11ms]
+(pass) Responses reasoning effort and usage details > parses cached and reasoning token details [0.13ms]
+
+ 17 pass
+ 0 fail
+ 47 expect() calls
+Ran 17 tests across 2 files. [6.31s]

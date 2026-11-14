@@ -1,0 +1,19 @@
+   Compiling agentkit-providers v0.1.0 (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/rust/crates/providers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.96s
+     Running tests/providers.rs (rust/target/debug/deps/providers-29079ac006062f65)
+
+running 1 test
+
+thread 'cache_write_usage_rejects_impossible_partial_writes' (35246353) panicked at crates/providers/tests/providers.rs:1440:9:
+[Ok(Started), Ok(Activity), Ok(Delta("answer")), Ok(Usage(Object {"callId": String("call_f44f9117-1908-459e-ba5a-949fe76fc1db"), "attempt": Number(1), "step": Number(0), "model": String("m"), "source": String("stream"), "finalForCall": Bool(true), "promptTokens": Number(100), "cachedPromptTokens": Number(60), "cache_read": Number(60), "cache_write_short": Number(60), "provider_raw": Object {"input_tokens": Number(100), "input_tokens_details": Object {"cached_tokens": Number(60), "cache_write_tokens_details": Object {"ttl_30m_tokens": Number(60)}}}})), Ok(Event { kind: "run.message.completed", data: Object {"content": String("answer"), "toolCallCount": Number(0), "toolCalls": Array [], "finishReason": String("stop")} })]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cache_write_usage_rejects_impossible_partial_writes ... FAILED
+
+failures:
+
+failures:
+    cache_write_usage_rejects_impossible_partial_writes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p agentkit-providers --test providers`

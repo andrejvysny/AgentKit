@@ -5,7 +5,7 @@ use crate::{
 };
 use agentkit_core::{
     ChatProvider, ChatRequest, ConnectionIdentity, CoreError, ProviderEvent, ProviderStream,
-    ToolCall, UsageRecord,
+    ToolCall,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -213,7 +213,7 @@ impl ChatCompletionsProvider {
             if let Some(usage) = &state.usage {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Usage(
-                    usage_data(usage, &input.model, &state.call_id, complete)?,
+                    usage_data(usage, &input.model, &state.call_id, complete, false)?,
                 );
             }
             if let Some(error) = failure {
@@ -670,6 +670,7 @@ pub(crate) fn usage_data(
     model: &str,
     call_id: &str,
     final_for_call: bool,
+    responses: bool,
 ) -> Result<Value, CoreError> {
     let mut data = json!({
         "callId": call_id,
@@ -685,13 +686,7 @@ pub(crate) fn usage_data(
         ("total_tokens", "totalTokens"),
     ] {
         if let Some(value) = usage.get(source) {
-            if value
-                .as_u64()
-                .filter(|value| *value <= 9007199254740991)
-                .is_none()
-            {
-                return Err(CoreError::responses("malformed_usage"));
-            }
+            crate::usage::count(value)?;
             data[target] = value.clone();
         }
     }
@@ -716,44 +711,15 @@ pub(crate) fn usage_data(
             .and_then(|details| details.get(key))
             .filter(|value| value.is_number())
         {
-            if value
-                .as_u64()
-                .filter(|value| *value <= 9007199254740991)
-                .is_none()
-            {
-                return Err(CoreError::responses("malformed_usage"));
-            }
+            crate::usage::count(value)?;
             data[target] = value.clone();
         }
     }
-    let record = normalized_usage(&data, usage)?;
+    let record = crate::usage::normalized_usage(&data, usage, responses)?;
     if let Value::Object(fields) = serde_json::to_value(record).expect("usage record serializes") {
         data.as_object_mut()
             .expect("usage event is an object")
             .extend(fields);
     }
     Ok(data)
-}
-
-fn normalized_usage(data: &Value, raw: &Value) -> Result<UsageRecord, CoreError> {
-    let cache_read = data["cachedPromptTokens"].as_u64();
-    let reasoning = data["reasoningTokens"].as_u64();
-    Ok(UsageRecord {
-        input_uncached: usage_difference(data["promptTokens"].as_u64(), cache_read)?,
-        cache_read,
-        output: usage_difference(data["completionTokens"].as_u64(), reasoning)?,
-        reasoning,
-        provider_raw: raw.clone(),
-        ..UsageRecord::default()
-    })
-}
-
-fn usage_difference(total: Option<u64>, subset: Option<u64>) -> Result<Option<u64>, CoreError> {
-    match (total, subset) {
-        (Some(total), Some(subset)) => total
-            .checked_sub(subset)
-            .map(Some)
-            .ok_or_else(|| CoreError::responses("malformed_usage")),
-        _ => Ok(None),
-    }
 }

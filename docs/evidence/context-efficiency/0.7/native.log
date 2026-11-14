@@ -1,0 +1,945 @@
+bun test v1.4.0 (34cbb9a40)
+witness: remote calls after pre-aborted dispatch = []
+witness: in-flight abort settled after 152ms
+witness: cancelled turn settled in 0ms
+witness: remote tool-call log after the full init-delay window = ["echo","die"]
+witness: stale-descriptor call after crash → mcp_not_connected
+witness: stale-generation dispatch → mcp_not_connected
+witness: tool-call log across the reconnect = ["echo","die","echo"]
+witness: healthy alias call by full advertised name → ["echo"] (ambiguous server saw [])
+
+packages/core/tests/responses-run-content.test.ts:
+(pass) selected content uses canonical digest, pins same-run bytes, and replays once [6.32ms]
+(pass) same-run content removal or change fails before transport without dropping reasoning [0.71ms]
+(pass) next run retains prior reasoning and template messages while using only current instructions [0.78ms]
+(pass) selected context does not relax canonical history validation [0.33ms]
+(pass) malformed or oversized selected context fails before transport [1.50ms]
+
+packages/core/tests/provider-diagnostic-safety.test.ts:
+(pass) provider public diagnostics > redacts echoed credentials in HTTP errors without changing status codes [1.80ms]
+(pass) provider public diagnostics > redacts thrown network errors without changing their codes [0.31ms]
+(pass) provider public diagnostics > redacts cancellation reasons [0.10ms]
+(pass) provider public diagnostics > caps UTF-8 diagnostics after redaction [0.28ms]
+(pass) diagnostic credential formats > redacts escaped JSON credentials and exact configured header values [0.02ms]
+
+packages/core/tests/openai-compatible-terminal-safety.test.ts:
+(pass) never executes complete-looking tool arguments after transport EOF [567.63ms]
+(pass) never executes complete-looking tool arguments after malformed tool frame [0.47ms]
+(pass) OpenAI request reservation > enforces a cumulative one-request budget across compatibility fallback [0.95ms]
+(pass) OpenAI request reservation > reserves each HTTP dispatch, including the max_tokens compatibility fallback [0.19ms]
+(pass) OpenAI request reservation > does not dispatch the compatibility fallback when its reservation is refused [0.10ms]
+
+packages/core/tests/native-loop-boundary.test.ts:
+(pass) native run facade > preserves the caller signal for hooks and tools without deadlines [1.64ms]
+(pass) native run facade > does not abort a timed-out observer signal after a successful run [10.21ms]
+(pass) native run facade > aborts a timed-out tool signal [7.85ms]
+(pass) native run facade > preserves delayed tool completion after caller cancellation [101.96ms]
+(pass) native run facade > bounds a cancelled uncooperative tool by its declared deadline [32.73ms]
+(pass) native run facade > waits for consumer acknowledgement before provider dispatch (retry=%s) [0.46ms]
+(pass) native run facade > waits for consumer acknowledgement before provider dispatch (retry=%s) [0.22ms]
+(pass) native run facade > rejects invalid backend selection [0.04ms]
+
+packages/core/tests/agent-loop-sessions.test.ts:
+(pass) runAgentLoop steering > reads a steer after an approved call resumes, before the first request [4.27ms]
+(pass) runAgentLoop steering > places a steer between step 1's tools and step 2's request [0.79ms]
+(pass) runAgentLoop steering > places a duplicate inputId once [1.02ms]
+(pass) runAgentLoop steering > rejects a non-user role with steering_rejected [0.81ms]
+(pass) runAgentLoop steering > polls only between tool steps, never on the last iteration [1.43ms]
+(pass) runAgentLoop steering > a throwing source warns hook_failed and the run completes [0.72ms]
+(pass) runAgentLoop steering > a hanging source warns hook_timeout and the run completes [22.79ms]
+(pass) runAgentLoop steering > without steering the stream equals runChat's [1.89ms]
+(pass) runAgentLoop suspension > suspends on the waiting call; other calls still run [0.88ms]
+(pass) runAgentLoop suspension > carries a standing-approval key onto run.waiting, and only when given [0.92ms]
+(pass) runAgentLoop suspension > second suspender in a batch fails suspend_conflict [0.62ms]
+(pass) runAgentLoop suspension > an empty prompt fails suspend_invalid and the run completes [0.65ms]
+(pass) runAgentLoop suspension > not suspendable: ctx has no suspend key [1.75ms]
+(pass) runAgentLoop suspension > abort after suspend cancels and answers every tool_call_id [0.57ms]
+(pass) runAgentLoop suspension > a late suspend() after a tool timeout is ignored [73.49ms]
+
+packages/core/tests/openai-compatible.test.ts:
+(pass) OpenAiCompatibleClient.streamChat > captures reasoning_content into the completed event without merging into content [0.38ms]
+(pass) OpenAiCompatibleClient.streamChat > keeps content and reasoning separate [0.10ms]
+(pass) OpenAiCompatibleClient.streamChat > warns when malformed SSE lines drop the entire answer [0.10ms]
+(pass) OpenAiCompatibleClient error bodies > caps an error body delivered as ONE oversized chunk [0.74ms]
+(pass) OpenAiCompatibleClient error bodies > caps an error body that never was a stream [0.29ms]
+(pass) OpenAiCompatibleClient error bodies > codes a stream that blows the SSE buffer cap as a provider error [2.25ms]
+(pass) OpenAiCompatibleClient extraHeaders > merges extraHeaders into requests but cannot override authorization [0.24ms]
+(pass) OpenAiCompatibleClient extraHeaders > fromConfig carries extraHeaders through to the outgoing request [0.14ms]
+(pass) OpenAiCompatibleClient app attribution headers > sends no attribution headers by default, not even for openrouter [0.10ms]
+(pass) OpenAiCompatibleClient app attribution headers > sends the caller's attribution when configured, regardless of kind [0.06ms]
+(pass) OpenAiCompatibleClient app attribution headers > maps appReferer/appTitle from config metadata in fromConfig [0.08ms]
+(pass) OpenAiCompatibleClient capability probe > reports toolCalling=true when the probe returns a tool_call [0.28ms]
+(pass) OpenAiCompatibleClient capability probe > treats finish_reason=length as inconclusive (does NOT disable tools) [0.04ms]
+(pass) OpenAiCompatibleClient capability probe > reports toolCalling=false on a clean stop with no tool_call [0.03ms]
+(pass) OpenAiCompatibleClient run.failed error codes > codes a request that never produced a response as network_error [0.07ms]
+(pass) OpenAiCompatibleClient run.failed error codes > codes a 200 with no body as empty_body [0.04ms]
+
+packages/core/tests/run-loop-cancellation-live.test.ts:
+(pass) runChat — cancellation through the real provider client > ends a stalled stream as cancelled, with no assistant message [0.62ms]
+(pass) runChat — cancellation through the real provider client > does not commit the final assistant message when cancelled after the last chunk [0.40ms]
+
+packages/core/tests/native-loop.test.ts:
+(pass) native run facade > streams provider events and returns the Rust run result [0.35ms]
+(pass) native run facade > executes a registered JavaScript tool through the native loop [0.67ms]
+(pass) native run facade > cancels a silent provider [21.30ms]
+(pass) native run facade > enforces first-byte budget on a silent provider [11.66ms]
+(pass) native run facade > forwards selected run content and reasoning effort to the provider [0.53ms]
+(pass) native run facade > does not add transport callbacks to an unbounded tool-less request [0.46ms]
+(pass) native run facade > does not announce an already-declared resumed tool call [0.64ms]
+(pass) native run facade > closes pending tool callbacks without accepting late resolution [3.85ms]
+(pass) native run facade > marks a tool callback inactive when its deadline expires before delivery [106.62ms]
+
+packages/core/tests/normalized-usage.test.ts:
+(pass) normalized usage > leaves unknown counts absent [0.05ms]
+(pass) normalized usage > rejects contradictory provider counts [0.08ms]
+(pass) rejects numeric counters outside the safe integer range [0.07ms]
+(pass) maps cache-write lifetime splits and preserves raw usage [0.04ms]
+(pass) maps zero, aggregate and complete cache-write counts [0.02ms]
+(pass) keeps missing cache-write counts unknown [0.37ms]
+(pass) rejects contradictory or malformed cache writes [0.04ms]
+(pass) keeps unreported output and chat lifetime classes unknown [0.01ms]
+(pass) rejects partial writes that already exceed input [0.02ms]
+
+packages/core/tests/responses-errors.test.ts:
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_usage_limit_exceeded keeps exact metadata [1.01ms]
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_usage_unavailable keeps exact metadata [0.11ms]
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_user_unavailable keeps exact metadata [0.06ms]
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_user_not_eligible keeps exact metadata [0.04ms]
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_unsupported_capability keeps exact metadata [0.04ms]
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_route_not_supported keeps exact metadata [0.03ms]
+(pass) Responses safe recovery diagnostics > HTTP subscription_sharing_invalid_user keeps exact metadata [0.03ms]
+(pass) Responses safe recovery diagnostics > HTTP chatpass_v2_scope_not_authorized keeps exact metadata [0.04ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_usage_limit_exceeded never succeeds [0.37ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_usage_unavailable never succeeds [0.10ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_user_unavailable never succeeds [0.09ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_user_not_eligible never succeeds [0.07ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_unsupported_capability never succeeds [0.15ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_route_not_supported never succeeds [0.21ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE subscription_sharing_invalid_user never succeeds [0.09ms]
+(pass) Responses safe recovery diagnostics > late terminal SSE chatpass_v2_scope_not_authorized never succeeds [0.07ms]
+(pass) Responses safe recovery diagnostics > direct HTTP 401 detail body is never diagnostic text [0.18ms]
+(pass) Responses safe recovery diagnostics > direct HTTP 403 detail body is never diagnostic text [0.04ms]
+(pass) Responses safe recovery diagnostics > direct HTTP 503 detail body is never diagnostic text [0.03ms]
+(pass) Responses safe recovery diagnostics > bounds malformed HTTP diagnostics and ignores observer failures [0.10ms]
+(pass) Responses safe recovery diagnostics > unreadable HTTP body retains status without leaking text [0.12ms]
+(pass) Responses safe recovery diagnostics > model catalog rejection carries structured diagnostics only [0.21ms]
+
+packages/core/tests/execution-budget.test.ts:
+(pass) execution budgets > ends an uncooperative provider on first-byte deadline [7.21ms]
+(pass) execution budgets > keeps the first-byte deadline after a local admission diagnostic [7.80ms]
+(pass) execution budgets > uses stream-idle after transport activity following admission [7.39ms]
+(pass) execution budgets > keeps the first-byte deadline after a local warning [7.29ms]
+(pass) execution budgets > cancels an uncooperative provider without waiting for return [0.28ms]
+(pass) execution budgets > counts provider calls across passes and restored snapshots [0.08ms]
+(pass) execution budgets > persists a reservation before dispatch; failed persistence starts nothing [0.08ms]
+(pass) execution budgets > retains original overall deadline after restart [0.05ms]
+(pass) execution budgets > stops hung tools and never starts another provider call [7.55ms]
+
+packages/core/tests/responses-continuation.test.ts:
+(pass) Responses continuation > replays encrypted state, exact call and result without duplicate assistant [0.70ms]
+(pass) Responses continuation > scope mismatch providerId rejected before network [0.25ms]
+(pass) Responses continuation > scope mismatch connectionId rejected before network [0.11ms]
+(pass) Responses continuation > scope mismatch generation rejected before network [0.21ms]
+(pass) Responses continuation > scope mismatch chatId rejected before network [0.18ms]
+(pass) Responses continuation > scope mismatch branchId rejected before network [0.11ms]
+(pass) Responses continuation > scope mismatch model rejected before network [0.08ms]
+(pass) Responses continuation > scope mismatch protocol rejected before network [0.13ms]
+(pass) Responses continuation > changed history rejected; metadata and tool-result names do not change digest [0.34ms]
+(pass) Responses continuation > required state absence, wrong version, oversize state and missing opaque replay fail closed [0.56ms]
+(pass) Responses continuation > no callback or scope cannot silently drop required reasoning [0.21ms]
+(pass) Responses continuation > async persistence completes before any tool dispatch; persistence failure sanitized [0.29ms]
+(pass) Responses continuation > failed final usage cannot be persisted as successful continuation [0.10ms]
+(pass) Responses transport and catalog > account catalogs preserve server order/visibility and never share cache [0.13ms]
+(pass) Responses transport and catalog > API catalog uses data; immutable connection snapshot rejects rebinding [0.07ms]
+(pass) Responses transport and catalog > transport connection drift cannot dispatch under stale scope [0.13ms]
+(pass) Responses transport and catalog > stalled reader cancellation cannot hold an aborted request [0.21ms]
+(pass) Responses transport and catalog > HTTP 401 safe category, no fallback [0.08ms]
+(pass) Responses transport and catalog > HTTP 403 safe category, no fallback [0.03ms]
+(pass) Responses transport and catalog > HTTP 429 safe category, no fallback [0.03ms]
+(pass) Responses transport and catalog > HTTP 500 safe category, no fallback [0.03ms]
+(pass) Responses transport and catalog > abort wins stalled headers; late response body cancelled [0.14ms]
+(pass) Responses transport and catalog > abort interrupts stalled stream and always cancels reader [0.08ms]
+(pass) Responses transport and catalog > successful EOF and early consumer return close response reader [0.31ms]
+
+packages/core/tests/token-estimator.test.ts:
+(pass) defaultTokenEstimator > is ceil(chars / 4) for text [0.06ms]
+(pass) defaultTokenEstimator > counts an image as 4800 chars and sums text parts [0.01ms]
+(pass) defaultTokenEstimator > counts a tool call's name and JSON arguments [0.01ms]
+(pass) estimateTools > is the JSON length over four, zero for none [0.02ms]
+
+packages/core/tests/run-loop-completed.test.ts:
+(pass) runChat — completed-only providers > captures assistant content from a completed-only {content} turn [0.60ms]
+(pass) runChat — completed-only providers > executes a tool from completed-only {toolCalls} (no deltas from the provider) [3.97ms]
+(pass) runChat — completed-only providers > synthesizes exactly one requested event per call for a multi-call turn [0.83ms]
+(pass) runChat — completed-only providers > does not double-announce when the provider emits both requested and completed.toolCalls [0.79ms]
+(pass) runChat — tool-own ok and envelopes > emits run.tool.failed when a tool returns { ok: false } (no throw) [0.66ms]
+(pass) runChat — tool-own ok and envelopes > feeds a balanced envelope (modelData + warnings/truncated/status) on success [0.59ms]
+(pass) runChat — terminal events for every requested/capped call > gives each over-cap call a terminal failed event + balanced messages [0.86ms]
+(pass) runChat — finish_reason tool_calls with no usable call > warns instead of returning an empty success [0.25ms]
+
+packages/core/tests/run-loop-tool-safety.test.ts:
+(pass) runChat — unserializable tool results > reports a BigInt result as result_unserializable and still terminates [0.60ms]
+(pass) runChat — tool deadlines > gives up on a tool that ignores its abort signal [52.73ms]
+(pass) runChat — tool deadlines > applies defaultToolTimeoutMs to a tool that declares none [53.18ms]
+(pass) runChat — output budget > caps an over-budget result in the envelope fed to the model [1.71ms]
+(pass) runChat — output budget > previews a non-string payload rather than emitting invalid JSON [6.35ms]
+(pass) runChat — output budget > caps an over-budget summary [1.74ms]
+(pass) runChat — output budget > caps over-budget warnings [2.01ms]
+(pass) runChat — output budget > caps the error message of a tool that threw [0.97ms]
+(pass) runChat — output budget > caps the failure text a tool reports without throwing [0.86ms]
+(pass) runChat — output budget > treats a tool that returns no data as a success, not a serialization failure [0.70ms]
+(pass) runChat — iteration budget > clamps maxToolIterations to at least one provider round-trip [0.39ms]
+(pass) runChat — finish reasons > keeps an incomplete turn incomplete instead of calling it stop [0.38ms]
+(pass) runChat — finish reasons > warns about a length-truncated turn even when it carried tool calls [0.63ms]
+
+packages/core/tests/openai-compatible-list-models.test.ts:
+(pass) listModels context window > maps vLLM max_model_len and LM Studio context_length [0.10ms]
+(pass) listModels context window > takes the first usable key and ignores invalid values [0.06ms]
+
+packages/core/tests/run-loop-cancellation.test.ts:
+(pass) runChat — cancellation > cancels before touching the provider when the signal is already aborted [0.17ms]
+(pass) runChat — cancellation > keeps the result of a tool that finished, and balances the rest [0.80ms]
+(pass) runChat — tool execution failures > reports a throwing tool as exec_failed and finishes the run [0.64ms]
+(pass) runChat — tool execution failures > carries a thrown error's own retryable flag into the envelope [0.61ms]
+(pass) runChat — tool execution failures > reports unparseable arguments as bad_args and feeds the error back [0.57ms]
+
+packages/core/tests/run-loop.test.ts:
+(pass) runChat > streams text-only response and completes [0.45ms]
+(pass) runChat > executes a tool call and re-invokes the model [0.72ms]
+(pass) runChat > hands a tool the run's chatId and scopeId, and omits what it wasn't given [1.31ms]
+(pass) runChat > fails gracefully when tool not registered [0.48ms]
+(pass) runChat > emits a truncated warning and accurate finishReason on finish_reason=length [0.34ms]
+(pass) runChat > defaults finishReason to stop when the provider omits it [0.26ms]
+(pass) runChat > respects maxToolIterations [0.87ms]
+(pass) runChat > aborts a tool that exceeds its timeoutMs and continues the run [22.86ms]
+(pass) runChat > re-keys duplicate tool_call_ids from ANY provider client [1.07ms]
+
+packages/core/tests/responses-reasoning.test.ts:
+(pass) Responses public reasoning deltas, done and final values do not duplicate [0.62ms]
+(pass) Responses final-only reasoning is retained and conflicting done text fails [0.36ms]
+
+packages/core/tests/prompt-compose.test.ts:
+(pass) composeSystemPrompt > returns preset text only when no blocks/tool instructions [0.04ms]
+(pass) composeSystemPrompt > orders blocks by priority ascending [0.02ms]
+(pass) composeSystemPrompt > appends tool instructions block
+
+packages/core/tests/mcp-content-schema.test.ts:
+(pass) 2020-12 unevaluatedProperties and prefixItems remain enforced [8.71ms]
+(pass) unknown dialects and unsupported validation keywords fail clearly [3.00ms]
+(pass) nested schema identities continue resolving local references [2.64ms]
+(pass) tool attachments are delivered after all balanced tool results with explicit attribution [0.17ms]
+
+packages/core/tests/openai-compatible-assembly.test.ts:
+(pass) OpenAiCompatibleClient tool-call assembly > keeps two calls apart when the provider sends no index [0.30ms]
+(pass) OpenAiCompatibleClient tool-call assembly > splits two id-less calls that reuse one index but name different tools [0.10ms]
+(pass) OpenAiCompatibleClient tool-call assembly > keeps streaming arguments on one call when only the first delta names it [0.05ms]
+(pass) OpenAiCompatibleClient tool-call assembly > still assembles the ordinary indexed shape [0.06ms]
+(pass) OpenAiCompatibleClient tool-call assembly > re-keys a reused tool call id and warns [0.07ms]
+(pass) OpenAiCompatibleClient stream completeness > says incomplete when the stream ends with neither [DONE] nor a finish_reason [0.07ms]
+(pass) OpenAiCompatibleClient stream completeness > does not say incomplete when the provider sent [DONE] [0.05ms]
+(pass) OpenAiCompatibleClient stream completeness > emits usage counted before a mid-stream failure, marked not final [0.13ms]
+(pass) OpenAiCompatibleClient header precedence > cannot be spoofed by a differently-cased extraHeaders entry [0.07ms]
+
+packages/core/tests/provider-presets.test.ts:
+(pass) provider presets > exposes all 6 kinds [1.67ms]
+(pass) provider presets > covers exactly the KNOWN_PROVIDER_KINDS vocabulary [0.04ms]
+(pass) provider presets > openai requires API key [0.04ms]
+(pass) provider presets > lmstudio, omlx and ollama do not require API key [0.01ms]
+(pass) provider presets > ollama defaults to the local OpenAI-compatible endpoint
+(pass) provider presets > returns undefined for a kind with no preset
+(pass) provider presets > omlx has empty defaults but provides probe URLs [0.01ms]
+(pass) provider presets > carries no product-specific branding in its notes [0.05ms]
+(pass) provider presets > listPresets returns a copy [0.03ms]
+
+packages/core/tests/openai-compatible-multimodal.test.ts:
+(pass) OpenAiCompatibleClient multimodal request mapping > maps a user parts array onto OpenAI content parts, detail included [0.40ms]
+(pass) OpenAiCompatibleClient multimodal request mapping > inlines a data image as a data: URL and omits an absent detail [0.08ms]
+(pass) OpenAiCompatibleClient multimodal request mapping > flattens a system message's parts to text and warns exactly once [0.09ms]
+(pass) OpenAiCompatibleClient multimodal request mapping > flattens a tool message's parts and names both roles in one warning [0.08ms]
+(pass) OpenAiCompatibleClient multimodal request mapping > does not warn when a flattened role carried text parts only [0.06ms]
+(pass) OpenAiCompatibleClient multimodal request mapping > leaves plain-string messages exactly as they were before multimodal [0.06ms]
+(pass) runChat passthrough of multimodal content > hands the provider the parts array untouched and completes normally [0.61ms]
+(pass) runChat passthrough of multimodal content > warns about a flattened system message once per RUN, not once per call [4.31ms]
+
+packages/core/tests/tool-validation.test.ts:
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > accepts a valid WireEndpoint pair → [] [3.45ms]
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > flags an empty-object endpoint that matches neither oneOf branch [0.04ms]
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > catches an enum violation [1.95ms]
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > catches a maxLength overflow [1.66ms]
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > catches an additionalProperties violation and names the key [1.66ms]
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > maps error paths without a leading slash [1.93ms]
+(pass) AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage) > returns [] for a non-object schema: registration rejects it, so nothing is ever validated [0.54ms]
+(pass) mapValidatorErrors > returns [] when the validator passed [2.26ms]
+(pass) mapValidatorErrors > maps a failing validator's errors without a leading slash [0.17ms]
+(pass) parseToolArguments (preserved) > parses a JSON string [0.03ms]
+(pass) parseToolArguments (preserved) > reports invalid JSON [0.02ms]
+
+packages/core/tests/tool-registry-schema-safety.test.ts:
+(pass) AiToolRegistry schema hygiene > compiles a schema declaring the 2020-12 dialect [6.14ms]
+(pass) AiToolRegistry schema hygiene > registers two tools that declare the same $id [4.16ms]
+(pass) AiToolRegistry schema hygiene > validates formats instead of ignoring them [2.43ms]
+(pass) AiToolRegistry schema hygiene > refuses a schema nested past the depth bound [0.10ms]
+(pass) AiToolRegistry schema hygiene > refuses a schema with too many nodes [1.10ms]
+(pass) AiToolRegistry schema hygiene > accepts an ordinary schema well within the bounds [2.15ms]
+(pass) AiToolRegistry schema hygiene > refuses ambiguous nested schema identifiers [0.18ms]
+(pass) AiToolRegistry schema hygiene > refuses an over-large schema with a typed ToolSchemaError [0.05ms]
+(pass) AiToolRegistry schema hygiene > refuses an uncompilable schema with a typed ToolSchemaError [3.91ms]
+(pass) AiToolRegistry schema hygiene > compiles one schema once and shares the validator across registries [0.06ms]
+(pass) AiToolRegistry schema hygiene > rejects an unknown format without printing anything [2.11ms]
+
+packages/core/tests/openai-compatible-max-tokens.test.ts:
+(pass) OpenAiCompatibleClient max_tokens fallback > retries with max_completion_tokens when the server rejects max_tokens [0.35ms]
+(pass) OpenAiCompatibleClient max_tokens fallback > does not retry on an unrelated 400 and emits a single run.failed [0.10ms]
+(pass) OpenAiCompatibleClient finish_reason=tool_calls guard > warns when finish_reason=tool_calls but no tool call is reconstructable [0.09ms]
+
+packages/core/tests/reasoning-effort.test.ts:
+(pass) chat completions reasoning_effort > sends reasoning_effort when requested and omits it otherwise [0.20ms]
+(pass) chat completions reasoning_effort > drops it once on a 400 naming it and warns [0.13ms]
+(pass) chat completions reasoning_effort > does not retry a second time when the server still rejects [0.08ms]
+(pass) chat completions reasoning_effort > parses cached and reasoning token details [0.09ms]
+(pass) chat completions reasoning_effort > leaves the detail fields out when the server sends none [0.05ms]
+(pass) Responses reasoning effort and usage details > sends reasoning.effort alongside encrypted content include [0.19ms]
+(pass) Responses reasoning effort and usage details > omits reasoning when no effort is requested [0.07ms]
+(pass) Responses reasoning effort and usage details > parses cached and reasoning token details [0.10ms]
+
+packages/core/tests/run-usage.test.ts:
+(pass) OpenAiCompatibleClient usage reporting > requests include_usage and emits run.usage from the trailing usage chunk [0.27ms]
+(pass) OpenAiCompatibleClient usage reporting > reads usage that arrives alongside choices [0.07ms]
+(pass) OpenAiCompatibleClient usage reporting > emits nothing when the server reports no usage [0.06ms]
+(pass) OpenAiCompatibleClient usage reporting > does not ask for usage on the non-streaming capability probe [0.09ms]
+(pass) runChat usage stamping > reports one usage event per provider call, stamped with its step [1.10ms]
+
+packages/core/tests/provider-retry-effects.test.ts:
+(pass) retries only the provider request after a recorded tool effect, preserving model and tool result [1.05ms]
+
+packages/core/tests/run-loop-continuation.test.ts:
+(pass) runChat Responses continuation forwarding > one existing loop replays exact state/IDs/tool results across tool iterations [4.42ms]
+(pass) runChat Responses continuation forwarding > failed persistence never reaches tool executor or another provider pass [0.65ms]
+(pass) runChat Responses continuation forwarding > zero request budget prevents Responses dispatch [0.37ms]
+
+packages/core/tests/run-loop-schema-invalid.test.ts:
+(pass) runChat — schema_invalid arguments > fails with errorCode schema_invalid and does not execute the tool [2.92ms]
+
+packages/core/tests/sse-parser.test.ts:
+(pass) parseSseStream > parses single data lines [0.12ms]
+(pass) parseSseStream > handles fragmented chunks [0.03ms]
+(pass) parseSseStream > skips [DONE] sentinel [0.02ms]
+(pass) parseSseStream > ignores comments [0.02ms]
+(pass) parseSseStream > handles CRLF line endings [0.03ms]
+(pass) parseSseStream > joins the several data: lines of one frame with a newline [0.02ms]
+(pass) parseSseStream > yields nothing for an event:-only frame [0.04ms]
+(pass) parseSseStream > reports [DONE] as a sentinel frame instead of swallowing it [0.04ms]
+(pass) parseSseStream > throws AbortError when the signal aborts mid-stream [0.08ms]
+(pass) parseSseStream > refuses to buffer a body with no frame boundary [2.39ms]
+(pass) parseSseStream > parses a chunk carrying far more than the cap in COMPLETE frames [8.01ms]
+
+packages/core/tests/run-loop-provider-error.test.ts:
+(pass) runChat — provider throws mid-stream > normalizes the throw into exactly one terminal run.failed [0.64ms]
+(pass) runChat — provider throws mid-stream > describes a non-Error throw without exploding [0.32ms]
+(pass) runChat — provider throws mid-stream > classifies an AbortError throw as cancellation, not failure [0.32ms]
+(pass) runChat — provider throws mid-stream > classifies a throw under an aborted signal as cancellation [0.15ms]
+
+packages/core/tests/tool-registry-validation.test.ts:
+(pass) AiToolRegistry compiled validators > compiles a validator at registration and exposes it [2.53ms]
+(pass) AiToolRegistry compiled validators > returns undefined for an unknown tool [0.01ms]
+(pass) AiToolRegistry compiled validators > the compiled validator accepts good input and rejects bad input [0.09ms]
+(pass) AiToolRegistry.validateInput > reuses the cached validator (same instance as getValidator) [0.03ms]
+(pass) AiToolRegistry.validateInput > returns [] for valid input and errors for invalid input [0.03ms]
+(pass) AiToolRegistry.validateInput > returns [] for an unknown tool
+(pass) AiToolRegistry.validateInput > does not half-register when the schema is malformed (no validator-less tool) [1.64ms]
+
+packages/core/tests/agent-loop-hooks.test.ts:
+(pass) runAgentLoop hooks > fires all six points in order across two hooks (MockProviderClient) [1.88ms]
+(pass) runAgentLoop hooks > fires all six points in order across two hooks (CompletedOnlyProviderClient) [1.03ms]
+(pass) runAgentLoop hooks > an observer that throws becomes one hook_failed warning, text withheld [0.83ms]
+(pass) runAgentLoop hooks > an observer that hangs gives hook_timeout and the run completes [23.00ms]
+(pass) runAgentLoop hooks > beforeToolCall deny: tool never runs, guard envelope, run goes on [1.21ms]
+(pass) runAgentLoop hooks > beforeToolCall throw: tool never runs, guard envelope, run goes on [0.76ms]
+(pass) runAgentLoop hooks > beforeToolCall hang: tool never runs, guard envelope, run goes on [45.10ms]
+(pass) runAgentLoop hooks > beforeToolCall malformed action: tool never runs, guard envelope, run goes on [1.01ms]
+(pass) runAgentLoop hooks > beforeToolCall non-object: tool never runs, guard envelope, run goes on [0.92ms]
+(pass) runAgentLoop hooks > beforeToolCall deny without reason: tool never runs, guard envelope, run goes on [0.73ms]
+(pass) runAgentLoop hooks > beforeToolCall null: tool never runs, guard envelope, run goes on [0.76ms]
+(pass) runAgentLoop hooks > beforeToolCall NaN: tool never runs, guard envelope, run goes on [0.84ms]
+(pass) runAgentLoop hooks > beforeToolCall Infinity: tool never runs, guard envelope, run goes on [0.84ms]
+(pass) runAgentLoop hooks > beforeToolCall false: tool never runs, guard envelope, run goes on [0.84ms]
+(pass) runAgentLoop hooks > beforeToolCall true: tool never runs, guard envelope, run goes on [0.78ms]
+(pass) runAgentLoop hooks > beforeToolCall zero: tool never runs, guard envelope, run goes on [0.73ms]
+(pass) runAgentLoop hooks > beforeToolCall number: tool never runs, guard envelope, run goes on [0.77ms]
+(pass) runAgentLoop hooks > beforeToolCall empty string: tool never runs, guard envelope, run goes on [0.74ms]
+(pass) runAgentLoop hooks > beforeToolCall array: tool never runs, guard envelope, run goes on [0.69ms]
+(pass) runAgentLoop hooks > beforeToolCall empty object: tool never runs, guard envelope, run goes on [0.80ms]
+(pass) runAgentLoop hooks > beforeToolCall numeric action: tool never runs, guard envelope, run goes on [0.75ms]
+(pass) runAgentLoop hooks > beforeToolCall deny with numeric reason: tool never runs, guard envelope, run goes on [0.75ms]
+(pass) runAgentLoop hooks > beforeToolCall circular decision: tool never runs, guard envelope, run goes on [1.83ms]
+(pass) runAgentLoop hooks > a deny short-circuits later hooks [0.89ms]
+(pass) runAgentLoop hooks > hook cannot mutate args; tool gets the original [0.92ms]
+(pass) runAgentLoop hooks > abort inside beforeToolCall cancels: no execute, remaining balanced [0.59ms]
+(pass) runAgentLoop hooks > onSettled > completed [0.84ms]
+(pass) runAgentLoop hooks > onSettled > failed (provider throw) [0.26ms]
+(pass) runAgentLoop hooks > onSettled > cancelled (pre-aborted) [0.19ms]
+(pass) runAgentLoop hooks > onSettled > budget exhausted [0.72ms]
+(pass) runAgentLoop hooks > hook contexts never carry continuation or run content [1.30ms]
+(pass) runAgentLoop hooks > hooks: [] is byte-identical to runChat [1.50ms]
+
+packages/core/tests/native-loop-budget.test.ts:
+(pass) native run facade > never dispatches a provider for a pre-aborted run [0.18ms]
+(pass) native run facade > handles a throwing retry random without silently repeating on random failure [0.29ms]
+(pass) native run facade > handles a throwing retry sleep without silently repeating on random failure [0.37ms]
+(pass) native run facade > resets the first-byte deadline after retry backoff [52.27ms]
+(pass) native run facade > forwards tool metadata while preserving opaque values [0.87ms]
+(pass) native run facade > honors caller-owned budget checkpoints before provider effects [0.27ms]
+(pass) native run facade > honors the caller-owned budget timeout during a silent provider [16.31ms]
+(pass) native run facade > honors a caller-owned budget with a custom clock [0.68ms]
+(pass) native run facade > does not dispatch a transport after cancellation during a budget checkpoint [10.42ms]
+(pass) native run facade > preserves the external zero provider budget failure [0.32ms]
+(pass) native run facade > preserves the external zero tool budget failure [0.61ms]
+(pass) native run facade > preserves exhausted restored provider budget %s [0.22ms]
+(pass) native run facade > preserves exhausted restored provider budget %s [0.12ms]
+
+packages/core/tests/responses-empty-terminal.test.ts:
+(pass) Responses ChatGPT empty terminal output compatibility > replays completed message omitted from empty account terminal output [0.53ms]
+(pass) Responses ChatGPT empty terminal output compatibility > API-key profile retains missing-output rejection for same stream [0.13ms]
+(pass) Responses ChatGPT empty terminal output compatibility > never reconstructs partial, noncontiguous or nonempty missing output [0.07ms]
+(pass) Responses ChatGPT empty terminal output compatibility > never reconstructs partial, noncontiguous or nonempty missing output [0.04ms]
+(pass) Responses ChatGPT empty terminal output compatibility > never reconstructs partial, noncontiguous or nonempty missing output [0.04ms]
+(pass) Responses ChatGPT empty terminal output compatibility > nonempty conflicting terminal output remains an error [0.13ms]
+(pass) Responses ChatGPT empty terminal output compatibility > does not promote non-completed message status in_progress [0.07ms]
+(pass) Responses ChatGPT empty terminal output compatibility > does not promote non-completed message status incomplete [0.03ms]
+(pass) Responses ChatGPT empty terminal output compatibility > does not promote non-completed message status %s [0.03ms]
+(pass) Responses ChatGPT empty terminal output compatibility > uses finished function call only after completed terminal and EOF [0.20ms]
+(pass) Responses ChatGPT empty terminal output compatibility > preserves final encrypted reasoning privately from done item [0.21ms]
+(pass) Responses ChatGPT empty terminal output compatibility > finished items never substitute for valid terminal and clean EOF [0.15ms]
+(pass) Responses ChatGPT empty terminal output compatibility > finished items never substitute for valid terminal and clean EOF [0.05ms]
+(pass) Responses ChatGPT empty terminal output compatibility > finished items never substitute for valid terminal and clean EOF [0.04ms]
+(pass) Responses ChatGPT empty terminal output compatibility > finished items never substitute for valid terminal and clean EOF [0.04ms]
+(pass) Responses ChatGPT empty terminal output compatibility > finished items never substitute for valid terminal and clean EOF [0.02ms]
+(pass) Responses ChatGPT empty terminal output compatibility > missing encrypted reasoning and malformed tool arguments still fail [0.18ms]
+
+packages/core/tests/provider-retry.test.ts:
+(pass) providerRetry > retries 503 once, warns, keeps both usage events [0.85ms]
+(pass) providerRetry > does not retry 400 [0.20ms]
+(pass) providerRetry > does not retry after a delta [0.25ms]
+(pass) providerRetry > fails with the last code when attempts are exhausted [0.34ms]
+(pass) providerRetry > cancels when aborted during backoff, without another request [0.28ms]
+(pass) providerRetry > retries a thrown network error before output [0.47ms]
+(pass) providerRetry > applies capped, jittered exponential backoff [0.57ms]
+(pass) providerRetry > invalid policy means no retry [0.17ms]
+(pass) providerRetry > absent option: failure sequence unchanged [0.24ms]
+
+packages/core/tests/responses-metadata.test.ts:
+(pass) Responses live-observed inert metadata extension > replays streaming text, metadata and completed response without replacing text with failure [0.36ms]
+(pass) Responses live-observed inert metadata extension > metadata cannot inject text, tools, usage, continuation or terminal state [0.14ms]
+(pass) Responses live-observed inert metadata extension > metadata without a completed response fails EOF and never persists continuation [0.08ms]
+(pass) Responses live-observed inert metadata extension > metadata never suppresses unsupported_stream_event [0.07ms]
+(pass) Responses live-observed inert metadata extension > metadata never suppresses unsupported_stream_event [0.03ms]
+(pass) Responses live-observed inert metadata extension > metadata never suppresses service_unavailable [0.03ms]
+(pass) Responses live-observed inert metadata extension > metadata never suppresses response_incomplete [0.02ms]
+(pass) Responses live-observed inert metadata extension > metadata after terminal still fails instead of dispatching pending tools [0.05ms]
+(pass) Responses live-observed inert metadata extension > metadata does not bypass final text reconciliation [0.09ms]
+(pass) Responses live-observed inert metadata extension > metadata remains subject to frame and cumulative stream byte limits [21.32ms]
+
+packages/core/tests/responses-accounting.test.ts:
+(pass) Responses failure accounting and valid activity > retains billed usage on response.failed exactly once [0.27ms]
+(pass) Responses failure accounting and valid activity > retains billed usage on response.incomplete exactly once [0.04ms]
+(pass) Responses failure accounting and valid activity > completed followed by failure retains usage without successful completion [0.08ms]
+(pass) Responses failure accounting and valid activity > unknown/malformed stream events never count as activity [0.14ms]
+
+packages/core/tests/openai-compatible-citations.test.ts:
+(pass) openai-compatible citations > surfaces url_citation annotations and plain citations on delta and completed [0.30ms]
+(pass) openai-compatible citations > never adds a citations field on the ordinary lane [0.07ms]
+
+packages/core/tests/run-events-base.test.ts:
+(pass) run event base fields > stamps a strictly increasing seq starting at 0 [1.02ms]
+(pass) run event base fields > continues from firstSeq when resuming a stream [1.68ms]
+(pass) run event base fields > gives every event a unique eventId [0.64ms]
+(pass) run event base fields > stamps CONTRACT_VERSION on every event [0.58ms]
+(pass) run event base fields > propagates attemptId to every event when given, and omits it otherwise [1.04ms]
+(pass) run event base fields > re-stamps provider events so seq stays monotonic across provider calls [0.58ms]
+(pass) run event base fields > has the provider client stamp valid base fields on its own events [0.13ms]
+
+packages/core/tests/tool-registry.test.ts:
+(pass) AiToolRegistry > registers a tool with provider-safe name [0.02ms]
+(pass) AiToolRegistry > rejects dotted names [0.04ms]
+(pass) AiToolRegistry > rejects spaces [0.01ms]
+(pass) AiToolRegistry > rejects duplicate registration [0.02ms]
+(pass) AiToolRegistry > lists definitions [0.02ms]
+
+packages/core/tests/output-caps.test.ts:
+(pass) resolveToolLimits > returns profile defaults [0.01ms]
+(pass) resolveToolLimits > caps to model context budget when smaller [0.29ms]
+(pass) resolveToolLimits > respects requestedMaxBytes override
+(pass) resolveToolLimits > enforces floor of 1024 bytes
+(pass) truncateString > returns unchanged when within budget
+(pass) truncateString > truncates and marks [0.01ms]
+(pass) truncateString > passes through an ASCII value that exactly fills the budget [0.04ms]
+(pass) truncateString > truncates an ASCII value one byte over the budget [0.02ms]
+(pass) truncateString > counts 2-byte code points (é) as bytes, not characters [0.02ms]
+(pass) truncateString > passes through a 2-byte value whose bytes exactly fill the budget [0.01ms]
+(pass) truncateString > counts 3-byte code points (中) as bytes and never splits one [0.01ms]
+(pass) truncateString > never splits a surrogate pair (4-byte 😀) [0.02ms]
+(pass) truncateString > keeps the byte cap on mixed-width text and emits no U+FFFD [0.03ms]
+(pass) truncateString > stays within the cap when there is no room for the marker [0.01ms]
+(pass) truncateArray > returns unchanged when no cap [0.02ms]
+(pass) truncateArray > caps to maxItems
+
+packages/core/tests/responses.test.ts:
+(pass) Responses stream conformance > assembles interleaved tools, exact IDs, one usage; emits only after EOF [0.35ms]
+(pass) Responses stream conformance > every UTF-8 byte split and one-byte CRLF chunks match golden output [50.56ms]
+(pass) Responses stream conformance > no tool execution after partial arguments and failure [0.17ms]
+(pass) Responses stream conformance > no tool execution after partial arguments and failure [0.03ms]
+(pass) Responses stream conformance > no tool execution after partial arguments and failure [0.03ms]
+(pass) Responses stream conformance > no tool execution after partial arguments and failure [0.03ms]
+(pass) Responses stream conformance > no tool execution after partial arguments and failure [0.03ms]
+(pass) Responses stream conformance > completed followed by late failure never dispatches tools [0.08ms]
+(pass) Responses stream conformance > final output reconciles text and tool suffix without duplicates [0.14ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.05ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.02ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.02ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.04ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.03ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.04ms]
+(pass) Responses stream conformance > rejects malformed identities/arguments/final reconciliation [0.03ms]
+(pass) Responses stream conformance > empty completed and reasoning-only completed are distinct valid results [1.61ms]
+(pass) Responses stream conformance > missing opaque reasoning cannot pass as success [0.18ms]
+(pass) Responses stream conformance > missing opaque reasoning cannot pass as success [0.03ms]
+(pass) Responses stream conformance > oversize frames and data-line frames fail bounded [0.95ms]
+
+packages/core/tests/responses-request.test.ts:
+(pass) Responses request mapping > maps account profile, system instructions, images and exact call/results [0.23ms]
+(pass) Responses request mapping > preserves optional/union/enum/additionalProperties schemas without coercion [0.22ms]
+(pass) Responses request mapping > rejects unsupported account parameter temperature before network [0.06ms]
+(pass) Responses request mapping > rejects unsupported account parameter maxOutputTokens before network [0.01ms]
+(pass) Responses request mapping > keeps API-key parameter support [0.06ms]
+(pass) Responses request mapping > rejects unsupported tools/schema before network [0.04ms]
+(pass) Responses request mapping > rejects unsupported tools/schema before network
+(pass) Responses request mapping > rejects unsupported tools/schema before network [0.01ms]
+(pass) Responses request mapping > rejects unsupported tools/schema before network
+(pass) Responses request mapping > rejects duplicate tool names [0.04ms]
+(pass) Responses request mapping > rejects unsupported audio before network [0.04ms]
+(pass) Responses request mapping > rejects unsupported video before network
+(pass) Responses request mapping > rejects unsupported file before network
+(pass) Responses request mapping > rejects unsupported image-ref before network
+
+packages/native/tests/tool-identity.test.ts:
+(pass) name identity: read-first, the write re-registration is rejected and the READ callback is the only one reachable [149.14ms]
+(pass) name identity: write-first, the read re-registration is rejected and the WRITE registration is gated exactly as advertised [31.18ms]
+
+packages/native/tests/store-transactions.test.ts:
+(pass) native transactions commit, roll back, flatten, and expire their views [3.28ms]
+(pass) root access inside a native transaction times out without joining it [27.89ms]
+(pass) settled native transactions release file ownership before close resolves [275.27ms]
+
+packages/native/tests/mcp-config-runtime.test.ts:
+(pass) durable HTTP MCP config uses one native manager and stores only vault references [77.90ms]
+(pass) durable alias conflict preserves manual session and stored declarations [18.60ms]
+(pass) HTTP MCP literals fail closed when the store has no configured vault [15.58ms]
+
+packages/native/tests/mcp.test.ts:
+(pass) MCP server: initialize, write-gated catalogue, engine round-trip, bearer refusal, session reuse [23.11ms]
+(pass) MCP server: writesEnabled opens write tools; option validation; close with a live server [46.04ms]
+(pass) MCP client: connect, host effect authority, call, local refusal, registerTool lane, disconnect [223.40ms]
+(pass) MCP client: host effect reaches the engine guard — write descriptor waits for approval [168.39ms]
+(pass) MCP client: a superseded registration never authorizes the replacement server's callback [261.88ms]
+(pass) MCP client: an alias whose replacement name shadows another alias routes by (alias, generation) [106.32ms]
+(pass) MCP client: a failed configuration change leaves the already-connected servers usable [807.22ms]
+(pass) MCP client: an aborted invocation never dispatches — not queued, not in flight (P1-C) [2555.20ms]
+(pass) MCP client: a cancelled run dispatches ZERO remote calls across the reconnect window (P1-C) [3692.42ms]
+(pass) MCP client: a descriptor is bound to the transport it was listed from (W1d) [106.96ms]
+(pass) MCP client: a cross-namespace ambiguous catalogue is refused at connect (W1e) [99.28ms]
+
+packages/native/tests/uncertain-executions-chat.test.ts:
+(pass) the static fast path resolves sessionless receipts by chat, never by session [4.17ms]
+
+packages/native/tests/provider-lane.test.ts:
+(pass) rust provider lane (chat-completions): streams real deltas through the binding [110.70ms]
+(pass) rust provider lane (responses): streams deltas and usage details [57.89ms]
+(pass) responses: terminal-only reasoning survives into the public completed event [56.28ms]
+(pass) responses: final reasoning that conflicts with the streamed prefix fails stream_output_mismatch [57.83ms]
+(pass) binding without a provider slot or lane settles the turn as failed [56.31ms]
+(pass) context.policy is honored through the binding: final_answers drops prior run records, transcript replays them [342.49ms]
+(pass) js callback lane keeps single-chunk delta semantics [77.98ms]
+(pass) provider output cap is resolved before admission: admission event, accounting and wire agree [351.06ms]
+(pass) providerConfig.maxTokens outside the finite safe-integer range is rejected at construction [2.82ms]
+
+packages/native/tests/binding-hardening.test.ts:
+(pass) keyed provider connections isolate stores and mint fresh endpoint identities [56.48ms]
+(pass) HTTP and MCP servers refuse non-loopback binds unless allowNonLoopback [28.91ms]
+(pass) MCP server hides and refuses exec/write tools whatever mix of effect and capability they declare [33.97ms]
+(pass) integer arguments reject non-finite, fractional, and out-of-range numbers [21.76ms]
+(pass) cancel() wakes a parked poll at once and close() leaves no live subscription [156.57ms]
+(pass) a dropped service handle with a running HTTP server keeps serving until close() [171.41ms]
+(pass) concurrent keyed registrations and rotations of one id end consistent [29.50ms]
+
+packages/native/tests/smoke.test.ts:
+(pass) binding identity probe reports the native addon [0.01ms]
+(pass) settling an unknown callback id is ignored, not an exception [0.01ms]
+(pass) in-memory store runs a full chat turn through JS provider and JS tool [157.86ms]
+(pass) durable file store rejects a second owner and survives reopen [35.73ms]
+(pass) session failures cross the boundary as contract-coded errors [3.19ms]
+(pass) close is idempotent and later calls fail closed [3.97ms]
+(pass) a provider that rejects fails the turn instead of faking success [65.90ms]
+
+packages/native/tests/invocation-liveness.test.ts:
+(pass) a tool call abandoned at its timeout while the JS thread is blocked never enters user code after resume [1259.85ms]
+(pass) control: without blocking, the same 100ms-timeout callback is claimed and executes exactly once [59.62ms]
+
+packages/native/tests/http-provider-binding.test.ts:
+(pass) HTTP binds configured static providers and refuses other ids before writes [250.87ms]
+
+packages/native/tests/multimodal-tool-output.test.ts:
+(pass) fresh tool modelContent reaches the provider as structured parts [1.37ms]
+(pass) replayed tool results expand from the stored envelope [0.45ms]
+(pass) invalid attachment parts are dropped and never fabricate content [0.40ms]
+
+packages/native/tests/authority.test.ts:
+(pass) plan mode never runs a JS write callback without an approval [68.90ms]
+(pass) plan approval escalates the session and the write acts exactly once [143.46ms]
+(pass) auto_edit asks before a JS command tool runs, approval acts once [76.67ms]
+(pass) a read-effect plan submission still reaches the human in plan mode [81.43ms]
+(pass) close dispatches no new callbacks and always completes [25.49ms]
+(pass) close hard-stops a never-resolving provider within bound [25.46ms]
+(pass) concurrent close callers share one completion [2.95ms]
+(pass) close leaves an in-flight JS callback observable, replay fabricates nothing [109.11ms]
+(pass) the binding parser preserves malformed-present values natively reject [3.26ms]
+(pass) a registered JS write tool executes on a REST-minted chat under full_auto [146.89ms]
+
+packages/native/tests/project-instructions.test.ts:
+(pass) workspace sessions receive the AGENTS.md system block on the wire [56.89ms]
+(pass) untrusted workspaces label the block; symlinked AGENTS.md warns not fails [161.38ms]
+
+packages/native/tests/provider-continuity.test.ts:
+(pass) a Responses continuation completes its next turn in a second, fully separate application process [215.22ms]
+(pass) credential rotation blocks continuation before transport until explicitly restored [375.02ms]
+(pass) revocation requires explicit settled-state restoration after re-registration [302.30ms]
+(pass) a wrong providerId still rejects the resumed turn before transport [192.12ms]
+(pass) a continuation stored on the durable identity is still rejected by any other connection [197.40ms]
+
+packages/native/tests/mcp-hardening.test.ts:
+(pass) MCP pending initial connection cannot publish after disconnect [55.05ms]
+(pass) MCP close during durable fence allocation never recreates registry [74.75ms]
+(pass) MCP callback helper cannot disconnect replacement registration [99.92ms]
+(pass) native elicitation reaches explicit host callback with a cancellable scope [62.24ms]
+(pass) native managed OAuth composes vault/browser ports and never replays401 mutation [6.16ms]
+
+packages/native/tests/uncertain-executions.test.ts:
+(pass) uncertain execution surface lists, validates and refuses explicitly [3.12ms]
+
+packages/native/tests/http-server.test.ts:
+(pass) bearer refusal and routing errors are Rust problem+json envelopes [16.21ms]
+(pass) sessionProfileId resolves against the service's registry; an undeclared one 400s [15.14ms]
+(pass) chat round-trip, durable submit + worker execution, task poll, and SSE replay over REST [188.03ms]
+(pass) base path, body-size cap, and stopped-server refusal [27.69ms]
+(pass) option validation, closed-service refusal, and close with a live server [16.35ms]
+(pass) startHttpServer binds the IPv6 loopback and answers over [::1]:port [28.67ms]
+(pass) cors option answers the reference transport's exact CORS matrix [29.59ms]
+(pass) cors/providerSecrets options are strictly parsed, never ignored [15.86ms]
+(pass) provider management routes are real when providerSecrets wires a vault [31.77ms]
+
+packages/native/tests/final-settlement.test.ts:
+(pass) abort during the final warning settles cancelled without an assistant partial [26.81ms]
+
+packages/native/tests/workspace-binding.test.ts:
+(pass) a session of another workspace gets no coding tools on the same service [263.81ms]
+(pass) strict registration withholds coding tools from sessions without a workspace [152.45ms]
+(pass) non-strict registration keeps the service-wide tools for sessions without a workspace [47.16ms]
+
+packages/native/tests/assistant-store-conformance.test.ts:
+(pass) AssistantStore conformance — NativeAssistantStore > targeted interruption atomically fences attempts and preserves payload [3.41ms]
+(pass) AssistantStore conformance — NativeAssistantStore > explicit root branching > keeps null distinct from omitted parents and preserves old roots [3.35ms]
+(pass) AssistantStore conformance — NativeAssistantStore > explicit root branching > refuses a chain append with a null parent before writing anything [2.21ms]
+(pass) AssistantStore conformance — NativeAssistantStore > inactive subtree archiving > hides the whole subtree while preserving records, audit, and sibling indices [3.80ms]
+(pass) AssistantStore conformance — NativeAssistantStore > inactive subtree archiving > refuses active branches and prevents archived branches from being revived [3.70ms]
+(pass) AssistantStore conformance — NativeAssistantStore > inactive subtree archiving > rolls archives back with an enclosing transaction on transactional adapters [53.14ms]
+(pass) AssistantStore conformance — NativeAssistantStore > inactive subtree archiving > lists a complete inactive tree beyond normal history windows [82.37ms]
+(pass) AssistantStore conformance — NativeAssistantStore > archived imports > inherits archive flags, excludes archived children from the live-leaf rule, and keeps audit [3.55ms]
+(pass) AssistantStore conformance — NativeAssistantStore > archived imports > rejects active archived messages or descendants without writing a chat [3.17ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > appends a linear chain: parent links, rising depth, branchIndex 0, all active [2.52ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > rejects an append whose named parent is unknown or in another chat [2.48ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > a branching append takes the next branchIndex and switches the active path in one write [2.43ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > listMessages reports only the active path, in (depth, orderKey) order, across switches [5.07ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > listSiblings returns same-parent messages including self, branchIndex ascending [7.06ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > activatePath activates ancestors plus a descent, preferring an active child and otherwise the lowest branchIndex [4.76ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > a chain append inherits the parent's active flag and switches nothing [3.83ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > round-trips content parts byte-exact through append, list, siblings and a chain append [2.53ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > keeps a string body a string — no parts wrapper anywhere on the round trip [2.27ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > lastMessageOfRun > answers the deepest record the run wrote, not the newest in the chat [2.69ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > lastMessageOfRun > answers off the run's own branch even when that branch is inactive [2.54ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation branching > lastMessageOfRun > answers null for a run that wrote nothing, and for another chat's run [2.33ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > forkChat copies the active-path prefix: fresh ids, remapped parents, no runId, no placeholder, internals kept [11.45ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > forkChat stores the copy in PROVIDER order, not in the order the source was written [2.81ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > forkChat keeps a chat with no title untitled rather than inventing one [2.07ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > forkChat rejects an unknown, cross-chat or off-path fork point, and writes nothing [2.74ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > a fork and its source are independent in both directions [2.68ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > forkChat rolls back with the transaction that wrapped it [4.74ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation forking > forkChat copies content parts byte-exact, refs included [2.76ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > updateChat renames, REPLACES metadata, and round-trips the archived flag [2.11ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > updateChat rejects an unknown chat rather than creating one [1.86ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > listChats hides archived chats by default, shows them on request, and resolves them by id regardless [2.26ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > listMessages pages BACKWARDS with beforeOrderKey, and rejects both cursors at once [2.50ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteChat removes the chat and EVERY message, off-path branches included [2.84ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > a fork of an archived chat is NOT archived [2.38ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteChat rejects an unknown chat instead of succeeding silently [1.97ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteByScope removes a scope's tasks with their attempts, leases and events, and leaves other scopes alone [3.74ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteByScope REFUSES with chat_busy while a task in the scope is running, and deletes NOTHING [2.90ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteByScope REFUSES with chat_busy while a task in the scope is waiting_approval, and deletes NOTHING [2.92ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteByScope refuses a task a CONCURRENT claim took mid-delete, so nothing is ever claimed AND deleted [2.57ms]
+(pass) AssistantStore conformance — NativeAssistantStore > chat lifecycle > deleteByChat removes a chat's proposals and their outcomes, by chat and not by scope [9.96ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > imports a branchy conversation with the caller's ids, store-assigned orderKey/depth/branchIndex, and a well-formed active path [3.66ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > round-trips tool linkage VERBATIM, so an imported run still replays in provider order [3.37ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > imports an empty conversation, and the chat then behaves like any other [2.22ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > an imported chat keeps growing: an append continues the active path from where the import left it [2.78ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects two active children of one message (not a path) as invalid_import, writing nothing [2.40ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects an active message under an inactive parent (a broken chain) as invalid_import, writing nothing [2.08ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects an active path that stops above a childless leaf as invalid_import, writing nothing [1.90ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects a parent that appears later in the list as invalid_import, writing nothing [2.20ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects a parent the payload does not contain at all as invalid_import, writing nothing [1.99ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects the same message id twice as invalid_import, writing nothing [2.06ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects messages with nothing active as invalid_import, writing nothing [2.04ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation import > rejects an import onto a chat id that already exists, leaving the existing chat untouched [2.48ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > finds a multimodal message by a term in its SECOND text part [2.39ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > ranks the message that matches the whole query above ones matching half of it [2.43ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > restricts to one chat when asked, and searches every chat when not [3.26ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > excludes internal and placeholder records, and finds a placeholder once it stops being one [2.87ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > finds a message on a branch the conversation moved away from [2.94ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > leaves no residue behind a deleted chat [3.51ms]
+(pass) AssistantStore conformance — NativeAssistantStore > message search > survives a query made of query-language punctuation instead of raising [2.44ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation tree invariants (seeded random walk) > holds the active-path invariant across 60 random operations — seed 1 [22.59ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation tree invariants (seeded random walk) > holds the active-path invariant across 60 random operations — seed 7 [37.33ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation tree invariants (seeded random walk) > holds the active-path invariant across 60 random operations — seed 23 [28.82ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation tree invariants (seeded random walk) > holds the active-path invariant across 60 random operations — seed 101 [22.43ms]
+(pass) AssistantStore conformance — NativeAssistantStore > conversation tree invariants (seeded random walk) > holds the active-path invariant across 60 random operations — seed 4242 [20.89ms]
+(pass) AssistantStore conformance — NativeAssistantStore > creates chats and appends messages with per-chat monotonic orderKey [2.74ms]
+(pass) AssistantStore conformance — NativeAssistantStore > updates a message's content and REPLACES its metadata [3.45ms]
+(pass) AssistantStore conformance — NativeAssistantStore > creates a task, allows a legal transition, and rejects an illegal one [3.04ms]
+(pass) AssistantStore conformance — NativeAssistantStore > re-admits a waiting_approval task through queued and claimNext, with a new attempt [8.64ms]
+(pass) AssistantStore conformance — NativeAssistantStore > createTask({ exclusiveScope }) > refuses chat_busy while the scope holds an unfinished task, and allows it once that task is terminal [2.85ms]
+(pass) AssistantStore conformance — NativeAssistantStore > createTask({ exclusiveScope }) > is opt-in, and confined to its own scope [2.15ms]
+(pass) AssistantStore conformance — NativeAssistantStore > createTask({ exclusiveScope }) > still reports a REDELIVERED task id as a duplicate, not as busy [1.92ms]
+(pass) AssistantStore conformance — NativeAssistantStore > round-trips the task kind through create, read, and claim [2.13ms]
+(pass) AssistantStore conformance — NativeAssistantStore > rejects a duplicate taskId instead of overwriting the existing task [2.14ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext honours the kinds filter, and claims anything without one [2.30ms]
+(pass) AssistantStore conformance — NativeAssistantStore > creates and ends an attempt [2.05ms]
+(pass) AssistantStore conformance — NativeAssistantStore > counts an abandoned attempt in the task's poisonCount, and only an abandoned one [2.69ms]
+(pass) AssistantStore conformance — NativeAssistantStore > keeps the FIRST terminal status an attempt was ended with [2.32ms]
+(pass) AssistantStore conformance — NativeAssistantStore > checks the fence BEFORE the first-terminal short-circuit [2.39ms]
+(pass) AssistantStore conformance — NativeAssistantStore > counts the same abandoned attempt once, however often it is ended [2.02ms]
+(pass) AssistantStore conformance — NativeAssistantStore > acquires, renews, and releases a lease [2.04ms]
+(pass) AssistantStore conformance — NativeAssistantStore > rejects renewLease with a stale or unknown token [2.07ms]
+(pass) AssistantStore conformance — NativeAssistantStore > issues a strictly higher fencingToken when re-acquiring after expiry [2.10ms]
+(pass) AssistantStore conformance — NativeAssistantStore > rejects appendEvents when the leaseToken is not current [1.94ms]
+(pass) AssistantStore conformance — NativeAssistantStore > rejects a non-monotonic seq in appendEvents [2.23ms]
+(pass) AssistantStore conformance — NativeAssistantStore > refuses a fenced terminal write from an attempt whose lease moved on [2.77ms]
+(pass) AssistantStore conformance — NativeAssistantStore > refuses to renew a lease that has already expired [2.46ms]
+(pass) AssistantStore conformance — NativeAssistantStore > rejects a repeated eventId in the same task's log [2.16ms]
+(pass) AssistantStore conformance — NativeAssistantStore > hands back snapshots a caller cannot mutate into the store [2.29ms]
+(pass) AssistantStore conformance — NativeAssistantStore > lists events after a seq and reports nextSeq [2.54ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext returns null when there is nothing queued [1.84ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext does not claim a task whose availableAt is in the future [1.91ms]
+(pass) AssistantStore conformance — NativeAssistantStore > normalizes availableAt, so an offset-form instant is not claimed early [2.10ms]
+(pass) AssistantStore conformance — NativeAssistantStore > normalizes an availableAt written through a transition patch [6.14ms]
+(pass) AssistantStore conformance — NativeAssistantStore > refuses an unparsable availableAt instead of storing it [5.25ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext skips scopes already marked busy [3.90ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext prefers the higher-priority task [2.69ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext breaks a priority tie in FIFO (enqueuedAt) order [2.53ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext claims atomically — a second claim with the same scope busy sees nothing [2.77ms]
+(pass) AssistantStore conformance — NativeAssistantStore > rejects a task whose parent, dependency, or self-reference is unknown [2.77ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext skips a dependent until its dependency completes [3.99ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext fails a dependent whose dependency failed, and claims other work in the same call [3.85ms]
+(pass) AssistantStore conformance — NativeAssistantStore > claimNext cancels a dependent whose dependency was cancelled, with no error string [28.50ms]
+(pass) AssistantStore conformance — NativeAssistantStore > settles a whole A←B←C dependency chain over successive claims [3.67ms]
+(pass) AssistantStore conformance — NativeAssistantStore > fails a dependent whose dependency was dead-lettered, whatever that dependency's status says [2.59ms]
+(pass) AssistantStore conformance — NativeAssistantStore > listChildren finds a task's children, and lineage does NOT gate them [2.75ms]
+(pass) AssistantStore conformance — NativeAssistantStore > updateProgress overwrites the snapshot under the lease, and writes no events [2.65ms]
+(pass) AssistantStore conformance — NativeAssistantStore > ages a long-waiting task past a younger, higher-priority one when aging is enabled [2.61ms]
+(pass) AssistantStore conformance — NativeAssistantStore > caps the aging bonus so a waiting task cannot climb past the ceiling [2.42ms]
+(pass) AssistantStore conformance — NativeAssistantStore > does NOT age by default: priority alone orders the queue [2.36ms]
+(pass) AssistantStore conformance — NativeAssistantStore > creates a proposal and rejects a duplicate live actionId in the same scope [2.38ms]
+(pass) AssistantStore conformance — NativeAssistantStore > allows a fresh actionId reuse after the earlier proposal was rejected or invalidated [2.44ms]
+(pass) AssistantStore conformance — NativeAssistantStore > getByActionId returns the most recent proposal for a (scopeKey, actionId) pair [2.82ms]
+(pass) AssistantStore conformance — NativeAssistantStore > refuses a second competing terminal transition with the stable code (receipt present) [3.49ms]
+(pass) AssistantStore conformance — NativeAssistantStore > the terminal transition's patch.reason survives on the record [3.11ms]
+(pass) AssistantStore conformance — NativeAssistantStore > racing duplicate actionId creates refuse exactly one and never add a second row [2.18ms]
+(pass) AssistantStore conformance — NativeAssistantStore > recordOutcome is idempotent per operationId, and getOutcome reads it back [1.91ms]
+(pass) AssistantStore conformance — NativeAssistantStore > persists claimedAt from the apply claim, and reads it back from get and listByStatus [2.14ms]
+(pass) AssistantStore conformance — NativeAssistantStore > listByStatus finds proposals across chats by status [2.13ms]
+(pass) AssistantStore conformance — NativeAssistantStore > invalidatePendingForRevision invalidates stale pending proposals with reason revision_conflict [2.00ms]
+(pass) AssistantStore conformance — NativeAssistantStore > upserts and lists providers, plus their models and capabilities [2.51ms]
+(pass) AssistantStore conformance — NativeAssistantStore > reads default settings and applies a partial update [2.17ms]
+(pass) AssistantStore conformance — NativeAssistantStore > round-trips the toolCalling override, defaulting to auto [2.12ms]
+(pass) AssistantStore conformance — NativeAssistantStore > enqueues, claims, and publishes an outbox record without re-claiming it while in flight [2.37ms]
+(pass) AssistantStore conformance — NativeAssistantStore > markFailed schedules a retry via availableAt [2.25ms]
+(pass) AssistantStore conformance — NativeAssistantStore > stops offering an outbox record once its attempts are exhausted [2.81ms]
+(pass) AssistantStore conformance — NativeAssistantStore > markPublished and markFailed reject an unknown id [1.80ms]
+(pass) AssistantStore conformance — NativeAssistantStore > prune removes settled outbox records and never a claimable one [2.24ms]
+(pass) AssistantStore conformance — NativeAssistantStore > transaction() callers do not interleave [7.95ms]
+(pass) AssistantStore conformance — NativeAssistantStore > a nested transaction() through the tx view flattens into the open one [2.38ms]
+(pass) AssistantStore conformance — NativeAssistantStore > fails a root-store call made from inside a transaction callback instead of hanging [112.61ms]
+(pass) AssistantStore conformance — NativeAssistantStore > releases the gate when a transaction callback throws [2.40ms]
+(pass) AssistantStore conformance — NativeAssistantStore > transaction() rolls back every write when fn throws [2.07ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > creates and reads back an input [2.40ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > re-create with the same identity is idempotent [2.09ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > re-create with a different hash, kind or session is input_conflict [2.05ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > rejects malformed creates with invalid_input [1.97ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > lists by filter in insertion (FIFO) order [2.63ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > CAS success writes status, receipt fields and updatedAt [2.28ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > CAS from the wrong status throws and leaves the record unchanged [2.36ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > refuses edges the kind forbids [2.33ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > terminal statuses cannot move [2.19ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > deleteSessionInputs removes only that session's inputs and counts them [2.18ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > transaction writes are visible to tx.inputs, then to store.inputs after commit [2.23ms]
+(pass) AgentInputStore conformance — NativeAssistantStore > a throw inside transaction() leaves no row [2.07ms]
+(pass) ContextSummaryStore conformance — NativeAssistantStore > saves and lists a record, with and without providerId [2.11ms]
+(pass) ContextSummaryStore conformance — NativeAssistantStore > lists newest first [1.97ms]
+(pass) ContextSummaryStore conformance — NativeAssistantStore > saving the same summaryId again is idempotent [1.87ms]
+(pass) ContextSummaryStore conformance — NativeAssistantStore > deletes only the named session and counts the rows [2.06ms]
+
+packages/native/tests/loader-version-guard.test.ts:
+(pass) wrapper version guard > matching versions load normally [831.30ms]
+(pass) wrapper version guard > a drifted platform version rejects the load, loudly [570.03ms]
+(pass) wrapper version guard > the documented escape hatch is the only way past the guard [2175.02ms]
+(pass) wrapper version guard > a missing platform package is not a version failure (foreign cell) [38.19ms]
+
+packages/native/tests/managed-content.test.ts:
+(pass) prompt templates: publish, list order, get, render, remove leaves a tombstone [6.08ms]
+(pass) connections: create/update CAS, *** redaction, deny-all, alias uniqueness, immutable identity, lifecycle refused [3.51ms]
+(pass) skills: catalog publish order, frontmatter validation, get and remove [2.98ms]
+(pass) runContent: resolve renders the template, gates skills, tolerates unavailable, records resources [3.01ms]
+(pass) transaction arms: commit makes writes visible, rollback leaves no trace [4.04ms]
+(pass) malformed inputs fail client-side with the binding's code, before the FFI [0.40ms]
+(pass) reopen stability: a fresh NativeStore.open on the same file sees everything [36.41ms]
+(pass) HTTP lane pass-through: publish answers 201 and delete 204 on the shared engine [16.04ms]
+
+packages/native/tests/provider-config-parity.test.ts:
+(pass) stored model catalogue decides admission: a persisted 64-token window is admitted against 64, not the fallback [358.34ms]
+(pass) toolCalling off: no tools field on the wire, provider-emitted function_call refuses as tool_missing, counters prove no execution [70.05ms]
+(pass) auto with recorded toolCalling:false capability: same refusal — no tools on the wire, no execution [58.06ms]
+(pass) on overrides a toolCalling:false probe: tools advertise and execute (the knob works both directions) [57.02ms]
+(pass) account-backed JS provider lane completes a turn: no implicit output cap is injected, the API-key lane is unchanged [111.31ms]
+(pass) revoking a provider connection fails the next request with connection_changed, never network_error [57.16ms]
+
+packages/native/tests/lease-close.test.ts:
+(pass) native close drains no-start receipt while external workspace lease stays held [276.84ms]
+
+packages/native/tests/contract.test.ts:
+(pass) the error-code contract is present, sorted, and deduplicated [2.22ms]
+(pass) codes the wrapper surfaces are all in the contract [0.26ms]
+(pass) generated d.ts exposes the classes the wrapper binds [0.13ms]
+(pass) Rust and TypeScript share the same code list literally [0.05ms]
+
+packages/native/tests/store-ports.test.ts:
+(pass) provider ports preserve catalogues and clear related records on delete [3.00ms]
+(pass) native provider and summary ports reopen with first-write summary identity [45.22ms]
+
+packages/native/tests/callback-stress.test.ts:
+(pass) external callback watchdog kills a frozen child event loop [358.05ms]
+(pass) native callback bridge sustains 32-way batches, cancellation and concurrent close [25042.02ms]
+
+packages/native/tests/mcp-server-compat.test.ts:
+(pass) MCP server: the pinned SDK1 (1.30.0) HTTP client connects, lists, and calls [20.40ms]
+(pass) MCP server: legacy 2025-11-25 initializes and lists over real HTTP [16.22ms]
+(pass) MCP server: legacy 2025-06-18 initializes and lists over real HTTP [14.14ms]
+(pass) MCP server: legacy 2025-03-26 initializes and lists over real HTTP [16.12ms]
+(pass) MCP server: legacy 2024-11-05 initializes and lists over real HTTP [15.79ms]
+(pass) MCP server: legacy 2024-10-07 initializes and lists over real HTTP [14.08ms]
+(pass) MCP server: same-token clients run as distinct actors; DELETE revokes only the caller's in-flight call [63.14ms]
+(pass) MCP server: session admission at the per-principal cap is a 503 with Retry-After and zero extra dispatch [70.89ms]
+(pass) MCP server: the call cap dispatches one at a time — a competing call queues, never double-dispatches [151.91ms]
+(pass) MCP server: a batch over maxBatchSize is refused as one −32600 with zero dispatch [15.94ms]
+(pass) MCP server: a client disconnect revokes the abandoned call and the next call proceeds [83.05ms]
+(pass) MCP server: the bodyless 401 carries the Bearer WWW-Authenticate challenge [16.84ms]
+
+packages/native/tests/management.test.ts:
+(pass) import and binding identity do not load the addon [0.02ms]
+(pass) abort only stops waiting and cleans listeners [0.38ms]
+(pass) management methods persist and enforce closed gate [201.61ms]
+(pass) manual compaction runs before the next ordinary provider call [262.68ms]
+(pass) queued inputs can be cancelled and cleared while a turn is active [58.97ms]
+(pass) archive, unarchive, and delete drive the chat lifecycle through the store engine [58.21ms]
+
+packages/native/tests/cancellation.test.ts:
+(pass) a cancelled tool call aborts the JS tool signal and terminalizes the turn [79.64ms]
+(pass) cancelling a held provider stream terminalizes without waiting for the stream [448.34ms]
+(pass) a tool that resolves after cancellation cannot rewrite the terminal outcome [955.79ms]
+(pass) a coding-owned process receives cancellation and stops [92.69ms]
+
+packages/native/tests/run-deadline.test.ts:
+(pass) the overall deadline bounds a hook whose own timeout is disabled [28.50ms]
+(pass) the smaller per-hook deadline wins over the overall budget [27.89ms]
+
+packages/native/tests/teammate-lane.test.ts:
+(pass) lifecycle and the revision ledger walk through the bindings [3.02ms]
+(pass) a stale expectedRevision conflicts and applies nothing [2.55ms]
+(pass) an archived agent refuses admission while history stays readable [2.79ms]
+(pass) a duplicate admissionKey replays the same logical task [2.65ms]
+(pass) agent listings isolate scopes: other scopes are absence [2.59ms]
+(pass) the projection reports unknown usage as unknown, never a zero [2.44ms]
+(pass) event pages redact credentials and oversized tool text [3.56ms]
+(pass) cancel settles a queued task and is idempotent [2.63ms]
+(pass) the projection reconstructs identically after a store reopen [39.84ms]
+(pass) submit pins the effective profile and the explanation agrees [3.49ms]
+
+packages/native/tests/coding-native.test.ts:
+(pass) the native lane advertises the frozen pack descriptors, descriptor-by-descriptor [52.51ms]
+(pass) native write_file and read_file behave like the pack (real files, model-visible results) [77.47ms]
+(pass) full_auto native run_command executes without approval (harmless counter witness) [253.75ms]
+(pass) ask mode: durable approval with the v4 standing key; approve→run; identical rerun runs WITHOUT asking; mutating the bound input re-asks with zero execution and zero receipts [738.54ms]
+(pass) cancelling a turn takes the native command's process group down [298.33ms]
+
+packages/native/tests/distribution.test.ts:
+(pass) native stack is publishable, lockstep-versioned, and complete [7.38ms]
+(pass) committed loader enforces the wrapper's version on every platform [9.03ms]
+(pass) the wrapper's own version guard covers every triple in the table [3.47ms]
+(pass) platform pack refuses a missing addon [540.52ms]
+
+packages/native/tests/profile-registry.test.ts:
+(pass) declared profiles become the sessions' policy; an undeclared id is still refused [4.27ms]
+(pass) a service with no `profiles` option still admits only the built-ins [2.83ms]
+(pass) a definition the host rejects fails construction, never a looser session policy [2.39ms]
+
+packages/native/tests/hook-decision-table.test.ts:
+(pass) beforeToolCall allow table — tool executes, run completes > allows undefined (no opinion) [1.02ms]
+(pass) beforeToolCall allow table — tool executes, run completes > allows explicit allow [0.59ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies deny with reason [0.61ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies deny without reason [0.55ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies deny with numeric reason [0.54ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies null [0.59ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies NaN [0.51ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies Infinity [0.47ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies false [0.46ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies true [0.43ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies zero [0.40ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies number [0.43ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies empty string [0.44ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies string allow [0.45ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies array [0.42ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies empty object [0.42ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies unrecognized action [0.45ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies numeric action [0.44ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies bigint [0.41ms]
+(pass) beforeToolCall deny table — tool never runs, run goes on > denies circular object [0.42ms]
+(pass) beforeToolCall failure modes deny like garbage > a hung hook denies at the per-hook deadline [22.70ms]
+(pass) beforeToolCall failure modes deny like garbage > a throwing hook denies without leaking its message [0.92ms]
+(pass) beforeToolCall failure modes deny like garbage > the first deny short-circuits later hooks [0.63ms]
+(pass) beforeToolCall failure modes deny like garbage > observer return values are inert [0.81ms]
+
+packages/native/tests/loader-platform.test.ts:
+(pass) nativePlatformKey > derives every shipped key from platform/arch/libc [0.04ms]
+(pass) nativePlatformKey > classifies musl, unknown libc as gnu, and unsupported arches [0.01ms]
+(pass) assertSupportedPlatform > accepts the host the suite runs on
+(pass) assertSupportedPlatform > refuses musl and win32-arm64 with the supported list [0.11ms]
+
+packages/native/tests/native-admission.test.ts:
+(pass) native profile defaults and selected content reach the provider callback [158.34ms]
+(pass) managed native provider identity is frozen for session and HTTP admission [225.48ms]
+(pass) pure native profile queries match direct session settings and template-only content [56.45ms]
+(pass) custom provider checks native content authority after awaited preparation [158.80ms]
+
+packages/native/tests/proposals.test.ts:
+(pass) transition to applied without a recorded outcome leaves no receipt, even after reopen [43.33ms]
+(pass) a committed receipt is first-write-wins and the stamp derives from it, not the replay [50.12ms]
+
+ 759 pass
+ 0 fail
+ 8135 expect() calls
+Ran 759 tests across 86 files. [56.54s]

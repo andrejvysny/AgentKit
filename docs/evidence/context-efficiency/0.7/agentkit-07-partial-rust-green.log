@@ -1,0 +1,45 @@
+   Compiling agentkit-providers v0.1.0 (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/rust/crates/providers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.17s
+     Running tests/providers.rs (rust/target/debug/deps/providers-29079ac006062f65)
+
+running 37 tests
+test chat_transport_failure_before_any_response_is_network_error ... ok
+test chat_response_without_body_is_empty_body ... ok
+test chat_stream_keeps_reasoning_separate_and_records_trailing_usage ... ok
+test chat_stream_emits_incremental_reasoning_deltas ... ok
+test chat_stream_without_annotations_never_adds_a_citations_field ... ok
+test chat_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones ... ok
+test chat_malformed_tool_frames_never_dispatch_tool_calls ... ok
+test chat_stream_surfaces_url_citation_annotations_on_delta_and_completed ... ok
+test compatibility_fallback_reserves_each_request_and_never_exceeds_budget ... ok
+test chat_reports_tool_call_progress_once_named_and_before_the_request ... ok
+test cache_write_usage_rejects_impossible_partial_writes ... ok
+test cache_write_usage_maps_split_and_preserves_raw ... ok
+test multimodal_wire_preserves_absent_detail_newlines_and_silent_host_refs ... ok
+test chat_unindexed_and_reused_index_assembly_matches_typescript_fixtures ... ok
+test private_persistence_failure_preserves_usage_and_exposes_no_completion ... ok
+test responses_accepts_reencrypted_reasoning_in_terminal_output ... ok
+test responses_fails_stream_output_mismatch_when_final_reasoning_conflicts ... ok
+test responses_reconciles_live_prefix_and_terminal_snapshot ... ok
+test responses_preserves_terminal_only_reasoning_in_completed_event ... ok
+test private_reasoning_continuation_is_persisted_then_replayed_under_exact_scope ... ok
+test responses_request_asks_for_reasoning_summary_by_default ... ok
+test responses_joins_reasoning_parts_in_first_appearance_order ... ok
+test cache_write_usage_rejects_invalid_counts ... ok
+test responses_rejects_mismatched_output_and_unknown_events ... ok
+test cache_write_usage_handles_unknown_zero_and_partial_splits ... ok
+test responses_reconciles_streamed_reasoning_with_extended_final_text ... ok
+test responses_service_unavailable_is_the_only_retryable_http_error ... ok
+test trusted_model_catalogues_map_api_and_account_shapes_without_silent_account_fallback ... ok
+test responses_summary_off_sends_no_summary_and_never_retries ... ok
+test responses_summary_retry_is_once_and_only_for_summary_rejections ... ok
+test responses_stream_level_failure_shares_the_retryable_taxonomy ... ok
+test responses_reports_tool_call_progress_per_fragment_before_the_request ... ok
+test responses_summary_retry_tells_a_rejected_effort_from_a_rejected_reasoning_object ... ok
+test responses_streams_reasoning_deltas ... ok
+test responses_retries_once_without_rejected_summary_and_remembers_the_model ... ok
+test responses_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones ... ok
+test chat_limit_failure_terminates_without_waiting_for_hostile_socket_eof ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

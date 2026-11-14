@@ -1,0 +1,42 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/normalized-usage.test.ts:
+(pass) normalized usage > leaves unknown counts absent [2.97ms]
+(pass) normalized usage > rejects contradictory provider counts [2.36ms]
+(pass) rejects numeric counters outside the safe integer range [1.82ms]
+(pass) maps cache writes without assuming unknown counts [1.03ms]
+(pass) rejects contradictory or malformed cache writes [0.03ms]
+(pass) keeps unreported output and chat lifetime classes unknown [0.01ms]
+159 | 
+160 | it("rejects partial writes that already exceed input", () => {
+161 |   for (const details of [
+162 |     { cached_tokens: 60, cache_write_tokens_details: { ttl_30m_tokens: 60 } },
+163 |     { cache_write_tokens_details: { ttl_30m_tokens: 120 } },
+164 |   ]) expect(() => responses({ input_tokens: 100, input_tokens_details: details })).toThrow("malformed_usage");
+                                                                                         ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "malformed_usage"
+
+Received function did not throw
+Received value: {
+  cache_read: 60,
+  cache_write_short: 60,
+  provider_raw: {
+    input_tokens: 100,
+    input_tokens_details: {
+      cached_tokens: 60,
+      cache_write_tokens_details: {
+        ttl_30m_tokens: 60,
+      },
+    },
+  },
+}
+
+      at <anonymous> (/Users/andrejvysny/workspace/onemind-workspace/AgentKit/packages/core/tests/normalized-usage.test.ts:164:84)
+(fail) rejects partial writes that already exceed input [5.96ms]
+
+ 6 pass
+ 1 fail
+ 32 expect() calls
+Ran 7 tests across 1 file. [2.25s]

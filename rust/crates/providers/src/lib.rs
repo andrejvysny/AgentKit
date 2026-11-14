@@ -10,6 +10,7 @@ mod responses_request;
 mod responses_state;
 mod sse;
 mod transport;
+mod usage;
 
 pub use chat_completions::ChatCompletionsProvider;
 pub use connection_transport::{NativeConnectionTransport, disclosed_categories};

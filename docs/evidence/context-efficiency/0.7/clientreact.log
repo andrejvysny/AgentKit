@@ -1,0 +1,296 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/client/tests/errors.test.ts:
+(pass) problem+json becomes a typed error > a 404 carries status, code, detail and the raw problem [2029.75ms]
+(pass) problem+json becomes a typed error > a 409 is distinguished by its code, not its status [143.53ms]
+(pass) problem+json becomes a typed error > a rejected query parameter is a 400 with the transport's code [39.41ms]
+(pass) problem+json becomes a typed error > a body that is not problem+json still becomes the same error [41.47ms]
+(pass) problem+json becomes a typed error > a 204 resolves to void rather than a parse failure [127.84ms]
+(pass) credentials never come back > createProvider takes an apiKey and no response ever repeats it [126.22ms]
+(pass) credentials never come back > updateProvider replaces the stored credential without publishing it [128.00ms]
+
+packages/client/tests/resync-frame.test.ts:
+(pass) the resync marker > is consumed, never yielded, and its announced replay dedupes [5.13ms]
+(pass) the resync marker > a malformed marker is protocol drift, not a silent drop [1.32ms]
+
+packages/client/tests/stream-bounds.test.ts:
+(pass) streamRun bounds a server that misbehaves > unmarked EOF after a terminal pass exhausts the retry budget [2.50ms]
+(pass) streamRun bounds a server that misbehaves > unmarked EOF with fresh events still exhausts the total budget [3.66ms]
+(pass) streamRun bounds a server that misbehaves > drainRun rejects unmarked EOF without retrying [0.15ms]
+(pass) streamRun bounds a server that misbehaves > a retry hint below the floor is clamped, not obeyed [251.95ms]
+(pass) streamRun bounds a server that misbehaves > a server that drops after every event still runs out of budget [3.70ms]
+(pass) streamRun bounds a server that misbehaves > a resume answered from the start of the log is not delivered twice [1.67ms]
+(pass) streamRun bounds a server that misbehaves > a frame that lost its seq does not disable the replay dedupe [1.79ms]
+(pass) streamRun bounds a server that misbehaves > a long replay past the old id-window still dedupes cleanly [17.87ms]
+(pass) streamRun keeps going past a terminal event > a break after run.failed reconnects and delivers the retry pass [3.06ms]
+
+packages/client/tests/drain.test.ts:
+(pass) drainRun > picks up an event appended after the terminal one [200.28ms]
+(pass) drainRun > a stream re-opened after the append replays it, the log being the truth [196.71ms]
+(pass) drainRun > without a lastEventId it returns the whole log [193.60ms]
+(pass) drainRun > an unknown run is the same typed 404 as everywhere else [41.03ms]
+
+packages/client/tests/parser-bounds.test.ts:
+(pass) SSE parser bounds and cleanup > rejects an oversized unfinished frame and cancels its reader [0.33ms]
+(pass) SSE parser bounds and cleanup > abort cancels a stalled reader even when fetch ignores its signal [0.71ms]
+
+packages/client/tests/resume.test.ts:
+(pass) streamRun resumes across a severed connection > every event arrives exactly once, seq-contiguous [418.17ms]
+(pass) streamRun resumes across a severed connection > survives being severed on every connection [3226.24ms]
+(pass) streamRun resumes across a severed connection > gives up once the retry budget is spent, and says why [138.18ms]
+(pass) streamRun resumes across a severed connection > an explicit lastEventId starts one past that event [162.96ms]
+(pass) streamRun resumes across a severed connection > an unknown lastEventId replays the whole log rather than failing [154.75ms]
+(pass) streamRun resumes across a severed connection > aborting the signal ends the iteration without reconnecting [158.46ms]
+(pass) streamRun tells a broken store from a finished run > a failed log read resumes, terminal before failure: false [409.57ms]
+(pass) streamRun tells a broken store from a finished run > a failed log read resumes, terminal before failure: true [409.37ms]
+(pass) streamRun tells a broken store from a finished run > fixture disposal cancels a parked provider and closes its socket [153.07ms]
+(pass) streamRun surfaces a problem response instead of retrying it > a run that does not exist is a typed 404, not a reconnect loop [41.59ms]
+
+packages/client/tests/rust-stream-boundaries.test.ts:
+(pass) TypeScript client resumes Rust SSE at every byte boundary [21951.04ms]
+
+packages/client/tests/provider-bridge.test.ts:
+(pass) provider fixture shutdown settles callbacks and closes the listener [1.80ms]
+
+packages/client/tests/flow.test.ts:
+(pass) a full chat turn > createChat → submitMessage → streamRun → listMessages [296.31ms]
+(pass) a full chat turn > the stream is iterable more than once — each pass re-reads the log [206.38ms]
+(pass) a full chat turn > breaking out of the stream early does not throw [203.45ms]
+(pass) idempotency > resubmitting with the returned key lands on the same run [194.22ms]
+(pass) idempotency > two submits WITHOUT a shared key are two runs [194.69ms]
+(pass) branching > regenerate mints its own key and answers on a new branch [278.13ms]
+(pass) branching > forkChat copies the active path into a new chat [194.71ms]
+(pass) management routes > chats round-trip through update, list and delete [127.49ms]
+(pass) management routes > settings patch and read back [124.54ms]
+(pass) management routes > version reports both versions [41.70ms]
+(pass) management routes > models list through the provider path [41.27ms]
+(pass) management routes > an id containing a slash survives the round trip [123.39ms]
+(pass) auth headers > headers() is applied to every request and resolved per call [74.69ms]
+
+packages/client/tests/surface.test.ts:
+(pass) every route in the contract has a client method > the operation sets are identical [0.29ms]
+(pass) every route in the contract has a client method > createChat → POST /v1/chats [0.12ms]
+(pass) every route in the contract has a client method > listChats → GET /v1/chats [0.02ms]
+(pass) every route in the contract has a client method > getChat → GET /v1/chats/:chatId [0.03ms]
+(pass) every route in the contract has a client method > updateChat → PATCH /v1/chats/:chatId [0.01ms]
+(pass) every route in the contract has a client method > deleteChat → DELETE /v1/chats/:chatId [0.02ms]
+(pass) every route in the contract has a client method > listMessages → GET /v1/chats/:chatId/messages
+(pass) every route in the contract has a client method > submitMessage → POST /v1/chats/:chatId/messages [0.02ms]
+(pass) every route in the contract has a client method > regenerateMessage → POST /v1/chats/:chatId/messages/:messageId/regenerate [0.01ms]
+(pass) every route in the contract has a client method > forkChat → POST /v1/chats/:chatId/fork
+(pass) every route in the contract has a client method > searchMessages → GET /v1/search [0.02ms]
+(pass) every route in the contract has a client method > activateBranch → POST /v1/messages/:messageId/activate
+(pass) every route in the contract has a client method > listSiblings → GET /v1/messages/:messageId/siblings
+(pass) every route in the contract has a client method > getRun → GET /v1/runs/:runId
+(pass) every route in the contract has a client method > streamRun → GET /v1/runs/:runId/stream [0.12ms]
+(pass) every route in the contract has a client method > cancelRun → POST /v1/runs/:runId/cancel [0.01ms]
+(pass) every route in the contract has a client method > resumeRun → POST /v1/runs/:runId/resume [0.01ms]
+(pass) every route in the contract has a client method > listToolEvents → GET /v1/chats/:chatId/tool-events [0.02ms]
+(pass) every route in the contract has a client method > listProposals → GET /v1/chats/:chatId/proposals [0.01ms]
+(pass) every route in the contract has a client method > approveProposal → POST /v1/proposals/:proposalId/approve [0.02ms]
+(pass) every route in the contract has a client method > rejectProposal → POST /v1/proposals/:proposalId/reject [0.01ms]
+(pass) every route in the contract has a client method > applyProposal → POST /v1/proposals/:proposalId/apply [0.02ms]
+(pass) every route in the contract has a client method > listProviders → GET /v1/providers [0.01ms]
+(pass) every route in the contract has a client method > createProvider → POST /v1/providers
+(pass) every route in the contract has a client method > updateProvider → PATCH /v1/providers/:providerId [0.01ms]
+(pass) every route in the contract has a client method > deleteProvider → DELETE /v1/providers/:providerId [0.01ms]
+(pass) every route in the contract has a client method > listModels → GET /v1/providers/:providerId/models
+(pass) every route in the contract has a client method > refreshProviderModels → POST /v1/providers/:providerId/models/refresh
+(pass) every route in the contract has a client method > testProvider → POST /v1/providers/:providerId/test [0.01ms]
+(pass) every route in the contract has a client method > getSettings → GET /v1/settings [0.01ms]
+(pass) every route in the contract has a client method > updateSettings → PATCH /v1/settings
+(pass) every route in the contract has a client method > listAllowances → GET /v1/chats/:chatId/write-policy/allowances
+(pass) every route in the contract has a client method > grantAllowance → POST /v1/chats/:chatId/write-policy/allowances [0.01ms]
+(pass) every route in the contract has a client method > revokeAllowance → DELETE /v1/chats/:chatId/write-policy/allowances/:allowanceId [0.02ms]
+(pass) every route in the contract has a client method > listConnections → GET /v1/connections
+(pass) every route in the contract has a client method > saveConnection → PATCH /v1/connections/:connectionId [0.02ms]
+(pass) every route in the contract has a client method > deleteConnection → DELETE /v1/connections/:connectionId [0.02ms]
+(pass) every route in the contract has a client method > connectionAction → POST /v1/connections/:connectionId/actions [0.02ms]
+(pass) every route in the contract has a client method > listPromptTemplates → GET /v1/prompt-templates [0.01ms]
+(pass) every route in the contract has a client method > publishPromptTemplate → POST /v1/prompt-templates [0.02ms]
+(pass) every route in the contract has a client method > deletePromptTemplate → DELETE /v1/prompt-templates/:templateId/:revision [0.02ms]
+(pass) every route in the contract has a client method > renderPromptTemplate → POST /v1/prompt-templates/:templateId/:revision/render [0.01ms]
+(pass) every route in the contract has a client method > listSkills → GET /v1/skills
+(pass) every route in the contract has a client method > listMcpServers → GET /v1/mcp/servers
+(pass) every route in the contract has a client method > createMcpServer → POST /v1/mcp/servers
+(pass) every route in the contract has a client method > updateMcpServer → PATCH /v1/mcp/servers/:serverId [0.01ms]
+(pass) every route in the contract has a client method > deleteMcpServer → DELETE /v1/mcp/servers/:serverId [0.01ms]
+(pass) every route in the contract has a client method > listTools → GET /v1/tools
+(pass) every route in the contract has a client method > createAgent → POST /v1/agents [0.01ms]
+(pass) every route in the contract has a client method > listAgents → GET /v1/agents [0.01ms]
+(pass) every route in the contract has a client method > getAgent → GET /v1/agents/:agentId
+(pass) every route in the contract has a client method > updateAgent → PATCH /v1/agents/:agentId [0.01ms]
+(pass) every route in the contract has a client method > setAgentModel → POST /v1/agents/:agentId/model
+(pass) every route in the contract has a client method > archiveAgent → POST /v1/agents/:agentId/archive [0.01ms]
+(pass) every route in the contract has a client method > restoreAgent → POST /v1/agents/:agentId/restore
+(pass) every route in the contract has a client method > listAgentRevisions → GET /v1/agents/:agentId/revisions
+(pass) every route in the contract has a client method > submitTeammateTask → POST /v1/agents/:agentId/tasks [0.02ms]
+(pass) every route in the contract has a client method > listAgentTasks → GET /v1/agents/:agentId/tasks
+(pass) every route in the contract has a client method > getAgentTask → GET /v1/agent-tasks/:taskId
+(pass) every route in the contract has a client method > cancelAgentTask → POST /v1/agent-tasks/:taskId/cancel
+(pass) every route in the contract has a client method > listAgentTaskEvents → GET /v1/agent-tasks/:taskId/events [0.01ms]
+(pass) every route in the contract has a client method > streamAgentTask → GET /v1/agent-tasks/:taskId/stream
+(pass) every route in the contract has a client method > getAgentTaskRunProfile → GET /v1/agent-tasks/:taskId/run-profile
+(pass) every route in the contract has a client method > getVersion → GET /v1/version
+(pass) headers and query parameters > the two idempotent writes send an Idempotency-Key and nothing else does [0.32ms]
+(pass) headers and query parameters > a minted key is a UUID, and a supplied one is sent verbatim [0.46ms]
+(pass) headers and query parameters > query parameters go where the route declares them [0.28ms]
+(pass) headers and query parameters > the allowance routes carry their chat in the PATH, not a query [0.30ms]
+(pass) headers and query parameters > an absent optional query parameter is omitted, not sent as undefined [0.03ms]
+(pass) headers and query parameters > path parameters are percent-encoded [0.02ms]
+(pass) headers and query parameters > a trailing slash on the base URL does not double up [0.05ms]
+(pass) headers and query parameters > per-call headers merge over the client-wide ones [0.35ms]
+(pass) headers and query parameters > a caller cannot displace the Idempotency-Key with a stray header [0.07ms]
+(pass) headers and query parameters > bodies are JSON, and a body-less route sends none [0.05ms]
+(pass) headers and query parameters > the stream route asks for text/event-stream, everything else for JSON [0.11ms]
+
+packages/client/tests/rust-interop.test.ts:
+(pass) same client full-turn assertions against rust [195.45ms]
+(pass) native SQLite state survives process restart [224.51ms]
+(pass) unchanged TypeScript SSE client reconnects to native durable cursor after a cut [397.39ms]
+(pass) raw JSON numbers follow JavaScript overflow semantics against rust [127.88ms]
+(pass) native test control uses a separate listener and credential [126.79ms]
+
+packages/client/tests/phase.test.ts:
+(pass) runPhase > queued, nothing on the log [0.02ms]
+(pass) runPhase > running, nothing on the log yet — thinking, not typing
+(pass) runPhase > waiting_approval mirrors straight through
+(pass) runPhase > completed
+(pass) runPhase > failed
+(pass) runPhase > cancelled
+(pass) runPhase > running + run.started is streaming
+(pass) runPhase > running + a delta is streaming
+(pass) runPhase > a stale queued status still streams once the log has started
+(pass) runPhase > an event that is not output does not make it streaming
+(pass) runPhase > waiting_approval beats streaming — the user has to act
+(pass) runPhase > run.completed while the task is running is settling
+(pass) runPhase > run.failed while the task is running is settling
+(pass) runPhase > run.cancelled while the task is running is settling
+(pass) runPhase > a terminal status with no terminal event still terminates
+(pass) runPhase > nothing at all is queued
+(pass) runPhase > an empty event list is queued
+(pass) runPhase > events but no status: output means streaming
+(pass) runPhase > events but no status and no output means running
+(pass) runPhase > a terminal event with no status at all
+(pass) runPhase > a failed pass the host retried into a completed one is completed
+(pass) runPhase > a run typing its second pass is streaming, not the first's failure
+(pass) runPhase > a second run.started is a boundary on its own — older hosts emit no warning
+(pass) runPhase > the LAST pass's failure still awaits task settlement
+(pass) runPhase > a warning that is not retry_pass moves nothing
+(pass) createRunPhaseTracker > every prefix of a log agrees with runPhase over that prefix [0.06ms]
+(pass) createRunPhaseTracker > output alone is streaming; anything else is only running [0.01ms]
+(pass) createRunPhaseTracker > every prefix of a MULTI-PASS log agrees with runPhase too [0.04ms]
+(pass) createRunPhaseTracker > startedNewPass marks the boundary, and only the boundary [0.02ms]
+(pass) createRunPhaseTracker > a terminal event is the last word, whatever the log carries after it [0.03ms]
+(pass) isTerminalRunEvent > run.completed is terminal
+(pass) isTerminalRunEvent > run.failed is terminal
+(pass) isTerminalRunEvent > run.cancelled is terminal
+(pass) isTerminalRunEvent > run.started is not terminal
+(pass) isTerminalRunEvent > run.message.delta is not terminal
+(pass) isTerminalRunEvent > run.message.completed is not terminal
+(pass) isTerminalRunEvent > run.tool.requested is not terminal
+(pass) isTerminalRunEvent > run.tool.running is not terminal
+(pass) isTerminalRunEvent > run.tool.succeeded is not terminal
+(pass) isTerminalRunEvent > run.tool.failed is not terminal
+(pass) isTerminalRunEvent > run.warning is not terminal
+(pass) isTerminalRunEvent > run.usage is not terminal
+(pass) isTerminalRunEvent > run.verification is not terminal
+
+packages/react/tests/run.test.ts:
+(pass) useRun > event retention is bounded without losing the final phase [246.17ms]
+(pass) useRun > streams a run to its terminal event [232.33ms]
+(pass) useRun > a multi-pass run is the phase of its LAST pass [371.84ms]
+(pass) useRun > resumes across a severed connection, every event exactly once [437.92ms]
+(pass) useRun > unmounting mid-stream aborts and leaves the state where it was [289.07ms]
+(pass) useRun > drain picks up an event appended after the terminal one [237.38ms]
+(pass) useRun > under <StrictMode> the doubled effect yields no duplicate events [230.58ms]
+(pass) useRun > a run that does not exist is a typed 404 in state, not a throw [93.19ms]
+(pass) useRun > the run's status decides the phase when no terminal event arrives [179.26ms]
+(pass) useRun > exposes the finishReason of the run's last pass [231.84ms]
+(pass) useRun > an event that lost its seq is appended, not spliced to the front [247.91ms]
+(pass) useRun > useRun(null) is inert [43.04ms]
+
+packages/react/tests/context.test.ts:
+(pass) AgentKitProvider > a hook outside the provider throws an explanation, not a null [44.86ms]
+(pass) AgentKitProvider > useAgentKitClient hands back the provider's client [47.84ms]
+(pass) AgentKitProvider > an override replaces the client for one hook only [247.68ms]
+(pass) the change emitter > delivers to every subscriber of a topic and no other [51.75ms]
+(pass) the change emitter > carries the origin so a hook can skip its own echo [51.65ms]
+(pass) the change emitter > one throwing subscriber does not cost the others their event [44.17ms]
+(pass) the change emitter > unsubscribing is idempotent and stops delivery [39.40ms]
+(pass) the change emitter > a subscriber that unsubscribes mid-dispatch does not skip the next one [39.98ms]
+
+packages/react/tests/providers.test.ts:
+(pass) useProviders > lists the seeded provider on mount [93.99ms]
+(pass) useProviders > create round-trips, and the apiKey is nowhere in the state [178.88ms]
+(pass) useProviders > update and delete round-trip [181.48ms]
+(pass) useProviders > loadModels files the catalogue under the provider id [94.46ms]
+(pass) useProviders > a host wired without provider probing reports the 501, it does not throw [93.67ms]
+(pass) useProviders > a provider that does not exist is a typed 404 in state [176.42ms]
+
+packages/react/tests/reasoning.test.ts:
+(pass) provider SSE reasoning streams through the real host, survives SQLite reopen and React reload exactly once [471.67ms]
+
+packages/react/tests/chat.test.ts:
+(pass) a turn through useChat > the optimistic pair renders before the server has answered [299.22ms]
+(pass) a turn through useChat > deltas stream into the placeholder, and the final state is the server's [332.49ms]
+(pass) a turn through useChat > a retried pass replaces the first pass's text and completes the run [476.37ms]
+(pass) a turn through useChat > a run that fails lands as an error with the run's own message [322.42ms]
+(pass) a submit the server refuses > rolls the optimistic pair back and reports the typed error [95.04ms]
+(pass) a submit the server refuses > the rollback takes its OWN pair, not everything since [289.10ms]
+(pass) a submit the server refuses > the retry of the same question replays the same Idempotency-Key [179.57ms]
+(pass) a submit the server refuses > a rejected branch submit restores the tail it optimistically cut [283.84ms]
+(pass) a submit the server refuses > a DIFFERENT question after a failure mints a fresh key [182.25ms]
+(pass) lifecycle > unmounting mid-stream leaves no update behind [391.23ms]
+(pass) lifecycle > changing the chat id re-reads, and the old chat's messages go [184.73ms]
+(pass) lifecycle > a failed read after switching chats does not keep the old chat's messages [228.84ms]
+(pass) lifecycle > changing the chat id mid-stream ends the old run's follow [693.74ms]
+(pass) lifecycle > cancel stops a parked run and the stream ends on run.cancelled [390.14ms]
+(pass) a chat switch while a write is in flight > a submit that lands after the switch does not write into the new chat [481.24ms]
+(pass) a chat switch while a write is in flight > a branch submit's refresh does not render chat A's messages under chat B [534.64ms]
+(pass) a run whose log never said how it ended > the run's status decides the phase when no terminal event arrives [231.17ms]
+(pass) a run whose log never said how it ended > a truncated answer reports its finishReason [333.22ms]
+(pass) the trailing drain > a failed drain does not turn a completed run into an error [288.68ms]
+(pass) paging > a read the page cap cut short says so [232.95ms]
+(pass) <StrictMode> > the doubled mount effect reads once and streams once [334.58ms]
+(pass) useChat(null) > renders empty and refuses to write [40.06ms]
+
+packages/react/tests/ssr.test.ts:
+(pass) server rendering > every hook renders its initial state without a single request [41.52ms]
+
+packages/react/tests/rust-interop.test.ts:
+(pass) same useChat assertions against rust [329.66ms]
+(pass) same StrictMode useRun and provider assertions against rust [281.03ms]
+
+packages/react/tests/branching.test.ts:
+(pass) regenerate > adds a sibling, switches to it, and streams the new answer [391.98ms]
+(pass) editAndResubmit > branches under the named message and cuts the path there [391.38ms]
+(pass) editAndResubmit > the rewritten question is on screen before the server answers [384.21ms]
+(pass) useBranches > counts the siblings and follows a regeneration through the bus [357.45ms]
+(pass) useBranches > activate switches the path and useChat follows through the bus [498.29ms]
+(pass) useBranches > under <StrictMode> the doubled effect still loads exactly one list [337.88ms]
+(pass) useBranches > useBranches(null) is inert [95.39ms]
+
+packages/react/tests/reliability.test.ts:
+(pass) headless submission ownership > failed checks still dispose the parked run and socket [155.21ms]
+(pass) headless submission ownership > provider completion remains settling and busy until host settlement [250.58ms]
+(pass) headless submission ownership > clean EOF reconciles failure after a completed provider pass [182.61ms]
+(pass) headless submission ownership > reconnect after provider completion keeps one tool result and verification [645.39ms]
+(pass) headless submission ownership > StrictMode double click sends one POST and creates one run [302.85ms]
+(pass) headless submission ownership > lost accepted response retries identical payload and key after remount [356.04ms]
+(pass) headless submission ownership > remount recovers original busy run and Stop cancels original [353.66ms]
+(pass) headless submission ownership > changing model after unknown outcome mints a new key [95.79ms]
+(pass) headless submission ownership > changing metadata after unknown outcome mints a new key [93.69ms]
+
+packages/react/tests/proposals.test.ts:
+(pass) useProposals > lists what is staged [93.51ms]
+(pass) useProposals > approve then apply walks the record to applied [180.92ms]
+(pass) useProposals > reject records the decision and the reason [177.85ms]
+(pass) useProposals > a proposal that does not exist is a typed 404 in state [176.55ms]
+(pass) useProposals > a finished run refreshes the queue without anyone calling reload [236.29ms]
+(pass) useProposals > useProposals(null) is inert [40.45ms]
+
+ 246 pass
+ 0 fail
+ 3835 expect() calls
+Ran 246 tests across 22 files. [61.38s]
