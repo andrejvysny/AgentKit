@@ -1,0 +1,40 @@
+PASS fmt (1s)
+FAIL clippy (24s): exit 101 — .gate-logs/clippy.log
+error: this creates an owned instance just for comparison
+ --> crates/runtime/examples/context_eval/replay_validation.rs:9:12
+  |
+9 |         if expected["request"].to_string() != actual.to_string() {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `expected["request"]`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cmp_owned
+  = note: `-D clippy::cmp-owned` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::cmp_owned)]`
+
+error: this creates an owned instance just for comparison
+ --> crates/runtime/examples/context_eval/replay_validation.rs:9:47
+  |
+9 |         if expected["request"].to_string() != actual.to_string() {
+  |                                               ^^^^^^^^^^^^^^^^^^ help: try: `*actual`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cmp_owned
+
+error: could not compile `agentkit-runtime` (example "context_capture") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+gates: test: 2157 passed across 243 binaries
+PASS test (335s)
+PASS machete (0s)
+PASS deny (1s)
+PASS arch (0s)
+PASS api (57s)
+PASS buildfix (30s)
+PASS clientreact (53s)
+PASS contracts (0s)
+PASS typecheck (9s)
+PASS lint (0s)
+PASS napi (150s)
+PASS build (5s)
+PASS umbrella (0s)
+PASS native (52s)
+PASS checkapi (9s)
+PASS smoke (0s)
+OVERALL=1 (17/18 passed)

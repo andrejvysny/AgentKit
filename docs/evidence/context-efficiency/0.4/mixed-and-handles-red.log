@@ -1,0 +1,36 @@
+   Compiling agentkit-runtime v0.1.0 (/private/tmp/agentkit-context-04-candidate/rust/crates/runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running unittests examples/context_capture.rs (rust/target/debug/examples/context_capture-51834c64d01e8a5e)
+
+running 9 tests
+test context_eval::tests::scenarios_cover_lanes_profiles_and_mutations ... ok
+test context_eval::replay_tests::request_order_and_raw_arguments_are_preserved ... ok
+test context_eval::replay_tests::mixed_responses_item_is_rejected ... FAILED
+test context_eval::tests::recorded_exceptions_and_argument_bytes_are_checked ... ok
+test context_eval::tests::report_preserves_failures_and_only_applies_recorded_exceptions ... ok
+test context_eval::replay_tests::outcome_and_request_tampering_are_rejected_without_input_writes ... ok
+test context_eval::replay_tests::unsupported_handle_count_is_not_accepted_as_measured ... FAILED
+test context_eval::tests::capture_reaches_mutation_and_report_retains_failures ... ok
+test context_eval::replay_tests::immutable_corpus_reassembles_ten_scripted_sessions ... ok
+
+failures:
+
+---- context_eval::replay_tests::mixed_responses_item_is_rejected stdout ----
+
+thread 'context_eval::replay_tests::mixed_responses_item_is_rejected' (34724106) panicked at crates/runtime/examples/context_eval/replay_tests.rs:77:5:
+assertion failed: replay_validation::frame_output(&frame).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- context_eval::replay_tests::unsupported_handle_count_is_not_accepted_as_measured stdout ----
+
+thread 'context_eval::replay_tests::unsupported_handle_count_is_not_accepted_as_measured' (34724109) panicked at crates/runtime/examples/context_eval/replay_tests.rs:84:5:
+assertion failed: replay::verify(&session).await.is_err()
+
+
+failures:
+    context_eval::replay_tests::mixed_responses_item_is_rejected
+    context_eval::replay_tests::unsupported_handle_count_is_not_accepted_as_measured
+
+test result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+error: test failed, to rerun pass `-p agentkit-runtime --example context_capture`

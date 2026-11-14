@@ -20,6 +20,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
+    if mode.as_deref() == Some("--replay") {
+        let input = std::env::args().nth(2).ok_or("missing replay input")?;
+        let count = context_eval::replay::verify_file(&input).await?;
+        println!("validated {count} scripted sessions");
+        return Ok(());
+    }
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
     let configs: Vec<CaptureConfig> = serde_json::from_str(&input)?;

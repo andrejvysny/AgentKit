@@ -1,0 +1,32 @@
+   Compiling agentkit-replay-prep v0.1.0 (/private/tmp/agentkit-context-04-prep/capture)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running tests/integrity.rs (capture/target/debug/deps/integrity-373a0e57b6d5d16c)
+
+running 5 tests
+test tampered_request_is_rejected ... ok
+test response_and_frame_tool_arguments_preserve_original_string ... ok
+test reordered_request_keys_are_rejected ... FAILED
+test script_outcome_cannot_be_relabelled_as_task_success ... FAILED
+test replay_rejects_tampered_fixture_without_writing_it ... ok
+
+failures:
+
+---- reordered_request_keys_are_rejected stdout ----
+
+thread 'reordered_request_keys_are_rejected' (34669729) panicked at tests/integrity.rs:62:5:
+assertion failed: validate_requests(&expected, &actual).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- script_outcome_cannot_be_relabelled_as_task_success stdout ----
+
+thread 'script_outcome_cannot_be_relabelled_as_task_success' (34669732) panicked at tests/integrity.rs:76:5:
+arbitrary task-success label accepted
+
+
+failures:
+    reordered_request_keys_are_rejected
+    script_outcome_cannot_be_relabelled_as_task_success
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+error: test failed, to rerun pass `--test integrity`

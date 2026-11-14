@@ -1,0 +1,81 @@
+bun test v1.4.0 (34cbb9a40)
+
+scripts/evals/context-replay/replay.test.ts:
+(pass) replay > prices cache reads separately, preserves unknowns and bounds [0.24ms]
+(pass) replay > bounds unknown input allocation without assuming zero [0.05ms]
+(pass) replay > classifies roles and leaves ambiguous metadata unattributed [0.16ms]
+(pass) replay > replay deterministic, cache hit, capture identity and outcome retained [0.36ms]
+(pass) session report includes frozen illustrative prices and per-request bills [0.35ms]
+(pass) classifies Responses host assembly without dropping instructions or input [0.02ms]
+(pass) cache simulation isolates keys and expires at lifetime boundary [0.07ms]
+(pass) rejects response text changed independently of frozen provider frame [0.08ms]
+(pass) prices output and reasoning as disjoint counters [0.01ms]
+(pass) rejects frame when durable output evidence differs [0.02ms]
+(pass) rejects an arbitrary verifier argument before writing a report [13.99ms]
+(pass) rejects unsupported multi-tool frame instead of undercounting output [0.06ms]
+(pass) scores the captured corpus while preserving unknown reasoning [1.93ms]
+313 |   const request = session.requests[0];
+314 |   if (!request) throw new Error("missing request");
+315 |   request.response_frame = {response: {output: [{arguments: "{}", content: [{text: "ignored"}]}]}};
+316 |   request.response = {content: "{}"};
+317 |   request.output_evidence = {kind: "tool", value: "{}"};
+318 |   expect(() => replay(session, {lifetime_ms: 100, minimum_tokens: 1})).toThrow();
+                                                                             ^
+error: expect(received).toThrow()
+
+Received function did not throw
+Received value: {
+  id: "synthetic",
+  kind: "chat",
+  outcome: "script completed",
+  requests: [
+    {
+      request: {
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+          }
+        ],
+      },
+      response: {
+        content: "{}",
+      },
+      usage: {
+        input_uncached: 12,
+        cache_read: 0,
+        cache_write_short: 0,
+        cache_write_long: 0,
+        output: 0,
+        reasoning: null,
+      },
+      classes: {
+        tools: 0,
+        system: 0,
+        project: null,
+        memory: null,
+        history: 0,
+        turn_context: 8,
+        unattributed: 0,
+        output: 0,
+      },
+    }
+  ],
+  totals: {
+    input_uncached: 12,
+    cache_read: 0,
+    cache_write_short: 0,
+    cache_write_long: 0,
+    output: 0,
+    reasoning: null,
+  },
+  follow_handles: null,
+}
+
+      at <anonymous> (/private/tmp/agentkit-context-04-candidate/scripts/evals/context-replay/replay.test.ts:318:72)
+(fail) rejects Responses output containing tool arguments and text [4.88ms]
+
+ 13 pass
+ 1 fail
+ 81 expect() calls
+Ran 14 tests across 1 file. [63.00ms]

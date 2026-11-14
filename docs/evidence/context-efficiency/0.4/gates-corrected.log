@@ -1,0 +1,3 @@
+PASS fmt (1s)
+PASS clippy (1s)
+OVERALL=0 (2/2 passed)
