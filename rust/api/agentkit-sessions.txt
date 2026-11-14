@@ -241,43 +241,48 @@ pub struct agentkit_sessions::AgentSessionService<R: agentkit_sessions::SessionB
 impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
 pub async fn agentkit_sessions::AgentSessionService<R>::answer(&self, &agentkit_sessions::AnswerInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::approve(&self, &str, &str, core::option::Option<&str>, core::option::Option<bool>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::deny(&self, &str, &str, core::option::Option<&str>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::list_approval_grants(&self, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<serde_json::value::Value>, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::revoke_approval_grant(&self, &str, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
+impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
 pub async fn agentkit_sessions::AgentSessionService<R>::cancel(&self, &str, &str) -> agentkit_sessions::SessionsResult<(), agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::interrupt(&self, &str, &str) -> agentkit_sessions::SessionsResult<(), agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::resume(&self, &str, &str) -> agentkit_sessions::SessionsResult<(), agentkit_sessions::SessionFault<R>>
+impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
 pub async fn agentkit_sessions::AgentSessionService<R>::cancel_queued_input(&self, &str, &str) -> agentkit_sessions::SessionsResult<bool, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::clear_queue(&self, &str) -> agentkit_sessions::SessionsResult<usize, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::flush_queue(&self, &str) -> agentkit_sessions::SessionsResult<core::option::Option<agentkit_sessions::AgentSendResult>, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::follow_up(&self, &str, &agentkit_sessions::FollowUpInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::send(&self, &str, &agentkit_sessions::SendInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::steer(&self, &str, &agentkit_sessions::SteerInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::steer_live(&self, &str, &agentkit_sessions::SteerInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
+impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
 pub async fn agentkit_sessions::AgentSessionService<R>::compact(&self, &str) -> agentkit_sessions::SessionsResult<(), agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::configure(&self, &str, core::option::Option<alloc::vec::Vec<serde_json::value::Value>>, core::option::Option<serde_json::value::Value>, core::option::Option<bool>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::create_session(&self, &agentkit_sessions::CreateSessionInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::create_session_chat(&self, &agentkit_sessions::CreateSessionInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::ChatRecord, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::deny(&self, &str, &str, core::option::Option<&str>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::export_session(&self, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::flush_queue(&self, &str) -> agentkit_sessions::SessionsResult<core::option::Option<agentkit_sessions::AgentSendResult>, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::follow_up(&self, &str, &agentkit_sessions::FollowUpInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::fork(&self, &str, &str) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::get_execution(&self, &str) -> agentkit_sessions::SessionsResult<core::option::Option<serde_json::value::Value>, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::get_state(&self, &str) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::get_usage(&self, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::interrupt(&self, &str, &str) -> agentkit_sessions::SessionsResult<(), agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::list_approval_grants(&self, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<serde_json::value::Value>, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::list_turns(&self, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<serde_json::value::Value>, agentkit_sessions::SessionFault<R>>
-pub fn agentkit_sessions::AgentSessionService<R>::new(agentkit_sessions::AgentSessionServiceDeps<R>) -> Self
-pub fn agentkit_sessions::AgentSessionService<R>::profiles(&self) -> alloc::rcs::arc::Arc<agentkit_sessions::ProfileRegistry>
-pub async fn agentkit_sessions::AgentSessionService<R>::resume(&self, &str, &str) -> agentkit_sessions::SessionsResult<(), agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::revoke_approval_grant(&self, &str, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::send(&self, &str, &agentkit_sessions::SendInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::set_execution_mode(&self, &str, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::set_model(&self, &str, core::option::Option<&str>, &str, core::option::Option<core::option::Option<&str>>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::snapshot_turn_configuration(&self, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::steer(&self, &str, &agentkit_sessions::SteerInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::steer_live(&self, &str, &agentkit_sessions::SteerInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSendResult, agentkit_sessions::SessionFault<R>>
+impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
+pub async fn agentkit_sessions::AgentSessionService<R>::list_uncertain_executions(&self, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<agentkit_sessions::ExecutionReceiptRecord>, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::resolve_uncertain_execution(&self, &str, &str, agentkit_sessions::ResolutionOutcome, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_sessions::SessionsResult<agentkit_sessions::ExecutionReceiptRecord, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::resolve_uncertain_execution_for_chat(&self, &str, &str, agentkit_sessions::ResolutionOutcome, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_sessions::SessionsResult<agentkit_sessions::ExecutionReceiptRecord, agentkit_sessions::SessionFault<R>>
+impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
+pub fn agentkit_sessions::AgentSessionService<R>::new(agentkit_sessions::AgentSessionServiceDeps<R>) -> Self
+pub fn agentkit_sessions::AgentSessionService<R>::profiles(&self) -> alloc::rcs::arc::Arc<agentkit_sessions::ProfileRegistry>
 pub fn agentkit_sessions::AgentSessionService<R>::with_content_authority(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ContentAuthority<agentkit_sessions::SessionFault<R>>>) -> Self
 pub fn agentkit_sessions::AgentSessionService<R>::with_defaults(self, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> Self
 pub fn agentkit_sessions::AgentSessionService<R>::with_gate(self, agentkit_engine::runner::AdmissionGate) -> Self
 pub fn agentkit_sessions::AgentSessionService<R>::with_profiles(self, alloc::rcs::arc::Arc<agentkit_sessions::ProfileRegistry>) -> Self
 pub fn agentkit_sessions::AgentSessionService<R>::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ChatProviderFactory>) -> Self
 impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
-pub async fn agentkit_sessions::AgentSessionService<R>::list_uncertain_executions(&self, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<agentkit_sessions::ExecutionReceiptRecord>, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::resolve_uncertain_execution(&self, &str, &str, agentkit_sessions::ResolutionOutcome, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_sessions::SessionsResult<agentkit_sessions::ExecutionReceiptRecord, agentkit_sessions::SessionFault<R>>
-pub async fn agentkit_sessions::AgentSessionService<R>::resolve_uncertain_execution_for_chat(&self, &str, &str, agentkit_sessions::ResolutionOutcome, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> agentkit_sessions::SessionsResult<agentkit_sessions::ExecutionReceiptRecord, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::snapshot_turn_configuration(&self, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
 impl<R> agentkit_engine::runner::SessionFlushPlanner<R> for agentkit_sessions::AgentSessionService<R> where R: agentkit_sessions::SessionBackend + agentkit_engine::repository::TaskRepository<SessionSettle = agentkit_sessions::SessionSettle>
 pub fn agentkit_sessions::AgentSessionService<R>::settle_plan<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_engine::model::TaskRecord, bool) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<agentkit_sessions::SessionSettle, agentkit_sessions::SessionFault<R>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_sessions::AgentSessionServiceDeps<R: agentkit_sessions::SessionBackend>

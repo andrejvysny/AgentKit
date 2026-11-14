@@ -9,7 +9,6 @@
     "R12 agentkit-governance src/durable_execution.rs",
     "R12 agentkit-native-exec src/lib.rs",
     "R12 agentkit-sessions src/run_profiles.rs",
-    "R12 agentkit-sessions src/session/mod.rs",
     "R1b agentkit-agents -> agentkit-store",
     "R1b agentkit-chat -> agentkit-store",
     "R1b agentkit-governance -> agentkit-store",
