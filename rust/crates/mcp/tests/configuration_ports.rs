@@ -10,7 +10,7 @@ use agentkit_mcp::{
     ClientOptions, McpClientError, McpClientManager, McpConnection, McpConnector,
     McpSecretResolver, SystemClock, TransportConfig, model,
 };
-use agentkit_mcp::{McpConfigError, McpConfigRepository, McpConfigRuntime, McpConfigSecrets};
+use agentkit_mcp::{McpConfigError, McpConfigRuntime, McpConfigSecrets, McpConfigurationService};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -165,7 +165,7 @@ fn patch(value: Value) -> UpdateMcpServerRequest {
 fn ports(
     store: SqliteStore,
 ) -> (
-    McpConfigRepository,
+    McpConfigurationService<SqliteStore>,
     Arc<Vault>,
     Arc<Runtime>,
     Arc<Connector>,
@@ -187,7 +187,7 @@ fn ports(
         stale_metadata: AtomicBool::new(false),
         fail_reconcile: AtomicBool::new(false),
     });
-    let repository = McpConfigRepository::new(store, "app", Arc::new(SystemRuntime))
+    let repository = McpConfigurationService::new(store, "app", Arc::new(SystemRuntime))
         .unwrap()
         .with_ports(Some(vault.clone()), Some(runtime.clone()))
         .unwrap();
@@ -198,7 +198,7 @@ fn ports(
 async fn literals_require_an_explicit_vault_and_never_reach_sqlite_or_projection() {
     let store = SqliteStore::memory(16).unwrap();
     let repository =
-        McpConfigRepository::new(store.clone(), "no-vault", Arc::new(SystemRuntime)).unwrap();
+        McpConfigurationService::new(store.clone(), "no-vault", Arc::new(SystemRuntime)).unwrap();
     assert!(matches!(
         repository
             .create(input("tools", Some("dummy-secret-one")))
@@ -243,7 +243,10 @@ async fn literals_require_an_explicit_vault_and_never_reach_sqlite_or_projection
     runtime.manager.dispose().await.unwrap();
 }
 
-async fn assert_metadata_fence(repository: &McpConfigRepository, runtime: &Runtime) {
+async fn assert_metadata_fence(
+    repository: &McpConfigurationService<SqliteStore>,
+    runtime: &Runtime,
+) {
     let listed = serde_json::to_value(repository.list().await.unwrap()).unwrap();
     assert_eq!(listed[0]["connection"]["status"], "connected");
     assert!(listed[0]["connection"].get("secret").is_none());
@@ -327,7 +330,7 @@ async fn rotation_revokes_old_handles_and_delete_cancels_pending_connect() {
 }
 
 async fn delete_pending(
-    repository: &McpConfigRepository,
+    repository: &McpConfigurationService<SqliteStore>,
     record: &McpServerDto,
     runtime: &Runtime,
     connector: &Connector,
@@ -414,7 +417,7 @@ async fn durable_generation_never_reuses_deleted_or_prior_process_authority() {
     let (repository, _, runtime, _) = ports(store.clone());
     let second = repository.create(input("tools", None)).await.unwrap();
     assert!(second.extra["generation"].as_u64().unwrap() > generation);
-    let other = McpConfigRepository::new(store, "other-app", Arc::new(SystemRuntime)).unwrap();
+    let other = McpConfigurationService::new(store, "other-app", Arc::new(SystemRuntime)).unwrap();
     assert_eq!(
         other.create(input("tools", None)).await.unwrap().extra["generation"],
         1
@@ -426,12 +429,13 @@ async fn durable_generation_never_reuses_deleted_or_prior_process_authority() {
 async fn one_live_runtime_cannot_cross_application_or_store_scopes() {
     let store = SqliteStore::memory(16).unwrap();
     let (repository, _, runtime, _) = ports(store.clone());
-    let other_app = McpConfigRepository::new(store, "other-app", Arc::new(SystemRuntime)).unwrap();
+    let other_app =
+        McpConfigurationService::new(store, "other-app", Arc::new(SystemRuntime)).unwrap();
     assert!(matches!(
         other_app.with_ports(None, Some(runtime.clone())),
         Err(McpConfigError::Conflict)
     ));
-    let other_store = McpConfigRepository::new(
+    let other_store = McpConfigurationService::new(
         SqliteStore::memory(16).unwrap(),
         "app",
         Arc::new(SystemRuntime),

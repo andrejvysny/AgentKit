@@ -1,4 +1,5 @@
 use super::{McpConfigError, Ports};
+use crate::repository::RepositoryFault;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
@@ -30,7 +31,7 @@ fn same_target(current: &Value, previous: &Value) -> bool {
     current["kind"] == previous["kind"] && current[target] == previous[target]
 }
 
-fn values_key(value: &Value) -> Result<&'static str, McpConfigError> {
+fn values_key<E: RepositoryFault>(value: &Value) -> Result<&'static str, McpConfigError<E>> {
     match value["transport"]["kind"].as_str() {
         Some("http") => {
             let url = reqwest::Url::parse(
@@ -60,12 +61,12 @@ struct Prepared {
     values: Vec<(String, String)>,
 }
 
-fn prepare(
+fn prepare<E: RepositoryFault>(
     app_id: &str,
     value: &Value,
     previous: Option<&Value>,
     ports: &Ports,
-) -> Result<Prepared, McpConfigError> {
+) -> Result<Prepared, McpConfigError<E>> {
     let field = values_key(value)?;
     let scope = prefix(app_id, value["id"].as_str().ok_or(McpConfigError::Invalid)?);
     let refs = value["secretRefs"].as_object().cloned().unwrap_or_default();
@@ -100,7 +101,7 @@ fn prepare(
             }
             Ok((key, actual))
         })
-        .collect::<Result<Vec<_>, McpConfigError>>()?;
+        .collect::<Result<Vec<_>, McpConfigError<E>>>()?;
     Ok(Prepared {
         field,
         scope,
@@ -109,10 +110,10 @@ fn prepare(
     })
 }
 
-async fn materialize(
+async fn materialize<E: RepositoryFault>(
     prepared: &mut Prepared,
     ports: &Ports,
-) -> Result<(Map<String, Value>, Vec<String>), McpConfigError> {
+) -> Result<(Map<String, Value>, Vec<String>), McpConfigError<E>> {
     let mut next = Map::new();
     let mut staged = Vec::new();
     for (key, actual) in &prepared.values {
@@ -137,12 +138,12 @@ async fn materialize(
     Ok((next, staged))
 }
 
-pub(super) async fn normalize(
+pub(super) async fn normalize<E: RepositoryFault>(
     app_id: &str,
     mut value: Value,
     previous: Option<&Value>,
     ports: &Ports,
-) -> Result<(Value, Vec<String>), McpConfigError> {
+) -> Result<(Value, Vec<String>), McpConfigError<E>> {
     let mut prepared = prepare(app_id, &value, previous, ports)?;
     let (next, staged) = materialize(&mut prepared, ports).await?;
     let mut used = BTreeSet::new();
@@ -199,7 +200,9 @@ pub(super) fn redact(value: &mut Value) {
     }
 }
 
-pub(super) fn validate_declarations(records: &[super::McpServerDto]) -> Result<(), McpConfigError> {
+pub(super) fn validate_declarations<E: RepositoryFault>(
+    records: &[super::McpServerDto],
+) -> Result<(), McpConfigError<E>> {
     for record in records {
         let value = serde_json::to_value(record).map_err(|_| McpConfigError::Invalid)?;
         let field = values_key(&value)?;
@@ -215,7 +218,7 @@ pub(super) fn validate_declarations(records: &[super::McpServerDto]) -> Result<(
     Ok(())
 }
 
-fn placeholders(mut text: &str) -> Result<Vec<String>, McpConfigError> {
+fn placeholders<E: RepositoryFault>(mut text: &str) -> Result<Vec<String>, McpConfigError<E>> {
     let mut tokens = Vec::new();
     while let Some((_, tail)) = text.split_once("${") {
         let (token, rest) = tail.split_once('}').ok_or(McpConfigError::Invalid)?;

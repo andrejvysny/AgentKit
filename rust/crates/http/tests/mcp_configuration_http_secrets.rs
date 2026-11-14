@@ -1,7 +1,7 @@
 use agentkit_contracts::CreateMcpServerRequest;
 use agentkit_engine::SystemRuntime;
 use agentkit_http::{Actor, McpConfigurationPort};
-use agentkit_mcp::{McpConfigError, McpConfigRepository, McpConfigSecrets};
+use agentkit_mcp::{McpConfigError, McpConfigSecrets, McpConfigurationService};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -76,10 +76,14 @@ async fn production_http_port_requires_vault_and_scopes_before_secret_access() {
     assert_eq!(listed[0]["transport"]["headers"]["Authorization"], "***");
 }
 
-async fn configured_port() -> (McpConfigRepository, SqliteStore, Arc<Vault>) {
+async fn configured_port() -> (
+    McpConfigurationService<SqliteStore>,
+    SqliteStore,
+    Arc<Vault>,
+) {
     let store = SqliteStore::memory(16).unwrap();
     let repository =
-        McpConfigRepository::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
+        McpConfigurationService::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
     let missing = McpConfigurationPort::create(&repository, &actor("app"), input())
         .await
         .unwrap_err();
@@ -105,7 +109,7 @@ async fn configured_port() -> (McpConfigRepository, SqliteStore, Arc<Vault>) {
 async fn unused_transport_fields_cannot_bypass_credential_storage_rules() {
     let store = SqliteStore::memory(16).unwrap();
     let repository =
-        McpConfigRepository::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
+        McpConfigurationService::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
     let input: CreateMcpServerRequest = serde_json::from_value(json!({"alias":"stdio","transport":{"kind":"stdio","command":"host-owned-command","headers":{"Authorization":"dummy-unused-secret"}}})).unwrap();
     repository.create(input).await.unwrap();
     let input: CreateMcpServerRequest = serde_json::from_value(json!({"alias":"http","transport":{"kind":"http","url":"https://resource.test/mcp","env":{"TOKEN":"dummy-unused-secret"}}})).unwrap();

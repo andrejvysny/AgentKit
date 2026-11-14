@@ -557,7 +557,7 @@ impl SessionService {
                 "an HTTP server is already running on this service; call stopHttpServer() first",
             ));
         }
-        let mcp_configuration = agentkit_mcp::McpConfigRepository::new(
+        let mcp_configuration = agentkit_mcp::McpConfigurationService::new(
             core.runtime.host().store().clone(),
             &options.actor_id,
             core.runtime.host().runtime().clone(),

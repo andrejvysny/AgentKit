@@ -2,7 +2,6 @@
   "comment": "Existing architecture violations (see docs/adr/0021). Only shrinks; remove entries as migration phases resolve them.",
   "violations": [
     "R11 agentkit-http -> agentkit-store",
-    "R11 agentkit-mcp -> agentkit-store",
     "R12 agentkit-agents src/subagents/service.rs",
     "R12 agentkit-chat src/chat/history.rs",
     "R12 agentkit-core src/run.rs",

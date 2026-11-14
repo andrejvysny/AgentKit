@@ -14,7 +14,7 @@ use agentkit_governance::{Authorization, MutationIdentity, ProposalApplier, Prop
 use agentkit_http::{
     Actor, Config, DesktopBackend, Problem, ProviderOperations, ToolCatalogPort, WritePolicyPort,
 };
-use agentkit_mcp::McpConfigRepository;
+use agentkit_mcp::McpConfigurationService;
 use agentkit_runtime::AgentRuntime;
 use agentkit_store::{MessageInput, ProposalRecord, ProposalStatus, SqliteStore};
 use async_trait::async_trait;
@@ -368,7 +368,7 @@ impl Native {
             Arc::new(UnavailableNetwork),
         ));
         let mcp = Arc::new(
-            McpConfigRepository::new(store.clone(), "client-actor", Arc::new(SystemRuntime))
+            McpConfigurationService::new(store.clone(), "client-actor", Arc::new(SystemRuntime))
                 .unwrap()
                 .with_ports(Some(Arc::new(MemoryVault::default())), None)
                 .unwrap(),

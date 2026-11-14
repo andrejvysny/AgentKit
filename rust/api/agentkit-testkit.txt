@@ -1,5 +1,24 @@
 pub mod agentkit_testkit
 pub mod agentkit_testkit::conformance
+pub mod agentkit_testkit::conformance::mcp_repository
+pub const agentkit_testkit::conformance::mcp_repository::CASES: &[&str]
+pub const agentkit_testkit::conformance::mcp_repository::CONFIG_KEY: &str
+pub const agentkit_testkit::conformance::mcp_repository::CONFIG_NAMESPACE: &str
+pub const agentkit_testkit::conformance::mcp_repository::COUNTER_NAMESPACE: &str
+pub const agentkit_testkit::conformance::mcp_repository::GENERATION_NAMESPACE: &str
+pub trait agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub type agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+pub type agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture::Repo: agentkit_mcp::repository::McpConfigRepository
+pub fn agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture::new_repo(&self) -> Self::Repo
+pub fn agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture::put_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture::repo(&self) -> &Self::Repo
+impl agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture for agentkit_testkit::InMemoryMcpConfigFixture
+pub type agentkit_testkit::InMemoryMcpConfigFixture::Error = agentkit_testkit::mcp_memory::InMemoryMcpFixtureError
+pub type agentkit_testkit::InMemoryMcpConfigFixture::Repo = agentkit_testkit::InMemoryMcpConfigRepository
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::new_repo(&self) -> Self::Repo
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::put_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::repo(&self) -> &Self::Repo
+pub async fn agentkit_testkit::conformance::mcp_repository::run<T, F, Fut>(F) where T: agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
 pub mod agentkit_testkit::conformance::native_backend
 pub struct agentkit_testkit::conformance::native_backend::ConformanceCase
 pub agentkit_testkit::conformance::native_backend::ConformanceCase::id: &'static str
@@ -106,6 +125,17 @@ pub fn agentkit_testkit::scripted::plain_chat_target(&str) -> agentkit_native::t
 pub fn agentkit_testkit::scripted::scripted_turn_input() -> agentkit_native::ports::TurnInput
 pub fn agentkit_testkit::scripted::supported() -> agentkit_native::capability::CapabilityState
 pub fn agentkit_testkit::scripted::unsupported(&str) -> agentkit_native::capability::CapabilityState
+pub enum agentkit_testkit::InMemoryMcpConfigRepositoryError
+pub agentkit_testkit::InMemoryMcpConfigRepositoryError::Environmental(&'static str)
+impl agentkit_engine::repository::RepositoryFault for agentkit_testkit::InMemoryMcpConfigRepositoryError
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::invalid_input(&self) -> core::option::Option<&str>
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::is_duplicate(&self) -> bool
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::is_invalid_transition(&self) -> bool
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::is_lease_lost(&self) -> bool
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::is_not_found(&self) -> bool
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::is_transient(&self) -> bool
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::session_conflict(&self) -> core::option::Option<&str>
+pub fn agentkit_testkit::InMemoryMcpConfigRepositoryError::task_input_reason(&self) -> core::option::Option<agentkit_engine::repository::TaskInputReason>
 pub enum agentkit_testkit::InMemoryRepositoryError
 pub agentkit_testkit::InMemoryRepositoryError::Duplicate(alloc::string::String)
 pub agentkit_testkit::InMemoryRepositoryError::InvalidInput(alloc::string::String)
@@ -175,6 +205,24 @@ pub fn agentkit_testkit::InMemorySessionRepositoryError::from(agentkit_kernel::t
 pub enum agentkit_testkit::ReceiptRefusal
 pub agentkit_testkit::ReceiptRefusal::NotUncertain
 pub agentkit_testkit::ReceiptRefusal::RunActive
+pub struct agentkit_testkit::InMemoryMcpConfigFixture
+impl agentkit_testkit::InMemoryMcpConfigFixture
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::new() -> Self
+impl agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture for agentkit_testkit::InMemoryMcpConfigFixture
+pub type agentkit_testkit::InMemoryMcpConfigFixture::Error = agentkit_testkit::mcp_memory::InMemoryMcpFixtureError
+pub type agentkit_testkit::InMemoryMcpConfigFixture::Repo = agentkit_testkit::InMemoryMcpConfigRepository
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::new_repo(&self) -> Self::Repo
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::put_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryMcpConfigFixture::repo(&self) -> &Self::Repo
+pub struct agentkit_testkit::InMemoryMcpConfigRepository
+impl agentkit_testkit::InMemoryMcpConfigRepository
+pub fn agentkit_testkit::InMemoryMcpConfigRepository::new() -> Self
+impl agentkit_mcp::repository::McpConfigRepository for agentkit_testkit::InMemoryMcpConfigRepository
+pub type agentkit_testkit::InMemoryMcpConfigRepository::Error = agentkit_testkit::InMemoryMcpConfigRepositoryError
+pub fn agentkit_testkit::InMemoryMcpConfigRepository::actor_identity(&self) -> agentkit_mcp::repository::RepositoryIdentity
+pub fn agentkit_testkit::InMemoryMcpConfigRepository::compare_and_set_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<serde_json::value::Value>, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryMcpConfigRepository::compare_and_set_settings<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<serde_json::value::Value>, alloc::vec::Vec<agentkit_mcp::repository::SettingWrite>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_mcp::repository::SettingsCommit<Self::Error>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryMcpConfigRepository::get_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<serde_json::value::Value>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_testkit::InMemorySessionFixture
 impl agentkit_testkit::InMemorySessionFixture
 pub fn agentkit_testkit::InMemorySessionFixture::new() -> Self

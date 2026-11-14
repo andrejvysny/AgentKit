@@ -18,6 +18,8 @@ agentkit-engine = { workspace = true }
 agentkit-kernel = { workspace = true }
 # The sessions context owns the port this crate's fake implements (ADR 0024).
 agentkit-sessions = { workspace = true }
+# The MCP configuration context owns the port this crate's fake implements.
+agentkit-mcp = { workspace = true }
 agentkit-native = { workspace = true }
 async-trait.workspace = true
 futures.workspace = true

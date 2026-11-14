@@ -1,13 +1,7 @@
 use crate::{Result, SqliteStore, StoreError, util};
+use agentkit_mcp::SettingWrite;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
-
-#[derive(Clone, Debug)]
-pub struct SettingWrite {
-    pub namespace: String,
-    pub key: String,
-    pub value: Option<Value>,
-}
 
 #[derive(Debug)]
 pub enum SettingsCommit {

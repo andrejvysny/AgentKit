@@ -1,10 +1,10 @@
 use super::McpConfigurationPort;
 use crate::{Actor, Problem};
 use agentkit_contracts::{CreateMcpServerRequest, McpServerDto, UpdateMcpServerRequest};
-use agentkit_mcp::{McpConfigError, McpConfigRepository};
+use agentkit_mcp::{McpConfigError, McpConfigRepository, McpConfigurationService, RepositoryFault};
 use async_trait::async_trait;
 
-fn problem(error: McpConfigError) -> Problem {
+fn problem<E: RepositoryFault>(error: McpConfigError<E>) -> Problem {
     let (status, code) = match error {
         McpConfigError::NotFound => (404, "not_found"),
         McpConfigError::DuplicateAlias => (409, "duplicate_alias"),
@@ -17,7 +17,10 @@ fn problem(error: McpConfigError) -> Problem {
     Problem::new(status, code, "MCP configuration operation failed.")
 }
 
-fn authorize(repository: &McpConfigRepository, actor: &Actor) -> Result<(), Problem> {
+fn authorize<R: McpConfigRepository>(
+    repository: &McpConfigurationService<R>,
+    actor: &Actor,
+) -> Result<(), Problem> {
     if actor.id != repository.app_id() {
         return Err(Problem::new(
             403,
@@ -29,10 +32,10 @@ fn authorize(repository: &McpConfigRepository, actor: &Actor) -> Result<(), Prob
 }
 
 #[async_trait]
-impl McpConfigurationPort for McpConfigRepository {
+impl<R: McpConfigRepository> McpConfigurationPort for McpConfigurationService<R> {
     async fn list(&self, actor: &Actor) -> Result<Vec<McpServerDto>, Problem> {
         authorize(self, actor)?;
-        McpConfigRepository::list(self).await.map_err(problem)
+        McpConfigurationService::list(self).await.map_err(problem)
     }
     async fn create(
         &self,
@@ -40,7 +43,7 @@ impl McpConfigurationPort for McpConfigRepository {
         input: CreateMcpServerRequest,
     ) -> Result<McpServerDto, Problem> {
         authorize(self, actor)?;
-        McpConfigRepository::create(self, input)
+        McpConfigurationService::create(self, input)
             .await
             .map_err(problem)
     }
@@ -51,12 +54,14 @@ impl McpConfigurationPort for McpConfigRepository {
         input: UpdateMcpServerRequest,
     ) -> Result<McpServerDto, Problem> {
         authorize(self, actor)?;
-        McpConfigRepository::update(self, id, input)
+        McpConfigurationService::update(self, id, input)
             .await
             .map_err(problem)
     }
     async fn delete(&self, actor: &Actor, id: &str) -> Result<(), Problem> {
         authorize(self, actor)?;
-        McpConfigRepository::delete(self, id).await.map_err(problem)
+        McpConfigurationService::delete(self, id)
+            .await
+            .map_err(problem)
     }
 }

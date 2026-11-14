@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(UnavailableNetwork),
     ));
     let mcp = Arc::new(
-        agentkit_mcp::McpConfigRepository::new(
+        agentkit_mcp::McpConfigurationService::new(
             store.clone(),
             "fixture-actor",
             Arc::new(SystemRuntime),

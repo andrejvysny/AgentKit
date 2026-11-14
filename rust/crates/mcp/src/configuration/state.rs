@@ -1,8 +1,10 @@
 use super::{
-    McpConfigError, McpConfigRepository, McpConfigRuntime, McpConfigSecrets, McpServerDto,
-    SqliteStore, parse_record, secrets,
+    McpConfigError, McpConfigRuntime, McpConfigSecrets, McpConfigurationService, McpServerDto,
+    parse_record, secrets,
 };
-use agentkit_store::{SettingWrite, SettingsCommit, StoreActorIdentity};
+use crate::repository::{
+    McpConfigRepository, RepositoryFault, RepositoryIdentity, SettingWrite, SettingsCommit,
+};
 use serde_json::{Value, json};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
@@ -22,13 +24,13 @@ impl State {
     pub fn ports(&self) -> Ports {
         self.ports.lock().expect("MCP configuration ports").clone()
     }
-    pub fn install(
+    pub fn install<R: McpConfigRepository>(
         &self,
-        store: &SqliteStore,
+        store: &R,
         app_id: &str,
         secrets: Option<Arc<dyn McpConfigSecrets>>,
         live: Option<Arc<dyn McpConfigRuntime>>,
-    ) -> Result<(), McpConfigError> {
+    ) -> Result<(), McpConfigError<R::Error>> {
         let mut ports = self.ports.lock().expect("MCP configuration ports");
         if matches!((&ports.secrets, &secrets), (Some(old), Some(next)) if !Arc::ptr_eq(old, next))
             || matches!((&ports.live, &live), (Some(old), Some(next)) if !Arc::ptr_eq(old, next))
@@ -49,17 +51,17 @@ impl State {
 }
 
 struct RuntimeBinding {
-    identity: StoreActorIdentity,
+    identity: RepositoryIdentity,
     app_id: String,
     runtime: Weak<dyn McpConfigRuntime>,
 }
 static RUNTIMES: LazyLock<Mutex<Vec<RuntimeBinding>>> = LazyLock::new(Default::default);
 
-fn bind_runtime(
-    store: &SqliteStore,
+fn bind_runtime<R: McpConfigRepository>(
+    store: &R,
     app_id: &str,
     runtime: &Arc<dyn McpConfigRuntime>,
-) -> Result<(), McpConfigError> {
+) -> Result<(), McpConfigError<R::Error>> {
     let mut bindings = RUNTIMES.lock().expect("MCP runtime bindings");
     bindings.retain(|entry| entry.runtime.strong_count() > 0);
     let runtime = Arc::downgrade(runtime);
@@ -78,10 +80,10 @@ fn bind_runtime(
     Ok(())
 }
 
-type Entry = (StoreActorIdentity, String, Weak<State>);
+type Entry = (RepositoryIdentity, String, Weak<State>);
 static STATES: LazyLock<Mutex<Vec<Entry>>> = LazyLock::new(Default::default);
 
-pub(super) fn shared(store: &SqliteStore, app_id: &str) -> Arc<State> {
+pub(super) fn shared<R: McpConfigRepository>(store: &R, app_id: &str) -> Arc<State> {
     let mut states = STATES.lock().expect("MCP configuration scopes");
     states.retain(|(identity, _, state)| identity.is_alive() && state.strong_count() > 0);
     if let Some(state) = states
@@ -100,8 +102,8 @@ pub(super) fn shared(store: &SqliteStore, app_id: &str) -> Arc<State> {
     state
 }
 
-impl McpConfigRepository {
-    pub(super) async fn applied_generation(&self) -> Result<u64, McpConfigError> {
+impl<R: McpConfigRepository> McpConfigurationService<R> {
+    pub(super) async fn applied_generation(&self) -> Result<u64, McpConfigError<R::Error>> {
         let value = self
             .store
             .get_setting("mcp-config-generation", &self.app_id)
@@ -116,7 +118,7 @@ impl McpConfigRepository {
             .unwrap_or(Ok(0))
     }
 
-    async fn reserve_generation(&self) -> Result<u64, McpConfigError> {
+    async fn reserve_generation(&self) -> Result<u64, McpConfigError<R::Error>> {
         for _ in 0..16 {
             let previous = self
                 .store
@@ -151,7 +153,7 @@ impl McpConfigRepository {
         records: Vec<McpServerDto>,
         staged: Vec<String>,
         ports: &Ports,
-    ) -> Result<u64, McpConfigError> {
+    ) -> Result<u64, McpConfigError<R::Error>> {
         if let Err(error) = secrets::validate_declarations(&records) {
             secrets::cleanup(&staged, ports).await;
             return Err(error);
@@ -198,7 +200,7 @@ impl McpConfigRepository {
         previous: Option<Value>,
         records: &[McpServerDto],
         generation: u64,
-    ) -> Result<SettingsCommit, McpConfigError> {
+    ) -> Result<SettingsCommit<R::Error>, McpConfigError<R::Error>> {
         let value = serde_json::to_value(records).map_err(|_| McpConfigError::Invalid)?;
         Ok(self
             .store
@@ -228,7 +230,7 @@ impl McpConfigRepository {
         old: &[Value],
         records: &[McpServerDto],
         ports: &Ports,
-    ) -> Result<(), McpConfigError> {
+    ) -> Result<(), McpConfigError<R::Error>> {
         if let Some(live) = &ports.live
             && !matches!(
                 tokio::time::timeout(
@@ -280,11 +282,11 @@ impl McpConfigRepository {
     }
 }
 
-async fn prepare(
+async fn prepare<E: RepositoryFault>(
     generation: u64,
     records: &[McpServerDto],
     ports: &Ports,
-) -> Result<Option<Box<dyn super::McpConfigLease>>, McpConfigError> {
+) -> Result<Option<Box<dyn super::McpConfigLease>>, McpConfigError<E>> {
     match &ports.live {
         Some(live) => tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -292,7 +294,8 @@ async fn prepare(
         )
         .await
         .map_err(|_| McpConfigError::Runtime)?
-        .map(Some),
+        .map(Some)
+        .map_err(McpConfigError::from_faultless),
         None => Ok(None),
     }
 }
@@ -300,7 +303,7 @@ async fn prepare(
 fn changed_aliases(previous: &[Value], next: &[McpServerDto]) -> Vec<String> {
     let previous = previous
         .iter()
-        .filter_map(|value| parse_record(value.clone()).ok())
+        .filter_map(|value| parse_record::<agentkit_engine::NeverFault>(value.clone()).ok())
         .collect::<Vec<_>>();
     let unchanged = |left: &McpServerDto, right: &McpServerDto| {
         let mut right = right.clone();
@@ -320,11 +323,11 @@ fn changed_aliases(previous: &[Value], next: &[McpServerDto]) -> Vec<String> {
         .collect()
 }
 
-async fn failed_commit(
-    failed: Result<SettingsCommit, McpConfigError>,
+async fn failed_commit<E: RepositoryFault>(
+    failed: Result<SettingsCommit<E>, McpConfigError<E>>,
     staged: &[String],
     ports: &Ports,
-) -> Result<u64, McpConfigError> {
+) -> Result<u64, McpConfigError<E>> {
     match failed {
         Ok(SettingsCommit::Conflict) => {
             secrets::cleanup(staged, ports).await;

@@ -5,7 +5,7 @@ use std::sync::{
 
 use agentkit_contracts::{CreateMcpServerRequest, McpServerDto};
 use agentkit_engine::SystemRuntime;
-use agentkit_mcp::{McpConfigError, McpConfigLease, McpConfigRepository, McpConfigRuntime};
+use agentkit_mcp::{McpConfigError, McpConfigLease, McpConfigRuntime, McpConfigurationService};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::json;
@@ -65,10 +65,14 @@ fn input() -> CreateMcpServerRequest {
     .unwrap()
 }
 
-fn fixture() -> (SqliteStore, McpConfigRepository, Arc<Runtime>) {
+fn fixture() -> (
+    SqliteStore,
+    McpConfigurationService<SqliteStore>,
+    Arc<Runtime>,
+) {
     let store = SqliteStore::memory(16).unwrap();
     let runtime = Arc::new(Runtime::default());
-    let repository = McpConfigRepository::new(store.clone(), "app", Arc::new(SystemRuntime))
+    let repository = McpConfigurationService::new(store.clone(), "app", Arc::new(SystemRuntime))
         .unwrap()
         .with_ports(None, Some(runtime.clone()))
         .unwrap();

@@ -11,12 +11,18 @@
 //! exists for the whole workspace. [`InMemorySessionRepository`] is the
 //! sessions context's `SessionRepository` held in memory; both it and
 //! [`InMemoryTaskRepository`] run one conformance suite each.
+//! [`InMemoryMcpConfigRepository`] is the MCP configuration context's
+//! `McpConfigRepository` held in memory, with its own suite.
 
 pub mod conformance;
+mod mcp_memory;
 mod memory;
 pub mod scripted;
 mod session_memory;
 
+pub use mcp_memory::{
+    InMemoryMcpConfigFixture, InMemoryMcpConfigRepository, InMemoryMcpConfigRepositoryError,
+};
 pub use memory::{InMemoryRepositoryError, InMemorySessionSettle, InMemoryTaskRepository};
 pub use session_memory::{
     CONTEXT_SUMMARIES_NAMESPACE, InMemorySessionFixture, InMemorySessionRepository,

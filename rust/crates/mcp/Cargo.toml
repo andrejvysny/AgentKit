@@ -16,7 +16,7 @@ workspace = true
 agentkit-contracts = { workspace = true }
 agentkit-core = { workspace = true }
 agentkit-engine = { workspace = true }
-agentkit-store = { workspace = true }
+agentkit-kernel = { workspace = true }
 async-trait.workspace = true
 futures.workspace = true
 axum.workspace = true
@@ -37,5 +37,8 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+# The SQLite adapter the integration tests compose the port with (ADR 0024
+# Consequences: store-backed context tests live behind a dev edge).
+agentkit-store = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled"] }
 tempfile.workspace = true

@@ -14,6 +14,7 @@ mod execution_receipts;
 mod execution_resolution;
 mod faults;
 mod managed_content;
+mod mcp_repository;
 mod native_continuations;
 mod native_exec;
 mod native_repository;
@@ -42,6 +43,7 @@ pub use agentkit_engine::{
     TaskStatus, TaskTransitionPatch,
 };
 pub use agentkit_kernel::{ConversationTimestamp, TimestampOutOfRange};
+pub use agentkit_mcp::SettingWrite;
 pub use agents::*;
 pub use connector_crypto::ResealReport;
 pub use context_summaries::*;
@@ -63,7 +65,7 @@ pub use provider_connections::{
 pub use run_profiles::run_profile_digest;
 pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
-pub use settings_commit::{SettingWrite, SettingsCommit};
+pub use settings_commit::SettingsCommit;
 pub use subagents::*;
 pub use tasks::{
     MAX_TOOL_TEXT_BYTES, TaskAging, TaskProjection, TaskProjectionApproval, TaskProjectionUsage,

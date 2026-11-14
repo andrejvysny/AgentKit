@@ -1,6 +1,6 @@
 use agentkit_contracts::{CreateMcpServerRequest, UpdateMcpServerRequest};
 use agentkit_engine::SystemRuntime;
-use agentkit_mcp::{McpConfigError, McpConfigRepository};
+use agentkit_mcp::{McpConfigError, McpConfigurationService};
 use agentkit_store::SqliteStore;
 use serde_json::json;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ async fn configuration_timestamps_cover_the_entire_javascript_date_range() {
         (-8_640_000_000_000_000, "-271821-04-20T00:00:00.000Z"),
         (8_640_000_000_000_000, "+275760-09-13T00:00:00.000Z"),
     ] {
-        let repository = McpConfigRepository::new(
+        let repository = McpConfigurationService::new(
             SqliteStore::memory(16).unwrap(),
             "app",
             Arc::new(FixedRuntime(milliseconds)),
@@ -35,7 +35,7 @@ async fn configuration_timestamps_cover_the_entire_javascript_date_range() {
         assert_eq!(record.created_at, expected);
         assert_eq!(record.updated_at, expected);
     }
-    let repository = McpConfigRepository::new(
+    let repository = McpConfigurationService::new(
         SqliteStore::memory(16).unwrap(),
         "app",
         Arc::new(FixedRuntime(8_640_000_000_000_001)),
@@ -51,8 +51,10 @@ async fn configuration_timestamps_cover_the_entire_javascript_date_range() {
 #[tokio::test]
 async fn aliases_are_atomic_across_repository_handles_and_scopes_are_isolated() {
     let store = SqliteStore::memory(16).unwrap();
-    let first = McpConfigRepository::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
-    let second = McpConfigRepository::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
+    let first =
+        McpConfigurationService::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
+    let second =
+        McpConfigurationService::new(store.clone(), "app", Arc::new(SystemRuntime)).unwrap();
     let (left, right) = tokio::join!(first.create(input("tools")), second.create(input("tools")));
     assert_ne!(left.is_ok(), right.is_ok());
     assert!(matches!(
@@ -70,7 +72,8 @@ async fn aliases_are_atomic_across_repository_handles_and_scopes_are_isolated() 
         serde_json::to_value(updated).unwrap()["secretRefs"],
         json!({})
     );
-    let other = McpConfigRepository::new(store, "another-app", Arc::new(SystemRuntime)).unwrap();
+    let other =
+        McpConfigurationService::new(store, "another-app", Arc::new(SystemRuntime)).unwrap();
     assert!(other.list().await.unwrap().is_empty());
     assert!(matches!(
         other.delete(&record.id).await,
@@ -88,7 +91,7 @@ async fn declarations_survive_reopen_without_resolved_credentials() {
     ));
     {
         let store = SqliteStore::open(&path, 16).unwrap();
-        McpConfigRepository::new(store, "app", Arc::new(SystemRuntime))
+        McpConfigurationService::new(store, "app", Arc::new(SystemRuntime))
             .unwrap()
             .create(input("tools"))
             .await
@@ -96,7 +99,7 @@ async fn declarations_survive_reopen_without_resolved_credentials() {
     }
     {
         let store = SqliteStore::open(&path, 16).unwrap();
-        let records = McpConfigRepository::new(store, "app", Arc::new(SystemRuntime))
+        let records = McpConfigurationService::new(store, "app", Arc::new(SystemRuntime))
             .unwrap()
             .list()
             .await

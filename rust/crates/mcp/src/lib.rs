@@ -16,6 +16,7 @@ mod oauth;
 mod oauth_http;
 mod oauth_redaction;
 mod oauth_store;
+mod repository;
 mod server;
 mod stdio_client;
 
@@ -23,7 +24,7 @@ pub use backend::{Backend, CatalogTool, Features, RpcId, SessionScope};
 pub use bridge::{BridgeError, McpToolSet, aliases_are_one_step, resolve_original};
 pub use client::{ClientOptions, McpClient, McpClientError};
 pub use configuration::{
-    McpConfigError, McpConfigLease, McpConfigRepository, McpConfigRuntime, McpConfigSecrets,
+    McpConfigError, McpConfigLease, McpConfigRuntime, McpConfigSecrets, McpConfigurationService,
 };
 pub use elicitation::ElicitationHandler;
 pub use http_client::McpHttpExecutor;
@@ -34,6 +35,9 @@ pub use manager::{
 };
 pub use model_content::{ModelContentCapabilities, ModelContentProjection, project_model_content};
 pub use oauth::{ManagedOAuthOptions, ManagedOAuthProvider, OAuthBrowser, OAuthSecrets};
+pub use repository::{
+    McpConfigRepository, RepositoryFault, RepositoryIdentity, SettingWrite, SettingsCommit,
+};
 pub use rmcp::model;
 pub use rmcp::transport::auth as oauth_protocol;
 pub use rmcp::{ErrorData, RmcpError};

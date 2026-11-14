@@ -46,6 +46,7 @@ pub use agentkit_store::RetryTask
 pub use agentkit_store::SESSION_METADATA_KEY
 pub use agentkit_store::STANDING_APPROVALS_METADATA_KEY
 pub use agentkit_store::SessionSettle
+pub use agentkit_store::SettingWrite
 pub use agentkit_store::SettleTask
 pub use agentkit_store::StageQueuedTurn
 pub use agentkit_store::StagedCandidate
@@ -450,10 +451,6 @@ pub agentkit_store::SetAgentModel::expected_revision: i64
 pub agentkit_store::SetAgentModel::model: core::option::Option<alloc::string::String>
 pub agentkit_store::SetAgentModel::now: i64
 pub agentkit_store::SetAgentModel::reasoning_effort: core::option::Option<alloc::string::String>
-pub struct agentkit_store::SettingWrite
-pub agentkit_store::SettingWrite::key: alloc::string::String
-pub agentkit_store::SettingWrite::namespace: alloc::string::String
-pub agentkit_store::SettingWrite::value: core::option::Option<serde_json::value::Value>
 pub struct agentkit_store::SqliteStore
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::acquire_lease(&self, &str, &str, &str, i64, i64) -> agentkit_store::Result<agentkit_engine::model::Lease>
@@ -604,7 +601,7 @@ pub async fn agentkit_store::SqliteStore::checkpoint_runtime_state(&self, agentk
 pub async fn agentkit_store::SqliteStore::interrupt_queued(&self, i64) -> agentkit_store::Result<usize>
 pub async fn agentkit_store::SqliteStore::submit_child(&self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
 impl agentkit_store::SqliteStore
-pub async fn agentkit_store::SqliteStore::compare_and_set_settings(&self, &str, &str, core::option::Option<serde_json::value::Value>, alloc::vec::Vec<agentkit_store::SettingWrite>) -> agentkit_store::Result<agentkit_store::SettingsCommit>
+pub async fn agentkit_store::SqliteStore::compare_and_set_settings(&self, &str, &str, core::option::Option<serde_json::value::Value>, alloc::vec::Vec<agentkit_mcp::repository::SettingWrite>) -> agentkit_store::Result<agentkit_store::SettingsCommit>
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::complete_execution_not_started(&self, agentkit_engine::model::LeaseFence, alloc::string::String, alloc::string::String, serde_json::value::Value) -> core::result::Result<bool, agentkit_store::StoreError>
 impl agentkit_store::SqliteStore
@@ -742,6 +739,12 @@ pub fn agentkit_store::SqliteStore::submit<'life0, 'async_trait>(&'life0 self, a
 pub fn agentkit_store::SqliteStore::submit_child<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_store::SqliteStore::update_progress<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_store::SqliteStore::wait_for_children<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_mcp::repository::McpConfigRepository for agentkit_store::SqliteStore
+pub type agentkit_store::SqliteStore::Error = agentkit_store::StoreError
+pub fn agentkit_store::SqliteStore::actor_identity(&self) -> agentkit_mcp::repository::RepositoryIdentity
+pub fn agentkit_store::SqliteStore::compare_and_set_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<serde_json::value::Value>, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::compare_and_set_settings<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<serde_json::value::Value>, alloc::vec::Vec<agentkit_mcp::repository::SettingWrite>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_mcp::repository::SettingsCommit<agentkit_store::StoreError>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteStore::get_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<serde_json::value::Value>, agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl agentkit_native::repository::NativeRunRepository for agentkit_store::SqliteStore
 pub type agentkit_store::SqliteStore::Error = agentkit_store::StoreError
 pub fn agentkit_store::SqliteStore::active_continuation<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, i64, &'life3 str, &'life4 str, &'life5 str, core::option::Option<&'life6 str>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_native::repository::NativeContinuationBinding>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait

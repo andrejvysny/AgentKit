@@ -1,6 +1,6 @@
+use crate::repository::{McpConfigRepository, RepositoryFault};
 use agentkit_contracts::{CreateMcpServerRequest, McpServerDto, UpdateMcpServerRequest};
-use agentkit_engine::SharedRuntime;
-use agentkit_store::SqliteStore;
+use agentkit_engine::{NeverFault, SharedRuntime};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ mod state;
 use state::{Ports, State};
 
 #[derive(Debug, thiserror::Error)]
-pub enum McpConfigError {
+pub enum McpConfigError<E: RepositoryFault = NeverFault> {
     #[error("MCP configuration not found")]
     NotFound,
     #[error("MCP alias already exists")]
@@ -23,8 +23,35 @@ pub enum McpConfigError {
     SecretStore,
     #[error("MCP live configuration unavailable")]
     Runtime,
-    #[error(transparent)]
-    Store(#[from] agentkit_store::StoreError),
+    /// The adapter's own fault, branchable only through [`RepositoryFault`]
+    /// (ADR 0024 §3); `NeverFault` keeps it unconstructable for the ports
+    /// that carry no repository.
+    #[error("{0}")]
+    Store(#[source] E),
+}
+
+impl<E: RepositoryFault> From<E> for McpConfigError<E> {
+    fn from(error: E) -> Self {
+        Self::Store(error)
+    }
+}
+
+/// A refusal that names no repository, carried into the fault type of the
+/// port its caller drives. The fault-carrying variant is uninhabited on the
+/// source side, so the lift loses nothing. (An inherent method, not `From`:
+/// a blanket `From` would make every `?` in the service ambiguous.)
+impl<E: RepositoryFault> McpConfigError<E> {
+    pub fn from_faultless(error: McpConfigError<NeverFault>) -> Self {
+        match error {
+            McpConfigError::NotFound => Self::NotFound,
+            McpConfigError::DuplicateAlias => Self::DuplicateAlias,
+            McpConfigError::Invalid => Self::Invalid,
+            McpConfigError::Conflict => Self::Conflict,
+            McpConfigError::SecretStore => Self::SecretStore,
+            McpConfigError::Runtime => Self::Runtime,
+            McpConfigError::Store(fault) => match fault {},
+        }
+    }
 }
 
 /// The host vault owns credential bytes; references alone enter SQLite.
@@ -64,20 +91,22 @@ pub trait McpConfigRuntime: Send + Sync {
 }
 
 /// Stores declarations and references, and returns redacted projections.
+/// Generic over its repository port (ADR 0024 §5); composition names the
+/// concrete store.
 #[derive(Clone)]
-pub struct McpConfigRepository {
-    store: SqliteStore,
+pub struct McpConfigurationService<R: McpConfigRepository> {
+    store: R,
     app_id: String,
     runtime: SharedRuntime,
     state: Arc<State>,
 }
 
-impl McpConfigRepository {
+impl<R: McpConfigRepository> McpConfigurationService<R> {
     pub fn new(
-        store: SqliteStore,
+        store: R,
         app_id: &str,
         runtime: SharedRuntime,
-    ) -> Result<Self, McpConfigError> {
+    ) -> Result<Self, McpConfigError<R::Error>> {
         if app_id.is_empty() {
             return Err(McpConfigError::Invalid);
         }
@@ -100,14 +129,14 @@ impl McpConfigRepository {
         self,
         secrets: Option<Arc<dyn McpConfigSecrets>>,
         live: Option<Arc<dyn McpConfigRuntime>>,
-    ) -> Result<Self, McpConfigError> {
+    ) -> Result<Self, McpConfigError<R::Error>> {
         self.state
             .install(&self.store, &self.app_id, secrets, live)?;
         Ok(self)
     }
 
     /// Run after installing vault/runtime ports and before exposing management routes.
-    pub async fn initialize(&self) -> Result<(), McpConfigError> {
+    pub async fn initialize(&self) -> Result<(), McpConfigError<R::Error>> {
         let _guard = self.state.mutation.lock().await;
         let (previous, records) = self.read().await?;
         let ports = self.state.ports();
@@ -129,7 +158,7 @@ impl McpConfigRepository {
         self.apply(previous, next, staged, &ports).await.map(|_| ())
     }
 
-    pub async fn list(&self) -> Result<Vec<McpServerDto>, McpConfigError> {
+    pub async fn list(&self) -> Result<Vec<McpServerDto>, McpConfigError<R::Error>> {
         let _guard = self.state.mutation.lock().await;
         let (_, records) = self.read().await?;
         let generation = self.applied_generation().await?;
@@ -142,7 +171,7 @@ impl McpConfigRepository {
     pub async fn create(
         &self,
         input: CreateMcpServerRequest,
-    ) -> Result<McpServerDto, McpConfigError> {
+    ) -> Result<McpServerDto, McpConfigError<R::Error>> {
         let _guard = self.state.mutation.lock().await;
         let (previous, mut records) = self.read().await?;
         let mut value = serde_json::to_value(input).map_err(|_| McpConfigError::Invalid)?;
@@ -164,7 +193,7 @@ impl McpConfigRepository {
         &self,
         id: &str,
         input: UpdateMcpServerRequest,
-    ) -> Result<McpServerDto, McpConfigError> {
+    ) -> Result<McpServerDto, McpConfigError<R::Error>> {
         let _guard = self.state.mutation.lock().await;
         let (previous, mut records) = self.read().await?;
         let index = records
@@ -192,7 +221,7 @@ impl McpConfigRepository {
         self.project(record, generation)
     }
 
-    pub async fn delete(&self, id: &str) -> Result<(), McpConfigError> {
+    pub async fn delete(&self, id: &str) -> Result<(), McpConfigError<R::Error>> {
         let _guard = self.state.mutation.lock().await;
         let (previous, mut records) = self.read().await?;
         let index = records
@@ -205,7 +234,7 @@ impl McpConfigRepository {
         Ok(())
     }
 
-    async fn read(&self) -> Result<(Option<Value>, Vec<McpServerDto>), McpConfigError> {
+    async fn read(&self) -> Result<(Option<Value>, Vec<McpServerDto>), McpConfigError<R::Error>> {
         let value = self.store.get_setting("mcp-config", &self.app_id).await?;
         let mut records = value
             .as_ref()
@@ -232,7 +261,7 @@ impl McpConfigRepository {
         &self,
         record: McpServerDto,
         generation: u64,
-    ) -> Result<McpServerDto, McpConfigError> {
+    ) -> Result<McpServerDto, McpConfigError<R::Error>> {
         let mut value = serde_json::to_value(record).map_err(|_| McpConfigError::Invalid)?;
         secrets::redact(&mut value);
         value["generation"] = json!(generation);
@@ -252,18 +281,18 @@ impl McpConfigRepository {
         serde_json::from_value(value).map_err(|_| McpConfigError::Invalid)
     }
 
-    fn timestamp(&self) -> Result<String, McpConfigError> {
-        agentkit_store::ConversationTimestamp::from_epoch_millis(self.runtime.now_ms())
+    fn timestamp(&self) -> Result<String, McpConfigError<R::Error>> {
+        agentkit_kernel::ConversationTimestamp::from_epoch_millis(self.runtime.now_ms())
             .and_then(|value| value.wire_text().map(|text| text.into_owned()))
             .map_err(|_| McpConfigError::Invalid)
     }
 }
 
-fn unique(
+fn unique<E: RepositoryFault>(
     records: &[McpServerDto],
     record: &McpServerDto,
     replacing: Option<&str>,
-) -> Result<(), McpConfigError> {
+) -> Result<(), McpConfigError<E>> {
     if records
         .iter()
         .any(|item| Some(item.id.as_str()) != replacing && item.alias == record.alias)
@@ -276,7 +305,7 @@ fn unique(
     Ok(())
 }
 
-fn parse_record(mut value: Value) -> Result<McpServerDto, McpConfigError> {
+fn parse_record<E: RepositoryFault>(mut value: Value) -> Result<McpServerDto, McpConfigError<E>> {
     let object = value.as_object_mut().ok_or(McpConfigError::Invalid)?;
     object.retain(|key, _| {
         matches!(
