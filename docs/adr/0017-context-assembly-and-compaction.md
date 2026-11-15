@@ -87,7 +87,7 @@ Port `ProjectInstructionsSource.read(root, name, maxBytes)` (`TurnRunnerDeps.pro
 implementation `fileProjectInstructions()` in `@agentkit/runner-local/filesystem`: `realpath` on the root, a plain
 file name only, `O_NOFOLLOW`, lstat/fstat identity, symlinks and non-regular files refused. `AGENTS.md` then
 `CLAUDE.md`, 64 KiB each, truncated with a warning. Each becomes a system block `Project instructions (<file>,
-sha256:<12 hex>)` appended to the system prompt of sessions whose descriptor has `workspace: { root, trusted }`.
+sha256:<12 hex>)` placed behind the system prompt (segment S3, ADR 0028) of sessions whose descriptor has `workspace: { root, trusted }`.
 `trusted: false` puts a line before the block saying it is untrusted repository text and never a permission grant. The
 text never grants a tool anything: guards decide what runs.
 

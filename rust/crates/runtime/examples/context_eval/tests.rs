@@ -102,3 +102,17 @@ fn report_preserves_failures_and_only_applies_recorded_exceptions() {
     );
     assert!(summary.get("rawCapture").is_none());
 }
+
+#[tokio::test]
+async fn captured_requests_report_their_system_layout() {
+    let mut case = scenarios::baseline_scenarios()
+        .into_iter()
+        .find(|case| case.name == "control" && case.config.protocol == "chat-completions")
+        .unwrap();
+    case.config.inputs.truncate(4);
+    let capture = run(case.config.clone()).await;
+    let summary = report::summarize(&case, &capture, false);
+    let layout = summary["layout"].as_array().expect("layout report");
+    assert_eq!(layout.len(), capture.requests.len());
+    assert!(layout.iter().all(|row| row["violations"] == json!([])));
+}

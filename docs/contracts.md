@@ -112,6 +112,7 @@ TS type narrows it to the union below while still accepting any string.
 | `compaction_failed` | host (`turn/turn-runner.ts`, `context/compactor.ts`) | Agent-session turns only. The summarizer request failed (provider error, non-completed run, empty summary), so the pass fell back to `context_trimmed` trimming. The message carries no model text. |
 | `skill_unavailable` | host (`turn/turn-runner.ts`) | Agent-session turns only. A Skill the session carries over could not be activated (missing, or its revision or content hash changed). The message names the skill id; the turn went on without it. |
 | `project_instructions_unavailable` | host (`turn/turn-runner.ts`, `context/instructions.ts`) | Agent-session turns only. An `AGENTS.md` / `CLAUDE.md` in the session workspace could not be read (symlink or outside the root) or exceeded 64 KiB and was truncated. |
+| `prefix_refrozen` | Rust (`chat/prefix.rs`) | Agent-session turns only. The frozen prompt head (tools, system text, project rules, core memory or request parameters) differs from the session's recorded prefix, so the record was replaced under a new revision. `data` also carries `revision` and `changed` (names among `tools`, `system`, `rules`, `memoryCore`, `params`). A provider cache restarts from this request (ADR 0028). |
 
 **Removed, never emitted**: `duplicate_loop`, `stall`, `tool_cap`,
 `timeout`. These were declared in an earlier iteration as reserved for

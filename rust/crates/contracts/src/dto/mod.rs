@@ -56,6 +56,7 @@ mod ai_run_usage_event;
 mod ai_run_verification_event;
 mod ai_run_waiting_event;
 mod ai_run_warning_event;
+mod ai_session_prefix;
 mod ai_source_ref;
 mod ai_text_part;
 mod ai_tool_call;
@@ -236,6 +237,7 @@ pub use ai_run_waiting_event::{
     AiRunWaitingEventDataStanding, AiRunWaitingEventType,
 };
 pub use ai_run_warning_event::{AiRunWarningEvent, AiRunWarningEventData, AiRunWarningEventType};
+pub use ai_session_prefix::AiSessionPrefix;
 pub use ai_source_ref::AiSourceRef;
 pub use ai_text_part::{AiTextPart, AiTextPartType};
 pub use ai_tool_call::AiToolCall;

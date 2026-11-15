@@ -122,9 +122,10 @@ pub fn append_to_system_prompt(system_prompt: Option<&str>, block: &str) -> Opti
 
 /// The turn-runner injection (port of `assembleSessionHistory`'s
 /// project-instructions block): when the chat is an agent session carrying a
-/// workspace, load its instructions and append them to the resolved system
-/// prompt, surfacing every warning as a contract `run.warning` event with
-/// `{ code: "project_instructions_unavailable", message }`.
+/// workspace, load its instructions and return them as the S3 block of the
+/// prompt layout (ADR 0028), surfacing every warning as a contract
+/// `run.warning` event with `{ code: "project_instructions_unavailable",
+/// message }`. `None` means the session has no project rules block.
 ///
 /// Skipped entirely — no load, no warnings — for an untrusted workspace when
 /// [`ChatExecutorOptions::skip_untrusted_project_instructions`] is set (the
@@ -132,17 +133,16 @@ pub fn append_to_system_prompt(system_prompt: Option<&str>, block: &str) -> Opti
 /// `profile.resources.projectInstructions === false` is not engine-side:
 /// profiles resolve in the TypeScript authority, so this lane gates on
 /// workspace presence and the option's own presence.
-pub(crate) async fn augment_system_prompt(
+pub(crate) async fn project_rules_block(
     options: &ChatExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
-    system_prompt: Option<String>,
 ) -> ChatResult<Option<String>> {
     let Some(source) = options.project_instructions.clone() else {
-        return Ok(system_prompt);
+        return Ok(None);
     };
     let Some(workspace) = session_workspace(context, chat_id).await? else {
-        return Ok(system_prompt);
+        return Ok(None);
     };
     let root = workspace
         .get("root")
@@ -153,10 +153,10 @@ pub(crate) async fn augment_system_prompt(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if !trusted && options.skip_untrusted_project_instructions {
-        return Ok(system_prompt);
+        return Ok(None);
     }
     let Some(block) = load_project_instructions(source.as_ref(), root, trusted).await else {
-        return Ok(system_prompt);
+        return Ok(None);
     };
     for warning in &block.warnings {
         context
@@ -166,10 +166,7 @@ pub(crate) async fn augment_system_prompt(
             )
             .await?;
     }
-    Ok(append_to_system_prompt(
-        system_prompt.as_deref(),
-        &block.text,
-    ))
+    Ok(Some(block.text))
 }
 
 /// The session descriptor's `{root, trusted}` workspace, when the chat is an

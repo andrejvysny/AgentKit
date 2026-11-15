@@ -54,6 +54,7 @@ export {
 export {
   AiPromptPresetSchema,
   AiPromptContextBlockSchema,
+  AiSessionPrefixSchema,
   RunContentSelectionSchema,
 } from "./prompt.js";
 

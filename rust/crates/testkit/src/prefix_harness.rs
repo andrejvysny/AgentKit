@@ -96,6 +96,40 @@ fn retained_prefix(request: &Value, input: &str) -> String {
     panic!("request missing input array");
 }
 
+/// Layout check on one provider-assembled request (CE-01, INV-1): every
+/// system block must sit ahead of the first non-system item of `input`, so no
+/// history or turn content precedes a more stable segment. Returns the
+/// JSON-pointer path of each offending item. Segment tags are not on the wire,
+/// so order among the system blocks themselves is checked by the unit tests of
+/// `agentkit_core::PromptLayout`.
+pub fn layout_violations(request: &Value, input: &str) -> Vec<String> {
+    let Some(items) = request[input].as_array() else {
+        return vec![format!("/{input}")];
+    };
+    let mut seen_other = false;
+    let mut found = vec![];
+    for (index, item) in items.iter().enumerate() {
+        if item["role"] == "system" {
+            if seen_other {
+                found.push(format!("/{input}/{index}"));
+            }
+        } else {
+            seen_other = true;
+        }
+    }
+    found
+}
+
+/// Number of leading system items in `input` (the system blocks on the wire).
+pub fn system_block_count(request: &Value, input: &str) -> usize {
+    request[input].as_array().map_or(0, |items| {
+        items
+            .iter()
+            .take_while(|item| item["role"] == "system")
+            .count()
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub struct EventMark {
     pub turn: usize,

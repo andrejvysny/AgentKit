@@ -182,9 +182,18 @@ async fn a_symlinked_agents_md_skips_with_a_durable_warning_and_never_leaks() {
     );
 
     let requests = requests.lock().unwrap();
-    let system = &requests[0].messages[0];
-    assert_eq!(system.role, "system");
-    let text = system.content.as_str().expect("system text");
+    // System segments are separate blocks (ADR 0028); the rules are S3.
+    let system: Vec<_> = requests[0]
+        .messages
+        .iter()
+        .take_while(|message| message.role == "system")
+        .collect();
+    assert!(!system.is_empty());
+    let text = system
+        .iter()
+        .map(|message| message.content.as_str().expect("system text"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
     assert!(
         text.contains("rule two"),
         "the readable file is still injected"

@@ -5672,6 +5672,66 @@
     ],
     "type": "object"
   },
+  "AiSessionPrefixSchema": {
+    "properties": {
+      "cacheKey": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "dialectVersion": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "frozenAtTask": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "memoryCoreDigest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "modelProfileId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "paramsDigest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "rulesDigest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "systemDigest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "toolManifestHash": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "toolsDigest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "revision",
+      "toolsDigest",
+      "systemDigest",
+      "rulesDigest",
+      "memoryCoreDigest",
+      "paramsDigest",
+      "frozenAtTask",
+      "cacheKey"
+    ],
+    "type": "object"
+  },
   "AiSourceRefSchema": {
     "properties": {
       "excerpt": {

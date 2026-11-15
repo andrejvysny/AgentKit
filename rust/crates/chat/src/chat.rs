@@ -14,6 +14,7 @@ mod context_budget;
 mod elision;
 mod hooks;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
+mod prefix;
 mod session_run;
 
 /// A fixed provider binding or an immutable task snapshot determines the account.
@@ -293,32 +294,38 @@ impl ChatExecutor {
             (Some(profile), Some(context)) => Some(format!("{profile}\n\n{context}")),
             (profile, context) => profile.or(context),
         };
-        // Project instructions (ADR 0017 part 1): the session workspace's
-        // AGENTS.md / CLAUDE.md text is appended to the resolved system
-        // prompt after context resolution and before provider dispatch,
-        // with every read refusal/truncation surfaced as a `run.warning`
-        // event (TS turn-runner parity).
-        let system_prompt = crate::project_instructions::augment_system_prompt(
-            &options,
-            &context,
-            chat_id,
-            base_prompt,
-        )
-        .await?;
         // Autonomous-delegation channel: while subagents are enabled, every
         // session turn (Chat and Coding alike) carries the guidance to
         // delegate when beneficial. Consulted per turn so hot configuration
         // takes effect without rebuilding the executor.
-        let system_prompt = match &options.delegation_guidance {
+        let base_prompt = match &options.delegation_guidance {
             Some(guidance) => match guidance.guidance(chat_id).await {
-                Some(text) if !text.is_empty() => Some(match system_prompt {
+                Some(text) if !text.is_empty() => Some(match base_prompt {
                     Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
                     _ => text,
                 }),
-                _ => system_prompt,
+                _ => base_prompt,
             },
-            None => system_prompt,
+            None => base_prompt,
         };
+        // Project instructions (ADR 0017 part 1): the session workspace's
+        // AGENTS.md / CLAUDE.md text, with every read refusal/truncation
+        // surfaced as a `run.warning` event (TS turn-runner parity). It is
+        // segment S3 of the prompt layout (ADR 0028), a system block of its
+        // own behind the S2 policy text.
+        let rules = crate::project_instructions::project_rules_block(&options, &context, chat_id)
+            .await?;
+        let layout = agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
+        // The correction pass takes the system text as one string.
+        let system_prompt = layout.joined();
+        if session {
+            let params = json!({"model": model, "reasoningEffort": reasoning_effort});
+            let branch = continuation
+                .as_ref()
+                .map_or("", |cont| cont.scope.branch_id.as_str());
+            prefix::record(&context, chat_id, &layout, &registry.definitions(), &params, branch)
+                .await?;
+        }
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
@@ -341,7 +348,7 @@ impl ChatExecutor {
             records,
             usize::MAX,
             &anchor,
-            system_prompt.clone(),
+            &layout,
             // Unanswered persisted calls reconcile against durable receipts,
             // never against an assumed absence (ADR 0020). Receipts are read
             // per chat: the calls being reconciled were recorded under the

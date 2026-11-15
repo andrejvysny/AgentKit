@@ -151,7 +151,7 @@ pub(super) fn assemble(
         records,
         limit,
         anchor,
-        system_prompt,
+        &agentkit_core::PromptLayout::from_system(system_prompt.as_deref()),
         receipts,
         run_id,
         policy,
@@ -165,7 +165,7 @@ pub(super) fn assemble_with_ids(
     records: Vec<MessageRecord>,
     limit: usize,
     anchor: &str,
-    system_prompt: Option<String>,
+    layout: &agentkit_core::PromptLayout,
     receipts: &[agentkit_store::ExecutionReceiptRecord],
     run_id: &str,
     policy: HistoryPolicy,
@@ -174,8 +174,9 @@ pub(super) fn assemble_with_ids(
     let eligible = eligible_records(&ordered, anchor, run_id, policy);
     let start = history_start(&eligible, limit);
     let mut messages = vec![];
-    if let Some(prompt) = system_prompt.filter(|prompt| !prompt.is_empty()) {
-        messages.push((ChatMessage::text("system", &prompt), None, None));
+    // One system message per layout segment (S2-S4), in segment order.
+    for message in layout.to_messages() {
+        messages.push((message, None, None));
     }
     let declared = declared_calls(&eligible[start..]);
     for record in eligible.into_iter().skip(start) {

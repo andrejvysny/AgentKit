@@ -81,12 +81,11 @@ fn make_plan(input: &Input, snapshot: &Snapshot) -> Plan {
         .iter()
         .map(|entry| context_budget::message_tokens(&entry.0))
         .sum::<u64>();
-    let body_start = usize::from(
-        input
-            .entries
-            .first()
-            .is_some_and(|entry| entry.0.role == "system"),
-    );
+    let body_start = input
+        .entries
+        .iter()
+        .take_while(|entry| entry.0.role == "system")
+        .count();
     let body = &input.entries[body_start..];
     let from = previous
         .as_ref()
@@ -465,11 +464,10 @@ fn entries_tokens(entries: &[Entry]) -> u64 {
 /// is the only record of everything compacted away: trimming starts AFTER
 /// it, never through it.
 fn trim_entries(mut entries: Vec<Entry>, budget: u64) -> (Vec<Entry>, usize) {
-    let system = usize::from(
-        entries
-            .first()
-            .is_some_and(|entry| entry.0.role == "system"),
-    );
+    let system = entries
+        .iter()
+        .take_while(|entry| entry.0.role == "system")
+        .count();
     let summary = usize::from(
         entries
             .get(system)

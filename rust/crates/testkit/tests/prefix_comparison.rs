@@ -98,3 +98,18 @@ fn fractional_event_marks_remain_between_dispatches() {
     let event: EventMark = serde_json::from_str(r#"{"turn":0,"seq":1.5}"#).unwrap();
     assert!(exception_between(before, after, &[event]));
 }
+
+#[test]
+fn layout_check_requires_system_blocks_ahead_of_history() {
+    use agentkit_testkit::prefix_harness::{layout_violations, system_block_count};
+    let ordered = json!({"messages":[
+        {"role":"system","content":"S2"},{"role":"system","content":"S3"},
+        {"role":"user","content":"hi"},{"role":"assistant","content":"ok"}]});
+    assert!(layout_violations(&ordered, "messages").is_empty());
+    assert_eq!(system_block_count(&ordered, "messages"), 2);
+    let late = json!({"input":[
+        {"role":"system","content":"S3"},{"role":"user","content":"hi"},
+        {"role":"system","content":"late"}]});
+    assert_eq!(layout_violations(&late, "input"), ["/input/2"]);
+    assert_eq!(layout_violations(&json!({}), "input"), ["/input"]);
+}

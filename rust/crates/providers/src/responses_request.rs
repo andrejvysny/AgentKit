@@ -86,12 +86,15 @@ pub fn build_responses_request_with_warnings(
         .selected_content
         .iter()
         .chain(input.messages.iter())
-        .filter(|message| message.role == "system")
+        .filter(|message| message.role == "system" && !is_segment_item(message))
         .map(|message| content::text(message, true))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
     let (tools, warnings) = tools(input)?;
-    let mut wire_items = selected_items;
+    // Segment order on the wire: tools, instructions (S2), then the S3/S4
+    // system blocks, request-local selected content, and history.
+    let mut wire_items = segment_items(&input.messages)?;
+    wire_items.extend(selected_items);
     wire_items.extend(items);
     let mut body = json!({"model":input.model,"input":wire_items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
     if !instructions.is_empty() {
@@ -204,7 +207,8 @@ pub(crate) fn make_continuation(
         .cloned()
         .ok_or_else(|| CoreError::responses("invalid_request"))?;
     // Strip request-local content before persisting provider continuation.
-    let selected_count = map_messages(&input.selected_content)?.len();
+    let selected_count =
+        segment_items(&input.messages)?.len() + map_messages(&input.selected_content)?.len();
     if selected_count > items.len() {
         return Err(CoreError::responses("invalid_request"));
     }
@@ -269,6 +273,24 @@ fn message_digest(messages: &[ChatMessage]) -> Result<String, CoreError> {
         .collect();
     let bytes = bounded(&Value::Array(stable))?;
     Ok(sha256_hex(bytes.as_bytes()))
+}
+/// S3 and S4 are system blocks that the single `instructions` string cannot
+/// carry apart from S2; they travel as system-role input items instead.
+fn is_segment_item(message: &ChatMessage) -> bool {
+    matches!(
+        agentkit_core::segment_of(message),
+        Some(agentkit_core::Segment::Rules | agentkit_core::Segment::Memory)
+    )
+}
+fn segment_items(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
+    messages
+        .iter()
+        .filter(|message| is_segment_item(message))
+        .map(|message| {
+            let text = content::text(message, true)?;
+            Ok(json!({"type":"message","role":"system","content":[{"type":"input_text","text":text}]}))
+        })
+        .collect()
 }
 fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
     let mut items = vec![];

@@ -16,6 +16,29 @@ export const AiPromptContextBlockSchema = Type.Object({
 });
 export type AiPromptContextBlock = Static<typeof AiPromptContextBlockSchema>;
 
+const Sha256HexSchema = Type.String({ pattern: "^[0-9a-f]{64}$" });
+
+/**
+ * The frozen head of a session's prompt (segments S1-S4), recorded once at
+ * session start and replaced only by a re-freeze. Digests are lowercase
+ * SHA-256 hex. The three optional fields belong to the tool-use track and stay
+ * absent until their producers exist.
+ */
+export const AiSessionPrefixSchema = Type.Object({
+  revision: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  toolsDigest: Sha256HexSchema,
+  systemDigest: Sha256HexSchema,
+  rulesDigest: Sha256HexSchema,
+  memoryCoreDigest: Sha256HexSchema,
+  paramsDigest: Sha256HexSchema,
+  frozenAtTask: Type.String({ minLength: 1 }),
+  cacheKey: Type.String({ minLength: 1 }),
+  toolManifestHash: Type.Optional(Sha256HexSchema),
+  modelProfileId: Type.Optional(Type.String({ minLength: 1 })),
+  dialectVersion: Type.Optional(Type.String({ minLength: 1 })),
+});
+export type AiSessionPrefix = Static<typeof AiSessionPrefixSchema>;
+
 export interface PromptTemplate {
   id: string;
   revision: string;

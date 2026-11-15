@@ -33,11 +33,11 @@ pub(super) fn apply_summary(entries: &[Entry], record: &Value) -> Option<Vec<Ent
     if record["summarizerRevision"].as_str()? != REVISION {
         return None;
     }
-    let body_start = usize::from(
-        entries
-            .first()
-            .is_some_and(|entry| entry.0.role == "system"),
-    );
+    // The leading system blocks (S2-S4) stay ahead of the summary.
+    let body_start = entries
+        .iter()
+        .take_while(|entry| entry.0.role == "system")
+        .count();
     let body = &entries[body_start..];
     let through = body
         .iter()

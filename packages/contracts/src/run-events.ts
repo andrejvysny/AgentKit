@@ -370,7 +370,8 @@ export type AiRunWarningCode =
   | "skill_unavailable"
   | "project_instructions_unavailable"
   | "tool_schema_unsupported"
-  | "tool_less_retry";
+  | "tool_less_retry"
+  | "prefix_refrozen";
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),
