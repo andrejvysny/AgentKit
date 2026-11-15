@@ -69,7 +69,10 @@ fn recorded_request_offers_one_text_editor_and_bash_without_descriptions() {
 fn render_is_pure() {
     let dialect = anthropic_dialect();
     let canonical = canonical();
-    assert_eq!(dialect.render(&canonical), dialect.render(&canonical));
+    assert_eq!(
+        serde_json::to_value(dialect.render(&canonical)).unwrap(),
+        serde_json::to_value(dialect.render(&canonical)).unwrap()
+    );
 }
 
 #[test]

@@ -89,7 +89,6 @@ fn codes_in_source() -> BTreeSet<String> {
 #[test]
 fn every_code_used_in_source_is_in_the_table() {
     let listed: BTreeSet<&str> = failure_catalog::catalog()
-        .iter()
         .map(|row| row.code)
         .collect();
     let unlisted: Vec<String> = codes_in_source()
