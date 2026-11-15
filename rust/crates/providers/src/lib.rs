@@ -5,6 +5,7 @@ mod connection_transport;
 mod content;
 mod native_provider_factory;
 mod presets;
+pub mod probe;
 mod responses;
 mod responses_request;
 mod responses_state;
