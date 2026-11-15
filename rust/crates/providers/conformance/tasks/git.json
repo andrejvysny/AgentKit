@@ -1,0 +1,252 @@
+{
+  "toolset": "git",
+  "tasks": [
+    {
+      "id": "git-branch",
+      "lang": "en",
+      "prompt": "Which branch am I on?",
+      "allowed_tools": [
+        {
+          "name": "git_status",
+          "required": [],
+          "optional": [
+            "path"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": "On branch feature/login\nnothing to commit"
+          }
+        },
+        {
+          "name": "git_log",
+          "required": [],
+          "optional": [
+            "limit"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_diff",
+          "required": [],
+          "optional": [
+            "path"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_add",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "staged",
+            "value_arg": "path"
+          }
+        },
+        {
+          "name": "git_commit",
+          "required": [
+            "message"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "commits",
+            "value_arg": "message"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "git_status",
+            "args": {}
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "feature/login"
+        ]
+      }
+    },
+    {
+      "id": "git-log-sk",
+      "lang": "sk",
+      "prompt": "Zobraz posledný commit.",
+      "allowed_tools": [
+        {
+          "name": "git_status",
+          "required": [],
+          "optional": [
+            "path"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_log",
+          "required": [],
+          "optional": [
+            "limit"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": "a1b2c3 Fix login redirect"
+          }
+        },
+        {
+          "name": "git_diff",
+          "required": [],
+          "optional": [
+            "path"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_add",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "staged",
+            "value_arg": "path"
+          }
+        },
+        {
+          "name": "git_commit",
+          "required": [
+            "message"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "commits",
+            "value_arg": "message"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "git_log",
+            "args": {}
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "a1b2c3"
+        ]
+      }
+    },
+    {
+      "id": "git-commit",
+      "lang": "en",
+      "prompt": "Stage README.md and commit it with the message Update docs.",
+      "allowed_tools": [
+        {
+          "name": "git_status",
+          "required": [],
+          "optional": [
+            "path"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_log",
+          "required": [],
+          "optional": [
+            "limit"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_diff",
+          "required": [],
+          "optional": [
+            "path"
+          ],
+          "effect": {
+            "kind": "reply",
+            "text": ""
+          }
+        },
+        {
+          "name": "git_add",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "staged",
+            "value_arg": "path"
+          }
+        },
+        {
+          "name": "git_commit",
+          "required": [
+            "message"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "commits",
+            "value_arg": "message"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "git_add",
+            "args": {
+              "path": "README.md"
+            }
+          },
+          {
+            "tool": "git_commit",
+            "args": {
+              "message": "Update docs"
+            }
+          }
+        ],
+        "state": [
+          {
+            "entry_contains": {
+              "key": "staged",
+              "text": "README.md"
+            }
+          },
+          {
+            "entry_contains": {
+              "key": "commits",
+              "text": "Update docs"
+            }
+          }
+        ],
+        "answer_contains": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "toolset": "shell",
+  "tasks": [
+    {
+      "id": "shell-ls",
+      "lang": "en",
+      "prompt": "List the files in the current directory.",
+      "allowed_tools": [
+        {
+          "name": "run_command",
+          "required": [
+            "command"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "README.md\nsrc"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "run_command",
+            "args": {
+              "command": "contains:ls"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "README.md"
+        ]
+      }
+    },
+    {
+      "id": "shell-tests-sk",
+      "lang": "sk",
+      "prompt": "Spusti testy príkazom cargo test a povedz mi výsledok.",
+      "allowed_tools": [
+        {
+          "name": "run_command",
+          "required": [
+            "command"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "test result: ok. 12 passed"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "run_command",
+            "args": {
+              "command": "contains:cargo test"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "12"
+        ]
+      }
+    },
+    {
+      "id": "shell-pwd",
+      "lang": "en",
+      "prompt": "Print the current working directory.",
+      "allowed_tools": [
+        {
+          "name": "run_command",
+          "required": [
+            "command"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "/work/project"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "run_command",
+            "args": {
+              "command": "contains:pwd"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "/work/project"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "toolset": "code_intel",
+  "tasks": [
+    {
+      "id": "ci-definition",
+      "lang": "en",
+      "prompt": "Where is parse_config defined?",
+      "allowed_tools": [
+        {
+          "name": "find_definition",
+          "required": [
+            "symbol"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/lib.rs:42"
+          }
+        },
+        {
+          "name": "find_references",
+          "required": [
+            "symbol"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/a.rs:10\nsrc/b.rs:7"
+          }
+        },
+        {
+          "name": "diagnostics",
+          "required": [
+            "path"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/main.rs:3: unused variable `x`"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "find_definition",
+            "args": {
+              "symbol": "parse_config"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "src/lib.rs:42"
+        ]
+      }
+    },
+    {
+      "id": "ci-references-sk",
+      "lang": "sk",
+      "prompt": "Nájdi všetky použitia symbolu Config.",
+      "allowed_tools": [
+        {
+          "name": "find_definition",
+          "required": [
+            "symbol"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/lib.rs:42"
+          }
+        },
+        {
+          "name": "find_references",
+          "required": [
+            "symbol"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/a.rs:10\nsrc/b.rs:7"
+          }
+        },
+        {
+          "name": "diagnostics",
+          "required": [
+            "path"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/main.rs:3: unused variable `x`"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "find_references",
+            "args": {
+              "symbol": "Config"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "src/b.rs"
+        ]
+      }
+    },
+    {
+      "id": "ci-diagnostics",
+      "lang": "en",
+      "prompt": "What does the compiler say about src/main.rs?",
+      "allowed_tools": [
+        {
+          "name": "find_definition",
+          "required": [
+            "symbol"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/lib.rs:42"
+          }
+        },
+        {
+          "name": "find_references",
+          "required": [
+            "symbol"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/a.rs:10\nsrc/b.rs:7"
+          }
+        },
+        {
+          "name": "diagnostics",
+          "required": [
+            "path"
+          ],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "src/main.rs:3: unused variable `x`"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "diagnostics",
+            "args": {
+              "path": "src/main.rs"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "unused variable"
+        ]
+      }
+    }
+  ]
+}

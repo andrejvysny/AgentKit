@@ -1,0 +1,234 @@
+{
+  "toolset": "files",
+  "tasks": [
+    {
+      "id": "files-read",
+      "lang": "en",
+      "prompt": "Read notes.txt and tell me what it says.",
+      "allowed_tools": [
+        {
+          "name": "read_file",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "read",
+            "key_arg": "path"
+          }
+        },
+        {
+          "name": "write_file",
+          "required": [
+            "path",
+            "content"
+          ],
+          "effect": {
+            "kind": "write",
+            "key_arg": "path",
+            "value_arg": "content"
+          }
+        },
+        {
+          "name": "append_file",
+          "required": [
+            "path",
+            "content"
+          ],
+          "effect": {
+            "kind": "append",
+            "key_arg": "path",
+            "value_arg": "content"
+          }
+        },
+        {
+          "name": "delete_file",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "remove",
+            "key_arg": "path"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {
+        "notes.txt": "alpha beta"
+      },
+      "expect": {
+        "calls": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "notes.txt"
+            }
+          }
+        ],
+        "state": [],
+        "answer_contains": [
+          "alpha beta"
+        ]
+      }
+    },
+    {
+      "id": "files-write-sk",
+      "lang": "sk",
+      "prompt": "Vytvor súbor hello.txt s textom „ahoj svet“.",
+      "allowed_tools": [
+        {
+          "name": "read_file",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "read",
+            "key_arg": "path"
+          }
+        },
+        {
+          "name": "write_file",
+          "required": [
+            "path",
+            "content"
+          ],
+          "effect": {
+            "kind": "write",
+            "key_arg": "path",
+            "value_arg": "content"
+          }
+        },
+        {
+          "name": "append_file",
+          "required": [
+            "path",
+            "content"
+          ],
+          "effect": {
+            "kind": "append",
+            "key_arg": "path",
+            "value_arg": "content"
+          }
+        },
+        {
+          "name": "delete_file",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "remove",
+            "key_arg": "path"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "write_file",
+            "args": {
+              "path": "hello.txt",
+              "content": "ahoj svet"
+            }
+          }
+        ],
+        "state": [
+          {
+            "entry_equals": {
+              "key": "hello.txt",
+              "value": "ahoj svet"
+            }
+          }
+        ],
+        "answer_contains": []
+      }
+    },
+    {
+      "id": "files-delete-append",
+      "lang": "en",
+      "prompt": "Delete tmp.log and append the line done to status.txt.",
+      "allowed_tools": [
+        {
+          "name": "read_file",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "read",
+            "key_arg": "path"
+          }
+        },
+        {
+          "name": "write_file",
+          "required": [
+            "path",
+            "content"
+          ],
+          "effect": {
+            "kind": "write",
+            "key_arg": "path",
+            "value_arg": "content"
+          }
+        },
+        {
+          "name": "append_file",
+          "required": [
+            "path",
+            "content"
+          ],
+          "effect": {
+            "kind": "append",
+            "key_arg": "path",
+            "value_arg": "content"
+          }
+        },
+        {
+          "name": "delete_file",
+          "required": [
+            "path"
+          ],
+          "effect": {
+            "kind": "remove",
+            "key_arg": "path"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {
+        "tmp.log": "x",
+        "status.txt": "start\n"
+      },
+      "expect": {
+        "calls": [
+          {
+            "tool": "delete_file",
+            "args": {
+              "path": "tmp.log"
+            }
+          },
+          {
+            "tool": "append_file",
+            "args": {
+              "path": "status.txt",
+              "content": "contains:done"
+            }
+          }
+        ],
+        "state": [
+          {
+            "entry_absent": {
+              "key": "tmp.log"
+            }
+          },
+          {
+            "entry_contains": {
+              "key": "status.txt",
+              "text": "done"
+            }
+          }
+        ],
+        "answer_contains": []
+      }
+    }
+  ]
+}

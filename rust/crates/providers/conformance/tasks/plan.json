@@ -1,0 +1,206 @@
+{
+  "toolset": "plan",
+  "tasks": [
+    {
+      "id": "plan-create",
+      "lang": "en",
+      "prompt": "Create a plan with the steps: write tests, implement, review.",
+      "allowed_tools": [
+        {
+          "name": "plan_add_step",
+          "required": [
+            "step"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "plan",
+            "value_arg": "step"
+          }
+        },
+        {
+          "name": "plan_complete",
+          "required": [
+            "step"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "done",
+            "value_arg": "step"
+          }
+        },
+        {
+          "name": "plan_show",
+          "required": [],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "1. implement\n2. review"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "plan_add_step",
+            "args": {
+              "step": "write tests"
+            }
+          },
+          {
+            "tool": "plan_add_step",
+            "args": {
+              "step": "implement"
+            }
+          },
+          {
+            "tool": "plan_add_step",
+            "args": {
+              "step": "review"
+            }
+          }
+        ],
+        "state": [
+          {
+            "entry_contains": {
+              "key": "plan",
+              "text": "write tests"
+            }
+          },
+          {
+            "entry_contains": {
+              "key": "plan",
+              "text": "implement"
+            }
+          },
+          {
+            "entry_contains": {
+              "key": "plan",
+              "text": "review"
+            }
+          }
+        ],
+        "answer_contains": []
+      }
+    },
+    {
+      "id": "plan-add-sk",
+      "lang": "sk",
+      "prompt": "Pridaj do plánu krok „nasadiť na test“.",
+      "allowed_tools": [
+        {
+          "name": "plan_add_step",
+          "required": [
+            "step"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "plan",
+            "value_arg": "step"
+          }
+        },
+        {
+          "name": "plan_complete",
+          "required": [
+            "step"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "done",
+            "value_arg": "step"
+          }
+        },
+        {
+          "name": "plan_show",
+          "required": [],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "1. implement\n2. review"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "plan_add_step",
+            "args": {
+              "step": "contains:nasadiť"
+            }
+          }
+        ],
+        "state": [
+          {
+            "entry_contains": {
+              "key": "plan",
+              "text": "nasadiť"
+            }
+          }
+        ],
+        "answer_contains": []
+      }
+    },
+    {
+      "id": "plan-complete",
+      "lang": "en",
+      "prompt": "Mark the step implement as done.",
+      "allowed_tools": [
+        {
+          "name": "plan_add_step",
+          "required": [
+            "step"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "plan",
+            "value_arg": "step"
+          }
+        },
+        {
+          "name": "plan_complete",
+          "required": [
+            "step"
+          ],
+          "effect": {
+            "kind": "log",
+            "key": "done",
+            "value_arg": "step"
+          }
+        },
+        {
+          "name": "plan_show",
+          "required": [],
+          "optional": [],
+          "effect": {
+            "kind": "reply",
+            "text": "1. implement\n2. review"
+          }
+        }
+      ],
+      "max_turns": 6,
+      "workspace": {},
+      "expect": {
+        "calls": [
+          {
+            "tool": "plan_complete",
+            "args": {
+              "step": "implement"
+            }
+          }
+        ],
+        "state": [
+          {
+            "entry_contains": {
+              "key": "done",
+              "text": "implement"
+            }
+          }
+        ],
+        "answer_contains": []
+      }
+    }
+  ]
+}
