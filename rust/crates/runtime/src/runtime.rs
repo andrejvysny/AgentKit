@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use agentkit_chat::ProviderRegistry;
 use agentkit_chat::{AgentHost, WorkerHandle};
+use agentkit_memory::MemoryService;
 use agentkit_providers::NativeProviderFactory;
 use agentkit_sessions::{AgentSessionService, ContentAuthority, ProfileRegistry};
 use agentkit_store::SqliteStore;
@@ -25,6 +26,7 @@ pub struct AgentRuntime {
     pub(crate) subagent: Arc<SubagentLane>,
     pub(crate) advisor: Arc<AdvisorLane>,
     pub(crate) lsp: Arc<LspLane>,
+    pub(crate) memory: Option<Arc<MemoryService>>,
     pub(crate) worker: Option<WorkerHandle>,
 }
 
@@ -73,6 +75,12 @@ impl AgentRuntime {
 
     pub fn lsp_lane(&self) -> &Arc<LspLane> {
         &self.lsp
+    }
+
+    /// The long-term memory service, when the builder was given
+    /// `memory(..)`.
+    pub fn memory(&self) -> Option<&Arc<MemoryService>> {
+        self.memory.as_ref()
     }
 
     /// Hand the worker to the caller's shutdown sequence; `None` once taken.

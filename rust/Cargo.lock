@@ -355,6 +355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "agentkit-native"
 version = "0.1.0"
 dependencies = [
@@ -437,6 +449,7 @@ dependencies = [
  "agentkit-http",
  "agentkit-lsp",
  "agentkit-mcp",
+ "agentkit-memory",
  "agentkit-native",
  "agentkit-native-exec",
  "agentkit-providers",
@@ -570,6 +583,7 @@ dependencies = [
  "agentkit-governance",
  "agentkit-kernel",
  "agentkit-mcp",
+ "agentkit-memory",
  "agentkit-native",
  "agentkit-providers",
  "agentkit-sessions",

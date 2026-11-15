@@ -18,6 +18,7 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
 | `agentkit-engine` | Generic durable task execution (runner, retry, subscription), the task model and the `TaskRepository` port the store implements |
 | `agentkit-sessions` | Durable agent-session service (steering, human input, plan grants, receipts), agent/run profiles and run-content freezing |
+| `agentkit-memory` | Long-term memory context: records, supersession, the four retrieval ports and `MemoryService` (no storage) |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
 | `agentkit-testkit` | Dev-only test fakes (`InMemoryTaskRepository`) and the `TaskRepository` conformance suite run against SQLite and in-memory; never a normal dependency |
 | `agentkit-chat` | Chat execution, tool governance and proposal application |

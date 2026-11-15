@@ -13,11 +13,18 @@
 //! [`InMemoryTaskRepository`] run one conformance suite each.
 //! [`InMemoryMcpConfigRepository`] is the MCP configuration context's
 //! `McpConfigRepository` held in memory, with its own suite.
+//! [`InMemoryMemoryRepository`] and [`InMemoryRetrievalIndex`] are the memory
+//! context's repository and index ports held in memory, [`HashEmbedder`] is
+//! its deterministic fake embedder; each port has a suite under
+//! [`conformance`] (the no-op reranker is `agentkit_memory::NoopReranker`).
 
 pub mod cache_provider;
 pub mod conformance;
 pub mod context_fixtures;
 mod mcp_memory;
+mod mem_embedder;
+mod mem_index;
+mod mem_repository;
 mod memory;
 pub mod prefix_harness;
 pub mod scripted;
@@ -26,6 +33,9 @@ mod session_memory;
 pub use mcp_memory::{
     InMemoryMcpConfigFixture, InMemoryMcpConfigRepository, InMemoryMcpConfigRepositoryError,
 };
+pub use mem_embedder::{HASH_EMBEDDER_DIMS, HashEmbedder};
+pub use mem_index::InMemoryRetrievalIndex;
+pub use mem_repository::InMemoryMemoryRepository;
 pub use memory::{InMemoryRepositoryError, InMemorySessionSettle, InMemoryTaskRepository};
 pub use session_memory::{
     CONTEXT_SUMMARIES_NAMESPACE, InMemorySessionFixture, InMemorySessionRepository,

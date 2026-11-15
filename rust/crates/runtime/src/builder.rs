@@ -26,6 +26,7 @@ use agentkit_engine::{
     ExecutionFailure, RetrySafety, SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
 };
 use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
+use agentkit_memory::{Embedder, MemoryRepository, MemoryService, Reranker, RetrievalIndex};
 use agentkit_native_exec::{NativeAgentExecutor, NativeDispatchExecutor};
 use agentkit_providers::NativeProviderFactory;
 use agentkit_sessions::{
@@ -76,6 +77,9 @@ pub struct AgentRuntimeBuilder {
     turn_kinds: Vec<String>,
     extra_executors: Vec<(String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>)>,
     native_lane: Option<NativeLane>,
+    memory: Option<(Arc<dyn MemoryRepository>, Arc<dyn RetrievalIndex>)>,
+    embedder: Option<Arc<dyn Embedder>>,
+    reranker: Option<Arc<dyn Reranker>>,
 }
 
 impl AgentRuntimeBuilder {
@@ -104,6 +108,9 @@ impl AgentRuntimeBuilder {
             turn_kinds: Vec::new(),
             extra_executors: Vec::new(),
             native_lane: None,
+            memory: None,
+            embedder: None,
+            reranker: None,
         }
     }
 
@@ -223,6 +230,35 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    /// Enable long-term memory: the record repository and the retrieval index
+    /// the memory service drives (ADR 0035). The consumer names the concrete
+    /// adapters, as with the store; without this call the runtime has no
+    /// memory service.
+    pub fn memory(
+        mut self,
+        repository: Arc<dyn MemoryRepository>,
+        index: Arc<dyn RetrievalIndex>,
+    ) -> Self {
+        self.memory = Some((repository, index));
+        self
+    }
+
+    /// The embedder memory search uses for vectors. Optional: without one,
+    /// search runs lexical-only. Refused at `build()` unless `memory(..)` is
+    /// also set.
+    pub fn embedder(mut self, embedder: Arc<dyn Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// The reranker applied to fused memory results. Optional: the default
+    /// leaves the fused order unchanged. Refused at `build()` unless
+    /// `memory(..)` is also set.
+    pub fn reranker(mut self, reranker: Arc<dyn Reranker>) -> Self {
+        self.reranker = Some(reranker);
+        self
+    }
+
     /// Build the runtime. Recovery runs before the worker claims any task,
     /// so restart reconciliation always precedes new modifying work.
     ///
@@ -259,7 +295,28 @@ impl AgentRuntimeBuilder {
             turn_kinds,
             extra_executors,
             native_lane,
+            memory,
+            embedder,
+            reranker,
         } = self;
+        let memory = match memory {
+            Some((repository, index)) => {
+                let mut service = MemoryService::new(repository, index);
+                if let Some(embedder) = embedder {
+                    service = service.with_embedder(embedder);
+                }
+                if let Some(reranker) = reranker {
+                    service = service.with_reranker(reranker);
+                }
+                Some(Arc::new(service))
+            }
+            None if embedder.is_some() || reranker.is_some() => {
+                return Err(RuntimeError::invalid(
+                    "`embedder` and `reranker` need a memory service: call `memory(repository, index)`",
+                ));
+            }
+            None => None,
+        };
         let has_model_loop = default_provider.is_some();
         let has_native_lane = native_lane.is_some();
         // Every kind the builder itself serves with the turn executor, in a
@@ -531,6 +588,7 @@ impl AgentRuntimeBuilder {
             subagent: subagent_lane,
             advisor: advisor_lane,
             lsp: lsp_lane,
+            memory,
             worker: Some(worker),
         })
     }

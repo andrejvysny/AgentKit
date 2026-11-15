@@ -43,6 +43,7 @@ rules (R1–R13) over `cargo metadata`; violations live in
 | 3 | `agentkit-sessions` | Durable agent-session service, agent/run profiles, run-content freezing |
 | 3 | `agentkit-chat` | Chat execution and governance: `ChatExecutor`, compaction, correction passes, proposals, project instructions |
 | 3 | `agentkit-agents` | Agent definitions, teammates, subagents and the advisor |
+| 3 | `agentkit-memory` | Long-term memory: records, supersession, the `MemoryRepository`, `RetrievalIndex`, `Embedder` and `Reranker` ports, `MemoryService` ([ADR 0035](adr/0035-long-term-memory.md)); no SQL |
 | 3 | `agentkit-native-exec` | Durable executor for vendor agent runtimes: `NativeAgentExecutor`, `NativeDispatchExecutor`, one owned process per attempt |
 | 4 | `agentkit-store` | SQLite actor: tasks, attempts, leases, event log, conversations, sessions, native ledgers; the TypeScript-database importer lives inside it behind the `ts-import` feature ([ADR 0024](adr/0024-repository-ports.md)) |
 | 4 | `agentkit-providers` | Concrete LLM provider adapters and provider HTTP plumbing |

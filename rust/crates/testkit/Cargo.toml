@@ -20,6 +20,8 @@ agentkit-kernel = { workspace = true }
 agentkit-sessions = { workspace = true }
 # The MCP configuration context owns the port this crate's fake implements.
 agentkit-mcp = { workspace = true }
+# The memory context owns the ports this crate's twins and suites cover.
+agentkit-memory = { workspace = true }
 agentkit-native = { workspace = true }
 async-trait.workspace = true
 futures.workspace = true
