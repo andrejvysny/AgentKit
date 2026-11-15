@@ -65,13 +65,13 @@ pub use dispatch::{DispatchFence, DispatchGuard};
 pub use meta_call::unwrap_tool_call;
 pub use meta_tools::{
     meta_definitions, tool_call_definition, tool_describe_definition, tool_search_definition,
+    toolset_load_definition,
 };
 pub use examples_render::{ExampleLane, RenderedExamples, presented_description, render_examples};
 pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
     cache_key, freeze, segment_of, tools_digest,
 };
-    toolset_load_definition,
 pub use manifest::{ToolManifest, ToolSurface, manifest_hash};
 pub use model_profile::{
     ANTHROPIC_PROFILE_ID, AiModelToolProfile, BODY_EXTRA_ALLOW_LIST, GENERIC_PROFILE_ID, LimitFacts,
