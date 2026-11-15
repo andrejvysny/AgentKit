@@ -1,7 +1,9 @@
 //! Provider-neutral asynchronous chat execution. Secrets and connection policy belong to hosts.
 mod budget;
+mod call_pipeline;
 mod dispatch;
 mod envelope;
+mod layout;
 pub mod permission;
 mod provider_identity;
 mod provider_retry;
@@ -11,12 +13,17 @@ mod tool_execution;
 mod tool_record;
 mod types;
 
+pub use call_pipeline::{AliasRule, AliasTable, Normalised, UNNAMED_TOOL, closest_names, normalise};
 pub use budget::{BudgetCheckpoint, BudgetLimits, BudgetSnapshot, ExecutionBudget};
 // The event type names the public `RunHandle`/`RunEventSink` surfaces; hosts
 // (and this crate's own tests) need it without a parallel contracts import.
 pub use agentkit_contracts::AiRunEvent;
 pub use agentkit_kernel::{Runtime, SystemRuntime};
 pub use dispatch::{DispatchFence, DispatchGuard};
+pub use layout::{
+    Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
+    cache_key, freeze, segment_of, tools_digest,
+};
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 pub use registry::{RegistryError, ToolRegistry};

@@ -211,6 +211,16 @@ impl ResponsesProvider {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Usage(response_usage(usage, &input.model, &call_id, true)?);
             }
+            if !result.repairs.is_empty() {
+                provider.transport.check_authority().await?;
+                yield ProviderEvent::Warning {
+                    code: "tool_call_repaired".into(),
+                    message: format!(
+                        "Provider tool call was incomplete; it is answered with a failure: {}.",
+                        result.repairs.join("; ")
+                    ),
+                };
+            }
             for call in &result.calls {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::ToolRequested(call.clone());

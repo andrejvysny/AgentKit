@@ -225,7 +225,17 @@ impl ChatCompletionsProvider {
                     "Provider stream ended without a complete response or contained malformed tool frames.",
                 ))?;
             }
-            let mut calls = state.assemble();
+            let (mut calls, repairs) = state.assemble();
+            if !repairs.is_empty() {
+                provider.transport.check_authority().await?;
+                yield ProviderEvent::Warning {
+                    code: "tool_call_repaired".into(),
+                    message: format!(
+                        "Provider tool call was incomplete; it is answered with a failure: {}.",
+                        repairs.join("; ")
+                    ),
+                };
+            }
             let duplicates = agentkit_core::dedupe_tool_call_ids(&mut calls);
             if !duplicates.is_empty() {
                 provider.transport.check_authority().await?;
@@ -647,22 +657,33 @@ impl ChatState {
         }
         Ok(slot)
     }
-    fn assemble(&self) -> Vec<ToolCall> {
-        self.calls
+    /// Every call the model started stays a call, so each gets a result: a
+    /// missing name becomes `UNNAMED_TOOL`, a missing id a stable `call_{slot}`.
+    /// Bad argument text passes through for the pipeline to refuse. The second
+    /// value lists what was repaired.
+    fn assemble(&self) -> (Vec<ToolCall>, Vec<String>) {
+        let mut repairs = vec![];
+        let calls = self
+            .calls
             .iter()
             .enumerate()
-            .filter(|(_, call)| !call.name.is_empty())
             .map(|(index, call)| {
                 let mut call = call.clone();
                 if call.id.is_empty() {
                     call.id = format!("call_{index}");
+                    repairs.push(format!("empty id -> {}", call.id));
+                }
+                if call.name.is_empty() {
+                    call.name = agentkit_core::UNNAMED_TOOL.into();
+                    repairs.push(format!("empty name on call {}", call.id));
                 }
                 if call.arguments_json.is_empty() {
                     call.arguments_json = "{}".into();
                 }
                 call
             })
-            .collect()
+            .collect();
+        (calls, repairs)
     }
 }
 pub(crate) fn usage_data(

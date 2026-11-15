@@ -1,4 +1,7 @@
-use crate::{Tool, ToolDefinition};
+use crate::{
+    Tool, ToolDefinition,
+    call_pipeline::{AliasTable, Normalised, normalise},
+};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -17,6 +20,9 @@ struct Entry {
 pub struct ToolRegistry {
     tools: BTreeMap<String, Entry>,
     order: Vec<String>,
+    aliases: AliasTable,
+    /// Known tools this turn may not use, with the reason shown to the model.
+    withheld: BTreeMap<String, String>,
 }
 impl ToolRegistry {
     pub fn new() -> Self {
@@ -52,9 +58,44 @@ impl ToolRegistry {
                 &format!("Invalid inputSchema for tool \"{name}\": {cause}"),
             )
         })?;
+        for (alias, canonical) in tool.arg_aliases() {
+            self.aliases.add_for_tool(name, &alias, &canonical);
+        }
         self.order.push(name.clone());
         self.tools.insert(name.clone(), Entry { tool, validator });
         Ok(())
+    }
+    /// Parameter aliases for the call pipeline; per-tool entries go here.
+    pub fn aliases_mut(&mut self) -> &mut AliasTable {
+        &mut self.aliases
+    }
+    /// Record a known tool that is not offered this turn, so a call to it
+    /// is refused with that reason and the nearest alternatives.
+    pub fn withhold(&mut self, name: &str, reason: &str) {
+        self.withheld.insert(name.into(), reason.into());
+    }
+    pub(crate) fn withheld_reason(&self, name: &str) -> Option<&str> {
+        self.withheld.get(name).map(String::as_str)
+    }
+    pub fn names(&self) -> Vec<String> {
+        self.order.clone()
+    }
+    /// Normalise `args` for tool `name` (aliases, then types). Unknown tools
+    /// pass through unchanged.
+    pub fn normalise(&self, name: &str, args: Value) -> Normalised {
+        match self.tools.get(name) {
+            Some(entry) => normalise(
+                &self.aliases,
+                name,
+                &entry.tool.definition().input_schema,
+                args,
+            ),
+            None => Normalised {
+                args,
+                aliases_used: vec![],
+                values_converted: 0,
+            },
+        }
     }
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).map(|entry| entry.tool.clone())

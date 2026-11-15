@@ -32,6 +32,8 @@ pub(crate) struct ResponsesResult {
     pub output: Vec<Value>,
     pub content: String,
     pub calls: Vec<ToolCall>,
+    /// Calls completed with a placeholder id or name (see `tool_call`).
+    pub repairs: Vec<String>,
     pub usage: Option<Value>,
     /// The frozen `reasoningContent`: every reasoning part the stream
     /// revealed, terminal-reconciled (final text must extend the streamed
@@ -319,6 +321,7 @@ impl ResponsesState {
         let mut ids = HashSet::new();
         let mut call_ids = HashSet::new();
         let mut calls = vec![];
+        let mut repairs = vec![];
         let mut content = String::new();
         for (index, item) in output.iter().enumerate() {
             let id = nonempty(&item["id"])?;
@@ -344,7 +347,7 @@ impl ResponsesState {
             match string(&item["type"])? {
                 "message" => content.push_str(&message_text(item)?),
                 "function_call" => {
-                    let call = tool_call(item, tools)?;
+                    let call = tool_call(item, index, tools, &mut repairs)?;
                     if !call_ids.insert(call.id.clone()) {
                         return err("duplicate_tool_call_id");
                     }
@@ -401,6 +404,7 @@ impl ResponsesState {
             output: output.clone(),
             content,
             calls,
+            repairs,
             reasoning,
             usage: terminal
                 .get("usage")
@@ -465,18 +469,38 @@ fn message_text(item: &Value) -> Result<String, CoreError> {
     }
     Ok(text)
 }
-fn tool_call(item: &Value, tools: &[ToolDefinition]) -> Result<ToolCall, CoreError> {
+/// A function call the model emitted always becomes a call, so it always gets
+/// a result: an empty name becomes `UNNAMED_TOOL`, an empty `call_id` a stable
+/// id from the output slot, and argument text that is not JSON passes through
+/// for the call pipeline to refuse. `repairs` records each case.
+fn tool_call(
+    item: &Value,
+    slot: usize,
+    tools: &[ToolDefinition],
+    repairs: &mut Vec<String>,
+) -> Result<ToolCall, CoreError> {
     let name = string(&item["name"])?;
-    let id = nonempty(&item["call_id"])?;
+    let call_id = string(&item["call_id"])?;
     let arguments = string(&item["arguments"])?;
-    if item["namespace"] != "agentkit" || !tools.iter().any(|tool| tool.name == name) {
+    if item["namespace"] != "agentkit" || (!name.is_empty() && !tools.iter().any(|tool| tool.name == name))
+    {
         return err("unknown_tool");
     }
-    if agentkit_contracts::parse_javascript_json(arguments).is_err() {
-        return err("malformed_tool_arguments");
-    }
+    let id = if call_id.is_empty() {
+        let synthetic = format!("call_{slot}");
+        repairs.push(format!("empty id -> {synthetic}"));
+        synthetic
+    } else {
+        call_id.to_owned()
+    };
+    let name = if name.is_empty() {
+        repairs.push(format!("empty name on call {id}"));
+        agentkit_core::UNNAMED_TOOL
+    } else {
+        name
+    };
     Ok(ToolCall {
-        id: id.into(),
+        id,
         name: name.into(),
         arguments_json: arguments.into(),
     })

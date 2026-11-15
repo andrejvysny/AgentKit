@@ -22,6 +22,8 @@ pub(crate) struct Finished<'a> {
     pub error_message: Option<&'a str>,
     pub duration_ms: u64,
     pub result_bytes: usize,
+    pub aliases_used: &'a [String],
+    pub values_converted: u32,
 }
 
 impl ToolRecords {
@@ -55,8 +57,8 @@ impl ToolRecords {
             "step": finished.step,
             "model": finished.model,
             "outcomeClass": class,
-            "aliasesUsed": [],
-            "valuesConverted": 0,
+            "aliasesUsed": finished.aliases_used,
+            "valuesConverted": finished.values_converted,
             "salvaged": false,
             "repairAttempt": prior,
             "durationMs": finished.duration_ms,
@@ -76,8 +78,8 @@ fn classify(code: Option<&str>, message: Option<&str>) -> Class {
     match code {
         Some("tool_missing") => Class::UnknownTool,
         Some("bad_args") => Class::InvalidJson,
-        Some("schema_invalid") => Class::InvalidStructure,
-        Some("tool_hook_denied" | "lease_lost") => Class::GuardRefused,
+        Some("schema_invalid" | "tool_name_missing") => Class::InvalidStructure,
+        Some("tool_hook_denied" | "lease_lost" | "tool_not_allowed") => Class::GuardRefused,
         Some("execution_timeout" | "execution_budget_exhausted") => Class::Timeout,
         Some("exec_failed") if message.is_some_and(|text| text.contains("timed out after")) => {
             Class::Timeout
@@ -102,6 +104,8 @@ mod tests {
             error_message: None,
             duration_ms: 1,
             result_bytes: 2,
+            aliases_used: &[],
+            values_converted: 0,
         }
     }
 
@@ -117,6 +121,18 @@ mod tests {
         assert_eq!(fixed["outcomeClass"], "ok_after_repair");
         assert_eq!(fixed["repairAttempt"], 2);
         assert!(fixed.get("failureCode").is_none());
+    }
+
+    #[test]
+    fn aliases_and_conversions_are_recorded() {
+        let mut records = ToolRecords::default();
+        let aliases = vec!["path->file_path".to_string()];
+        let mut call = finished(true, None, "{}");
+        call.aliases_used = &aliases;
+        call.values_converted = 2;
+        let data = records.record(&call);
+        assert_eq!(data["aliasesUsed"], json!(["path->file_path"]));
+        assert_eq!(data["valuesConverted"], 2);
     }
 
     #[test]

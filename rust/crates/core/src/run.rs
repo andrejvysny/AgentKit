@@ -737,6 +737,10 @@ impl State {
         let mut budget_error = None;
         let mut pending_suspension: Option<(crate::HumanRequestSpec, ToolCall)> = None;
         for (index, call) in calls.iter().enumerate() {
+            // Resolve and normalise first: guards and execution below see the
+            // canonical call, and the record shows what normalisation did.
+            let prepared = crate::call_pipeline::prepare(registry, call);
+            let call = &prepared.call;
             let call_started_ms = self.options.runtime.now_ms();
             if self.options.batch_suspension
                 && self.options.cancellation.is_cancelled()
@@ -774,7 +778,7 @@ impl State {
                     json!({"toolCallId":call.id,"toolName":call.name}),
                 )
                 .await?;
-                let gate = if self.options.hooks.is_some() {
+                let gate = if self.options.hooks.is_some() && prepared.failure.is_none() {
                     self.tool_gate(registry, call).await?
                 } else {
                     None
@@ -793,6 +797,9 @@ impl State {
                         self.options.limits.max_bytes,
                         json!({}),
                     )
+                } else if let Some(error) = &prepared.failure {
+                    executed = true;
+                    tool_execution::failed(call, error, self.options.limits.max_bytes, json!({}))
                 } else if let Some(message) = gate {
                     tool_execution::failed(
                         call,
@@ -908,6 +915,8 @@ impl State {
                         .max(0)
                         .cast_unsigned(),
                     result_bytes: outcome.model_json.len(),
+                    aliases_used: &prepared.aliases_used,
+                    values_converted: prepared.values_converted,
                 })
             });
             self.emit(outcome.kind, outcome.data).await?;

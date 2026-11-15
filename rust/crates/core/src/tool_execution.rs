@@ -34,10 +34,7 @@ pub(crate) async fn execute(
     let Some(tool) = registry.get(&call.name) else {
         return failed(
             call,
-            &CoreError::new(
-                "tool_missing",
-                &format!("Tool not registered: {}", call.name),
-            ),
+            &crate::call_pipeline::resolve_failure(registry, &call.name),
             max,
             json!({}),
         );
@@ -47,7 +44,12 @@ pub(crate) async fn execute(
         Err(error) => {
             return failed(
                 call,
-                &CoreError::new("bad_args", &format!("Invalid arguments JSON: {error}")),
+                &CoreError::new(
+                    "bad_args",
+                    &format!(
+                        "Invalid arguments JSON: {error}. Send the arguments as one JSON object."
+                    ),
+                ),
                 max,
                 json!({}),
             );
