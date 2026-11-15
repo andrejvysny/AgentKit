@@ -40,6 +40,13 @@ pub use dialect::{
     DialectError, ToolForm, Translated, WireTool, common as common_dialect,
     lookup as lookup_dialect, present_history, session_dialect,
 };
+// T3.2: the Anthropic dialect and its built-in tool markers.
+pub use dialect::{
+    ANTHROPIC_ID as ANTHROPIC_DIALECT_ID, BASH_NAME as ANTHROPIC_BASH_NAME,
+    BASH_TYPE as ANTHROPIC_BASH_TYPE, BUILTIN_KEY as BUILTIN_TOOL_KEY,
+    TEXT_EDITOR_NAME as ANTHROPIC_TEXT_EDITOR_NAME, TEXT_EDITOR_TYPE as ANTHROPIC_TEXT_EDITOR_TYPE,
+    anthropic as anthropic_dialect, builtin_tool_type,
+};
 pub use dispatch::{DispatchFence, DispatchGuard};
 pub use meta_call::unwrap_tool_call;
 pub use meta_tools::{

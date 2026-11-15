@@ -9,7 +9,8 @@
 use std::sync::Arc;
 
 use agentkit_core::{
-    CancellationToken, Tool, ToolDefinition, ToolLimits, ToolRegistry, common_dialect,
+    CancellationToken, Dialect, Tool, ToolDefinition, ToolLimits, ToolRegistry, anthropic_dialect,
+    builtin_tool_type, common_dialect,
 };
 use agentkit_governance::{
     ContributedTool, ToolContributionContext, ToolContributor, ToolGuard, ToolGuardContext,
@@ -256,4 +257,164 @@ async fn a_dialect_never_widens_authority() {
         let verdict = verdict(&supervisor, registered.definition(), &translated.args).await;
         assert!(verdict.starts_with("refused"), "{wire}: {verdict}");
     }
+}
+
+// ---- T3.2: the anthropic dialect (TU-25) -----------------------------------
+
+/// A registry frozen the way a new Anthropic session freezes: the coding tools
+/// presented as the built-in text editor and bash tools.
+async fn anthropic_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    for tool in coding_tools().await {
+        registry.register(tool).expect("register");
+    }
+    let dialect: Dialect = anthropic_dialect();
+    let offered = dialect.render(&registry.definitions());
+    assert!(registry.freeze_presented(offered, vec![], dialect));
+    registry
+}
+
+/// The canonical call an example is expected to translate to: the editor's
+/// `str_replace` always states `replace_all` false, which the flat edit call
+/// leaves out by default.
+fn normalised(name: &str, args: &Value) -> Value {
+    let mut args = args.clone();
+    if name == "edit_file"
+        && let Some(object) = args.as_object_mut()
+        && object.get("replace_all") == Some(&json!(false))
+    {
+        object.remove("replace_all");
+    }
+    args
+}
+
+#[tokio::test]
+async fn anthropic_offers_the_two_built_in_tools_for_the_coding_pack() {
+    let registry = anthropic_registry().await;
+    let offered = registry.definitions();
+    let builtin: Vec<(String, String)> = offered
+        .iter()
+        .filter_map(|definition| {
+            builtin_tool_type(definition)
+                .map(|kind| (kind.to_owned(), definition.name.clone()))
+        })
+        .collect();
+    assert_eq!(
+        builtin,
+        [
+            ("text_editor_20250728".to_owned(), "str_replace_based_edit_tool".to_owned()),
+            ("bash_20250124".to_owned(), "bash".to_owned()),
+        ]
+    );
+    // Search, git and plan tools keep the common shape.
+    let names: Vec<&str> = offered.iter().map(|d| d.name.as_str()).collect();
+    for common in ["glob", "grep_search", "git_status", "git_diff", "run_tests", "submit_plan"] {
+        assert!(names.contains(&common), "{common} in {names:?}");
+    }
+    for canonical in ["read_file", "write_file", "edit", "edit_file", "list_directory", "run_command"] {
+        assert!(!names.contains(&canonical), "{canonical} is folded into a built-in");
+    }
+}
+
+#[tokio::test]
+async fn anthropic_translated_call_equals_the_canonical_call_for_every_expressible_example() {
+    let registry = anthropic_registry().await;
+    let dialect = anthropic_dialect();
+    let (mut through, mut canonical_only) = (0, 0);
+    for name in registry.names() {
+        let definition = registry.get(&name).expect("registered").definition().clone();
+        for example in &definition.examples {
+            let Some((wire_name, wire_args)) = dialect.wire_call(&name, example) else {
+                // The built-in form cannot say it (replace_all, timeout,
+                // include_ignored): shown as stored, never rewritten wider.
+                assert!(
+                    ["edit_file", "run_command", "list_dir"].contains(&name.as_str()),
+                    "{name} {example}"
+                );
+                canonical_only += 1;
+                continue;
+            };
+            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            assert_eq!(translated.name, name, "{example}");
+            assert_eq!(translated.args, normalised(&name, example), "{wire_name}");
+            assert!(
+                registry.validate_input(&translated.name, &translated.args).is_empty(),
+                "{name} {example}"
+            );
+            through += 1;
+        }
+    }
+    assert!(through >= CODING_TOOL_NAMES.len() - 3, "{through}");
+    assert!(canonical_only >= 1);
+}
+
+#[tokio::test]
+async fn anthropic_translated_call_gets_the_same_guard_verdict_as_the_direct_call() {
+    let registry = anthropic_registry().await;
+    let dialect = anthropic_dialect();
+    let mut compared = 0;
+    for name in registry.names() {
+        let definition = registry.get(&name).expect("registered").definition().clone();
+        for example in &definition.examples {
+            let Some((wire_name, wire_args)) = dialect.wire_call(&name, example) else {
+                continue;
+            };
+            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            let registered = registry
+                .get(&translated.name)
+                .expect("translated name is registered");
+            for mode in MODES {
+                for role in ROLES {
+                    let guard = guard(mode, role);
+                    let direct = verdict(&guard, &definition, example).await;
+                    let through = verdict(&guard, registered.definition(), &translated.args).await;
+                    assert_eq!(direct, through, "{name} {example} {mode:?} {role:?}");
+                    compared += 1;
+                }
+            }
+        }
+    }
+    assert!(compared >= (CODING_TOOL_NAMES.len() - 3) * MODES.len() * ROLES.len());
+}
+
+#[tokio::test]
+async fn anthropic_never_widens_authority() {
+    let registry = anthropic_registry().await;
+    let editor = "str_replace_based_edit_tool";
+    // Write commands reach write tools; the read-only supervisor is refused
+    // for them exactly as for the direct call.
+    let supervisor = guard(CodingMode::FullAuto, CodingRole::Supervisor);
+    for (wire, args, canonical) in [
+        (
+            editor,
+            json!({"command": "str_replace", "path": "a", "old_str": "x", "new_str": "y"}),
+            "edit_file",
+        ),
+        (
+            editor,
+            json!({"command": "create", "path": "a", "file_text": "x"}),
+            "write_file",
+        ),
+        ("bash", json!({"command": "ls"}), "run_command"),
+    ] {
+        let translated = registry.translate(wire, args).expect("translates");
+        assert_eq!(translated.name, canonical);
+        let registered = registry.get(canonical).expect("registered");
+        assert_ne!(registered.definition().effect, "read", "{canonical}");
+        let verdict = verdict(&supervisor, registered.definition(), &translated.args).await;
+        assert!(verdict.starts_with("refused"), "{canonical}: {verdict}");
+    }
+    // A view stays a read.
+    let view = registry
+        .translate(editor, json!({"command": "view", "path": "a"}))
+        .expect("view");
+    assert_eq!(registry.get(&view.name).unwrap().definition().effect, "read");
+    // Calls with no canonical equivalent are refused before any guard.
+    for args in [
+        json!({"command": "insert", "path": "a", "insert_line": 0, "insert_text": "x"}),
+        json!({"command": "undo_edit", "path": "a"}),
+    ] {
+        assert!(registry.translate(editor, args).is_err());
+    }
+    assert!(registry.translate("bash", json!({"restart": true})).is_err());
 }

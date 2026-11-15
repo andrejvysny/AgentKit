@@ -10,10 +10,15 @@
 //! through with the same name and schema. Names that other tools' text
 //! mentions are rewritten to the names this dialect offers.
 
+mod anthropic;
 mod common;
 mod history;
 mod text;
 
+pub use anthropic::{
+    ANTHROPIC_ID, BASH_NAME, BASH_TYPE, BUILTIN_KEY, TEXT_EDITOR_NAME, TEXT_EDITOR_TYPE, anthropic,
+    builtin_tool_type,
+};
 pub use common::{COMMON_ID, COMMON_VERSION, common};
 pub use history::present_history;
 
@@ -134,6 +139,14 @@ impl Dialect {
     /// The definitions the model is offered for `canonical`. Pure: the same
     /// input gives the same output.
     pub fn render(&self, canonical: &[ToolDefinition]) -> Vec<ToolDefinition> {
+        if self.id == ANTHROPIC_ID {
+            return anthropic::render(self, canonical);
+        }
+        self.render_forms(canonical)
+    }
+
+    /// Renders through the form table alone.
+    fn render_forms(&self, canonical: &[ToolDefinition]) -> Vec<ToolDefinition> {
         let names = self.name_rewrites();
         let mut out = Vec::with_capacity(canonical.len());
         for definition in canonical {
@@ -166,6 +179,11 @@ impl Dialect {
     /// The canonical call for a call the model emitted. A name this dialect
     /// does not offer passes through unchanged. Pure.
     pub fn translate(&self, name: &str, args: Value) -> Result<Translated, DialectError> {
+        if self.id == ANTHROPIC_ID
+            && let Some(result) = anthropic::translate(name, &args)
+        {
+            return result;
+        }
         let Some((form, wire)) = self.find_wire(name) else {
             return Ok(Translated {
                 name: name.to_owned(),
@@ -211,6 +229,11 @@ impl Dialect {
     /// canonical call is shown as (history sent back to the model). `None`
     /// when no wire tool of this dialect can express the call.
     pub fn wire_call(&self, canonical: &str, args: &Value) -> Option<(String, Value)> {
+        if self.id == ANTHROPIC_ID
+            && let Some(shown) = anthropic::wire_call(canonical, args)
+        {
+            return shown;
+        }
         let Some(form) = self.form(canonical) else {
             return Some((canonical.to_owned(), args.clone()));
         };
@@ -299,16 +322,18 @@ fn wire_examples(examples: &[Value], wire: &WireTool, kept: &BTreeSet<String>) -
 
 /// The dialect with this id and version, if one is known.
 ///
-/// TODO(T3.2, T3.3): `anthropic` and `openai` have no forms of their own yet
-/// (experiment X3 decides whether vendor tools beat the common shape); they
-/// map to the common forms under their own id until then.
+/// `anthropic` carries the vendor built-in tools (T3.2; whether they beat the
+/// common shape is experiment X3, not yet run).
+/// TODO(T3.3): `openai` has no forms of its own yet; it maps to the common
+/// forms under its own id until then.
 pub fn lookup(id: &str, version: &str) -> Option<Dialect> {
     if version != COMMON_VERSION {
         return None;
     }
     match id {
         COMMON_ID => Some(common()),
-        "anthropic" | "openai" => Some(common().with_id(id)),
+        ANTHROPIC_ID => Some(anthropic()),
+        "openai" => Some(common().with_id(id)),
         _ => None,
     }
 }
