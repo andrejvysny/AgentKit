@@ -147,6 +147,14 @@ pub fn with_turn_note(metadata: &Value, note: TurnNote) -> Value {
     state.write(metadata)
 }
 
+/// `metadata` without the queued notes of `kind` (their content was adopted
+/// into the frozen head, so the delta is moot).
+pub fn without_turn_notes(metadata: &Value, kind: TurnNoteKind) -> Value {
+    let mut state = TurnState::read(metadata);
+    state.notes.retain(|note| note.kind != kind);
+    state.write(metadata)
+}
+
 /// Queue `note` for the next turn of `chat_id`. The next turn that starts
 /// renders it into its turn context and clears the queue; a turn already
 /// running keeps the context it built. Hosts of the project-rules, core-memory

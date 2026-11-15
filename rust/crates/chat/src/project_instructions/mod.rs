@@ -9,15 +9,19 @@
 //! says WHICH instructions were in force, and it is never a permission grant
 //! -- tools still decide what may run.
 
+mod diff;
 mod fs;
+mod rules_snapshot;
 
 use agentkit_kernel::sha256_hex;
+use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::{ChatExecutorOptions, ChatResult, ExecutionContext};
 
 pub use fs::FileProjectInstructions;
+pub use rules_snapshot::{PROJECT_RULES_METADATA_KEY, REFREEZE_DIFF_BYTES, refreeze_project_rules};
 
 /// The files loaded, in order: `AGENTS.md` first, then `CLAUDE.md`.
 pub const PROJECT_INSTRUCTION_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -37,6 +41,15 @@ pub struct ProjectInstructionsText {
     pub truncated: bool,
 }
 
+/// A file's size and modification time, for the cheap "did it change" check
+/// of the rules snapshot (roadmap 1.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInstructionsStat {
+    pub size: u64,
+    pub mtime_ns: i64,
+}
+
 /// Reads one instruction file directly under a workspace root.
 ///
 /// Must refuse symlinks and anything outside `root` (by returning `Err` or
@@ -53,6 +66,12 @@ pub trait ProjectInstructionsSource: Send + Sync {
         name: &str,
         max_bytes: usize,
     ) -> ChatResult<Option<ProjectInstructionsText>>;
+
+    /// The size and mtime of `name` when it is a plain file, without reading
+    /// it. `None` (the default) means "unknown": the caller reads the file.
+    async fn stat(&self, _root: &str, _name: &str) -> Option<ProjectInstructionsStat> {
+        None
+    }
 }
 
 /// The loaded sections and the warnings collected along the way.
@@ -64,22 +83,27 @@ pub struct ProjectInstructionsBlock {
     pub warnings: Vec<String>,
 }
 
-/// Every present file, in order, as one block; `None` when there is none.
-pub async fn load_project_instructions(
+/// Every present file, in order, with the warnings of reads that failed or
+/// were cut, and the names refused or unreadable. The one read shared by the
+/// per-turn load and the frozen snapshot.
+pub(super) async fn read_instruction_files(
     source: &dyn ProjectInstructionsSource,
     root: &str,
-    trusted: bool,
-) -> Option<ProjectInstructionsBlock> {
-    let mut sections: Vec<String> = Vec::new();
+) -> (
+    Vec<(&'static str, ProjectInstructionsText)>,
+    Vec<String>,
+    Vec<&'static str>,
+) {
+    let mut files = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut refused: Vec<&'static str> = Vec::new();
     for name in PROJECT_INSTRUCTION_FILES {
         // Refused (symlink, outside the root) or unreadable: skip, but say so.
         let found = match source.read(root, name, MAX_INSTRUCTION_BYTES).await {
             Ok(found) => found,
             Err(_) => {
-                warnings.push(format!(
-                    "Project instructions {name} could not be read and were skipped."
-                ));
+                warnings.push(unreadable_warning(name));
+                refused.push(name);
                 continue;
             }
         };
@@ -89,21 +113,49 @@ pub async fn load_project_instructions(
                 "Project instructions {name} exceed {MAX_INSTRUCTION_BYTES} bytes and were truncated."
             ));
         }
-        let digest = sha256_hex(&found.text);
+        files.push((name, found));
+    }
+    (files, warnings, refused)
+}
+
+/// The run warning for a refused or unreadable file.
+pub(super) fn unreadable_warning(name: &str) -> String {
+    format!("Project instructions {name} could not be read and were skipped.")
+}
+
+/// The system block for `files` (name, text): one labelled section each,
+/// joined by blank lines. Empty when there is no file.
+pub(super) fn render_block<'a>(
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+    trusted: bool,
+) -> String {
+    let mut sections: Vec<String> = Vec::new();
+    for (name, text) in files {
+        let digest = sha256_hex(text);
         let title = format!("Project instructions ({name}, sha256:{})", &digest[..12]);
         let mut section = String::new();
         if !trusted {
             section.push_str(UNTRUSTED_NOTICE);
             section.push_str("\n\n");
         }
-        section.push_str(&format!("## {title}\n{}", found.text));
+        section.push_str(&format!("## {title}\n{text}"));
         sections.push(section);
     }
-    if sections.is_empty() && warnings.is_empty() {
+    sections.join("\n\n")
+}
+
+/// Every present file, in order, as one block; `None` when there is none.
+pub async fn load_project_instructions(
+    source: &dyn ProjectInstructionsSource,
+    root: &str,
+    trusted: bool,
+) -> Option<ProjectInstructionsBlock> {
+    let (files, warnings, _) = read_instruction_files(source, root).await;
+    if files.is_empty() && warnings.is_empty() {
         return None;
     }
     Some(ProjectInstructionsBlock {
-        text: sections.join("\n\n"),
+        text: render_block(files.iter().map(|(n, f)| (*n, f.text.as_str())), trusted),
         warnings,
     })
 }
@@ -137,28 +189,28 @@ pub(crate) async fn project_rules_block(
     options: &ChatExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
+    session: bool,
 ) -> ChatResult<Option<String>> {
     let Some(source) = options.project_instructions.clone() else {
         return Ok(None);
     };
-    let Some(workspace) = session_workspace(context, chat_id).await? else {
+    let Some((root, trusted)) = rules_workspace(options, &context.store, chat_id).await? else {
         return Ok(None);
     };
-    let root = workspace
-        .get("root")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let trusted = workspace
-        .get("trusted")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !trusted && options.skip_untrusted_project_instructions {
-        return Ok(None);
+    if session {
+        // S3 is frozen at the session's first turn (roadmap 1.4); edits after
+        // that reach the model as notes of the turn context.
+        return rules_snapshot::turn_rules(source.as_ref(), context, chat_id, &root, trusted).await;
     }
-    let Some(block) = load_project_instructions(source.as_ref(), root, trusted).await else {
+    let Some(block) = load_project_instructions(source.as_ref(), &root, trusted).await else {
         return Ok(None);
     };
-    for warning in &block.warnings {
+    emit_warnings(context, &block.warnings).await?;
+    Ok(Some(block.text))
+}
+
+async fn emit_warnings(context: &ExecutionContext, warnings: &[String]) -> ChatResult<()> {
+    for warning in warnings {
         context
             .emit(
                 "run.warning",
@@ -166,14 +218,39 @@ pub(crate) async fn project_rules_block(
             )
             .await?;
     }
-    Ok(Some(block.text))
+    Ok(())
+}
+
+/// The workspace `(root, trusted)` whose rules this session loads; `None`
+/// when it has no workspace or an untrusted one is configured to be skipped.
+async fn rules_workspace(
+    options: &ChatExecutorOptions,
+    store: &SqliteStore,
+    chat_id: &str,
+) -> ChatResult<Option<(String, bool)>> {
+    let Some(workspace) = session_workspace(store, chat_id).await? else {
+        return Ok(None);
+    };
+    let root = workspace
+        .get("root")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let trusted = workspace
+        .get("trusted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !trusted && options.skip_untrusted_project_instructions {
+        return Ok(None);
+    }
+    Ok(Some((root, trusted)))
 }
 
 /// The session descriptor's `{root, trusted}` workspace, when the chat is an
 /// agent session whose descriptor carries one (the descriptor reader has
 /// already validated both fields).
-async fn session_workspace(context: &ExecutionContext, chat_id: &str) -> ChatResult<Option<Value>> {
-    let Some(chat) = context.store.get_chat(chat_id).await? else {
+async fn session_workspace(store: &SqliteStore, chat_id: &str) -> ChatResult<Option<Value>> {
+    let Some(chat) = store.get_chat(chat_id).await? else {
         return Ok(None);
     };
     Ok(agentkit_sessions::read_session_descriptor(&chat.metadata)

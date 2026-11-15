@@ -350,7 +350,8 @@ impl ChatExecutor {
             None => base_prompt,
         };
         let rules =
-            crate::project_instructions::project_rules_block(&options, &context, chat_id).await?;
+            crate::project_instructions::project_rules_block(&options, &context, chat_id, session)
+                .await?;
         let layout =
             agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
         // The correction pass takes the system text as one string.

@@ -85,6 +85,24 @@ request could not be replayed (INV-2).
 9. **Wire shape of the stored message.** A string body becomes
    `[{type:"text", text}, {type:"turn_context", text}]`. A message that gets no
    turn context is left as it was (the common case stays a string).
+10. **Project rules snapshot (CE-06, package 1.4).** Chat metadata
+    `agentkit.session.projectRules` holds the frozen S3 text, its digest, the
+    trust it was rendered for, the last-seen files (text, hash, size, mtime)
+    and the files refused at the last read. Later turns re-read the files and
+    queue a `project_rules_changed` note per changed file (unified diff, the
+    full text when shorter, `(whitespace or line-ending change only)` when no
+    line differs). Notes totalling more than 8 KiB since the last freeze, a
+    change of workspace trust, an unreadable record (run warning
+    `project_rules_record_unreadable`, revision keeps counting) and an explicit
+    reload or compaction re-freeze: S3 adopts the current files, queued notes
+    are dropped and the prefix record reports `context.cache_break` (reason
+    `refreeze`). A file refused on a later turn (symlink, special file) keeps
+    its frozen text and warns once per change of state. Every write is one
+    transaction that checks the lease fence and compare-and-sets on the record
+    it was computed from; a lost race adopts the winner's record.
+    Limit: change detection is size plus mtime, trusted only when the file was
+    modified more than 2 s before it was read. An edit that preserves both
+    size and mtime is not seen until a reload.
 
 ## Consequences
 

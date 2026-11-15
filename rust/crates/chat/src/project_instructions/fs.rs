@@ -21,7 +21,7 @@
 
 use async_trait::async_trait;
 
-use super::{ProjectInstructionsSource, ProjectInstructionsText};
+use super::{ProjectInstructionsSource, ProjectInstructionsStat, ProjectInstructionsText};
 use crate::{ChatError, ChatResult};
 
 /// Reads `AGENTS.md` / `CLAUDE.md` from a workspace root through a
@@ -66,6 +66,30 @@ impl ProjectInstructionsSource for FileProjectInstructions {
             let _ = (root, max_bytes);
             Err(ChatError::ProjectInstructionsAreNotReadOnThisPlatform)
         }
+    }
+
+    async fn stat(&self, root: &str, name: &str) -> Option<ProjectInstructionsStat> {
+        let path = std::path::Path::new(root).join(name);
+        // A symlink or special file reports no stat, so it is read (and
+        // refused there) instead of being trusted as unchanged.
+        tokio::task::spawn_blocking(move || {
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            let mtime = meta
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?;
+            Some(ProjectInstructionsStat {
+                size: meta.len(),
+                mtime_ns: i64::try_from(mtime.as_nanos()).ok()?,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
     }
 }
 

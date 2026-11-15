@@ -13,6 +13,7 @@ mod state;
 pub use render::{OversizedItemSink, TURN_CONTEXT_BUDGET_TOKENS, TurnItem, TurnItemKind};
 pub use state::{
     TURN_CONTEXT_METADATA_KEY, TurnNote, TurnNoteKind, append_turn_note, with_turn_note,
+    without_turn_notes,
 };
 
 use crate::{TurnContextHook, TurnContextInput};

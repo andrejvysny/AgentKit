@@ -26,8 +26,9 @@ pub use ports::{
 };
 pub use project_instructions::{
     FileProjectInstructions, MAX_INSTRUCTION_BYTES, PROJECT_INSTRUCTION_FILES,
-    ProjectInstructionsBlock, ProjectInstructionsSource, ProjectInstructionsText,
-    append_to_system_prompt, load_project_instructions,
+    PROJECT_RULES_METADATA_KEY, ProjectInstructionsBlock, ProjectInstructionsSource,
+    ProjectInstructionsStat, ProjectInstructionsText, REFREEZE_DIFF_BYTES, append_to_system_prompt,
+    load_project_instructions, refreeze_project_rules,
 };
 pub use provider_registry::ProviderRegistry;
 pub use turn_context::{
