@@ -510,3 +510,158 @@ async fn a_session_sends_direct_tools_and_the_meta_tools_with_a_stable_catalog_i
     };
     assert_eq!(catalog.len(), 3);
 }
+
+/// Answers round 1 with `calls`, then a final text; records every request's
+/// tool results by call id.
+struct Calling {
+    calls: Vec<ToolCall>,
+    requests: Mutex<Vec<Vec<agentkit_core::ChatMessage>>>,
+}
+
+#[async_trait]
+impl ChatProvider for Calling {
+    fn id(&self) -> &str {
+        "test"
+    }
+    fn stream_chat(&self, input: ChatRequest, _: CancellationToken) -> ProviderStream {
+        let mut seen = self.requests.lock().unwrap();
+        seen.push(input.messages);
+        let event = if seen.len() == 1 {
+            ProviderEvent::Completed {
+                content: String::new(),
+                tool_calls: self.calls.clone(),
+                finish_reason: "tool_calls".into(),
+            }
+        } else {
+            ProviderEvent::Completed {
+                content: "done".into(),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            }
+        };
+        Box::pin(futures::stream::iter(vec![Ok(event)]))
+    }
+}
+
+/// A profiled session (the `coding` profile filters the tool list) keeps the
+/// toolsets and retired names its registry carried: `toolset_load` finds the
+/// declared toolset and a retired name still maps to its replacement.
+#[tokio::test]
+async fn a_profiled_session_keeps_toolsets_and_legacy_names() {
+    let ran: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut registry = agentkit_core::ToolRegistry::new();
+    registry.register_toolset(
+        agentkit_core::Toolset::new("files", "Files", "Read and list files.")
+            .with_guide("---\nversion: 1\n---\n# files\nRead with {{tool:read_file}}.\n")
+            .with_tools(&["read_file", "list_dir"]),
+    );
+    for name in ["read_file", "list_dir"] {
+        registry
+            .register(Arc::new(Body {
+                definition: definition(name, "read"),
+                ran: ran.clone(),
+            }))
+            .unwrap();
+    }
+    assert!(registry.register_legacy_name(agentkit_core::LegacyName {
+        old: "old_read".into(),
+        new: Some("read_file".into()),
+        teach: "Use read_file.".into(),
+    }));
+    // `search_notes` is not in the coding profile: it is filtered out, so its
+    // retired name must not survive either.
+    assert!(registry.register_legacy_name(agentkit_core::LegacyName {
+        old: "old_search".into(),
+        new: Some("search_notes".into()),
+        teach: "Use search_notes.".into(),
+    }));
+    let provider = Arc::new(Calling {
+        calls: vec![
+            ToolCall {
+                id: "c1".into(),
+                name: "toolset_load".into(),
+                arguments_json: json!({"toolset": "files"}).to_string(),
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "old_read".into(),
+                arguments_json: json!({"note": "x"}).to_string(),
+            },
+            ToolCall {
+                id: "c3".into(),
+                name: "old_search".into(),
+                arguments_json: json!({"note": "x"}).to_string(),
+            },
+        ],
+        requests: Mutex::new(vec![]),
+    });
+    let store = SqliteStore::memory(64).expect("store");
+    let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
+        ChatExecutor::new(provider.clone(), Arc::new(registry)).with_options(
+            ChatExecutorOptions {
+                tool_classification: Some(Classification {
+                    direct: DirectSet::names(["read_file"]),
+                    max_tokens: 0,
+                    max_definitions: 0,
+                    ..Classification::default()
+                }),
+                ..Default::default()
+            },
+        ),
+    );
+    let runtime: SharedRuntime = Arc::new(SystemRuntime);
+    let host = AgentHost::new(
+        store.clone(),
+        HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
+        Arc::clone(&runtime),
+        HostOptions::default(),
+    )
+    .unwrap();
+    let service = AgentSessionService::new(AgentSessionServiceDeps {
+        store: store.clone(),
+        runtime,
+        plan_approval: None,
+        wake: Some(host.wake_handle()),
+    });
+    let rig = Rig {
+        host,
+        service,
+        seen: Arc::default(),
+    };
+    rig.service
+        .create_session(&CreateSessionInput {
+            session_id: Some("s1".into()),
+            title: None,
+            profile_id: "coding".into(),
+            profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
+            provider_id: None,
+            model: Some("model".into()),
+            workspace: None,
+            context: None,
+            skills: None,
+            turn_kind: None,
+            execution_mode: None,
+            metadata: None,
+        })
+        .await
+        .unwrap();
+    turn(&rig, &store, "in1").await;
+    let requests = provider.requests.lock().unwrap().clone();
+    let result = |id: &str| -> Value {
+        let message = requests[1]
+            .iter()
+            .find(|message| message.role == "tool" && message.tool_call_id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("result for {id}"));
+        serde_json::from_str(message.content.as_str().unwrap()).unwrap()
+    };
+    let loaded = result("c1");
+    assert_eq!(loaded["ok"], true, "{loaded}");
+    assert_eq!(loaded["data"]["toolset"], "files", "{loaded}");
+    assert!(loaded["data"]["guide"].as_str().unwrap().contains("read_file"));
+    // The members that remain are the ones listed (list_dir stays deferred).
+    assert_eq!(result("c2")["ok"], true);
+    assert_eq!(*ran.lock().unwrap(), [r#"read_file:{"note":"x"}"#]);
+    assert_eq!(result("c3")["data"]["errorCode"], "tool_missing");
+}

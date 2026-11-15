@@ -17,6 +17,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+mod inherit;
+
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub struct RegistryError {

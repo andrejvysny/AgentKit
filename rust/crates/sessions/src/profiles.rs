@@ -164,6 +164,9 @@ impl AgentProfile {
                 filtered.withhold_tool(definition, &reason);
             }
         }
+        // Toolsets (guides and cards), retired names and aliases belong to the
+        // session, not to a tool: keep what still applies to the tools left.
+        filtered.inherit_metadata(registry, &|name| self.tools.iter().any(|tool| tool == name));
         Ok(Arc::new(filtered))
     }
 }
