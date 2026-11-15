@@ -7,6 +7,7 @@ mod authority;
 mod builder;
 mod error;
 mod lanes;
+mod memory_refs;
 mod runtime;
 mod session_execution_authority;
 mod workspace;

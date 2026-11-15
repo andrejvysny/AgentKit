@@ -20,25 +20,39 @@
 //!   attempt's logical tool call, so an executor retry re-admits the same
 //!   child instead of forking a duplicate execution.
 
+mod brief;
 mod budget;
 mod config;
+mod envelope;
 mod guard;
+mod memory_refs;
 mod service;
 mod snapshot;
 mod tools;
 mod toolsets;
 
+pub use brief::{
+    Brief, BriefBudget, BriefError, BriefScope, BudgetLines, ContextRef, MESSAGE_REF_CAP_BYTES,
+    OutputFormat, RefKind, RenderedRef, TITLE_MAX_CHARS, cap_message_text, confine_to_workspace,
+    render_brief,
+};
 pub use config::{
-    BUILTIN_ROLES, RoleSpec, SubagentConfig, SubagentRoleLimits, default_delegation_guidance,
-    default_role_specs,
+    BUILTIN_ROLES, DELEGATION_GUIDANCE, RoleSpec, SubagentConfig, SubagentRoleLimits,
+    default_delegation_guidance, default_role_specs,
+};
+pub use envelope::{
+    ChildReport, EnvelopeArtifact, EnvelopeUsage, ReportedFinding, ResultEnvelope,
+    SUMMARY_CAP_BYTES, cut_summary, envelope_status, present_envelope, usage_from_events,
 };
 pub use guard::{SubagentRoleGuard, WorkspaceLeaseRegistry};
+pub use memory_refs::MemoryRefReader;
 pub use service::{
-    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, MessageReceipt, SpawnRequest,
-    SpawnedChild, SubagentService, SubagentView, child_identity,
+    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, MessageReceipt, OwnerRequest,
+    SpawnRequest, SpawnedChild, SubagentService, SubagentView, child_identity,
 };
 pub use snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 pub use tools::{
-    SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SubagentContributor, subagent_tool_definitions,
+    REPORT_FINDINGS_TOOL, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SubagentContributor,
+    report_findings_definition, subagent_tool_definitions,
 };
 pub use toolsets::{DELEGATION_TOOLSET, delegation_toolsets};

@@ -314,3 +314,67 @@ async fn a_version_nineteen_database_upgrades_and_keeps_its_rows() {
         .expect("indexes");
     assert_eq!(indexes, 2);
 }
+
+/// Roadmap 4.1 (DEL-02): a child's chat record lists the handles its brief
+/// granted; exactly those become readable, and nothing else changes.
+#[tokio::test]
+async fn a_recorded_grant_opens_exactly_the_listed_handle() {
+    use agentkit_core::SessionTree;
+    let fixture = SqliteFixture::new();
+    for chat in ["parent", "child", "other-child"] {
+        fixture
+            .sqlite
+            .create_chat(chat, None, json!({}), 1000)
+            .await
+            .expect("chat");
+    }
+    let listed = fixture
+        .store
+        .put(meta("parent"), b"listed".to_vec())
+        .await
+        .expect("put");
+    let unlisted = fixture
+        .store
+        .put(meta("parent"), b"unlisted".to_vec())
+        .await
+        .expect("put");
+    assert!(
+        !fixture
+            .store
+            .may_read_handle("child", "parent", &listed)
+            .await
+    );
+    fixture
+        .sqlite
+        .update_chat(
+            "child",
+            None,
+            Some(json!({"agentkit.subagent": {"outputGrants": [listed.as_str()]}})),
+            None,
+            1001,
+        )
+        .await
+        .expect("grant");
+    assert!(
+        fixture
+            .store
+            .may_read_handle("child", "parent", &listed)
+            .await
+    );
+    assert!(
+        !fixture
+            .store
+            .may_read_handle("child", "parent", &unlisted)
+            .await
+    );
+    assert!(
+        !fixture
+            .store
+            .may_read_handle("other-child", "parent", &listed)
+            .await
+    );
+    assert!(
+        !fixture.store.may_read("child", "parent").await,
+        "a grant is not tree access"
+    );
+}

@@ -92,7 +92,7 @@ its retention ends.
    is allowed only for a handle whose session is the caller's own or a
    descendant subagent session of it (from the `subagents` table). A child
    cannot read its parent's or a sibling's outputs; package 4.1 adds explicit
-   per-handle grants through `context_refs`. A handle of any other session, an
+   per-handle grants through `context_refs` (ADR 0037). A handle of any other session, an
    unknown handle and a malformed one all answer `output_not_found`, so the
    answer does not reveal which handles exist. A read is capped to 12 KiB and says where to continue.
 9. **Retention.** Outputs are removed with their chat: `delete_chat` deletes

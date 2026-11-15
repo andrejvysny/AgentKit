@@ -660,15 +660,20 @@ impl AgentRuntimeBuilder {
         // advisor needs the provider, store, clock, tool source, event
         // bridge, and session service. Both are one-shot; configuration
         // (`configureSubagents`/`configureAdvisor`) is hot afterwards.
-        subagent_lane.bind(
-            agentkit_agents::SubagentService::new(
-                lanes_store.clone(),
-                service.clone(),
-                runtime.clone(),
-                agentkit_agents::SubagentConfig::default(),
-            )
-            .with_routable_providers(registry.ids().map(str::to_owned).collect()),
-        )?;
+        let mut subagents = agentkit_agents::SubagentService::new(
+            lanes_store.clone(),
+            service.clone(),
+            runtime.clone(),
+            agentkit_agents::SubagentConfig::default(),
+        )
+        .with_routable_providers(registry.ids().map(str::to_owned).collect());
+        // Without a memory service a brief's `memory` references are refused.
+        if let Some(memory) = &memory {
+            subagents = subagents.with_memory_refs(Arc::new(
+                crate::memory_refs::MemoryRefAccess::new(Arc::clone(memory)),
+            ));
+        }
+        subagent_lane.bind(subagents)?;
         // The advisor advises with the default provider. With no provider
         // there is nothing to advise with, so the lane stays unconfigured —
         // it contributes nothing, judges nothing, and hooks nothing, exactly

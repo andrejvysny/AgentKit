@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use agentkit_agents::{
-    BUILTIN_ROLES, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, advisor_tool_definition,
-    subagent_tool_definitions,
+    BUILTIN_ROLES, REPORT_FINDINGS_TOOL, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES,
+    advisor_tool_definition, report_findings_definition, subagent_tool_definitions,
 };
 use agentkit_core::{
     AuthKind, CancellationToken, ChatProvider, ChatRequest, ConnectionIdentity, CoreError,
@@ -137,6 +137,7 @@ async fn all_tools() -> Vec<Arc<dyn Tool>> {
     for definition in subagent_tool_definitions() {
         tools.push(definition_only(definition, SUBAGENT_ARG_ALIASES));
     }
+    tools.push(definition_only(report_findings_definition(), &[]));
     tools.push(definition_only(advisor_tool_definition(), &[]));
     for definition in lsp_tool_definitions() {
         tools.push(definition_only(definition, LSP_ARG_ALIASES));
@@ -658,6 +659,7 @@ async fn every_static_tool_is_linted() {
     let expected: BTreeSet<String> = CODING_TOOL_NAMES
         .iter()
         .chain(SUBAGENT_TOOL_NAMES.iter())
+        .chain([REPORT_FINDINGS_TOOL].iter())
         .chain(LSP_TOOL_NAMES.iter())
         .chain([ADVISOR_TOOL].iter())
         .map(|name| (*name).to_owned())
@@ -666,7 +668,7 @@ async fn every_static_tool_is_linted() {
         names, expected,
         "a tool was added or removed without the lint"
     );
-    assert_eq!(tools.len(), 25);
+    assert_eq!(tools.len(), 26);
 }
 
 #[tokio::test]
@@ -951,8 +953,8 @@ async fn every_renamed_parameter_still_maps_and_validates() {
         ),
         (
             "subagent_spawn",
-            json!({"role": BUILTIN_ROLES[0], "prompt": "p", "exclusiveWorkspace": true, "maxIterations": 3, "maxProviderRequests": 4, "overallTimeoutMs": 5000}),
-            json!({"role": BUILTIN_ROLES[0], "prompt": "p", "exclusive_workspace": true, "max_iterations": 3, "max_provider_requests": 4, "timeout": 5000}),
+            json!({"role": BUILTIN_ROLES[0], "title": "t", "objective": "o", "output_format": "summary", "scope": {"stop_when": "done"}, "exclusiveWorkspace": true}),
+            json!({"role": BUILTIN_ROLES[0], "title": "t", "objective": "o", "output_format": "summary", "scope": {"stop_when": "done"}, "exclusive_workspace": true}),
         ),
         (
             "lsp_definition",
@@ -999,7 +1001,7 @@ async fn runtime_owned_parameters_are_not_in_any_schema() {
         ),
         (
             "subagent_spawn",
-            json!({"role": "general", "prompt": "p", "spawnKey": "k"}),
+            json!({"role": "general", "title": "t", "objective": "o", "output_format": "summary", "scope": {"stop_when": "done"}, "spawnKey": "k"}),
         ),
         (
             "subagent_message",

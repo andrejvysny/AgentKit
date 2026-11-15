@@ -52,6 +52,8 @@ struct State {
     rows: HashMap<OutputHandle, (OutputInfo, Vec<u8>)>,
     /// child session -> parent session (the `subagents` table's shape).
     parents: HashMap<String, String>,
+    /// session -> handles an explicit grant lets it read (a brief's refs).
+    grants: HashMap<String, Vec<OutputHandle>>,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,15 @@ impl InMemoryOutputStore {
     /// Register `child` as a subagent session of `parent`.
     pub fn link_child(&self, child: &str, parent: &str) {
         self.lock().parents.insert(child.into(), parent.into());
+    }
+
+    /// Let `session` read exactly `handle`, whoever holds it.
+    pub fn grant(&self, session: &str, handle: &OutputHandle) {
+        self.lock()
+            .grants
+            .entry(session.into())
+            .or_default()
+            .push(handle.clone());
     }
 
     /// Outputs held for `session`.
@@ -209,5 +220,15 @@ impl SessionTree for InMemoryOutputStore {
             }
         }
         false
+    }
+
+    async fn may_read_handle(&self, caller: &str, owner: &str, handle: &OutputHandle) -> bool {
+        if self.may_read(caller, owner).await {
+            return true;
+        }
+        self.lock()
+            .grants
+            .get(caller)
+            .is_some_and(|handles| handles.contains(handle))
     }
 }

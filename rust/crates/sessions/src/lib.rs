@@ -26,11 +26,12 @@ pub use error::{
 };
 pub use metadata::{
     APPROVE_MARKER, COMPACT_REQUESTED_METADATA_KEY, Decision, EXECUTION_METADATA_KEY,
-    ExecutionStateRead, MAX_STANDING_APPROVALS, MODEL_PROFILE_METADATA_KEY, SESSION_METADATA_KEY,
-    SESSION_PREFIX_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY, SessionMutation, SessionRefusal,
-    apply_session_mutation, approval_answer_refusal, execution_state_for_grant,
-    execution_state_for_mode, find_active_standing_grant, inspect_execution_state,
-    is_approval_request, is_hex64, make_room, parse_answer_expiry, plan_request_of, read_decision,
+    ExecutionStateRead, HOST_METADATA_PREFIX, MAX_STANDING_APPROVALS, MODEL_PROFILE_METADATA_KEY,
+    SESSION_METADATA_KEY, SESSION_PREFIX_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY,
+    SessionMutation, SessionRefusal, apply_session_mutation, approval_answer_refusal,
+    execution_state_for_grant, execution_state_for_mode, find_active_standing_grant,
+    host_owned_metadata_key, inspect_execution_state, is_approval_request, is_hex64, make_room,
+    merge_caller_metadata, parse_answer_expiry, plan_request_of, read_decision,
     read_execution_state, read_model_profile, read_session_prefix, read_standing_key,
     standing_grants, with_execution, with_model_profile, with_session_prefix, with_standing,
     writable_standing_grants,
@@ -38,8 +39,8 @@ pub use metadata::{
 pub use model::{
     AgentBudgets, AgentDefinition, AgentInputKind, AgentInputPatch, AgentInputQuery,
     AgentInputRecord, AgentInputSettlePolicy, AgentInputStatus, AgentLifecycle, AgentRecord,
-    AgentRevisionSource, AgentSkillSelection, AnswerHumanRequest, AnswerOutcome, AnswerReceipt,
-    ArgsHashProvenance, ChatRecord, CreateAgentInput, ExecutionReceiptRecord,
+    AgentRevisionSource, AgentSkillSelection, AnswerActor, AnswerHumanRequest, AnswerOutcome,
+    AnswerReceipt, ArgsHashProvenance, ChatRecord, CreateAgentInput, ExecutionReceiptRecord,
     ExecutionReceiptStatus, ExecutionResolution, MessageRecord, PROVIDER_MODELS_NAMESPACE,
     QueueAdmission, QueueOrStage, RECEIPT_NOT_UNCERTAIN, RECEIPT_RUN_ACTIVE, ResolutionOutcome,
     ResolveExecution, SessionSettle, StageQueuedTurn, StagedCandidate, TurnStaging,

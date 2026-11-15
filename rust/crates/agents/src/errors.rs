@@ -52,6 +52,17 @@ pub enum AgentsError {
     SubagentHasNoTurnToResume,
     #[error("subagent prompt must not be empty")]
     SubagentPromptMustNotBeEmpty,
+    /// The spawn brief is missing a required field or breaks a limit; the
+    /// text names the field.
+    #[error("{0}")]
+    InvalidBrief(String),
+    /// A brief's context reference points at something the parent may not
+    /// hand on (an unreadable output, a path outside the workspace, ...).
+    #[error("{0}")]
+    ContextRefRefused(String),
+    /// A child session tried to answer a human request.
+    #[error("{0}")]
+    ChildCannotAnswer(String),
     #[error("subagent row vanished")]
     SubagentRowVanished,
     #[error("subagent_concurrency_limit: fan-out cap reached during registration")]
@@ -74,6 +85,9 @@ pub enum AgentsError {
     ChildSessionConflict(String),
     #[error("{0}")]
     ModelNotAllowed(String),
+    /// The spawn key names a child that was made from a different brief.
+    #[error("{0}")]
+    SpawnKeyConflict(String),
     #[error("role {0} may not spawn children")]
     RoleCannotSpawn(String),
     #[error("spawn key {0} already exists with a different identity")]
@@ -234,6 +248,10 @@ impl AgentsError {
             Self::SubagentTerminal(_) => "subagent_terminal".into(),
             Self::UnknownSubagentRole(_) => "unknown_subagent_role".into(),
             Self::ModelNotAllowed(_) => "model_not_allowed".into(),
+            Self::InvalidBrief(_) => "invalid_brief".into(),
+            Self::ContextRefRefused(_) => "context_ref_refused".into(),
+            Self::ChildCannotAnswer(_) => "child_cannot_answer".into(),
+            Self::SpawnKeyConflict(_) => "spawn_key_conflict".into(),
             Self::WorkspaceBusy(_) => "workspace_busy".into(),
             Self::WorkspaceRequired(_) => "workspace_required".into(),
             Self::InvalidAgent(_) => "invalid_agent".into(),

@@ -150,11 +150,12 @@ pub(crate) fn chat_messages(db: &Connection, chat_id: &str) -> Result<Vec<Messag
     )
 }
 
-pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<MessageRecord> {
+pub(crate) fn append(db: &Connection, mut input: MessageInput, now: i64) -> Result<MessageRecord> {
     if !["user", "assistant", "tool", "system"].contains(&input.role.as_str()) {
         return Err(StoreError::InvalidInput("invalid message role".into()));
     }
     let mut chat: ChatRecord = required(db, "chats", "id", &input.chat_id)?;
+    crate::session_ops::stamp_child_provenance(&chat.metadata, &mut input);
     if !input.activate && input.parent_message_id.is_none() {
         return Err(StoreError::InvalidInput(
             "chain append requires explicit parent".into(),

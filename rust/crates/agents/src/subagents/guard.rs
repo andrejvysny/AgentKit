@@ -1,4 +1,5 @@
 use super::service::SubagentService;
+use super::tools::REPORT_FINDINGS_TOOL;
 use crate::{AgentsResult, LeaseHeld};
 use agentkit_governance::{GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use agentkit_sessions::read_session_descriptor;
@@ -182,6 +183,13 @@ impl SubagentRoleGuard {
         // hot-disable silently widen every live child to the full tool
         // set — fail-open on the second, independent guard.
         let Some(row) = self.service.store().get_subagent(child_chat_id).await? else {
+            // report_findings belongs to children: anyone else neither sees
+            // nor runs it, whatever contributed it.
+            if context.tool.name == REPORT_FINDINGS_TOOL {
+                return Ok(Some(
+                    "report_findings is available to child sessions only".to_owned(),
+                ));
+            }
             return Ok(None);
         };
         // Authority is the spawn-time snapshot narrowed by the current
@@ -191,6 +199,11 @@ impl SubagentRoleGuard {
             Ok(role) => role,
             Err(reason) => return Ok(Some(reason.to_string())),
         };
+        // Only after the role resolved: a child with a gone or malformed
+        // role is denied `report_findings` too (fail closed).
+        if context.tool.name == REPORT_FINDINGS_TOOL {
+            return Ok(None);
+        }
         if role
             .tool_sets
             .iter()

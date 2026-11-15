@@ -24,6 +24,45 @@ pub const SESSION_PREFIX_METADATA_KEY: &str = "agentkit.session.prefix";
 /// (native tool use T2.1, ADR 0030).
 pub const MODEL_PROFILE_METADATA_KEY: &str = "agentkit.session.modelProfile";
 
+/// Chat-metadata namespace the host owns: descriptors, grants, subagent
+/// identity. A caller-facing surface (HTTP, the napi port, the public session
+/// API) never writes a key under it.
+pub const HOST_METADATA_PREFIX: &str = "agentkit.";
+
+/// The first host-owned (`agentkit.*`) key of caller-supplied chat
+/// `metadata` that is not in `allowed`, if any. The one rule HTTP, the napi
+/// port and session creation all apply to metadata a caller supplies.
+pub fn host_owned_metadata_key<'a>(metadata: &'a Value, allowed: &[&str]) -> Option<&'a str> {
+    metadata
+        .as_object()?
+        .keys()
+        .map(String::as_str)
+        .find(|key| key.starts_with(HOST_METADATA_PREFIX) && !allowed.contains(key))
+}
+
+/// The metadata a chat update leaves: the caller's object, with every
+/// host-owned key kept as it is. A caller may repeat a host-owned key
+/// unchanged but never change or add one.
+pub fn merge_caller_metadata(existing: &Value, supplied: &Value) -> Result<Value, String> {
+    let mut next = supplied
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Chat metadata must be an object.".to_owned())?;
+    for (key, value) in &next {
+        if key.starts_with(HOST_METADATA_PREFIX) && existing.get(key) != Some(value) {
+            return Err("Host-owned agentkit metadata cannot be changed.".to_owned());
+        }
+    }
+    if let Some(existing) = existing.as_object() {
+        for (key, value) in existing {
+            if key.starts_with(HOST_METADATA_PREFIX) {
+                next.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(Value::Object(next))
+}
+
 /// Marks an approve answer in `appliedMessageId`: no tool record backs it.
 pub const APPROVE_MARKER: &str = "approval:";
 

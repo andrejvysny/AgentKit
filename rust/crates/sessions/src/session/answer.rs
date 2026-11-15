@@ -2,9 +2,10 @@
 //! and standing approval grants.
 
 use crate::{
-    AgentInputKind, AgentInputRecord, AgentInputStatus, AnswerHumanRequest, AnswerReceipt,
-    SessionBackend, SessionFault, SessionsError, SessionsResult, approval_answer_refusal,
-    is_approval_request, parse_answer_expiry, plan_request_of, read_standing_key, standing_grants,
+    AgentInputKind, AgentInputRecord, AgentInputStatus, AnswerActor, AnswerHumanRequest,
+    AnswerReceipt, SessionBackend, SessionFault, SessionsError, SessionsResult,
+    approval_answer_refusal, is_approval_request, parse_answer_expiry, plan_request_of,
+    read_standing_key, standing_grants,
 };
 use agentkit_engine::TaskStatus;
 use agentkit_engine::is_child_wait;
@@ -19,10 +20,21 @@ use super::{
 impl<R: SessionBackend> AgentSessionService<R> {
     // -- human requests ---------------------------------------------------------
 
-    /// Record the answer and re-admit the parked turn, then poke the queue.
+    /// Record the owner's answer and re-admit the parked turn, then poke the
+    /// queue. This is the host-facing surface: the actor is the owner.
     pub async fn answer(
         &self,
         input: &AnswerInput,
+    ) -> SessionsResult<AnswerReceipt, SessionFault<R>> {
+        self.answer_with_actor(input, AnswerActor::Owner).await
+    }
+
+    /// [`Self::answer`] for a named actor; the store refuses an actor that
+    /// may not answer the request (an agent never may).
+    pub async fn answer_with_actor(
+        &self,
+        input: &AnswerInput,
+        actor: AnswerActor,
     ) -> SessionsResult<AnswerReceipt, SessionFault<R>> {
         let request = self
             .store()
@@ -89,6 +101,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
                     plan_tool_names: vec![],
                     policy_denial: None,
                     granted_mode: None,
+                    actor: actor.clone(),
                 })
                 .await
                 .map_err(answer_store_error)?;
@@ -184,6 +197,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 plan_tool_names,
                 policy_denial,
                 granted_mode,
+                actor,
             })
             .await
             .map_err(answer_store_error)?;

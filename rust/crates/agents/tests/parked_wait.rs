@@ -150,7 +150,10 @@ impl ChatProvider for Scripted {
                         name: "subagent_spawn".into(),
                         arguments_json: json!({
                             "role": "general",
-                            "prompt": format!("CHILD-WORK-{index}"),
+                            "title": format!("child {index}"),
+                            "objective": format!("CHILD-WORK-{index}"),
+                            "output_format": "summary",
+                            "scope": {"stop_when": "done"},
                         })
                         .to_string(),
                     })

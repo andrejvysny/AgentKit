@@ -1,19 +1,32 @@
+use super::brief::{
+    Brief, BudgetLines, ContextRef, RefKind, RenderedRef, cap_message_text, confine_to_workspace,
+    render_brief,
+};
 use super::budget;
 use super::config::{RoleSpec, SubagentConfig};
+use super::envelope::{
+    ChildReport, EnvelopeArtifact, EnvelopeUsage, ResultEnvelope, cut_summary, envelope_status,
+    present_envelope, usage_from_events,
+};
 use super::guard::WorkspaceLeaseRegistry;
+use super::memory_refs::MemoryRefReader;
 use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
-use agentkit_core::HumanRequestSpec;
+use agentkit_core::{
+    HumanRequestSpec, OutputHandle, OutputMeta, OutputStore, SUBAGENT_METADATA_KEY, SessionTree,
+    untrusted_subagent_block,
+};
 use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
 use agentkit_sessions::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, AgentSendResult, AgentSessionService,
-    AnswerHumanRequest, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput, SendInput,
-    SteerInput, WhenBusy, read_session_descriptor,
+    AnswerActor, AnswerHumanRequest, AnswerInput, AnswerReceipt, CHAT_TURN_TASK_KIND,
+    CreateSessionInput, FollowUpInput, SendInput, SteerInput, WhenBusy, read_session_descriptor,
 };
 use agentkit_store::{
-    CHILD_WAIT_ID_PREFIX, CHILD_WAIT_KIND, ConversationTimestamp, RegisterSubagent, SqliteStore,
-    StoreError, SubagentRecord, TaskRecord, TaskStatus, is_child_wait,
+    CHILD_WAIT_ID_PREFIX, CHILD_WAIT_KIND, ConversationTimestamp, RegisterSubagent,
+    SqliteOutputStore, SqliteStore, StoreError, SubagentRecord, TaskRecord, TaskStatus,
+    is_child_derived_message, is_child_wait,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -32,14 +45,9 @@ pub struct SpawnRequest {
     /// derived from (parent chat, parent task, spawn key), so replaying the
     /// same tool call after an attempt retry re-admits the SAME child.
     pub spawn_key: String,
-    pub role: String,
-    pub prompt: String,
-    pub title: Option<String>,
-    pub model: Option<String>,
+    /// The structured brief (role, objective, scope, references, budget).
+    pub brief: Brief,
     pub exclusive_workspace: bool,
-    pub max_iterations: Option<u32>,
-    pub max_provider_requests: Option<u64>,
-    pub overall_timeout_ms: Option<u64>,
 }
 
 /// A child plus the projection the parent received at spawn time.
@@ -89,8 +97,11 @@ pub struct AwaitResult {
     pub child_chat_id: String,
     pub role: String,
     pub status: String,
-    pub result: Option<String>,
-    pub error: Option<String>,
+    /// The result envelope of a settled child; `None` while it still runs
+    /// and for an unknown child. Child text lives only in here, and the tool
+    /// layer presents it inside the untrusted `<subagent_result>` block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<ResultEnvelope>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -206,6 +217,9 @@ pub struct SubagentService {
     /// Provider ids this service's executor can route to; `None` = unknown
     /// (host-only users), which skips spawn-time validation.
     routable_providers: Option<Arc<std::collections::BTreeSet<String>>>,
+    /// Decides whether a parent may hand on a memory record; `None` means no
+    /// memory service, and a brief's `memory` references are refused.
+    memory_refs: Option<Arc<dyn MemoryRefReader>>,
     /// Parked-parent waker lifecycle (see `ensure_waker`).
     waker: Arc<WakerState>,
     /// Keeps the store alive for as long as any handle exists. The waker
@@ -223,6 +237,31 @@ impl Drop for ServiceOwner {
     fn drop(&mut self) {
         self.core.waker.request_stop();
     }
+}
+
+/// A brief's references after resolution.
+#[derive(Default)]
+struct ResolvedContext {
+    rendered: Vec<RenderedRef>,
+    /// Output handles the child may read.
+    grants: Vec<String>,
+}
+
+/// A human request waiting on the owner, with who raised it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerRequest {
+    pub request_id: String,
+    /// The session the request was raised in.
+    pub session_id: String,
+    /// The raising child's role; `None` for the owner's own session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// `<child title> (<role>)` for a child's request, so the owner knows
+    /// whose approval this is; `None` for the owner's own session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub content: Value,
 }
 
 /// Releases a lease taken during `resume` unless disarmed with `keep`, so
@@ -265,6 +304,9 @@ pub(super) fn is_terminal_status(status: &str) -> bool {
 pub(super) const SUBAGENT_ITERATIONS_CEILING: u32 = 64;
 pub(super) const SUBAGENT_PROVIDER_REQUESTS_CEILING: u64 = 200;
 pub(super) const SUBAGENT_OVERALL_MS_CEILING: u64 = 30 * 60 * 1_000;
+/// Token ceiling per child (spec "Budgets"). The request is clamped and
+/// recorded now; enforcement arrives with the token budgets (DEL-06).
+pub(super) const SUBAGENT_TOKENS_CEILING: u64 = 1_000_000;
 
 /// Deterministic child identity for one logical spawn call. Public so
 /// callers (tests, recovery tooling) can precompute the id a given
@@ -274,17 +316,6 @@ pub fn child_identity(parent_chat_id: &str, parent_task_id: &str, spawn_key: &st
         "sub_{}",
         &sha256_hex(format!("{parent_chat_id}|{parent_task_id}|{spawn_key}"))[..24]
     )
-}
-
-fn compose_child_prompt(role: &RoleSpec, request: &SpawnRequest) -> Value {
-    let mut text = String::new();
-    if !role.prompt.is_empty() {
-        text.push_str(role.prompt.trim());
-        text.push_str("\n\n");
-    }
-    text.push_str("Assignment:\n");
-    text.push_str(request.prompt.trim());
-    Value::String(text)
 }
 
 impl SubagentService {
@@ -302,6 +333,7 @@ impl SubagentService {
             leases: WorkspaceLeaseRegistry::default(),
             spawn_gate: Arc::new(tokio::sync::Mutex::new(())),
             routable_providers: None,
+            memory_refs: None,
             waker: Arc::new(WakerState::default()),
             owner: None,
         }
@@ -317,6 +349,13 @@ impl SubagentService {
         self.waker.stopped.store(false, Ordering::SeqCst);
         let owner = Arc::new(ServiceOwner { core: self.clone() });
         self.owner = Some(owner);
+        self
+    }
+
+    /// Let briefs hand on memory records the parent can read; without it
+    /// every `memory` reference is refused.
+    pub fn with_memory_refs(mut self, reader: Arc<dyn MemoryRefReader>) -> Self {
+        self.memory_refs = Some(reader);
         self
     }
 
@@ -345,7 +384,10 @@ impl SubagentService {
                 "subagent_provider_unavailable: {provider_id}"
             )));
         }
-        if Some(provider_id) != parent_provider && request.model.is_none() && role.model.is_none() {
+        if Some(provider_id) != parent_provider
+            && request.brief.model.is_none()
+            && role.model.is_none()
+        {
             return Err(AgentsError::SubagentModelRequired(format!(
                 "subagent_model_required: role {} pins provider {provider_id} without a model",
                 role.id
@@ -410,15 +452,20 @@ impl SubagentService {
         if !config.enabled {
             return Err(AgentsError::SubagentsDisabled);
         }
-        if request.prompt.trim().is_empty() {
-            return Err(AgentsError::SubagentPromptMustNotBeEmpty);
-        }
-        let role = config.role(&request.role).cloned().ok_or_else(|| {
-            AgentsError::UnknownSubagentRole(format!("unknown_subagent_role: {}", request.role))
+        request
+            .brief
+            .validate()
+            .map_err(|error| AgentsError::InvalidBrief(error.to_string()))?;
+        let role = config.role(&request.brief.role).cloned().ok_or_else(|| {
+            AgentsError::UnknownSubagentRole(format!(
+                "unknown_subagent_role: {}",
+                request.brief.role
+            ))
         })?;
         // A host-pinned role model is a ceiling the model-authored request
         // cannot lift: the role may run on exactly that model.
-        if let (Some(pinned), Some(requested)) = (role.model.as_deref(), request.model.as_deref())
+        if let (Some(pinned), Some(requested)) =
+            (role.model.as_deref(), request.brief.model.as_deref())
             && pinned != requested
         {
             return Err(AgentsError::ModelNotAllowed(format!(
@@ -478,6 +525,7 @@ impl SubagentService {
             .clone()
             .or_else(|| parent_provider.map(str::to_owned));
         let child_model = request
+            .brief
             .model
             .clone()
             .or_else(|| role.model.clone())
@@ -520,12 +568,13 @@ impl SubagentService {
         if let Some(existing) = self.store.get_subagent(&child_chat_id).await? {
             if existing.parent_chat_id != request.parent_chat_id
                 || existing.parent_task_id.as_deref() != Some(request.parent_task_id.as_str())
-                || existing.role != request.role
+                || existing.role != request.brief.role
             {
                 return Err(AgentsError::SpawnIdentityConflict(
                     request.spawn_key.clone(),
                 ));
             }
+            self.require_same_brief(&child_chat_id, request).await?;
             // A crash between registering the child and dispatching its
             // first turn leaves a QUEUED row nobody owns: the replay must
             // re-drive, not just report. The turn submission is
@@ -576,7 +625,7 @@ impl SubagentService {
                         .await?;
                     return Err(error);
                 }
-                self.dispatch_initial_turn(&child_chat_id, &role, request)
+                self.dispatch_initial_turn(&child_chat_id, &role, request, workspace_root)
                     .await?;
                 let Some(reactualized) = self.store.get_subagent(&child_chat_id).await? else {
                     return Err(AgentsError::SubagentRowVanished);
@@ -641,6 +690,10 @@ impl SubagentService {
             return Box::pin(self.spawn(request)).await;
         }
         self.check_fanout_caps(&request.parent_chat_id).await?;
+        // The brief's references are resolved (and the parent's right to hand
+        // each one on checked) before the child exists: a refused reference
+        // leaves nothing behind.
+        let context = self.resolve_context(request, workspace_root, true).await?;
 
         // Per-role execution limits ride the child chat metadata; the
         // executor reads them at dispatch (`subagents::task_overrides`), so
@@ -650,7 +703,7 @@ impl SubagentService {
         // the absolute caps keep a prompt-injected parent from minting
         // run-away children (`maxIterations` etc. are model-authored ints).
         let mut role_limits = Map::new();
-        let iterations = match (request.max_iterations, role.max_iterations) {
+        let iterations = match (request.brief.budget.max_iterations, role.max_iterations) {
             (Some(requested), Some(bound)) => Some(requested.min(bound)),
             (Some(requested), None) => Some(requested),
             (None, Some(bound)) => Some(bound),
@@ -661,6 +714,8 @@ impl SubagentService {
             role_limits.insert("maxToolIterations".into(), json!(iterations));
         }
         let requested_requests = request
+            .brief
+            .budget
             .max_provider_requests
             .map(|requests| requests.clamp(1, SUBAGENT_PROVIDER_REQUESTS_CEILING));
         let tree_root =
@@ -684,13 +739,20 @@ impl SubagentService {
         if let Some(requests) = reserved_requests {
             role_limits.insert("maxProviderRequests".into(), json!(requests));
         }
-        if let Some(overall) = request.overall_timeout_ms {
+        if let Some(overall) = request.brief.budget.timeout_ms {
             role_limits.insert(
                 "overallTimeoutMs".into(),
                 json!(overall.clamp(1_000, SUBAGENT_OVERALL_MS_CEILING)),
             );
         }
+        if let Some(tokens) = request.brief.budget.max_tokens {
+            role_limits.insert(
+                "maxTokens".into(),
+                json!(tokens.clamp(1, SUBAGENT_TOKENS_CEILING)),
+            );
+        }
         let role_snapshot = RoleSnapshot::from_role(&role);
+        let brief_digest = request.brief.digest();
         let subagent_metadata = json!({
             "agentkit.subagent": {
                 "role": role.id,
@@ -701,8 +763,12 @@ impl SubagentService {
                 "rootChatId": tree_root,
                 "depth": depth + 1,
                 "spawnKey": request.spawn_key,
+                "briefDigest": brief_digest,
                 "exclusive": exclusive,
                 "limits": Value::Object(role_limits),
+                // The only parent outputs this child may read (DEL-02);
+                // the key is `OUTPUT_GRANTS_METADATA_KEY`.
+                "outputGrants": context.grants,
             }
         });
         // A crash can land between creating the child session and
@@ -730,14 +796,15 @@ impl SubagentService {
                 self.leases.release(&child_chat_id);
                 return Err(AgentsError::ChildSessionConflict(child_chat_id.clone()));
             }
+            if let Err(error) = self.require_same_brief(&child_chat_id, request).await {
+                self.leases.release(&child_chat_id);
+                return Err(error);
+            }
         } else {
             self.session
-                .create_session(&CreateSessionInput {
+                .create_session_with_host_metadata(&CreateSessionInput {
                     session_id: Some(child_chat_id.clone()),
-                    title: Some(request.title.clone().unwrap_or_else(|| {
-                        let head: String = request.prompt.chars().take(72).collect();
-                        format!("[{}] {head}", role.id)
-                    })),
+                    title: Some(request.brief.title.clone()),
                     profile_id: descriptor["profile"]["id"]
                         .as_str()
                         .unwrap_or("coding")
@@ -781,7 +848,7 @@ impl SubagentService {
                     parent_task_id: Some(request.parent_task_id.clone()),
                     role: role.id.clone(),
                     depth: depth + 1,
-                    prompt: request.prompt.clone(),
+                    prompt: request.brief.objective.clone(),
                     model: child_model.clone(),
                     now: self.now_ms(),
                     turn_task_id: None,
@@ -819,7 +886,7 @@ impl SubagentService {
             return Err(AgentsError::ChildCancelledAfterParent);
         }
 
-        self.dispatch_initial_turn(&child_chat_id, &role, request)
+        self.dispatch_initial_turn(&child_chat_id, &role, request, workspace_root)
             .await
             .inspect_err(|_| {
                 // The row stays QUEUED for an honest replay; the replay
@@ -842,6 +909,31 @@ impl SubagentService {
         })
     }
 
+    /// A replay of a spawn key re-admits the child it made, so it must carry
+    /// the brief that child was made from. A child that predates the stored
+    /// digest has nothing to compare and replays as before.
+    async fn require_same_brief(
+        &self,
+        child_chat_id: &str,
+        request: &SpawnRequest,
+    ) -> AgentsResult<()> {
+        let stored = self.store.get_chat(child_chat_id).await?.and_then(|chat| {
+            chat.metadata[SUBAGENT_METADATA_KEY]["briefDigest"]
+                .as_str()
+                .map(str::to_owned)
+        });
+        match stored {
+            Some(stored) if stored != request.brief.digest() => {
+                Err(AgentsError::SpawnKeyConflict(format!(
+                    "spawn_key_conflict: spawn key {} already made child {child_chat_id} from a \
+                     different brief; use a new spawnKey for different work",
+                    request.spawn_key
+                )))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Submit the child's first turn. The submission is deterministic —
     /// the input id is derived from the child id, so any replay (crash
     /// between register and dispatch, retry after the submission landed)
@@ -853,8 +945,18 @@ impl SubagentService {
         child_chat_id: &str,
         role: &RoleSpec,
         request: &SpawnRequest,
+        workspace_root: Option<&str>,
     ) -> AgentsResult<()> {
-        let content = compose_child_prompt(role, request);
+        // A replay re-renders the same first message: the grants were taken
+        // at spawn, so they are not asked for again.
+        let context = self.resolve_context(request, workspace_root, false).await?;
+        let limits = self.child_budget_lines(child_chat_id).await?;
+        let content = Value::String(render_brief(
+            &role.prompt,
+            &request.brief,
+            &context.rendered,
+            &limits,
+        ));
         let input_id = format!(
             "subin:{}",
             &sha256_hex(format!("{child_chat_id}:turn"))[..24]
@@ -906,6 +1008,186 @@ impl SubagentService {
             }
         }
         Ok(())
+    }
+
+    // -- brief context ----------------------------------------------------------
+
+    /// The output store over this service's database, when the store has an
+    /// output root.
+    fn output_store(&self) -> AgentsResult<SqliteOutputStore> {
+        SqliteOutputStore::new(self.store.clone(), self.runtime.clone()).map_err(|error| {
+            AgentsError::ContextRefRefused(format!(
+                "context_ref_refused: output handles are unavailable here ({error})"
+            ))
+        })
+    }
+
+    /// Resolve the brief's references into what the first message shows and
+    /// the output handles the child is granted. With `enforce`, the parent's
+    /// own right to hand each reference on is checked: it must be able to
+    /// read the output handle, the path must lie inside the inherited
+    /// workspace, and the message must be one of its own user or assistant
+    /// messages. A refusal never says whether a handle exists.
+    async fn resolve_context(
+        &self,
+        request: &SpawnRequest,
+        workspace_root: Option<&str>,
+        enforce: bool,
+    ) -> AgentsResult<ResolvedContext> {
+        let mut resolved = ResolvedContext::default();
+        for reference in &request.brief.context_refs {
+            let mut rendered = RenderedRef {
+                kind: reference.kind,
+                reference: reference.reference.clone(),
+                note: reference.note.clone(),
+                text: None,
+                cut: false,
+            };
+            match reference.kind {
+                RefKind::Output => {
+                    if enforce {
+                        self.require_output_access(&request.parent_chat_id, reference)
+                            .await?;
+                    }
+                    resolved.grants.push(reference.reference.clone());
+                }
+                RefKind::Path => {
+                    let root = workspace_root.ok_or_else(|| {
+                        AgentsError::ContextRefRefused(format!(
+                            "context_ref_refused: path {} needs a workspace, and this session \
+                             has none",
+                            reference.reference
+                        ))
+                    })?;
+                    rendered.reference =
+                        confine_to_workspace(root, &reference.reference).map_err(|reason| {
+                            AgentsError::ContextRefRefused(format!("context_ref_refused: {reason}"))
+                        })?;
+                }
+                RefKind::Memory => {
+                    if enforce {
+                        self.require_memory_access(&request.parent_chat_id, reference)
+                            .await?;
+                    }
+                }
+                RefKind::Message => {
+                    let (text, owner_text) = self
+                        .parent_message_text(&request.parent_chat_id, &reference.reference)
+                        .await?;
+                    let (text, cut) = cap_message_text(&text);
+                    // Only the owner's own words are copied as they are; the
+                    // assistant's text may echo a child's, so it is wrapped
+                    // as untrusted (after the cap, so the cut cannot lose
+                    // the closing tag).
+                    rendered.text = Some(if owner_text {
+                        text
+                    } else {
+                        untrusted_subagent_block(&reference.reference, "assistant", &text)
+                    });
+                    rendered.cut = cut;
+                }
+            }
+            resolved.rendered.push(rendered);
+        }
+        Ok(resolved)
+    }
+
+    /// The parent may only grant a handle it can read itself: its own, a
+    /// descendant's, or one its own brief granted it.
+    async fn require_output_access(
+        &self,
+        parent_chat_id: &str,
+        reference: &ContextRef,
+    ) -> AgentsResult<()> {
+        let refusal = || {
+            AgentsError::ContextRefRefused(format!(
+                "context_ref_refused: no output {} is readable from this session",
+                reference.reference
+            ))
+        };
+        let handle = OutputHandle::parse(&reference.reference).map_err(|_| refusal())?;
+        let outputs = self.output_store()?;
+        let info = outputs.info(&handle).await.map_err(|_| refusal())?;
+        if info.meta.session != parent_chat_id
+            && !outputs
+                .may_read_handle(parent_chat_id, &info.meta.session, &handle)
+                .await
+        {
+            return Err(refusal());
+        }
+        Ok(())
+    }
+
+    /// The parent may only hand on a memory record it can read itself, and
+    /// only when a memory service is configured. A refusal never says
+    /// whether the record exists.
+    async fn require_memory_access(
+        &self,
+        parent_chat_id: &str,
+        reference: &ContextRef,
+    ) -> AgentsResult<()> {
+        let Some(reader) = &self.memory_refs else {
+            return Err(AgentsError::ContextRefRefused(
+                "context_ref_refused: memory references need a memory service, and none is \
+                 configured"
+                    .to_owned(),
+            ));
+        };
+        if !reader.can_read(parent_chat_id, &reference.reference).await {
+            return Err(AgentsError::ContextRefRefused(format!(
+                "context_ref_refused: no memory record {} is readable from this session",
+                reference.reference
+            )));
+        }
+        Ok(())
+    }
+
+    /// The text of one user or assistant message of the parent session, and
+    /// whether it is the owner's own (a user message). A record stamped as
+    /// child-derived is not offered at all.
+    async fn parent_message_text(
+        &self,
+        parent_chat_id: &str,
+        message_id: &str,
+    ) -> AgentsResult<(String, bool)> {
+        let records = self.store.messages(parent_chat_id, false).await?;
+        records
+            .iter()
+            .find(|record| {
+                record.id == message_id
+                    && matches!(record.role.as_str(), "user" | "assistant")
+                    && !is_child_derived_message(&record.metadata)
+            })
+            .map(|record| {
+                let text = match &record.content {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                (text, record.role == "user")
+            })
+            .ok_or_else(|| {
+                AgentsError::ContextRefRefused(format!(
+                    "context_ref_refused: message {message_id} is not a user or assistant \
+                     message of this session"
+                ))
+            })
+    }
+
+    /// The limits the child runs under, read from its durable metadata, for
+    /// the budget section of the first message.
+    async fn child_budget_lines(&self, child_chat_id: &str) -> AgentsResult<BudgetLines> {
+        let limits = self
+            .store
+            .get_chat(child_chat_id)
+            .await?
+            .map(|chat| chat.metadata[SUBAGENT_METADATA_KEY]["limits"].clone())
+            .unwrap_or(Value::Null);
+        Ok(BudgetLines {
+            max_iterations: limits["maxToolIterations"].as_u64(),
+            max_provider_requests: limits["maxProviderRequests"].as_u64(),
+            timeout_ms: limits["overallTimeoutMs"].as_u64(),
+            max_tokens: limits["maxTokens"].as_u64(),
+        })
     }
 
     // -- queries ----------------------------------------------------------------
@@ -1130,14 +1412,14 @@ impl SubagentService {
                 return Ok(AwaitOutcome {
                     settled: true,
                     timed_out: false,
-                    results: views.iter().map(await_result).collect(),
+                    results: self.await_results(&views).await?,
                 });
             }
             if self.now_ms() >= deadline {
                 return Ok(AwaitOutcome {
                     settled: false,
                     timed_out: true,
-                    results: views.iter().map(await_result).collect(),
+                    results: self.await_results(&views).await?,
                 });
             }
             // Bound each nap so a parent cancellation is felt promptly.
@@ -1173,7 +1455,7 @@ impl SubagentService {
             return Ok(AwaitDecision::Ready(AwaitOutcome {
                 settled: satisfied,
                 timed_out: !satisfied,
-                results: views.iter().map(await_result).collect(),
+                results: self.await_results(&views).await?,
             }));
         }
         let awaited: Vec<String> = views
@@ -1360,7 +1642,7 @@ impl SubagentService {
             match self.store.get_subagent(id).await? {
                 Some(row) => {
                     let view = self.refresh(&row).await?;
-                    results.push(await_result(&view));
+                    results.push(self.await_result(&view).await?);
                     views.push(view);
                 }
                 None => results.push(missing_result(id)),
@@ -1402,6 +1684,7 @@ impl SubagentService {
                 plan_tool_names: vec![],
                 policy_denial: None,
                 granted_mode: None,
+                actor: AnswerActor::Waker,
             })
             .await;
         match answered {
@@ -2147,6 +2430,251 @@ impl SubagentService {
         Ok(answer.or_else(|| row.result.clone()))
     }
 
+    // -- result envelope ----------------------------------------------------------
+
+    async fn await_result(&self, view: &SubagentView) -> AgentsResult<AwaitResult> {
+        Ok(AwaitResult {
+            child_chat_id: view.child_chat_id.clone(),
+            role: view.role.clone(),
+            status: view.status.clone(),
+            envelope: self.build_envelope(view).await?,
+        })
+    }
+
+    async fn await_results(&self, views: &[SubagentView]) -> AgentsResult<Vec<AwaitResult>> {
+        let mut results = Vec::with_capacity(views.len());
+        for view in views {
+            results.push(self.await_result(view).await?);
+        }
+        Ok(results)
+    }
+
+    /// The result envelope of a settled child (`None` while it still runs).
+    /// The summary is the final message cut at 6 KiB on a paragraph boundary;
+    /// a longer message is stored whole in the output store and named by
+    /// `full_result_handle`. Findings and open questions come only from the
+    /// child's own `report_findings` call; usage from its turns' events.
+    pub async fn build_envelope(
+        &self,
+        view: &SubagentView,
+    ) -> AgentsResult<Option<ResultEnvelope>> {
+        if !is_terminal_status(&view.status) {
+            return Ok(None);
+        }
+        let full = view
+            .result
+            .clone()
+            .or_else(|| view.error.clone())
+            .unwrap_or_default();
+        let (summary, truncated) = cut_summary(&full);
+        let mut artifacts = vec![];
+        let mut full_result_handle = None;
+        if truncated {
+            full_result_handle = self.store_full_result(view, &full).await;
+            if let Some(handle) = &full_result_handle {
+                artifacts.push(EnvelopeArtifact {
+                    kind: "output".into(),
+                    reference: handle.clone(),
+                    description: "the full final message".into(),
+                });
+            }
+        }
+        let report = self
+            .store
+            .get_chat(&view.child_chat_id)
+            .await?
+            .map(|chat| ChildReport::from_metadata(&chat.metadata[SUBAGENT_METADATA_KEY]))
+            .unwrap_or_default();
+        Ok(Some(ResultEnvelope {
+            child_id: view.child_chat_id.clone(),
+            role: view.role.clone(),
+            status: envelope_status(&view.status, view.error.as_deref()).to_owned(),
+            summary,
+            findings: report.findings,
+            artifacts,
+            open_questions: report.open_questions,
+            usage: self.child_usage(&view.child_chat_id).await?,
+            truncated,
+            full_result_handle,
+        }))
+    }
+
+    /// Write the child's whole final message to the output store, once per
+    /// distinct text: the handle is remembered on the child's chat, so
+    /// repeated reads of the same result name the same handle. `None` when
+    /// the store has no output root or the write failed; the envelope is
+    /// then still marked truncated.
+    async fn store_full_result(&self, view: &SubagentView, full: &str) -> Option<String> {
+        let outputs = self.output_store().ok()?;
+        let digest = sha256_hex(full);
+        if let Some(chat) = self
+            .store
+            .get_chat(&view.child_chat_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            let recorded = &chat.metadata[SUBAGENT_METADATA_KEY]["resultHandle"];
+            if recorded["sha256"].as_str() == Some(digest.as_str())
+                && let Some(text) = recorded["handle"].as_str()
+                && let Ok(handle) = OutputHandle::parse(text)
+                && outputs.info(&handle).await.is_ok()
+            {
+                return Some(text.to_owned());
+            }
+        }
+        let handle = outputs
+            .put(
+                OutputMeta {
+                    session: view.child_chat_id.clone(),
+                    task: view.turn_task_id.clone().unwrap_or_default(),
+                    call_id: "subagent_result".into(),
+                    tool: "subagent_result".into(),
+                    mime: "text/plain".into(),
+                    exit_code: None,
+                },
+                full.as_bytes().to_vec(),
+            )
+            .await
+            .ok()?;
+        let record = json!({"handle": handle.as_str(), "sha256": digest});
+        let _ = self
+            .store
+            .mutate_chat(&view.child_chat_id, self.now_ms(), move |chat| {
+                chat.metadata[SUBAGENT_METADATA_KEY]["resultHandle"] = record;
+                Ok(())
+            })
+            .await;
+        Some(handle.to_string())
+    }
+
+    /// Usage of every turn the child ran, from the normalized usage events
+    /// of its turn tasks; duration is the sum of the turns' wall clock.
+    async fn child_usage(&self, child_chat_id: &str) -> AgentsResult<EnvelopeUsage> {
+        const PAGE: usize = 1_000;
+        let tasks = self
+            .store
+            .list_tasks(Some(child_chat_id.to_owned()))
+            .await?;
+        let mut usage = EnvelopeUsage::default();
+        for task in tasks.iter().filter(|task| task.kind == CHAT_TURN_TASK_KIND) {
+            if let (Some(started), Some(finished)) = (task.started_at, task.finished_at) {
+                usage.duration_ms = usage
+                    .duration_ms
+                    .saturating_add(u64::try_from(finished.saturating_sub(started)).unwrap_or(0));
+            }
+            let mut after = None;
+            loop {
+                let page = self.store.events(&task.task_id, after, PAGE).await?;
+                let (tokens, requests) = usage_from_events(page.iter().map(|record| &record.event));
+                usage.tokens = usage.tokens.saturating_add(tokens);
+                usage.provider_requests = usage.provider_requests.saturating_add(requests);
+                match page.last() {
+                    Some(last) if page.len() == PAGE => after = Some(last.seq as u64),
+                    _ => break,
+                }
+            }
+        }
+        Ok(usage)
+    }
+
+    /// A child view as the parent model reads it: the child's text is gone
+    /// from `result` and `error` and rides in `envelope`, the untrusted
+    /// block. Everything else is the registry's own bookkeeping.
+    pub async fn present_view(&self, view: &SubagentView) -> AgentsResult<Value> {
+        let mut value = serde_json::to_value(view).map_err(|error| {
+            AgentsError::Core(agentkit_core::CoreError::new(
+                "subagent_view_unserializable",
+                &error.to_string(),
+            ))
+        })?;
+        if let Some(object) = value.as_object_mut() {
+            object.remove("result");
+            object.remove("error");
+            if let Some(envelope) = self.build_envelope(view).await? {
+                object.insert(
+                    "envelope".into(),
+                    Value::String(present_envelope(&envelope)),
+                );
+            }
+        }
+        Ok(value)
+    }
+
+    // -- trust rules (DEL-04) -----------------------------------------------------
+
+    /// Answer a human request on behalf of `actor_chat_id`. A child session
+    /// can never answer or approve a request: not its parent's, not a
+    /// sibling's, not its own. Requests belong to the owner, who answers
+    /// through the session surface (see [`Self::pending_owner_requests`]).
+    /// Every agent-originated answer path goes through this check.
+    pub async fn answer_as(
+        &self,
+        actor_chat_id: &str,
+        input: &AnswerInput,
+    ) -> AgentsResult<AnswerReceipt> {
+        if self.store.get_subagent(actor_chat_id).await?.is_some() {
+            return Err(AgentsError::ChildCannotAnswer(format!(
+                "child_cannot_answer: session {actor_chat_id} is a subagent and cannot answer \
+                 request {}; the owner answers it",
+                input.request_id
+            )));
+        }
+        // Not even a non-child agent answers: the store refuses the
+        // `Agent` actor for every request, so this stays closed whatever
+        // the checks above know about the session.
+        self.session
+            .answer_with_actor(input, AnswerActor::Agent(actor_chat_id.to_owned()))
+            .await
+            .map_err(session_error)
+    }
+
+    /// Every human request waiting in the tree below `root_chat_id` (the
+    /// owner's session included), each labelled with the title and role of
+    /// the child that raised it. A child's approval request is not hidden in
+    /// the child's session: it is listed here for the owner. Child waits are
+    /// the host's, never a human's, and are left out.
+    pub async fn pending_owner_requests(
+        &self,
+        root_chat_id: &str,
+    ) -> AgentsResult<Vec<OwnerRequest>> {
+        let mut sessions: Vec<(String, Option<String>)> = vec![(root_chat_id.to_owned(), None)];
+        for row in budget::tree_rows(&self.store, root_chat_id).await? {
+            sessions.push((row.child_chat_id, Some(row.role)));
+        }
+        let mut requests = vec![];
+        for (session_id, role) in sessions {
+            let title = self
+                .store
+                .get_chat(&session_id)
+                .await?
+                .and_then(|chat| chat.title)
+                .unwrap_or_else(|| session_id.clone());
+            let pending = self
+                .store
+                .list_inputs(AgentInputQuery {
+                    session_id: session_id.clone(),
+                    kinds: Some(vec![AgentInputKind::HumanRequest]),
+                    statuses: Some(vec![AgentInputStatus::Pending]),
+                    target_task_id: None,
+                })
+                .await?;
+            for request in pending
+                .into_iter()
+                .filter(|request| !is_child_wait(&request.input_id, &request.content))
+            {
+                requests.push(OwnerRequest {
+                    request_id: request.input_id,
+                    session_id: session_id.clone(),
+                    label: role.as_ref().map(|role| format!("{title} ({role})")),
+                    role: role.clone(),
+                    content: request.content,
+                });
+            }
+        }
+        Ok(requests)
+    }
+
     async fn require_row(&self, child_chat_id: &str) -> AgentsResult<SubagentRecord> {
         self.store
             .get_subagent(child_chat_id)
@@ -2162,18 +2690,7 @@ fn missing_result(child_chat_id: &str) -> AwaitResult {
         child_chat_id: child_chat_id.to_owned(),
         role: String::new(),
         status: MISSING_STATUS.to_owned(),
-        result: None,
-        error: None,
-    }
-}
-
-fn await_result(view: &SubagentView) -> AwaitResult {
-    AwaitResult {
-        child_chat_id: view.child_chat_id.clone(),
-        role: view.role.clone(),
-        status: view.status.clone(),
-        result: view.result.clone(),
-        error: view.error.clone(),
+        envelope: None,
     }
 }
 

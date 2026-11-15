@@ -296,14 +296,8 @@ fn spawn_request(key: &str, role: &str) -> SpawnRequest {
         parent_chat_id: "parent".into(),
         parent_task_id: "parent-turn".into(),
         spawn_key: key.into(),
-        role: role.into(),
-        prompt: "look".into(),
-        title: None,
-        model: None,
+        brief: Brief::new(role, "look", "look", OutputFormat::Summary, "done"),
         exclusive_workspace: false,
-        max_iterations: None,
-        max_provider_requests: None,
-        overall_timeout_ms: None,
     }
 }
 
@@ -357,7 +351,7 @@ async fn unroutable_or_modelless_pin_is_refused_before_any_child_exists() {
     );
     // An explicit request model satisfies the rule.
     let mut explicit = spawn_request("m2", "modelless");
-    explicit.model = Some("model-b2".into());
+    explicit.brief.model = Some("model-b2".into());
     rig.subagents.spawn(&explicit).await.unwrap();
     settle(&rig.subagents).await;
     assert_eq!(rig.b.calls(), vec!["model-b2"]);

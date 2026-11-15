@@ -309,6 +309,7 @@ fn answer(request_id: &str, answer_id: &str, response: Value) -> AnswerHumanRequ
         plan_tool_names: vec![],
         policy_denial: None,
         granted_mode: None,
+        actor: Default::default(),
     }
 }
 

@@ -10,9 +10,9 @@
 //! that the session purge, or the orphan sweep, removes.
 use crate::{Result, SqliteStore};
 use agentkit_core::{
-    ByteOrLineRange, Match, OUTPUT_RETENTION_MS, OutputError, OutputHandle, OutputInfo, OutputMeta,
-    OutputSlice, OutputStore, PurgeReport, Runtime, SessionTree, count_lines, search_bytes,
-    slice_bytes,
+    ByteOrLineRange, Match, OUTPUT_GRANTS_METADATA_KEY, OUTPUT_RETENTION_MS, OutputError,
+    OutputHandle, OutputInfo, OutputMeta, OutputSlice, OutputStore, PurgeReport, Runtime,
+    SUBAGENT_METADATA_KEY, SessionTree, count_lines, search_bytes, slice_bytes,
 };
 use async_trait::async_trait;
 use rusqlite::{OptionalExtension, params};
@@ -477,6 +477,38 @@ impl SessionTree for SqliteOutputStore {
                     }
                 }
                 Ok(false)
+            })
+            .await
+            .unwrap_or(false)
+    }
+
+    /// The tree rule, or a grant: the child's chat record lists the handle
+    /// under `agentkit.subagent.outputGrants`. The record is written at
+    /// spawn, after the parent's own access to the handle was checked.
+    async fn may_read_handle(&self, caller: &str, owner: &str, handle: &OutputHandle) -> bool {
+        if self.may_read(caller, owner).await {
+            return true;
+        }
+        let (caller, handle) = (caller.to_owned(), handle.as_str().to_owned());
+        self.store
+            .call(move |db| {
+                let record: Option<String> = db
+                    .query_row("SELECT record FROM chats WHERE id=?", [&caller], |row| {
+                        row.get(0)
+                    })
+                    .optional()?;
+                let granted = record
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .is_some_and(|chat| {
+                        chat["metadata"][SUBAGENT_METADATA_KEY][OUTPUT_GRANTS_METADATA_KEY]
+                            .as_array()
+                            .is_some_and(|handles| {
+                                handles
+                                    .iter()
+                                    .any(|entry| entry.as_str() == Some(handle.as_str()))
+                            })
+                    });
+                Ok(granted)
             })
             .await
             .unwrap_or(false)

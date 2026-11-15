@@ -1,11 +1,13 @@
+use super::brief::{Brief, OutputFormat, RefKind, TITLE_MAX_CHARS};
 use super::config::{BUILTIN_ROLES, SubagentConfig};
+use super::envelope::ChildReport;
 use super::service::{
     AwaitDecision, AwaitMode, SUBAGENT_ITERATIONS_CEILING, SUBAGENT_OVERALL_MS_CEILING,
-    SUBAGENT_PROVIDER_REQUESTS_CEILING, SpawnRequest, SubagentService,
+    SUBAGENT_PROVIDER_REQUESTS_CEILING, SUBAGENT_TOKENS_CEILING, SpawnRequest, SubagentService,
 };
 use agentkit_core::{
-    AliasTable, CoreError, Tool, ToolContext, ToolDefinition, ToolResult, failure_catalog,
-    normalise,
+    AliasTable, CoreError, SUBAGENT_METADATA_KEY, Tool, ToolContext, ToolDefinition, ToolResult,
+    failure_catalog, normalise,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -24,6 +26,11 @@ pub const SUBAGENT_TOOL_NAMES: [&str; 7] = [
     "subagent_resume",
 ];
 
+/// The one tool only a child session has: it records the structured part of
+/// the result envelope (findings, open questions). It is not in
+/// [`SUBAGENT_TOOL_NAMES`] because a parent never sees it.
+pub const REPORT_FINDINGS_TOOL: &str = "report_findings";
+
 const CAPABILITY: &str = "orchestration";
 
 /// Upper bound the schema states for the child-id list.
@@ -35,9 +42,6 @@ pub const SUBAGENT_ARG_ALIASES: &[(&str, &str)] = &[
     ("childId", "child_id"),
     ("childIds", "child_ids"),
     ("exclusiveWorkspace", "exclusive_workspace"),
-    ("maxIterations", "max_iterations"),
-    ("maxProviderRequests", "max_provider_requests"),
-    ("overallTimeoutMs", "timeout"),
     ("timeoutMs", "timeout"),
 ];
 
@@ -66,30 +70,52 @@ fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefini
         match name {
             "subagent_spawn" => (
                 format!(
-                    "Spawn a child session that runs one delegated assignment in its own \
-                     context; it sees nothing of yours except the prompt. Roles: {}. Read-only \
-                     roles cannot write, and the child inherits your workspace and permission \
-                     ceiling. Spawn independent children together, then collect them with \
-                     subagent_await. Returns the child id for subagent_status, subagent_message, \
-                     subagent_cancel and subagent_resume. Set exclusive_workspace for an \
-                     implementer whose edits must not race another writer.",
+                    "Hand one assignment to a child session that works in its own context and \
+                     sees only this brief. Roles: {}. Fill every required field: the objective \
+                     says what to produce and why, scope.stop_when says when the child is \
+                     done, and context_refs point at output handles, workspace paths, memory \
+                     records or messages instead of pasted text. Read-only roles cannot write, \
+                     and the child inherits your workspace and permission ceiling. Spawn \
+                     independent children together, then collect them with subagent_await. \
+                     Returns the child id.",
                     roles.join(", ")
                 ),
-                json!({"type":"object","required":["role","prompt"],"additionalProperties":false,
+                json!({"type":"object","required":["role","title","objective","output_format","scope"],"additionalProperties":false,
                     "properties":{
-                    "role":{"type":"string","enum":roles,"description":"What kind of child to spawn."},
-                    "prompt":{"type":"string","minLength":1,"description":"Self-contained assignment: the child sees nothing of your context."},
-                    "title":{"type":"string","description":"Short label for the child."},
-                    "model":{"type":"string","description":"Model for this child instead of the default."},
-                    "exclusive_workspace":{"type":"boolean","description":"Give the child the workspace to itself while it runs."},
-                    "max_iterations":{"type":"integer","minimum":1,"maximum":SUBAGENT_ITERATIONS_CEILING,"description":"Upper bound on the child's tool iterations."},
-                    "max_provider_requests":{"type":"integer","minimum":1,"maximum":SUBAGENT_PROVIDER_REQUESTS_CEILING,"description":"Upper bound on the child's provider requests."},
-                    "timeout":{"type":"integer","minimum":1000,"maximum":SUBAGENT_OVERALL_MS_CEILING,"description":"Overall time limit for the child, in milliseconds."}
+                    "role":{"type":"string","enum":roles,"description":"Which child to spawn."},
+                    "title":{"type":"string","minLength":1,"maxLength":TITLE_MAX_CHARS,"description":"Short label shown in the UI, at most 80 characters."},
+                    "objective":{"type":"string","minLength":1,"description":"What the child must find out or produce, and why. The child sees nothing of your conversation."},
+                    "output_format":{"type":"string","enum":OutputFormat::NAMES,"description":"Shape of the child's final message."},
+                    "scope":{"type":"object","required":["stop_when"],"additionalProperties":false,
+                        "description":"Boundaries of the assignment.",
+                        "properties":{
+                            "include":{"type":"array","items":{"type":"string"},"maxItems":32,"description":"Paths, sources or topics the child works on."},
+                            "exclude":{"type":"array","items":{"type":"string"},"maxItems":32,"description":"Paths, sources or topics the child leaves alone."},
+                            "stop_when":{"type":"string","minLength":1,"description":"The condition that tells the child it is finished."}
+                        }},
+                    "context_refs":{"type":"array","maxItems":16,
+                        "description":"Context by reference, never pasted. An output handle is readable by the child; a path must lie inside the workspace; a message id copies at most 4 KiB of that message.",
+                        "items":{"type":"object","required":["kind","ref"],"additionalProperties":false,
+                            "properties":{
+                                "kind":{"type":"string","enum":RefKind::NAMES,"description":"What the reference points at."},
+                                "ref":{"type":"string","minLength":1,"description":"The handle, path, record id or message id."},
+                                "note":{"type":"string","description":"Why the child needs it."}
+                            }}},
+                    "budget":{"type":"object","required":[],"additionalProperties":false,
+                        "description":"Optional limits for the child, clamped to the host ceilings.",
+                        "properties":{
+                            "max_tokens":{"type":"integer","minimum":1,"maximum":SUBAGENT_TOKENS_CEILING,"description":"Upper bound on the tokens the child may spend."},
+                            "max_provider_requests":{"type":"integer","minimum":1,"maximum":SUBAGENT_PROVIDER_REQUESTS_CEILING,"description":"Upper bound on the child's provider requests."},
+                            "timeout":{"type":"integer","minimum":1000,"maximum":SUBAGENT_OVERALL_MS_CEILING,"description":"Overall time limit for the child, in milliseconds."},
+                            "max_iterations":{"type":"integer","minimum":1,"maximum":SUBAGENT_ITERATIONS_CEILING,"description":"Upper bound on the child's tool iterations."}
+                        }},
+                    "model":{"type":"string","description":"Name of the model for this child instead of the default; a choice pinned by the host wins."},
+                    "exclusive_workspace":{"type":"boolean","description":"Give the child the workspace to itself while it runs."}
                 }}),
                 30_000,
                 vec![
-                    json!({"role": "explorer", "prompt": "Find where retries are configured and report the file paths and defaults."}),
-                    json!({"role": "implementer", "prompt": "Add a retry limit to src/client.rs and run the tests.", "exclusive_workspace": true, "timeout": 600000}),
+                    json!({"role": "explorer", "title": "Find retry settings", "objective": "Find where retries are configured and report the file paths and defaults.", "output_format": "summary", "scope": {"include": ["src/"], "exclude": [], "stop_when": "every retry setting is located"}}),
+                    json!({"role": "implementer", "title": "Add retry limit", "objective": "Add a retry limit to src/client.rs and run the tests.", "output_format": "patch_report", "scope": {"include": ["src/client.rs"], "exclude": ["tests/fixtures"], "stop_when": "the tests pass"}, "context_refs": [{"kind": "path", "ref": "src/client.rs", "note": "the file to change"}], "budget": {"timeout": 600000}, "exclusive_workspace": true}),
                 ],
             ),
             "subagent_list" => (
@@ -188,6 +214,14 @@ fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefini
     }
 }
 
+/// An await outcome as the parent model reads it: every child's envelope is
+/// the text of an untrusted `<subagent_result>` block.
+fn presented_outcome(outcome: super::service::AwaitOutcome) -> Result<Value, String> {
+    let mut value = serde_json::to_value(outcome).map_err(|error| error.to_string())?;
+    agentkit_store::present_child_results(&mut value);
+    Ok(value)
+}
+
 fn payload(data: Value, context: &ToolContext) -> ToolResult {
     ToolResult {
         ok: true,
@@ -224,9 +258,12 @@ fn refused(reason: String, context: &ToolContext) -> ToolResult {
 /// One parent turn's stable identity for child naming. `tool_call_id` is
 /// the model's logical call id — identical across attempt retries, so a
 /// retried spawn re-admits the same child instead of forking a second one.
+/// An explicit `spawnKey` is the identity on its own (with the parent and its
+/// turn, as `messageKey` and `resumeKey` are): another call id does not mint
+/// another child.
 fn spawn_key(context: &ToolContext, input: &Value) -> String {
     if let Some(key) = input.get("spawnKey").and_then(Value::as_str) {
-        return format!("{}|k:{key}", context.tool_call_id.as_deref().unwrap_or(""));
+        return format!("k:{key}");
     }
     format!(
         "{}|a:{}",
@@ -364,7 +401,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
     }
     async fn contribute(
         &self,
-        _context: &agentkit_governance::ToolContributionContext,
+        context: &agentkit_governance::ToolContributionContext,
     ) -> agentkit_governance::GovernanceResult<Vec<agentkit_governance::ContributedTool>> {
         if !self.service.config().enabled {
             return Ok(vec![]);
@@ -380,7 +417,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             config.roles.keys().cloned().collect()
         };
         let max_await_ms = config.limits.max_await_ms;
-        Ok(vec![
+        let mut tools = vec![
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
                 definition_for("subagent_spawn", &roles, max_await_ms),
@@ -388,27 +425,16 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                     Box::pin(async move {
                         let (parent_chat_id, parent_task_id) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
+                        let brief = Brief::from_input(&input).map_err(|error| error.to_string())?;
                         require_call_identity(&context, &input, "spawnKey")?;
                         let request = SpawnRequest {
                             parent_chat_id,
                             parent_task_id,
                             spawn_key: spawn_key(&context, &input),
-                            role: input["role"]
-                                .as_str()
-                                .ok_or_else(|| "role is required".to_owned())?
-                                .to_owned(),
-                            prompt: input["prompt"]
-                                .as_str()
-                                .ok_or_else(|| "prompt is required".to_owned())?
-                                .to_owned(),
-                            title: input["title"].as_str().map(str::to_owned),
-                            model: input["model"].as_str().map(str::to_owned),
+                            brief,
                             exclusive_workspace: input["exclusive_workspace"]
                                 .as_bool()
                                 .unwrap_or(false),
-                            max_iterations: input["max_iterations"].as_u64().map(|v| v as u32),
-                            max_provider_requests: input["max_provider_requests"].as_u64(),
-                            overall_timeout_ms: input["timeout"].as_u64(),
                         };
                         let child = service
                             .spawn(&request)
@@ -429,8 +455,16 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             .list(&parent_chat_id)
                             .await
                             .map_err(|error| error.to_string())?;
-                        Ok(json!({"children": serde_json::to_value(views)
-                            .map_err(|error| error.to_string())?}))
+                        let mut children = Vec::with_capacity(views.len());
+                        for view in &views {
+                            children.push(
+                                service
+                                    .present_view(view)
+                                    .await
+                                    .map_err(|error| error.to_string())?,
+                            );
+                        }
+                        Ok(json!({ "children": children }))
                     })
                 },
             )),
@@ -453,7 +487,10 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                                 "subagent_not_yours: coordinate only your own children".into()
                             );
                         }
-                        serde_json::to_value(view).map_err(|error| error.to_string())
+                        service
+                            .present_view(&view)
+                            .await
+                            .map_err(|error| error.to_string())
                     })
                 },
             )),
@@ -532,8 +569,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                                 .map_err(|error| error.to_string())?;
                             match decision {
                                 AwaitDecision::Ready(outcome) => {
-                                    return serde_json::to_value(outcome)
-                                        .map_err(|error| error.to_string());
+                                    return presented_outcome(outcome);
                                 }
                                 AwaitDecision::Park(spec) => {
                                     if context.request_human(spec) {
@@ -552,7 +588,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             )
                             .await
                             .map_err(|error| error.to_string())?;
-                        serde_json::to_value(outcome).map_err(|error| error.to_string())
+                        presented_outcome(outcome)
                     })
                 },
             )),
@@ -584,7 +620,10 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             .cancel(child)
                             .await
                             .map_err(|error| error.to_string())?;
-                        serde_json::to_value(view).map_err(|error| error.to_string())
+                        service
+                            .present_view(&view)
+                            .await
+                            .map_err(|error| error.to_string())
                     })
                 },
             )),
@@ -621,10 +660,97 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             .resume_for_parent(child, &resume_key, Some(&parent_task_id))
                             .await
                             .map_err(|error| error.to_string())?;
-                        serde_json::to_value(view).map_err(|error| error.to_string())
+                        service
+                            .present_view(&view)
+                            .await
+                            .map_err(|error| error.to_string())
                     })
                 },
             )),
-        ])
+        ];
+        // The structured part of the envelope is the child's to fill; a
+        // session that is not a subagent never sees the tool.
+        if let Some(chat_id) = context.chat_id.as_deref()
+            && self
+                .service
+                .store()
+                .get_subagent(chat_id)
+                .await
+                .map_err(crate::AgentsError::from)?
+                .is_some()
+        {
+            tools.push(agentkit_governance::ContributedTool::Read(tool(
+                &service,
+                report_findings_definition(),
+                |service, context, input| {
+                    Box::pin(async move {
+                        let (chat_id, _) =
+                            parent_coordinates(&context).map_err(|error| error.code)?;
+                        if service
+                            .store()
+                            .get_subagent(&chat_id)
+                            .await
+                            .map_err(|error| error.to_string())?
+                            .is_none()
+                        {
+                            return Err(
+                                "report_findings_child_only: only a child session reports findings"
+                                    .into(),
+                            );
+                        }
+                        let report = ChildReport::from_input(&input)?;
+                        let value =
+                            serde_json::to_value(&report).map_err(|error| error.to_string())?;
+                        let recorded = json!({
+                            "recorded": true,
+                            "findings": report.findings.len(),
+                            "open_questions": report.open_questions.len(),
+                        });
+                        service
+                            .store()
+                            .mutate_chat(&chat_id, service.now_ms(), move |chat| {
+                                chat.metadata[SUBAGENT_METADATA_KEY]["report"] = value;
+                                Ok(())
+                            })
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        Ok(recorded)
+                    })
+                },
+            )));
+        }
+        Ok(tools)
+    }
+}
+
+/// `report_findings`, offered to child sessions only.
+pub fn report_findings_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: REPORT_FINDINGS_TOOL.to_owned(),
+        version: "1".to_owned(),
+        effect: "read".to_owned(),
+        capability: CAPABILITY.to_owned(),
+        description: "Record structured findings and open questions for the agent that spawned \
+                      you. Call it once, just before your final message, when your assignment \
+                      asks for findings; a later call replaces the earlier report. Your final \
+                      message is still your result: this only adds the structured part."
+            .to_owned(),
+        input_schema: json!({"type":"object","required":[],"additionalProperties":false,
+        "properties":{
+            "findings":{"type":"array","maxItems":20,"description":"Claims you can support, each with its evidence.",
+                "items":{"type":"object","required":["claim","confidence"],"additionalProperties":false,
+                    "properties":{
+                        "claim":{"type":"string","minLength":1,"description":"One claim, in a sentence or two."},
+                        "evidence":{"type":"array","items":{"type":"string"},"maxItems":5,"description":"File and location, or another source, that supports the claim."},
+                        "confidence":{"type":"string","enum":["high","medium","low"],"description":"How sure you are of the claim."}
+                    }}},
+            "open_questions":{"type":"array","items":{"type":"string"},"maxItems":10,"description":"Questions you could not settle."}
+        }}),
+        output_schema: None,
+        timeout_ms: Some(15_000),
+        examples: vec![json!({
+            "findings": [{"claim": "Retries default to three attempts.", "evidence": ["src/client.rs:42"], "confidence": "high"}],
+            "open_questions": ["Is the limit overridden in the deployment config?"]
+        })],
     }
 }

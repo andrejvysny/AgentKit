@@ -198,6 +198,7 @@ async fn heartbeat_during_committed_park_does_not_lose_the_worker_and_answer_res
             plan_tool_names: vec![],
             policy_denial: None,
             granted_mode: None,
+            actor: Default::default(),
         })
         .await
         .unwrap();

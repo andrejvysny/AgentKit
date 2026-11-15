@@ -11,7 +11,7 @@ use super::ports::{
 };
 use crate::errors;
 use agentkit_store::{
-    ChatRecord, ConversationTimestamp, ImportConversation, MessageInput, SqliteStore,
+    ChatRecord, ConversationTimestamp, ImportConversation, MessageInput, SqliteStore, StoreError,
 };
 use napi::bindgen_prelude::*;
 use serde_json::{Value, json};
@@ -31,6 +31,13 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                 None | Some(Value::Null) => json!({}),
                 Some(value) => value.clone(),
             };
+            // The port is a caller surface: host-owned keys are written by
+            // the host's own session paths, never supplied here.
+            if let Some(key) = agentkit_sessions::host_owned_metadata_key(&metadata, &[]) {
+                return Err(errors::invalid(format!(
+                    "metadata must not contain host-owned key {key}."
+                )));
+            }
             let now = instant_or_now(&input, "now")?;
             Ok(record(
                 store
@@ -79,23 +86,42 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
         }
         "updateChat" => {
             let patch = input.get("patch").cloned().unwrap_or(Value::Null);
+            let title = opt_text(&patch, "title")?.map(str::to_owned);
+            let metadata = match patch.get("metadata") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(value.clone()),
+            };
+            let archived = match patch.get("archived") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(value)) => Some(*value),
+                _ => {
+                    return Err(errors::invalid("patch.archived must be a boolean"));
+                }
+            };
+            // One store job: a supplied metadata object is merged over the
+            // host-owned keys the chat already holds, and a change to one is
+            // refused, so no caller rewrites a grant or a subagent identity.
             Ok(record(
                 store
-                    .update_chat(
+                    .mutate_chat(
                         text(&input, "chatId")?,
-                        opt_text(&patch, "title")?.map(str::to_owned),
-                        match patch.get("metadata") {
-                            None | Some(Value::Null) => None,
-                            Some(value) => Some(value.clone()),
-                        },
-                        match patch.get("archived") {
-                            None | Some(Value::Null) => None,
-                            Some(Value::Bool(value)) => Some(*value),
-                            _ => {
-                                return Err(errors::invalid("patch.archived must be a boolean"));
-                            }
-                        },
                         instant_or_now(&input, "now")?,
+                        move |chat| {
+                            if let Some(metadata) = &metadata {
+                                chat.metadata = agentkit_sessions::merge_caller_metadata(
+                                    &chat.metadata,
+                                    metadata,
+                                )
+                                .map_err(StoreError::InvalidInput)?;
+                            }
+                            if title.is_some() {
+                                chat.title = title;
+                            }
+                            if let Some(archived) = archived {
+                                chat.archived = archived;
+                            }
+                            Ok(chat.clone())
+                        },
                     )
                     .await
                     .map_err(errors::store)?,
@@ -358,6 +384,50 @@ fn chat_updated_ms(chat: &ChatRecord) -> Option<i64> {
 mod tests {
     use crate::store::ports::testkit::{NOW, begin, call, code, store};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn host_owned_metadata_is_refused_on_create_and_update() {
+        let store = store();
+        let refused = call(
+            &store,
+            "conversations.createChat",
+            json!({"input":{"id":"bad","metadata":{"agentkit.subagent":{"role":"x"}}},"now":NOW}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code(refused), "invalid_input");
+        assert!(
+            call(&store, "conversations.getChat", json!({"chatId":"bad"}))
+                .await
+                .unwrap()
+                .is_null(),
+            "a refused create leaves no chat"
+        );
+
+        call(
+            &store,
+            "conversations.createChat",
+            json!({"input":{"id":"c1","metadata":{"tag":"x"}},"now":NOW}),
+        )
+        .await
+        .expect("chat created");
+        let refused = call(
+            &store,
+            "conversations.updateChat",
+            json!({"chatId":"c1","patch":{"metadata":{"agentkit.session.approvals":[]}},"now":NOW}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code(refused), "invalid_input");
+        let kept = call(
+            &store,
+            "conversations.updateChat",
+            json!({"chatId":"c1","patch":{"metadata":{"tag":"y"}},"now":NOW}),
+        )
+        .await
+        .expect("plain metadata updates");
+        assert_eq!(kept["metadata"]["tag"], "y");
+    }
 
     #[tokio::test]
     async fn chat_and_message_round_trip_through_the_port_surface() {

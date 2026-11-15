@@ -519,6 +519,21 @@ pub struct ResolveExecution {
     pub now: i64,
 }
 
+/// Who is answering a human request. The store checks it inside the answer
+/// transaction, so no caller can answer on a path it does not own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AnswerActor {
+    /// The owner, through the host-facing session surface.
+    #[default]
+    Owner,
+    /// The host's parked-parent waker; it answers child waits and nothing
+    /// else.
+    Waker,
+    /// An agent session. Agents never answer: the store refuses every
+    /// request for this actor.
+    Agent(String),
+}
+
 /// it authorizes (ADR 0016 §5). The host resolves the plan policy BEFORE the
 /// transaction (`policy_denial`, `granted_mode`); the authoritative grant
 /// write still happens here, against the record re-read inside.
@@ -542,6 +557,9 @@ pub struct AnswerHumanRequest {
     /// The mode already resolved from the plan policy; required when this
     /// answer approves a plan.
     pub granted_mode: Option<String>,
+    /// Who answers; the store refuses an actor that may not answer this
+    /// request.
+    pub actor: AnswerActor,
 }
 
 #[derive(Clone, Debug, PartialEq)]

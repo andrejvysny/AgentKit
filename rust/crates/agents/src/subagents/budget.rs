@@ -42,7 +42,10 @@ pub(super) async fn root_of(
 
 /// Every subagent row below `root`, found by descending registry parent
 /// links (which also covers legacy rows that carry no `rootChatId`).
-async fn tree_rows(store: &SqliteStore, root: &str) -> AgentsResult<Vec<SubagentRecord>> {
+pub(super) async fn tree_rows(
+    store: &SqliteStore,
+    root: &str,
+) -> AgentsResult<Vec<SubagentRecord>> {
     let mut seen = HashSet::from([root.to_owned()]);
     let mut frontier = vec![root.to_owned()];
     let mut rows = Vec::new();

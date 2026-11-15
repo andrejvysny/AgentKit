@@ -167,6 +167,14 @@ fn take_shaped(value: &mut Value) -> Option<ShapedText> {
     })
 }
 
+/// Chat-metadata object a subagent child carries (written once at spawn).
+pub const SUBAGENT_METADATA_KEY: &str = "agentkit.subagent";
+/// Field of [`SUBAGENT_METADATA_KEY`] listing the output handles the child's
+/// brief granted it read access to (roadmap 4.1, DEL-02). The grant record is
+/// keyed by the child session (its chat) and holds exactly the handles the
+/// spawning parent could itself read.
+pub const OUTPUT_GRANTS_METADATA_KEY: &str = "outputGrants";
+
 const HANDLE_PREFIX: &str = "out_";
 
 #[derive(Debug, thiserror::Error)]
@@ -308,13 +316,21 @@ pub trait OutputStore: Send + Sync {
 }
 
 /// Decides whose outputs a session may page. `read_output` and
-/// `search_output` allow the caller's own session and its descendant
-/// subagent sessions only: a child never reads its parent's or a sibling's
-/// outputs (explicit per-handle grants arrive with package 4.1).
+/// `search_output` allow the caller's own session, its descendant subagent
+/// sessions and the handles an explicit grant names: a child never reads its
+/// parent's or a sibling's outputs, except the exact handles its brief
+/// listed as `output` context refs (roadmap 4.1, DEL-02).
 #[async_trait]
 pub trait SessionTree: Send + Sync {
     /// True when `owner` is `caller` itself or a descendant of it.
     async fn may_read(&self, caller: &str, owner: &str) -> bool;
+
+    /// True when `caller` may read `handle`, which `owner`'s session holds:
+    /// the tree rule of [`Self::may_read`], or a per-handle grant recorded
+    /// for `caller`. A tree without grants answers by the tree rule alone.
+    async fn may_read_handle(&self, caller: &str, owner: &str, _handle: &OutputHandle) -> bool {
+        self.may_read(caller, owner).await
+    }
 }
 
 /// The tree of a host that knows no delegation: a session reads only itself.

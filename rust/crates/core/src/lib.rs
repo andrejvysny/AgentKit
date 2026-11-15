@@ -131,13 +131,17 @@ pub use model_profile::{
 // the two framework tools that page a stored result.
 pub use output::{
     ByteOrLineRange, DEFAULT_INLINE_LIMIT, ExactSession, MAX_STORED_BYTES,
-    MIN_INLINE_LIMIT as MIN_OUTPUT_INLINE_LIMIT, Match, OUTPUT_INLINE_LIMIT_METADATA_KEY,
-    OUTPUT_STORE_METADATA_KEY, OutputCall, OutputError, OutputGate, OutputHandle, OutputInfo,
-    OutputMeta, OutputSlice, OutputStore, PurgeReport, READ_OUTPUT,
-    RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT, SHAPED_HIDDEN_KEY, SHAPED_TEXT_KEY,
-    SessionTree, count_lines, render_preview, search_bytes, shaped_value, slice_bytes,
+    MIN_INLINE_LIMIT as MIN_OUTPUT_INLINE_LIMIT, Match, OUTPUT_GRANTS_METADATA_KEY,
+    OUTPUT_INLINE_LIMIT_METADATA_KEY, OUTPUT_STORE_METADATA_KEY, OutputCall, OutputError,
+    OutputGate, OutputHandle, OutputInfo, OutputMeta, OutputSlice, OutputStore, PurgeReport,
+    READ_OUTPUT, RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT, SHAPED_HIDDEN_KEY,
+    SHAPED_TEXT_KEY, SUBAGENT_METADATA_KEY, SessionTree, count_lines, render_preview, search_bytes,
+    shaped_value, slice_bytes,
 };
-pub use output_tools::{output_tools, read_output_definition, search_output_definition};
+pub use output_tools::{
+    neutralize_subagent_tags, output_tools, read_output_definition, search_output_definition,
+    untrusted_subagent_block,
+};
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 pub use redaction::{is_bag_key, is_sensitive_key, redact_value};

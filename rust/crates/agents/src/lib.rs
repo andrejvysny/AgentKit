@@ -18,11 +18,16 @@ pub use advisor::{
 pub use agents::{AgentDefinitionService, validate_agent_definition};
 pub use errors::{AgentsError, AgentsResult, LeaseHeld, RoleDenial, SnapshotError};
 pub use subagents::{
-    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, BUILTIN_ROLES, DELEGATION_TOOLSET,
-    EffectiveRole, MessageReceipt, RoleSnapshot, RoleSpec, SUBAGENT_ARG_ALIASES,
-    SUBAGENT_TOOL_NAMES, SpawnRequest, SpawnedChild, SubagentConfig, SubagentContributor,
-    SubagentRoleGuard, SubagentRoleLimits, SubagentService, SubagentView, WorkspaceLeaseRegistry,
-    child_identity, default_delegation_guidance, default_role_specs, delegation_toolsets,
-    effective_role, subagent_tool_definitions,
+    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, BUILTIN_ROLES, Brief, BriefBudget,
+    BriefError, BriefScope, BudgetLines, ChildReport, ContextRef, DELEGATION_GUIDANCE,
+    DELEGATION_TOOLSET, EffectiveRole, EnvelopeArtifact, EnvelopeUsage, MESSAGE_REF_CAP_BYTES,
+    MemoryRefReader, MessageReceipt, OutputFormat, OwnerRequest, REPORT_FINDINGS_TOOL, RefKind,
+    RenderedRef, ReportedFinding, ResultEnvelope, RoleSnapshot, RoleSpec, SUBAGENT_ARG_ALIASES,
+    SUBAGENT_TOOL_NAMES, SUMMARY_CAP_BYTES, SpawnRequest, SpawnedChild, SubagentConfig,
+    SubagentContributor, SubagentRoleGuard, SubagentRoleLimits, SubagentService, SubagentView,
+    TITLE_MAX_CHARS, WorkspaceLeaseRegistry, cap_message_text, child_identity,
+    confine_to_workspace, cut_summary, default_delegation_guidance, default_role_specs,
+    delegation_toolsets, effective_role, envelope_status, present_envelope, render_brief,
+    report_findings_definition, subagent_tool_definitions, usage_from_events,
 };
 pub use teammates::{TeammateAdmission, TeammateService};

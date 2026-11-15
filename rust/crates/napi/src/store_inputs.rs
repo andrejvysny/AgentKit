@@ -85,16 +85,24 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
             let to: AgentInputStatus = deserialized(&input, "to")?;
             let patch = input.get("patch").cloned().unwrap_or(Value::Null);
             let target = text(&input, "inputId")?.to_owned();
-            // A child wait is resolved only by the host's waker.
             if let Some(existing) = store
                 .get_input(target.clone())
                 .await
                 .map_err(errors::store)?
-                && claims_child_wait(&existing.input_id, &existing.content)
             {
-                return Err(errors::invalid(
-                    "child_wait requests cannot be transitioned through inputs",
-                ));
+                // A child wait is resolved only by the host's waker.
+                if claims_child_wait(&existing.input_id, &existing.content) {
+                    return Err(errors::invalid(
+                        "child_wait requests cannot be transitioned through inputs",
+                    ));
+                }
+                // A human request settles in the answer transaction (actor,
+                // approval and answer record), never by a bare transition.
+                if existing.kind == AgentInputKind::HumanRequest {
+                    return Err(errors::invalid(
+                        "human requests cannot be transitioned through inputs; answer them",
+                    ));
+                }
             }
             Ok(record(
                 store
@@ -215,6 +223,34 @@ mod tests {
                 .await
                 .unwrap()
                 .is_null()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_human_request_cannot_be_transitioned_through_inputs() {
+        let store = store();
+        call(
+            &store,
+            "inputs.createInput",
+            json!({"input":{"inputId":"req1","sessionId":"s1","kind":"human_request",
+                "content":{"kind":"question","prompt":"ok?"},"contentHash":HASH,
+                "attemptId":"a1","toolCallId":"c1"},"now":NOW}),
+        )
+        .await
+        .expect("request created");
+        let error = call(
+            &store,
+            "inputs.transitionInput",
+            json!({"inputId":"req1","from":["pending"],"to":"answered","now":NOW}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code(error), "invalid_input");
+        assert_eq!(
+            call(&store, "inputs.getInput", json!({"inputId":"req1"}))
+                .await
+                .unwrap()["status"],
+            "pending"
         );
     }
 

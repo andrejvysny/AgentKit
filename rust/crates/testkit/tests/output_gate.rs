@@ -325,11 +325,24 @@ async fn handle_of_another_session_is_refused() {
             .await
             .expect("result");
         assert!(parent.ok, "{name}: {:?}", parent.summary);
+        // Another session's text reaches the parent as an untrusted block.
+        let wrapped = parent.data.as_ref().and_then(Value::as_str).expect("text");
+        assert!(
+            wrapped.starts_with("<subagent_result child=\"s1-child\""),
+            "{name}: {wrapped}"
+        );
+        assert!(wrapped.contains("trust=\"untrusted\""));
+        assert!(wrapped.ends_with("</subagent_result>"));
         let own = tool
             .execute(context(Some("s1-child")), input.clone())
             .await
             .expect("result");
         assert!(own.ok);
+        let own_text = own.data.as_ref().and_then(Value::as_str).expect("text");
+        assert!(
+            !own_text.contains("<subagent_result"),
+            "{name}: own reads stay plain"
+        );
         let sibling = tool
             .execute(context(Some("s1-sibling")), input)
             .await

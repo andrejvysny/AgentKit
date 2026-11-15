@@ -6,7 +6,7 @@ use crate::{
     AgentInputKind, AgentInputQuery, AgentInputRecord, AgentInputStatus, ChatRecord,
     ExecutionStateRead, SESSION_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY, SessionBackend,
     SessionFault, SessionMutation, SessionsError, SessionsResult, execution_state_for_mode,
-    inspect_execution_state, read_execution_state, with_execution,
+    host_owned_metadata_key, inspect_execution_state, read_execution_state, with_execution,
 };
 use agentkit_engine::is_child_wait;
 use serde_json::{Map, Value, json};
@@ -28,7 +28,35 @@ impl<R: SessionBackend> AgentSessionService<R> {
         self.get_state(&chat.id).await
     }
 
+    /// [`Self::create_session`] for the host itself: the metadata may carry
+    /// host-owned `agentkit.*` keys (a subagent child's identity). Never
+    /// reachable from a caller-facing surface.
+    pub async fn create_session_with_host_metadata(
+        &self,
+        input: &CreateSessionInput,
+    ) -> SessionsResult<AgentSessionState, SessionFault<R>> {
+        let chat = self.build_session_chat(input).await?;
+        self.get_state(&chat.id).await
+    }
+
+    /// Caller-facing session creation. Caller metadata never carries a
+    /// host-owned `agentkit.*` key (the one exception is the frozen native
+    /// stanza, which is moved into the descriptor).
     pub async fn create_session_chat(
+        &self,
+        input: &CreateSessionInput,
+    ) -> SessionsResult<ChatRecord, SessionFault<R>> {
+        if let Some(metadata) = &input.metadata
+            && let Some(key) = host_owned_metadata_key(metadata, &["agentkit.nativeExecution"])
+        {
+            return Err(SessionsError::invalid_input(format!(
+                "metadata must not contain {key}."
+            )));
+        }
+        self.build_session_chat(input).await
+    }
+
+    async fn build_session_chat(
         &self,
         input: &CreateSessionInput,
     ) -> SessionsResult<ChatRecord, SessionFault<R>> {

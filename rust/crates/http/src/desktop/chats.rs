@@ -6,9 +6,8 @@ impl DesktopBackend {
     async fn create_chat(&self, input: &OperationRequest, now: i64) -> Result<ChatRecord, Problem> {
         let title = string(&input.body, "title");
         let metadata = input.body.get("metadata").cloned().unwrap_or(json!({}));
-        if metadata
-            .as_object()
-            .is_none_or(|metadata| metadata.keys().any(|key| key.starts_with("agentkit.")))
+        if metadata.as_object().is_none()
+            || agentkit_sessions::host_owned_metadata_key(&metadata, &[]).is_some()
         {
             return Err(Problem::new(
                 400,
@@ -88,28 +87,9 @@ impl DesktopBackend {
                 let chat = store
                     .mutate_chat(chat_id, now, move |chat| {
                         if let Some(metadata) = metadata {
-                            let mut next = metadata.as_object().cloned().ok_or_else(|| {
-                                agentkit_store::StoreError::InvalidInput(
-                                    "Chat metadata must be an object.".into(),
-                                )
-                            })?;
-                            for (key, value) in &next {
-                                if key.starts_with("agentkit.")
-                                    && chat.metadata.get(key) != Some(value)
-                                {
-                                    return Err(agentkit_store::StoreError::InvalidInput(
-                                        "Host-owned agentkit metadata cannot be changed.".into(),
-                                    ));
-                                }
-                            }
-                            if let Some(existing) = chat.metadata.as_object() {
-                                for (key, value) in existing {
-                                    if key.starts_with("agentkit.") {
-                                        next.insert(key.clone(), value.clone());
-                                    }
-                                }
-                            }
-                            chat.metadata = Value::Object(next);
+                            chat.metadata =
+                                agentkit_sessions::merge_caller_metadata(&chat.metadata, &metadata)
+                                    .map_err(agentkit_store::StoreError::InvalidInput)?;
                         }
                         if let Some(title) = title {
                             chat.title = Some(title);
