@@ -680,6 +680,7 @@ impl ChatExecutor {
             resume_calls,
             tool_call_records: options.tool_call_records,
             record_identity,
+            output: options.output.clone(),
             ..RunOptions::default()
         };
         let session = correction::ChatSession {

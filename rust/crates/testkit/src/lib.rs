@@ -17,6 +17,8 @@
 //! context's repository and index ports held in memory, [`HashEmbedder`] is
 //! its deterministic fake embedder; each port has a suite under
 //! [`conformance`] (the no-op reranker is `agentkit_memory::NoopReranker`).
+//! [`InMemoryOutputStore`] is the core `OutputStore` held in memory (roadmap
+//! 2.1, ADR 0034), with its own suite.
 
 pub mod cache_provider;
 pub mod conformance;
@@ -26,6 +28,7 @@ mod mem_embedder;
 mod mem_index;
 mod mem_repository;
 mod memory;
+mod output_memory;
 pub mod prefix_harness;
 pub mod scripted;
 mod session_memory;
@@ -36,6 +39,7 @@ pub use mcp_memory::{
 pub use mem_embedder::{HASH_EMBEDDER_DIMS, HashEmbedder};
 pub use mem_index::InMemoryRetrievalIndex;
 pub use mem_repository::InMemoryMemoryRepository;
+pub use output_memory::{InMemoryOutputStore, ManualClock};
 pub use memory::{InMemoryRepositoryError, InMemorySessionSettle, InMemoryTaskRepository};
 pub use session_memory::{
     CONTEXT_SUMMARIES_NAMESPACE, InMemorySessionFixture, InMemorySessionRepository,

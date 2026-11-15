@@ -65,6 +65,9 @@ pub struct RunOptions {
     pub tool_call_records: bool,
     /// Provider, lane and profile stamped on those records.
     pub record_identity: crate::RecordIdentity,
+    /// Output store gate (roadmap 2.1): a result larger than its inline
+    /// limit is stored and shown as a preview with a handle.
+    pub output: Option<Arc<crate::OutputGate>>,
 }
 impl Default for RunOptions {
     fn default() -> Self {
@@ -97,6 +100,7 @@ impl Default for RunOptions {
             resume_calls: vec![],
             tool_call_records: false,
             record_identity: crate::RecordIdentity::default(),
+            output: None,
         }
     }
 }
@@ -907,6 +911,7 @@ impl State {
                         self.options.default_tool_timeout_ms,
                         self.options.request.budget.clone(),
                         self.options.tool_close.clone(),
+                        self.options.output.clone(),
                     )
                     .await
                 };

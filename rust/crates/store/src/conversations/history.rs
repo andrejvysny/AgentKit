@@ -119,6 +119,7 @@ impl SqliteStore {
     /// Delete a whole chat scope atomically; all work must be cancelled or settled first.
     pub async fn delete_chat(&self, chat_id: &str) -> Result<()> {
         let chat_id = chat_id.to_owned();
+        let output_root = self.output_root.clone();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             let _: ChatRecord = required(&transaction, "chats", "id", &chat_id)?;
@@ -136,6 +137,10 @@ impl SqliteStore {
             {
                 transaction.execute("DELETE FROM proposals WHERE id=?", [proposal.id])?;
             }
+            // Output sessions of this chat: the chat itself and its tasks (a
+            // run without a chat or scope stores under its own id).
+            let mut sessions = vec![chat_id.clone()];
+            sessions.extend(tasks.iter().map(|task| task.task_id.clone()));
             for task in tasks {
                 for outbox in all::<OutboxRecord>(&transaction, "outbox")?
                     .into_iter()
@@ -159,8 +164,32 @@ impl SqliteStore {
             transaction.execute("DELETE FROM subagents WHERE parent_chat_id=?", [&chat_id])?;
             transaction.execute("DELETE FROM advisor_findings WHERE chat_id=?", [&chat_id])?;
             transaction.execute("DELETE FROM advisor_reviews WHERE chat_id=?", [&chat_id])?;
+            // Stored tool outputs go with the chat (ADR 0034). Rows go in
+            // this transaction; the files are renamed aside just before the
+            // commit and removed after it, so a failed commit renames them
+            // back and the outputs stay readable.
+            let mut stored = 0_i64;
+            for session in &sessions {
+                stored += transaction.query_row(
+                    "SELECT count(*) FROM tool_outputs WHERE session=?",
+                    [session],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                transaction.execute("DELETE FROM tool_outputs WHERE session=?", [session])?;
+            }
+            if stored > 0 && output_root.is_none() {
+                return Err(StoreError::OutputsUnavailable(chat_id));
+            }
             transaction.execute("DELETE FROM chats WHERE id=?", [chat_id])?;
-            transaction.commit()?;
+            let staged = match &output_root {
+                Some(root) => crate::output_store::stage_removal(root, &sessions)?,
+                None => crate::output_store::StagedRemoval::default(),
+            };
+            if let Err(error) = transaction.commit() {
+                staged.restore();
+                return Err(error.into());
+            }
+            staged.finish();
             Ok(())
         })
         .await

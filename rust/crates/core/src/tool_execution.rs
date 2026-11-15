@@ -43,6 +43,7 @@ pub(crate) async fn execute(
     default_timeout: Option<u64>,
     budget: Option<Arc<ExecutionBudget>>,
     close: Option<tokio_util::sync::CancellationToken>,
+    output: Option<Arc<crate::OutputGate>>,
 ) -> ToolOutcome {
     let max = context.limits.max_bytes;
     let Some(tool) = registry.get(&call.name) else {
@@ -158,7 +159,33 @@ pub(crate) async fn execute(
             _ = closed(&close) => { child.cancel(); Err(cancelled()) }
         }
     };
-    outcome(call, render_failure_text(registry, result), max, &context.limits)
+    let result = render_failure_text(registry, result);
+    let session = context
+        .scope_id
+        .as_deref()
+        .or(context.chat_id.as_deref())
+        .filter(|session| !session.is_empty())
+        // No chat or scope: the run is its own session, so the output is
+        // still stored (and removed with the task's chat).
+        .unwrap_or(context.run_id.as_str());
+    // Roadmap 2.1: a result over its inline limit is stored before the model
+    // first sees it; the envelope then carries the preview and the handle.
+    let result = match (&output, result) {
+        (Some(gate), Ok(result)) => Ok(gate
+            .shape(
+                crate::OutputCall {
+                    session,
+                    task: &context.run_id,
+                    call_id: &call.id,
+                    tool: &call.name,
+                    max_bytes: max,
+                },
+                result,
+            )
+            .await),
+        (_, result) => result,
+    };
+    outcome(call, result, max, &context.limits)
 }
 /// Fills the placeholders a tool left in its result text (`{{tool:..}}`,
 /// `{{call:..}}`) with the names the session's dialect offered, so a teaching

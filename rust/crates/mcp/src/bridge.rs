@@ -321,7 +321,26 @@ impl RemoteTool {
                 projected.text.clone()
             }
         };
-        let (capped, truncated) = truncate(&message, context.limits.max_bytes);
+        // With an output store in play, text over the gate's inline limit
+        // goes whole to the store and the model reads a preview, so the
+        // bridge does not cut it here (roadmap 2.1, ADR 0034). Anything the
+        // gate will not store keeps the bridge's own byte cap.
+        let in_play = context
+            .metadata
+            .get(agentkit_core::OUTPUT_STORE_METADATA_KEY)
+            .and_then(Value::as_bool)
+            == Some(true);
+        let will_store = in_play
+            && context
+                .metadata
+                .get(agentkit_core::OUTPUT_INLINE_LIMIT_METADATA_KEY)
+                .and_then(Value::as_u64)
+                .is_some_and(|limit| message.len() as u64 > limit);
+        let (capped, truncated) = if will_store {
+            (message.clone(), false)
+        } else {
+            truncate(&message, context.limits.max_bytes)
+        };
         let mut data = json!({"canonicalId":self.definition.capability,"serverAlias":self.alias,"toolName":self.original,
             "text":text,"content":content,"nonTextTypes":non_text,"isError":is_error});
         let structured = result.structured_content.filter(Value::is_object);

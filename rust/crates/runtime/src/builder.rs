@@ -44,6 +44,7 @@ use crate::lanes::coding::{
 };
 use crate::lanes::lsp::{LspLane, LspLaneContributor};
 use crate::lanes::native::NativeLane;
+use crate::lanes::output::{OutputLaneContributor, spawn_sweeper};
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
 use crate::runtime::AgentRuntime;
 
@@ -80,6 +81,14 @@ pub struct AgentRuntimeBuilder {
     memory: Option<(Arc<dyn MemoryRepository>, Arc<dyn RetrievalIndex>)>,
     embedder: Option<Arc<dyn Embedder>>,
     reranker: Option<Arc<dyn Reranker>>,
+    output: Option<OutputConfig>,
+}
+
+/// The output store's configuration (roadmap 2.1, ADR 0034).
+struct OutputConfig {
+    root: std::path::PathBuf,
+    inline_limit: usize,
+    tool_limits: Vec<(String, usize)>,
 }
 
 impl AgentRuntimeBuilder {
@@ -111,6 +120,7 @@ impl AgentRuntimeBuilder {
             memory: None,
             embedder: None,
             reranker: None,
+            output: None,
         }
     }
 
@@ -259,6 +269,43 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    /// Turn the output store on (roadmap 2.1, ADR 0034): a tool result larger
+    /// than the inline limit is stored before the model first sees it, the
+    /// model reads a preview with a handle, and `read_output` and
+    /// `search_output` page the rest. `root` is the private directory for the
+    /// stored bytes (created 0700, files 0600); the host must choose one that
+    /// is not inside any workspace. Stored outputs are removed with their
+    /// chat and 30 days after the session's last activity (swept at build and
+    /// then hourly, together with files no row names).
+    /// Without this call results keep the envelope's byte budget.
+    pub fn output_store(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.output = Some(OutputConfig {
+            root: root.into(),
+            inline_limit: agentkit_core::DEFAULT_INLINE_LIMIT,
+            tool_limits: Vec::new(),
+        });
+        self
+    }
+
+    /// Inline limit for every tool without its own (default 8 KiB, at least
+    /// 1 KiB: [`Self::build`] refuses less). The effective limit is also
+    /// held inside the context's result byte budget. Has no effect before
+    /// [`Self::output_store`].
+    pub fn output_inline_limit(mut self, bytes: usize) -> Self {
+        if let Some(output) = &mut self.output {
+            output.inline_limit = bytes;
+        }
+        self
+    }
+
+    /// Inline limit for one tool, overriding the default.
+    pub fn output_tool_limit(mut self, tool: impl Into<String>, bytes: usize) -> Self {
+        if let Some(output) = &mut self.output {
+            output.tool_limits.push((tool.into(), bytes));
+        }
+        self
+    }
+
     /// Build the runtime. Recovery runs before the worker claims any task,
     /// so restart reconciliation always precedes new modifying work.
     ///
@@ -298,6 +345,7 @@ impl AgentRuntimeBuilder {
             memory,
             embedder,
             reranker,
+            output,
         } = self;
         let memory = match memory {
             Some((repository, index)) => {
@@ -317,6 +365,45 @@ impl AgentRuntimeBuilder {
             }
             None => None,
         };
+        // The output store: the store handle learns where its files live
+        // BEFORE it is cloned into the host, so deleting a chat removes them.
+        let store = match &output {
+            Some(config) => store.with_output_root(&config.root),
+            None => store,
+        };
+        let mut output_gate = None;
+        let mut output_lane = None;
+        if let Some(config) = &output {
+            let floor = agentkit_core::MIN_OUTPUT_INLINE_LIMIT;
+            let too_small = std::iter::once(config.inline_limit)
+                .chain(config.tool_limits.iter().map(|(_, bytes)| *bytes))
+                .any(|bytes| bytes < floor);
+            if too_small {
+                return Err(RuntimeError::invalid(format!(
+                    "output store: inline limits must be at least {floor} bytes"
+                )));
+            }
+        }
+        let mut output_sweeper = None;
+        if let Some(config) = output {
+            let adapter = agentkit_store::SqliteOutputStore::new(store.clone(), runtime.clone())
+                .map_err(|error| RuntimeError::invalid(format!("output store: {error}")))?;
+            // Retention sweep: outputs whose 30 days ended. A failed sweep
+            // leaves the rows for the next start and never blocks the build.
+            let _ = adapter.purge_expired().await;
+            output_sweeper = Some(spawn_sweeper(adapter.clone()));
+            let shared = Arc::new(adapter);
+            let mut gate = agentkit_core::OutputGate::new(shared.clone())
+                .with_inline_limit(config.inline_limit);
+            for (tool, bytes) in config.tool_limits {
+                gate = gate.with_tool_limit(tool, bytes);
+            }
+            output_gate = Some(Arc::new(gate));
+            output_lane = Some(Arc::new(OutputLaneContributor::new(
+                shared.clone(),
+                shared,
+            )) as Arc<dyn ToolContributor>);
+        }
         let has_model_loop = default_provider.is_some();
         let has_native_lane = native_lane.is_some();
         // Every kind the builder itself serves with the turn executor, in a
@@ -385,6 +472,7 @@ impl AgentRuntimeBuilder {
             RuntimeError::Sessions(agentkit_sessions::SessionsError::from_faultless(error))
         })?);
         let mut tool_contributors = extra_contributors;
+        tool_contributors.extend(output_lane);
         tool_contributors.extend([
             // The Rust coding toolpack, once registered, joins the SAME
             // lane: same snapshot, same durable execution, same receipts.
@@ -447,6 +535,7 @@ impl AgentRuntimeBuilder {
                         Arc::clone(&subagent_lane) as Arc<dyn agentkit_chat::DelegationGuidance>
                     ),
                     run_hooks: Some(Arc::clone(&advisor_lane) as Arc<dyn RunHooks>),
+                    output: output_gate,
                     ..Default::default()
                 },
             )
@@ -591,6 +680,7 @@ impl AgentRuntimeBuilder {
             lsp: lsp_lane,
             memory,
             worker: Some(worker),
+            output_sweeper,
         })
     }
 }

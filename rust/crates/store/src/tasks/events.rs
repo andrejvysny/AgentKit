@@ -450,46 +450,6 @@ impl SqliteStore {
     }
 }
 
-/// Keys whose VALUE is credential material the wire must never carry,
-/// normalized to lowercase alphanumerics for the comparison (so
-/// `api-key`, `API_KEY`, and `apiKey` all land on `apikey`). `secretRefs`
-/// normalizes to `secretrefs` and deliberately survives: references are
-/// not values.
-fn sensitive_key(key: &str) -> bool {
-    let normalized: String = key
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect();
-    matches!(
-        normalized.as_str(),
-        "apikey"
-            | "authorization"
-            | "password"
-            | "passwd"
-            | "secret"
-            | "token"
-            | "accesstoken"
-            | "refreshtoken"
-            | "clientsecret"
-            | "cookie"
-            | "setcookie"
-            | "credential"
-            | "credentials"
-    )
-}
-
-/// Maps that bag request headers / process environment — both are
-/// credential-shaped bags whose every string value is redacted whole.
-fn bag_key(key: &str) -> bool {
-    let normalized: String = key
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect();
-    normalized == "env" || normalized == "headers"
-}
-
 /// The cap on one tool payload text field a projection will echo; longer
 /// values are replaced by their bounded digest summary. Tool arguments
 /// and results are the biggest thing a durable event can carry, and a
@@ -513,13 +473,13 @@ pub fn redact_event(event: &serde_json::Value) -> serde_json::Value {
             serde_json::Value::Object(map) => {
                 let mut out = serde_json::Map::with_capacity(map.len());
                 for (key, entry) in map {
-                    let entry = if sensitive_key(key) {
+                    let entry = if agentkit_core::is_sensitive_key(key) {
                         if entry.is_null() {
                             entry.clone()
                         } else {
                             object!("***")
                         }
-                    } else if bag_key(key) && entry.is_object() {
+                    } else if agentkit_core::is_bag_key(key) && entry.is_object() {
                         serde_json::Value::Object(
                             entry
                                 .as_object()

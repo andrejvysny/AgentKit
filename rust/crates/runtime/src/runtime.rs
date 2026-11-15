@@ -13,6 +13,7 @@ use crate::builder::AgentRuntimeBuilder;
 use crate::lanes::advisor::AdvisorLane;
 use crate::lanes::coding::CodingLane;
 use crate::lanes::lsp::LspLane;
+use crate::lanes::output::OutputSweeper;
 use crate::lanes::subagent::SubagentLane;
 
 pub struct AgentRuntime {
@@ -28,6 +29,8 @@ pub struct AgentRuntime {
     pub(crate) lsp: Arc<LspLane>,
     pub(crate) memory: Option<Arc<MemoryService>>,
     pub(crate) worker: Option<WorkerHandle>,
+    /// Periodic output retention sweep; stops with the runtime.
+    pub(crate) output_sweeper: Option<OutputSweeper>,
 }
 
 impl AgentRuntime {

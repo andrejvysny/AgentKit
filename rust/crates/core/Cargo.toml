@@ -24,7 +24,10 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tokio-util.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v7"] }
+regex.workspace = true
 
 [dev-dependencies]
+# The in-memory output store (ADR 0021 R10); a dev-only cycle, as engine has.
+agentkit-testkit = { workspace = true }
 http.workspace = true

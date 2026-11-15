@@ -34,6 +34,14 @@ impl State {
             "toolEventId".into(),
             self.options.runtime.id_with_prefix("tool_").into(),
         );
+        if let Some(gate) = &self.options.output {
+            metadata.insert(crate::OUTPUT_STORE_METADATA_KEY.into(), true.into());
+            metadata.insert(
+                crate::OUTPUT_INLINE_LIMIT_METADATA_KEY.into(),
+                gate.effective_limit(&call.name, self.options.limits.max_bytes)
+                    .into(),
+            );
+        }
         ToolContext {
             run_id: self.run_id.clone(),
             tool_call_id: Some(call.id.clone()),

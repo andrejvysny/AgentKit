@@ -17,6 +17,9 @@ mod manifest;
 mod meta_call;
 mod meta_tools;
 mod model_profile;
+mod output;
+mod output_tools;
+mod redaction;
 pub mod permission;
 mod provider_identity;
 mod provider_retry;
@@ -96,6 +99,17 @@ pub use model_profile::{
     nudge_after_announced_call, policy_tool_choice, resolve_request_settings, salvage_tool_calls,
     wire_tool_choice,
 };
+// Roadmap 2.1 (ADR 0034): the output store port, its shared text helpers and
+// the two framework tools that page a stored result.
+pub use output::{
+    ByteOrLineRange, DEFAULT_INLINE_LIMIT, ExactSession, MAX_STORED_BYTES, MIN_INLINE_LIMIT as MIN_OUTPUT_INLINE_LIMIT, Match, OUTPUT_INLINE_LIMIT_METADATA_KEY,
+    OUTPUT_STORE_METADATA_KEY,
+    OutputCall, OutputError, OutputGate, OutputHandle, OutputInfo, OutputMeta, OutputSlice,
+    OutputStore, PurgeReport, READ_OUTPUT, RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT,
+    SessionTree, count_lines, render_preview, search_bytes, slice_bytes,
+};
+pub use output_tools::{output_tools, read_output_definition, search_output_definition};
+pub use redaction::{is_bag_key, is_sensitive_key, redact_value};
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 // T4.4: toolset recommender (lexical + usage, seam for a vector term).

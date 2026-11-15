@@ -83,6 +83,10 @@ pub struct SqliteStore {
     /// When true, the store-local connector key is refused (see
     /// `with_connector_key_required`).
     pub(crate) connector_key_required: bool,
+    /// Directory holding the output store's private files (roadmap 2.1,
+    /// ADR 0034); `delete_chat` removes a chat's files from it. `None`
+    /// means no output store is configured on this handle.
+    pub(crate) output_root: Option<Arc<std::path::PathBuf>>,
 }
 
 /// Opaque identity that does not keep a SQLite actor or its file lock alive.
@@ -162,6 +166,7 @@ impl SqliteStore {
             aging: crate::TaskAging::default(),
             connector_credential_key: None,
             connector_key_required: false,
+            output_root: None,
         })
     }
     pub fn memory(capacity: usize) -> Result<Self> {
@@ -193,6 +198,12 @@ impl SqliteStore {
     /// store-local key row is never created. Default `false`.
     pub fn with_connector_key_required(mut self, required: bool) -> Self {
         self.connector_key_required = required;
+        self
+    }
+    /// Names the directory of the output store's private files so deleting
+    /// a chat also removes its stored tool outputs (ADR 0034).
+    pub fn with_output_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.output_root = Some(Arc::new(root.into()));
         self
     }
     pub(crate) fn connector_crypto_source(&self) -> crate::connector_crypto::CryptoSource {

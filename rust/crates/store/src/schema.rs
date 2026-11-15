@@ -22,7 +22,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
 /// full scans.
-pub const SCHEMA_VERSION: i64 = 19;
+pub const SCHEMA_VERSION: i64 = 20;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -320,6 +320,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 19 {
             migrate_continuation_claims(&mut connection)?;
         }
+        if version < 20 {
+            migrate_tool_outputs(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -439,7 +442,29 @@ fn schema_sql(version: i64) -> String {
     } else if version >= 18 {
         sql.push_str(NATIVE_CONTINUATION_SCHEMA);
     }
+    if version >= 20 {
+        sql.push_str(TOOL_OUTPUTS_SCHEMA);
+    }
     sql
+}
+
+/// Output store index (roadmap 2.1, ADR 0034), additive at schema version 20
+/// (the number is provisional: it is ordered against the other migrations at
+/// merge). One row per stored tool result; the bytes live in a private file
+/// beside the database. `expires` moves forward with the session's activity;
+/// `IF NOT EXISTS` keeps a re-applied migration a no-op.
+const TOOL_OUTPUTS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS tool_outputs(handle TEXT PRIMARY KEY, session TEXT NOT NULL, task TEXT NOT NULL, call_id TEXT NOT NULL, tool TEXT NOT NULL, mime TEXT NOT NULL, exit_code INTEGER, byte_len INTEGER NOT NULL CHECK(byte_len>=0), line_count INTEGER NOT NULL CHECK(line_count>=0), sha256 TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS tool_outputs_session ON tool_outputs(session);
+CREATE INDEX IF NOT EXISTS tool_outputs_expires ON tool_outputs(expires);
+"#;
+
+fn migrate_tool_outputs(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(TOOL_OUTPUTS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 20)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 /// Durable teammate admission (AGENTKIT-88), additive at schema version 15.

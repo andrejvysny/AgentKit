@@ -161,10 +161,12 @@ version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
  "agentkit-kernel",
+ "agentkit-testkit",
  "async-stream",
  "async-trait",
  "futures-util",
  "http",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -529,11 +531,13 @@ name = "agentkit-store"
 version = "0.1.0"
 dependencies = [
  "agentkit-contracts",
+ "agentkit-core",
  "agentkit-engine",
  "agentkit-kernel",
  "agentkit-mcp",
  "agentkit-native",
  "agentkit-sessions",
+ "agentkit-sys",
  "agentkit-testkit",
  "async-trait",
  "chrono",

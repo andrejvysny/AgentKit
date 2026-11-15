@@ -21,6 +21,7 @@ fn version_one(path: &Path) {
         DROP TABLE managed_skills;
         DROP TABLE run_content_records;
         DROP TABLE uncertainty_barriers;
+        DROP TABLE tool_outputs;
         DROP TABLE subagents;
         DROP TABLE advisor_findings;
         DROP TABLE advisor_reviews;

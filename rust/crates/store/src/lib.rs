@@ -18,6 +18,7 @@ mod mcp_repository;
 mod native_continuations;
 mod native_exec;
 mod native_repository;
+mod output_store;
 mod proposals;
 mod provider_catalog;
 mod provider_connections;
@@ -54,6 +55,7 @@ pub use execution_resolution::*;
 pub use managed_content::*;
 pub use native_continuations::NativeCallReceipt;
 pub use native_exec::InteractionRow;
+pub use output_store::SqliteOutputStore;
 pub use proposals::*;
 pub use provider_catalog::*;
 pub use provider_connections::{
@@ -124,6 +126,10 @@ pub enum StoreError {
     Conflict(String),
     #[error("scope busy: {0}")]
     ScopeBusy(String),
+    /// A chat holds stored tool outputs but this handle has no output root,
+    /// so their files cannot be removed with it; nothing was deleted.
+    #[error("stored tool outputs of {0} cannot be removed: no output root is configured")]
+    OutputsUnavailable(String),
     /// The settlement committed nothing: the caller may rebuild its plan
     /// against the current descriptor and retry under the same lease.
     #[error("session descriptor changed while staging settlement: {0}")]
