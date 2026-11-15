@@ -201,8 +201,12 @@ async fn announced_without_call_repeats_and_turn_limit_are_recorded() {
     let run = run_task(&Looper, &task, 0, 0).await;
     assert!(!run.success);
     assert_eq!(run.turns, task.max_turns);
+    // The run record's rule: the second identical failure only fails again,
+    // the third and later are repeats.
+    assert!(run.calls.len() >= 3);
     assert_eq!(run.calls[0].class, Class::Precondition);
-    assert!(run.calls[1..].iter().all(|c| c.class == Class::RepeatIdentical));
+    assert_eq!(run.calls[1].class, Class::Precondition);
+    assert!(run.calls[2..].iter().all(|c| c.class == Class::RepeatIdentical));
     assert!(run.failure.unwrap().contains("turns"));
 }
 

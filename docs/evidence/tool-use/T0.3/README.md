@@ -43,3 +43,11 @@ JSON, not TOML: no new dependency.
 
 - `rust/api/agentkit-providers.txt` public-API snapshot not regenerated.
 - No live run; Claude/GPT/Qwen columns need the owner's endpoints.
+
+## Shared outcome classifier (follow-up)
+
+`agentkit_core::OutcomeClassifier` (`CallFailure`, `OutcomeVerdict`) exposes the run record's class,
+repair and repeat rules; `providers/src/conformance/check.rs` uses it instead of its own copy. One
+visible change: the conformance runner now marks the THIRD identical failing call `repeat_identical`
+(as the run record does), not the second. Tests: `core/tests/outcome_classifier.rs`, updated
+`providers/tests/conformance.rs` and the `check.rs` unit test (written, NOT run).

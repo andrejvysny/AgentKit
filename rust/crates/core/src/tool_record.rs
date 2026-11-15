@@ -58,7 +58,8 @@ impl<'a> From<&Finished<'a>> for Judged<'a> {
 
 /// What one finished call means for the run: its class, the failures before
 /// it, and whether the repair budget says to stop.
-pub(crate) struct Verdict {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Verdict {
     pub class: Class,
     pub prior: u32,
     pub stop_retrying: bool,
@@ -78,24 +79,34 @@ impl ToolRecords {
     /// call, whether or not records are emitted, because the repair budget
     /// depends on it.
     pub(crate) fn judge(&mut self, call: &Judged<'_>) -> Verdict {
-        let tool = call.tool_name.to_string();
-        let key = (tool.clone(), call.arguments_json.to_string());
+        let failure = (!call.succeeded).then(|| {
+            (
+                classify(call.error_code, call.error_message),
+                !outside_budget(call.error_code),
+            )
+        });
+        self.decide(call.tool_name, call.arguments_json, failure)
+    }
+
+    /// The shared rules: `failure` is the failure's class and whether it
+    /// spends the repair budget, or `None` for a success.
+    fn decide(&mut self, tool: &str, arguments_json: &str, failure: Option<(Class, bool)>) -> Verdict {
+        let tool = tool.to_string();
+        let key = (tool.clone(), arguments_json.to_string());
         let prior = self.failures.get(&tool).copied().unwrap_or(0);
-        if call.succeeded {
+        let Some((base, spends)) = failure else {
             self.streaks.remove(&tool);
             return Verdict {
                 class: if prior > 0 { Class::OkAfterRepair } else { Class::Ok },
                 prior,
                 stop_retrying: false,
             };
-        }
-        let base = classify(call.error_code, call.error_message);
+        };
         // The identical third call is a repeat; the second only fails again.
         let repeats = self.failed_calls.get(&key).copied().unwrap_or(0);
         let class = if repeats >= 2 { Class::RepeatIdentical } else { base };
         *self.failures.entry(tool.clone()).or_default() += 1;
         *self.failed_calls.entry(key).or_default() += 1;
-        let spends = !outside_budget(call.error_code);
         let length = match self.streaks.get(&tool) {
             Some(streak) if streak.class == base => streak.length + 1,
             _ => 1,
@@ -137,6 +148,49 @@ impl ToolRecords {
     pub(crate) fn record(&mut self, finished: &Finished<'_>) -> Value {
         let verdict = self.judge(&Judged::from(finished));
         self.data(finished, &verdict)
+    }
+}
+
+/// How a finished call failed, for [`OutcomeClassifier`].
+#[derive(Clone, Copy, Debug)]
+pub enum CallFailure<'a> {
+    /// A failure code and message; the failure table decides the class.
+    Code { code: &'a str, message: &'a str },
+    /// A class the caller already knows (a harness with its own checks).
+    Class(Class),
+}
+
+/// The T0.1 outcome rules as public API (T0.3): classes of a run's calls in
+/// order, `ok_after_repair` after an earlier failure of the same tool,
+/// `repeat_identical` on the third identical failing call, and the repair
+/// budget's stop. The run loop and the conformance runner share it, so a
+/// harness classifies exactly as the run record does.
+#[derive(Default)]
+pub struct OutcomeClassifier {
+    records: ToolRecords,
+}
+
+impl OutcomeClassifier {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Judge one finished call (`failure` is `None` when it succeeded) and
+    /// update the run's counters.
+    pub fn judge(
+        &mut self,
+        tool: &str,
+        arguments_json: &str,
+        failure: Option<CallFailure<'_>>,
+    ) -> Verdict {
+        let failure = failure.map(|failure| match failure {
+            CallFailure::Code { code, message } => (
+                classify(Some(code), Some(message)),
+                !outside_budget(Some(code)),
+            ),
+            CallFailure::Class(class) => (class, true),
+        });
+        self.records.decide(tool, arguments_json, failure)
     }
 }
 

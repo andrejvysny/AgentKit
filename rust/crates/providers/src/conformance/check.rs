@@ -1,11 +1,12 @@
 //! Fake workspace, call classification and the automatic checkers.
 use super::task::{Effect, ExpectedCall, Predicate, Task, ToolSpec};
 use agentkit_contracts::AiToolOutcomeClass as Class;
+use agentkit_core::{CallFailure, OutcomeClassifier};
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
-/// One classified call. Mirrors the T0.1 record's class and repair rules
-/// (`agentkit-core` keeps its own recorder crate-private).
+/// One classified call. The class comes from `agentkit-core`'s
+/// `OutcomeClassifier`, the rules the run record uses (T0.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallRecord {
     pub step: u32,
@@ -37,8 +38,7 @@ pub(crate) struct Sandbox {
     pub records: Vec<CallRecord>,
     /// Arguments of every successful call, in order.
     pub successes: Vec<(String, Map<String, Value>)>,
-    failures: HashMap<String, u32>,
-    failed_calls: HashSet<(String, String)>,
+    classifier: OutcomeClassifier,
 }
 
 impl Sandbox {
@@ -48,33 +48,23 @@ impl Sandbox {
             entries: task.workspace.clone(),
             records: Vec::new(),
             successes: Vec::new(),
-            failures: HashMap::new(),
-            failed_calls: HashSet::new(),
+            classifier: OutcomeClassifier::new(),
         }
     }
 
     /// Runs one call, records its class and returns the tool message text.
     pub fn call(&mut self, step: u32, name: &str, raw_args: &str) -> String {
         let outcome = self.execute(name, raw_args);
-        let key = (name.to_owned(), raw_args.to_owned());
-        let prior = self.failures.get(name).copied().unwrap_or(0);
         let (class, text) = match outcome {
             Ok((args, text)) => {
                 self.successes.push((name.to_owned(), args));
-                (
-                    if prior > 0 {
-                        Class::OkAfterRepair
-                    } else {
-                        Class::Ok
-                    },
-                    text,
-                )
+                (self.classifier.judge(name, raw_args, None).class, text)
             }
             Err((class, text)) => {
-                let repeated = self.failed_calls.contains(&key);
-                *self.failures.entry(name.to_owned()).or_default() += 1;
-                self.failed_calls.insert(key);
-                (if repeated { Class::RepeatIdentical } else { class }, text)
+                let verdict = self
+                    .classifier
+                    .judge(name, raw_args, Some(CallFailure::Class(class)));
+                (verdict.class, text)
             }
         };
         self.records.push(CallRecord {
@@ -277,8 +267,7 @@ mod tests {
             entries: BTreeMap::new(),
             records: Vec::new(),
             successes: Vec::new(),
-            failures: HashMap::new(),
-            failed_calls: HashSet::new(),
+            classifier: OutcomeClassifier::new(),
         }
     }
     fn classes(s: &Sandbox) -> Vec<Class> {
@@ -312,11 +301,14 @@ mod tests {
         let mut s = sandbox();
         s.call(1, "read", r#"{"path":"a"}"#);
         s.call(2, "read", r#"{"path":"a"}"#);
-        s.call(3, "write", r#"{"path":"a","content":"x"}"#);
-        s.call(4, "read", r#"{"path":"a"}"#);
+        s.call(3, "read", r#"{"path":"a"}"#);
+        s.call(4, "write", r#"{"path":"a","content":"x"}"#);
+        s.call(5, "read", r#"{"path":"a"}"#);
+        // Same rules as the run record: the third identical failure repeats.
         assert_eq!(
             classes(&s),
             vec![
+                Class::Precondition,
                 Class::Precondition,
                 Class::RepeatIdentical,
                 Class::Ok,

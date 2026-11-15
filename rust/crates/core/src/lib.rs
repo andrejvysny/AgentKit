@@ -24,6 +24,7 @@ mod run;
 mod tool_execution;
 mod toolset;
 mod tool_record;
+pub use tool_record::{CallFailure, OutcomeClassifier, Verdict as OutcomeVerdict};
 mod types;
 
 pub use call_pipeline::{AliasRule, AliasTable, Normalised, UNNAMED_TOOL, closest_names, normalise};
