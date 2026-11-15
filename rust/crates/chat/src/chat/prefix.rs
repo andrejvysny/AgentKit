@@ -5,8 +5,10 @@
 //! provider cache may hold.
 
 use crate::{ChatError, ChatResult, ExecutionContext};
+use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
-    Classification, Freeze, PrefixDigests, PromptLayout, ToolRegistry, ToolSurface, freeze,
+    Classification, Dialect, Freeze, PrefixDigests, PromptLayout, ToolDefinition, ToolRegistry,
+    ToolSurface, freeze,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -20,6 +22,25 @@ pub(super) struct Deferral<'a> {
     pub classification: Option<&'a Classification>,
     /// The index text already placed in S2 this turn.
     pub index: Option<&'a str>,
+}
+
+/// The session's dialect and the registry's offered definitions as it
+/// presents them (T3.1): the manifest, the deferred catalog and the S2 index
+/// all hold these names. A session whose tool list was frozen before
+/// dialects existed keeps its canonical names.
+fn presented(
+    metadata: &Value,
+    prior: Option<&AiSessionPrefix>,
+    registry: &ToolRegistry,
+) -> (Option<Dialect>, Vec<ToolDefinition>) {
+    let profile = agentkit_sessions::read_model_profile(metadata);
+    let dialect = agentkit_core::session_dialect(prior, profile.as_ref());
+    let canonical = registry.definitions();
+    let offered = match &dialect {
+        Some(dialect) => dialect.render(&canonical),
+        None => canonical,
+    };
+    (dialect, offered)
 }
 
 /// Bind the meta tools to `registry` and complete `classification` with the
@@ -67,8 +88,8 @@ pub(super) async fn deferred_index(
     {
         return Ok(Some(text.to_owned()));
     }
-    let surface =
-        ToolSurface::reconcile_with(prior.as_ref(), &registry.definitions(), Some(classification));
+    let (_, offered) = presented(&chat.metadata, prior.as_ref(), registry);
+    let surface = ToolSurface::reconcile_with(prior.as_ref(), &offered, Some(classification));
     Ok(surface.index())
 }
 
@@ -93,15 +114,18 @@ pub(super) async fn record(
         .await?
         .ok_or(ChatError::SessionDisappeared)?;
     let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
-    let surface = ToolSurface::reconcile_with(
-        prior.as_ref(),
-        &registry.definitions(),
-        deferral.classification,
-    );
-    registry.freeze_surface(
-        surface.manifest.definitions().to_vec(),
-        surface.deferred_names(),
-    );
+    let (dialect, offered) = presented(&chat.metadata, prior.as_ref(), registry);
+    let surface = ToolSurface::reconcile_with(prior.as_ref(), &offered, deferral.classification);
+    let frozen = surface.manifest.definitions().to_vec();
+    match &dialect {
+        Some(dialect) => {
+            warn_collisions(context, dialect, registry).await?;
+            registry.freeze_presented(frozen, surface.deferred_names(), dialect.clone());
+        }
+        None => {
+            registry.freeze_surface(frozen, surface.deferred_names());
+        }
+    }
     registry.freeze_catalog(&surface.deferred);
     let digests = PrefixDigests::compute(layout, &registry.definitions(), params);
     let decision = stamped(
@@ -115,6 +139,7 @@ pub(super) async fn record(
         &surface,
     );
     let decision = stamp_profile(decision, &chat.metadata);
+    let decision = stamp_dialect(decision, dialect.as_ref());
     let decision = stamp_index(decision, deferral.index);
     warn_tools(context, &surface).await?;
     // An unchanged head still persists a grown deferred catalog or a
@@ -157,6 +182,48 @@ fn stamp_profile(mut decision: Freeze, metadata: &Value) -> Freeze {
         }
     }
     decision
+}
+
+/// The decision with the dialect version actually used recorded in its
+/// prefix (the profile's own version may be one this build does not know).
+fn stamp_dialect(mut decision: Freeze, dialect: Option<&Dialect>) -> Freeze {
+    let Some(dialect) = dialect else {
+        return decision;
+    };
+    match &mut decision {
+        Freeze::Created(prefix) | Freeze::Unchanged(prefix) | Freeze::Refrozen { prefix, .. } => {
+            prefix.dialect_version = Optional::Present(dialect.version.clone());
+        }
+    }
+    decision
+}
+
+/// Two tools never share a name in one session. A tool from elsewhere that is
+/// named like a wire name of this dialect would silently lose its place in the
+/// manifest, so it is reported.
+async fn warn_collisions(
+    context: &ExecutionContext,
+    dialect: &Dialect,
+    registry: &ToolRegistry,
+) -> ChatResult<()> {
+    let names = dialect.collisions(&registry.definitions());
+    if names.is_empty() {
+        return Ok(());
+    }
+    context
+        .emit(
+            "run.warning",
+            json!({
+                "code": "tool_name_collision",
+                "message": format!(
+                    "More than one tool would be offered under the name(s) {}; only the first is in the session's tool list.",
+                    names.join(", ")
+                ),
+                "tools": names,
+            }),
+        )
+        .await?;
+    Ok(())
 }
 
 /// The decision with the S2 catalog index recorded in its prefix, so later

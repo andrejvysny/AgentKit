@@ -7,7 +7,7 @@
       "prompt": "List the files in the current directory.",
       "allowed_tools": [
         {
-          "name": "run_command",
+          "name": "run_shell_command",
           "required": [
             "command"
           ],
@@ -23,7 +23,7 @@
       "expect": {
         "calls": [
           {
-            "tool": "run_command",
+            "tool": "run_shell_command",
             "args": {
               "command": "contains:ls"
             }
@@ -41,7 +41,7 @@
       "prompt": "Spusti testy príkazom cargo test a povedz mi výsledok.",
       "allowed_tools": [
         {
-          "name": "run_command",
+          "name": "run_shell_command",
           "required": [
             "command"
           ],
@@ -57,7 +57,7 @@
       "expect": {
         "calls": [
           {
-            "tool": "run_command",
+            "tool": "run_shell_command",
             "args": {
               "command": "contains:cargo test"
             }
@@ -75,7 +75,7 @@
       "prompt": "Print the current working directory.",
       "allowed_tools": [
         {
-          "name": "run_command",
+          "name": "run_shell_command",
           "required": [
             "command"
           ],
@@ -91,7 +91,7 @@
       "expect": {
         "calls": [
           {
-            "tool": "run_command",
+            "tool": "run_shell_command",
             "args": {
               "command": "contains:pwd"
             }

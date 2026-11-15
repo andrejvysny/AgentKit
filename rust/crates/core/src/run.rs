@@ -485,6 +485,11 @@ impl State {
         request.run_id = self.run_id.clone();
         request.runtime = Some(self.options.runtime.clone());
         request.messages = expand_tool_result_content(&self.messages);
+        if let Some(dialect) = registry.dialect() {
+            // Stored history keeps canonical names; the model reads the names
+            // it was offered (T3.1).
+            request.messages = crate::present_history(dialect, request.messages);
+        }
         request.tools = registry.definitions();
         request.continuation = self.continuation.clone();
         request.continuation_required |= request.continuation.is_some();
@@ -748,7 +753,11 @@ impl State {
         }
         if push_assistant {
             let mut assistant = ChatMessage::text("assistant", content);
-            assistant.tool_calls = calls.clone();
+            // Canonical names are stored; the request shows wire names (T3.1).
+            assistant.tool_calls = calls
+                .iter()
+                .map(|call| crate::call_pipeline::translate_call(registry, call).0)
+                .collect();
             if let Some(reasoning) = self.step_reasoning.take() {
                 let mut metadata = serde_json::Map::new();
                 metadata.insert(crate::REASONING_METADATA_KEY.into(), reasoning.into());
@@ -763,6 +772,7 @@ impl State {
         for (index, call) in calls.iter().enumerate() {
             // Resolve and normalise first: guards and execution below see the
             // canonical call, and the record shows what normalisation did.
+            let emitted_name = call.name.clone();
             let prepared = crate::call_pipeline::prepare(registry, call);
             let call = &prepared.call;
             let call_started_ms = self.options.runtime.now_ms();
@@ -961,6 +971,14 @@ impl State {
                     values_converted: prepared.values_converted,
                 };
                 let mut data = self.tool_records.data(&finished, &verdict);
+                if let Some(dialect) = registry.dialect() {
+                    data["dialect"] = dialect.id.clone().into();
+                    data["dialectVersion"] = dialect.version.clone().into();
+                    if prepared.outer.is_none() && emitted_name != call.name {
+                        data["toolName"] = emitted_name.clone().into();
+                        data["canonicalTool"] = call.name.clone().into();
+                    }
+                }
                 if self.step_salvaged {
                     data["salvaged"] = true.into();
                 }

@@ -284,7 +284,9 @@ pub fn closest_names(name: &str, candidates: &[String], limit: usize) -> Vec<Str
 
 /// Stage 1 failure for a name the registry cannot run.
 pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError {
-    let names = registry.names();
+    // The model reads the names it was offered, not canonical ids (T3.1).
+    let names = registry.presented_names();
+    let shown_name = registry.present_name(name);
     if name.is_empty() || name == UNNAMED_TOOL {
         let shown: Vec<String> = names.iter().take(8).cloned().collect();
         return CoreError::new(
@@ -295,7 +297,7 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
             ),
         );
     }
-    let nearest = closest_names(name, &names, CLOSEST_NAMES);
+    let nearest = closest_names(&shown_name, &names, CLOSEST_NAMES);
     if let Some(reason) = registry.withheld_reason(name) {
         let because = if reason.is_empty() {
             String::new()
@@ -305,7 +307,7 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
         return CoreError::new(
             "tool_not_allowed",
             &format!(
-                "Tool {name} is not available this turn{because}. Use another tool instead{}. Call tool_search to see what is available.",
+                "Tool {shown_name} is not available this turn{because}. Use another tool instead{}. Call tool_search to see what is available.",
                 list_suffix(": ", &nearest)
             ),
         );
@@ -314,7 +316,7 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
         return CoreError::new(
             "tool_deferred",
             &format!(
-                "Tool {name} is deferred: it is not in your tool list. Call it through tool_call with its name and arguments; tool_describe shows its schema."
+                "Tool {shown_name} is deferred: it is not in your tool list. Call it through tool_call with its name and arguments; tool_describe shows its schema."
             ),
         );
     }
@@ -322,7 +324,7 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
         return CoreError::new(
             "tool_unavailable",
             &format!(
-                "Tool {name} joined this session after its tool list was fixed, so it cannot be called yet. Use one of the offered tools instead{}.",
+                "Tool {shown_name} joined this session after its tool list was fixed, so it cannot be called yet. Use one of the offered tools instead{}.",
                 list_suffix(": ", &nearest)
             ),
         );
@@ -331,7 +333,7 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
         return CoreError::new(
             "tool_unavailable",
             &format!(
-                "Tool {name} is in this session's tool list but is not available right now. Use another tool instead{}, or try {name} again in a later turn.",
+                "Tool {shown_name} is in this session's tool list but is not available right now. Use another tool instead{}, or try {shown_name} again in a later turn.",
                 list_suffix(": ", &nearest)
             ),
         );
@@ -377,6 +379,39 @@ pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
     prepare_resolved(registry, call, false)
 }
 
+/// The canonical form of `call` under the session's dialect (the call itself
+/// without one, or for a name the dialect does not present). A call the
+/// dialect cannot translate keeps its arguments and comes back with the
+/// refusal the model reads. Arguments that are not JSON are left for the
+/// `bad_args` stage, after the name is canonical.
+pub(crate) fn translate_call(
+    registry: &ToolRegistry,
+    call: &ToolCall,
+) -> (ToolCall, Option<CoreError>) {
+    let Some(dialect) = registry.dialect() else {
+        return (call.clone(), None);
+    };
+    if call.name == UNNAMED_TOOL || !dialect.knows_wire(&call.name) {
+        return (call.clone(), None);
+    }
+    let mut out = call.clone();
+    if let Some(canonical) = dialect.canonical_of(&call.name) {
+        out.name = canonical.to_owned();
+    }
+    let Ok(args) = agentkit_contracts::parse_javascript_json(&call.arguments_json) else {
+        return (out, None);
+    };
+    match registry.translate(&call.name, args) {
+        Ok(translated) => {
+            if translated.args_changed {
+                out.arguments_json = envelope::stringify(&translated.args);
+            }
+            (out, None)
+        }
+        Err(error) => (out, Some(CoreError::new("bad_args", &error.message))),
+    }
+}
+
 /// The stages for one tool call. `via_meta` is an inner call of `tool_call`:
 /// it may name a deferred tool, which a direct call may not.
 pub(crate) fn prepare_resolved(
@@ -384,13 +419,20 @@ pub(crate) fn prepare_resolved(
     call: &ToolCall,
     via_meta: bool,
 ) -> Prepared {
+    // Presentation layer first (T3.1): everything below, and every guard
+    // after it, sees the canonical call.
+    let (call, refused) = translate_call(registry, call);
+    let call = &call;
     let mut prepared = Prepared {
         call: call.clone(),
         outer: None,
         aliases_used: vec![],
         values_converted: 0,
-        failure: None,
+        failure: refused,
     };
+    if prepared.failure.is_some() {
+        return prepared;
+    }
     if call.name == UNNAMED_TOOL
         || registry.get(&call.name).is_none()
         || (!via_meta && registry.is_deferred(&call.name))

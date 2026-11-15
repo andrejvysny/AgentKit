@@ -184,7 +184,7 @@ impl Model for Looper {
         let call = ModelCall {
             id: format!("c{}", c.turn),
             name: "read_file".into(),
-            arguments: r#"{"path":"missing.txt"}"#.into(),
+            arguments: r#"{"file_path":"missing.txt"}"#.into(),
         };
         Ok(ModelTurn { text: String::new(), calls: vec![call] })
     }

@@ -1,6 +1,7 @@
 use crate::{
     Tool, ToolDefinition,
     call_pipeline::{AliasTable, Normalised, normalise},
+    dialect::{Dialect, DialectError, Translated},
     deferred::{Catalog, CatalogCell, CatalogEntry, TOOL_CALL, ToolLoading, is_meta_tool, namespace_of},
 };
 use serde_json::{Map, Value};
@@ -27,6 +28,11 @@ struct Frozen {
     /// Late tools: registered, but joined the deferred catalog and are not
     /// callable until a loader (tool_search, 2.3) promotes them.
     deferred: BTreeSet<String>,
+    /// How the surface is presented to the model (T3.1). Names in `surface`
+    /// and `deferred` are the dialect's wire names; everything else in the
+    /// registry is keyed by canonical id. `None` for a session whose list
+    /// was frozen before dialects existed.
+    dialect: Option<Dialect>,
 }
 #[derive(Default)]
 pub struct ToolRegistry {
@@ -114,8 +120,8 @@ impl ToolRegistry {
         let meta_active = surface.iter().any(|definition| definition.name == TOOL_CALL);
         let entry = |definition: &ToolDefinition, deferred: bool| CatalogEntry {
             namespace: namespace_of(definition),
-            available: self.tools.contains_key(&definition.name)
-                && !self.withheld.contains_key(&definition.name),
+            available: self.tools.contains_key(&self.canonical_name(&definition.name))
+                && !self.withheld.contains_key(&self.canonical_name(&definition.name)),
             definition: definition.clone(),
             deferred,
         };
@@ -169,12 +175,78 @@ impl ToolRegistry {
     /// manifest order) and mark `deferred` tools as not yet callable. The
     /// first freeze wins; returns false when already frozen.
     pub fn freeze_surface(&self, surface: Vec<ToolDefinition>, deferred: Vec<String>) -> bool {
+        self.freeze(surface, deferred, None)
+    }
+    /// [`ToolRegistry::freeze_surface`] for a surface rendered by `dialect`:
+    /// calls are translated back to canonical before anything else runs.
+    pub fn freeze_presented(
+        &self,
+        surface: Vec<ToolDefinition>,
+        deferred: Vec<String>,
+        dialect: Dialect,
+    ) -> bool {
+        self.freeze(surface, deferred, Some(dialect))
+    }
+    fn freeze(
+        &self,
+        surface: Vec<ToolDefinition>,
+        deferred: Vec<String>,
+        dialect: Option<Dialect>,
+    ) -> bool {
         self.frozen
             .set(Frozen {
                 surface,
                 deferred: deferred.into_iter().collect(),
+                dialect,
             })
             .is_ok()
+    }
+    /// The dialect the frozen surface is presented in, if any.
+    pub fn dialect(&self) -> Option<&Dialect> {
+        self.frozen.get().and_then(|frozen| frozen.dialect.as_ref())
+    }
+    /// The canonical call for a call emitted under the session's dialect:
+    /// the one place a wire name becomes a canonical id. Identity without a
+    /// dialect. Anything that runs a tool by name (the call pipeline, the
+    /// inner call of `tool_call`) goes through it.
+    pub fn translate(&self, name: &str, args: Value) -> Result<Translated, DialectError> {
+        match self.dialect() {
+            Some(dialect) => dialect.translate(name, args),
+            None => Ok(Translated {
+                name: name.to_owned(),
+                args,
+                args_changed: false,
+            }),
+        }
+    }
+    /// The canonical id for a name the model may use (a wire name of the
+    /// session's dialect, or any other name unchanged).
+    pub fn canonical_name(&self, name: &str) -> String {
+        self.canonical_in_surface(name).to_owned()
+    }
+    /// The name the model sees for canonical tool `name`.
+    pub fn present_name(&self, name: &str) -> String {
+        self.dialect()
+            .and_then(|dialect| dialect.wire_names_of(name).into_iter().next())
+            .unwrap_or_else(|| name.to_owned())
+    }
+    /// Names of the registered tools as the model sees them.
+    pub fn presented_names(&self) -> Vec<String> {
+        let Some(dialect) = self.dialect() else {
+            return self.names();
+        };
+        self.order
+            .iter()
+            .flat_map(|name| match dialect.wire_names_of(name) {
+                wires if wires.is_empty() => vec![name.clone()],
+                wires => wires,
+            })
+            .collect()
+    }
+    fn canonical_in_surface<'a>(&'a self, name: &'a str) -> &'a str {
+        self.dialect()
+            .and_then(|dialect| dialect.canonical_of(name))
+            .unwrap_or(name)
     }
     /// True for a tool in the frozen surface that nothing can run this turn
     /// (its contributor is gone, slow or refused it).
@@ -183,14 +255,17 @@ impl ToolRegistry {
             frozen
                 .surface
                 .iter()
-                .any(|definition| definition.name == name)
+                .any(|definition| self.canonical_in_surface(&definition.name) == name)
                 && !self.tools.contains_key(name)
         })
     }
     pub(crate) fn is_deferred(&self, name: &str) -> bool {
-        self.frozen
-            .get()
-            .is_some_and(|frozen| frozen.deferred.contains(name))
+        self.frozen.get().is_some_and(|frozen| {
+            frozen
+                .deferred
+                .iter()
+                .any(|deferred| self.canonical_in_surface(deferred) == name)
+        })
     }
     pub(crate) fn withheld_reason(&self, name: &str) -> Option<&str> {
         self.withheld.get(name).map(String::as_str)

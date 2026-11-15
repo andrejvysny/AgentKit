@@ -9,45 +9,45 @@
         {
           "name": "read_file",
           "required": [
-            "path"
+            "file_path"
           ],
           "effect": {
             "kind": "read",
-            "key_arg": "path"
+            "key_arg": "file_path"
           }
         },
         {
           "name": "write_file",
           "required": [
-            "path",
+            "file_path",
             "content"
           ],
           "effect": {
             "kind": "write",
-            "key_arg": "path",
+            "key_arg": "file_path",
             "value_arg": "content"
           }
         },
         {
           "name": "append_file",
           "required": [
-            "path",
+            "file_path",
             "content"
           ],
           "effect": {
             "kind": "append",
-            "key_arg": "path",
+            "key_arg": "file_path",
             "value_arg": "content"
           }
         },
         {
           "name": "delete_file",
           "required": [
-            "path"
+            "file_path"
           ],
           "effect": {
             "kind": "remove",
-            "key_arg": "path"
+            "key_arg": "file_path"
           }
         }
       ],
@@ -60,7 +60,7 @@
           {
             "tool": "read_file",
             "args": {
-              "path": "notes.txt"
+              "file_path": "notes.txt"
             }
           }
         ],
@@ -78,45 +78,45 @@
         {
           "name": "read_file",
           "required": [
-            "path"
+            "file_path"
           ],
           "effect": {
             "kind": "read",
-            "key_arg": "path"
+            "key_arg": "file_path"
           }
         },
         {
           "name": "write_file",
           "required": [
-            "path",
+            "file_path",
             "content"
           ],
           "effect": {
             "kind": "write",
-            "key_arg": "path",
+            "key_arg": "file_path",
             "value_arg": "content"
           }
         },
         {
           "name": "append_file",
           "required": [
-            "path",
+            "file_path",
             "content"
           ],
           "effect": {
             "kind": "append",
-            "key_arg": "path",
+            "key_arg": "file_path",
             "value_arg": "content"
           }
         },
         {
           "name": "delete_file",
           "required": [
-            "path"
+            "file_path"
           ],
           "effect": {
             "kind": "remove",
-            "key_arg": "path"
+            "key_arg": "file_path"
           }
         }
       ],
@@ -127,7 +127,7 @@
           {
             "tool": "write_file",
             "args": {
-              "path": "hello.txt",
+              "file_path": "hello.txt",
               "content": "ahoj svet"
             }
           }
@@ -151,45 +151,45 @@
         {
           "name": "read_file",
           "required": [
-            "path"
+            "file_path"
           ],
           "effect": {
             "kind": "read",
-            "key_arg": "path"
+            "key_arg": "file_path"
           }
         },
         {
           "name": "write_file",
           "required": [
-            "path",
+            "file_path",
             "content"
           ],
           "effect": {
             "kind": "write",
-            "key_arg": "path",
+            "key_arg": "file_path",
             "value_arg": "content"
           }
         },
         {
           "name": "append_file",
           "required": [
-            "path",
+            "file_path",
             "content"
           ],
           "effect": {
             "kind": "append",
-            "key_arg": "path",
+            "key_arg": "file_path",
             "value_arg": "content"
           }
         },
         {
           "name": "delete_file",
           "required": [
-            "path"
+            "file_path"
           ],
           "effect": {
             "kind": "remove",
-            "key_arg": "path"
+            "key_arg": "file_path"
           }
         }
       ],
@@ -203,13 +203,13 @@
           {
             "tool": "delete_file",
             "args": {
-              "path": "tmp.log"
+              "file_path": "tmp.log"
             }
           },
           {
             "tool": "append_file",
             "args": {
-              "path": "status.txt",
+              "file_path": "status.txt",
               "content": "contains:done"
             }
           }

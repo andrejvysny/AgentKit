@@ -168,12 +168,16 @@ async fn the_frozen_profile_is_recorded_and_survives_a_changed_profile() {
 }
 
 #[tokio::test]
-async fn a_session_without_a_profile_records_none() {
+async fn a_session_without_a_profile_records_no_profile_but_the_common_dialect() {
     let h = harness();
     create(&h, "s2", None).await;
     let _ = turn(&h, "s2", "in1").await;
     let prefix = prefix_of(&h, "s2").await.expect("recorded");
     assert!(prefix.model_profile_id.is_absent());
-    assert!(prefix.dialect_version.is_absent());
+    // Every session goes through a dialect (T3.1); common is the default.
+    assert_eq!(
+        prefix.dialect_version,
+        agentkit_contracts::Optional::Present("1".to_owned())
+    );
     assert!(prefix.model_profile_digest.is_absent());
 }

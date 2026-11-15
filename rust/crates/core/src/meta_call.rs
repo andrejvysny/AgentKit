@@ -85,7 +85,9 @@ pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
             &format!("name: {name} is in your tool list; call it directly"),
         ));
     }
-    if let Some(error) = unknown(registry, name) {
+    // The inner name is a name the model was offered (T3.1); the registry
+    // knows tools by canonical id. `prepare_resolved` translates the call.
+    if let Some(error) = unknown(registry, &registry.canonical_name(name)) {
         return refuse(error);
     }
     let inner = ToolCall {

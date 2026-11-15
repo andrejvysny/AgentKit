@@ -1,0 +1,467 @@
+{
+  "dialect": "common",
+  "version": "1",
+  "canonical": [
+    {
+      "name": "edit_file",
+      "version": "1",
+      "effect": "write",
+      "capability": "fs.write",
+      "description": "Replace text in a file. Read it first with read_file; to find it use code_search.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "File to edit. Locate it with find_files."
+          },
+          "old_string": {
+            "type": "string"
+          },
+          "new_string": {
+            "type": "string"
+          },
+          "replace_all": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "file_path": "a.rs",
+          "old_string": "x",
+          "new_string": "y"
+        }
+      ]
+    },
+    {
+      "name": "git_inspect",
+      "version": "1",
+      "effect": "read",
+      "capability": "git.read",
+      "description": "Read-only git inspection with one of four fixed commands. Use git_inspect instead of a shell.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "status",
+              "diff",
+              "log",
+              "show"
+            ],
+            "description": "status, diff, log or show."
+          },
+          "path": {
+            "type": "string",
+            "description": "Limit to this path (relative to the workspace root)."
+          },
+          "staged": {
+            "type": "boolean",
+            "description": "Show staged changes (command diff only)."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "Maximum number of commits (command log only)."
+          },
+          "rev": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Commit, branch, tag or range, e.g. HEAD~2."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "command": "status"
+        },
+        {
+          "command": "diff",
+          "staged": true,
+          "path": "src/lib.rs"
+        },
+        {
+          "command": "log",
+          "limit": 10
+        }
+      ]
+    },
+    {
+      "name": "calendar_list",
+      "version": "1",
+      "effect": "read",
+      "capability": "calendar.read",
+      "description": "List events. To change one, use calendar_update; to read a file use read_file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  ],
+  "request": {
+    "tools": [
+      {
+        "name": "edit",
+        "version": "1",
+        "effect": "write",
+        "capability": "fs.write",
+        "description": "Replace text in a file. Read it first with read_file; to find it use grep_search.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "File to edit. Locate it with glob."
+            },
+            "old_string": {
+              "type": "string"
+            },
+            "new_string": {
+              "type": "string"
+            },
+            "replace_all": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "file_path",
+            "old_string",
+            "new_string"
+          ],
+          "additionalProperties": false
+        },
+        "examples": [
+          {
+            "file_path": "a.rs",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        ]
+      },
+      {
+        "name": "git_status",
+        "version": "1",
+        "effect": "read",
+        "capability": "git.read",
+        "description": "Show the working tree status and the current branch (read-only). Use it instead of running git through run_shell_command. path limits the report to one file or directory. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Limit to this path (relative to the workspace root)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "examples": [
+          {}
+        ]
+      },
+      {
+        "name": "git_diff",
+        "version": "1",
+        "effect": "read",
+        "capability": "git.read",
+        "description": "Show changes (read-only): the unstaged working tree changes, or the staged changes with staged true; rev compares against a commit, branch, tag or range, and path limits the diff to one file or directory. Use it instead of running git through run_shell_command. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Limit to this path (relative to the workspace root)."
+            },
+            "staged": {
+              "type": "boolean",
+              "description": "Show staged changes (command diff only)."
+            },
+            "rev": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "Commit, branch, tag or range, e.g. HEAD~2."
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "examples": [
+          {
+            "staged": true,
+            "path": "src/lib.rs"
+          }
+        ]
+      },
+      {
+        "name": "git_log",
+        "version": "1",
+        "effect": "read",
+        "capability": "git.read",
+        "description": "List commits, newest first (read-only). limit sets how many (default 20); rev starts from a commit, branch or tag; path keeps only commits that touch it. Use it instead of running git through run_shell_command. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Limit to this path (relative to the workspace root)."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "description": "Maximum number of commits (command log only)."
+            },
+            "rev": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "Commit, branch, tag or range, e.g. HEAD~2."
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "examples": [
+          {
+            "limit": 10
+          }
+        ]
+      },
+      {
+        "name": "git_show",
+        "version": "1",
+        "effect": "read",
+        "capability": "git.read",
+        "description": "Show one commit with its changes (read-only). rev names the commit, branch or tag (default HEAD), for example HEAD~2; path limits the output to one file or directory. Use it instead of running git through run_shell_command. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Limit to this path (relative to the workspace root)."
+            },
+            "rev": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "Commit, branch, tag or range, e.g. HEAD~2."
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "calendar_list",
+        "version": "1",
+        "effect": "read",
+        "capability": "calendar.read",
+        "description": "List events. To change one, use calendar_update; to read a file use read_file.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "day": {
+              "type": "string"
+            }
+          },
+          "required": []
+        }
+      }
+    ]
+  },
+  "response": {
+    "calls": [
+      {
+        "wire": {
+          "name": "edit",
+          "arguments": {
+            "file_path": "a.rs",
+            "old_string": "x",
+            "new_string": "y",
+            "replace_all": true
+          }
+        },
+        "canonical": {
+          "name": "edit_file",
+          "arguments": {
+            "file_path": "a.rs",
+            "old_string": "x",
+            "new_string": "y",
+            "replace_all": true
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "git_status",
+          "arguments": {}
+        },
+        "canonical": {
+          "name": "git_inspect",
+          "arguments": {
+            "command": "status"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "git_diff",
+          "arguments": {
+            "staged": true,
+            "path": "src/lib.rs"
+          }
+        },
+        "canonical": {
+          "name": "git_inspect",
+          "arguments": {
+            "command": "diff",
+            "staged": true,
+            "path": "src/lib.rs"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "git_log",
+          "arguments": {
+            "limit": 10,
+            "rev": "main"
+          }
+        },
+        "canonical": {
+          "name": "git_inspect",
+          "arguments": {
+            "command": "log",
+            "limit": 10,
+            "rev": "main"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "git_show",
+          "arguments": {
+            "rev": "HEAD~2"
+          }
+        },
+        "canonical": {
+          "name": "git_inspect",
+          "arguments": {
+            "command": "show",
+            "rev": "HEAD~2"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "glob",
+          "arguments": {
+            "pattern": "**/*.rs"
+          }
+        },
+        "canonical": {
+          "name": "find_files",
+          "arguments": {
+            "pattern": "**/*.rs"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "grep_search",
+          "arguments": {
+            "pattern": "fn main",
+            "glob": "*.rs"
+          }
+        },
+        "canonical": {
+          "name": "code_search",
+          "arguments": {
+            "pattern": "fn main",
+            "glob": "*.rs"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "list_directory",
+          "arguments": {
+            "path": "src"
+          }
+        },
+        "canonical": {
+          "name": "list_dir",
+          "arguments": {
+            "path": "src"
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "run_shell_command",
+          "arguments": {
+            "command": "cargo test",
+            "timeout": 60000
+          }
+        },
+        "canonical": {
+          "name": "run_command",
+          "arguments": {
+            "command": "cargo test",
+            "timeout": 60000
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "read_file",
+          "arguments": {
+            "file_path": "a.rs",
+            "offset": 3
+          }
+        },
+        "canonical": {
+          "name": "read_file",
+          "arguments": {
+            "file_path": "a.rs",
+            "offset": 3
+          }
+        }
+      },
+      {
+        "wire": {
+          "name": "calendar_list",
+          "arguments": {
+            "day": "2026-11-16"
+          }
+        },
+        "canonical": {
+          "name": "calendar_list",
+          "arguments": {
+            "day": "2026-11-16"
+          }
+        }
+      }
+    ]
+  }
+}

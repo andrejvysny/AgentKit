@@ -2,6 +2,7 @@
 mod budget;
 mod call_pipeline;
 mod deferred;
+mod dialect;
 mod dispatch;
 mod envelope;
 mod examples_render;
@@ -32,6 +33,12 @@ pub use agentkit_kernel::{Runtime, SystemRuntime};
 pub use deferred::{
     Catalog, CatalogCell, CatalogEntry, Classification, DirectSet, META_TOOLS, Split, TOOL_CALL,
     TOOL_DESCRIBE, TOOL_SEARCH, ToolLoading, catalog_index, is_meta_tool, namespace_of,
+};
+// T3.1: the presentation layer; canonical ids stay, dialects render and translate.
+pub use dialect::{
+    COMMON_ID as COMMON_DIALECT_ID, COMMON_VERSION as COMMON_DIALECT_VERSION, Dialect,
+    DialectError, ToolForm, Translated, WireTool, common as common_dialect,
+    lookup as lookup_dialect, present_history, session_dialect,
 };
 pub use dispatch::{DispatchFence, DispatchGuard};
 pub use meta_call::unwrap_tool_call;
