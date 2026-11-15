@@ -266,6 +266,56 @@ async fn a_built_in_call_the_request_did_not_offer_is_refused_by_the_parser() {
         || event.to_string().contains("unknown_tool")), "{events:?}");
 }
 
+/// A continued run (T3.3): the history of request 2 shows the emitted patch
+/// call exactly as the provider returned it, so the continuation digest taken
+/// after request 1 still matches. A patch with context lines does not survive
+/// a canonical round trip (old/new text, then a re-rendered diff).
+#[tokio::test]
+async fn a_continued_run_shows_the_emitted_patch_call_unchanged() {
+    let diff = "@@ def fib\n def fib(n):\n-    return n\n+    return n + 0\n     # end\n";
+    let patch = json!({"id":"apc_c","type":"apply_patch_call","status":"completed","call_id":"call_ctx",
+        "operation":{"type":"update_file","path":"lib/fib.py","diff":diff}});
+    let transport = Transport::new(vec![completed(vec![patch]), answer()]);
+    let provider = ResponsesProvider::new(transport.clone()).unwrap();
+    let handle = run_chat(
+        RunOptions {
+            request: ChatRequest {
+                model: "m".into(),
+                messages: vec![ChatMessage::text("user", "go")],
+                continuation_scope: Some(ContinuationScope {
+                    chat_id: "chat".into(),
+                    branch_id: "branch".into(),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Arc::new(provider),
+        registry(),
+    );
+    let events: Vec<Value> = handle
+        .events
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(|event| serde_json::to_value(event).unwrap())
+        .collect();
+    assert!(
+        events.iter().all(|event| event["type"] != "run.failed"
+            && !event.to_string().contains("continuation_history_mismatch")),
+        "{events:?}"
+    );
+    let sent = transport.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2, "{events:?}");
+    let input = sent[1]["input"].as_array().unwrap();
+    let call = input
+        .iter()
+        .find(|item| item["type"] == "apply_patch_call")
+        .expect("patch call echoed");
+    assert_eq!(call["operation"]["diff"], diff);
+    assert!(input.iter().any(|item| item["type"] == "apply_patch_call_output"));
+}
+
 fn identity() -> ConnectionIdentity {
     ConnectionIdentity {
         provider_id: "p".into(),

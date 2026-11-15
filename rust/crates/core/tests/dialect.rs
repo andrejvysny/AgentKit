@@ -291,6 +291,46 @@ fn stored_history_is_shown_in_the_names_the_model_was_offered() {
     assert_eq!(shown[3].name.as_deref(), Some("edit"));
 }
 
+#[test]
+fn history_shows_the_calls_as_the_model_emitted_them_when_they_were_recorded() {
+    // The stored call is canonical; the emitted one rides in the metadata.
+    let emitted = ToolCall {
+        id: "1".into(),
+        name: "git_diff".into(),
+        arguments_json: r#"{ "staged": true }"#.into(),
+    };
+    let mut assistant = ChatMessage::text("assistant", "");
+    assistant.tool_calls = vec![ToolCall {
+        id: "1".into(),
+        name: "git_inspect".into(),
+        arguments_json: r#"{"command":"diff","staged":true}"#.into(),
+    }];
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        WIRE_CALLS_METADATA_KEY.into(),
+        serde_json::to_value(vec![emitted.clone()]).unwrap(),
+    );
+    assistant.metadata = Some(metadata);
+    let mut result = ChatMessage::text("tool", "ok");
+    result.tool_call_id = Some("1".into());
+    result.name = Some("git_inspect".into());
+    for shown in [
+        present_history(&common_dialect(), vec![assistant.clone(), result.clone()]),
+        // A session without a dialect shows the emitted call too.
+        restore_wire_calls(vec![assistant.clone(), result.clone()]),
+    ] {
+        // Same bytes, whitespace included: a provider continuation hashes them.
+        assert_eq!(shown[0].tool_calls, vec![emitted.clone()]);
+        assert_eq!(shown[1].name.as_deref(), Some("git_diff"));
+    }
+    // A record that does not pair with the stored calls is ignored.
+    let mut unpaired = assistant;
+    unpaired.tool_calls[0].id = "other".into();
+    let shown = present_history(&common_dialect(), vec![unpaired]);
+    assert_eq!(shown[0].tool_calls[0].name, "git_diff");
+    assert_eq!(shown[0].tool_calls[0].arguments_json, r#"{"staged":true}"#);
+}
+
 // ---- the call pipeline with a frozen dialect --------------------------------
 
 struct Script {
