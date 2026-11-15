@@ -68,6 +68,7 @@ fn all_dtos_roundtrip() {
     support::roundtrip::<AiToolLimits>("AiToolLimitsSchema");
     support::roundtrip::<AiToolResult>("AiToolResultSchema");
     support::roundtrip::<AiToolStatus>("AiToolStatusSchema");
+    support::roundtrip::<AiTurnContextPart>("AiTurnContextPartSchema");
     support::roundtrip::<ApplyOutcomeDto>("ApplyOutcomeDtoSchema");
     support::roundtrip::<ApplyProposalRequest>("ApplyProposalRequestSchema");
     support::roundtrip::<ApprovalGrantRefDto>("ApprovalGrantRefDtoSchema");

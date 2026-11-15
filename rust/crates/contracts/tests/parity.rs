@@ -9,7 +9,7 @@ fn schemas_match_exported_fixture_and_compile() {
         serde_json::to_value(schemas()).unwrap(),
         fixture("schemas.json")
     );
-    assert_eq!(schemas().len(), 134);
+    assert_eq!(schemas().len(), 136);
     for (name, schema) in schemas() {
         compile_schema(schema).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
@@ -204,6 +204,25 @@ fn content_security_and_closed_discriminators_match_typescript() {
     assert!(validate_schema("AiMessageContentSchema", &json!([])).is_err());
     assert!(validate_schema("AiMessageContentSchema", &json!("")).is_ok());
     assert!(validate_schema("AiContentPartSchema", &json!({"type":"audio","data":"x"})).is_err());
+    let turn_context = json!({"type":"turn_context","text":"<turn_context>\n</turn_context>"});
+    assert!(validate_schema("AiContentPartSchema", &turn_context).is_ok());
+    assert!(validate_schema("AiMessageContentSchema", &json!([turn_context])).is_ok());
+    assert!(validate_schema("AiContentPartSchema", &json!({"type":"turn_context"})).is_err());
+    // The host builds turn_context; a submit may not carry one.
+    assert!(
+        validate_schema("SubmitMessageRequestSchema", &json!({"content":[turn_context.clone()]})).is_err()
+    );
+    assert!(
+        validate_schema(
+            "SubmitMessageRequestSchema",
+            &json!({"content":[{"type":"text","text":"hi"}]})
+        )
+        .is_ok()
+    );
+    let typed: AiContentPart =
+        deserialize_validated("AiContentPartSchema", turn_context.clone()).unwrap();
+    assert!(matches!(typed, AiContentPart::TurnContext(_)));
+    assert_eq!(serde_json::to_value(typed).unwrap(), turn_context);
 }
 
 #[test]

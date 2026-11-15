@@ -353,7 +353,9 @@ fn visible_message(
     Some((
         ChatMessage {
             role: record.role.clone(),
-            content: record.content.clone(),
+            // A persisted turn-context part crosses as text; the stored
+            // bytes are unchanged, so replay stays byte-identical (INV-2).
+            content: agentkit_core::content_for_wire(&record.content),
             name: record.metadata["toolName"].as_str().map(str::to_owned),
             tool_call_id: record.tool_call_id.clone(),
             tool_calls: calls,

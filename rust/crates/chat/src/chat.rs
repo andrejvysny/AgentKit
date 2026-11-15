@@ -402,6 +402,17 @@ impl ChatExecutor {
                 }));
             }
         }
+        // The selection enters the history inside the turn's user message,
+        // built once; a retried or replayed turn finds it already there.
+        crate::turn_context::attach::attach(
+            &context,
+            &options,
+            &registry,
+            chat_id,
+            &anchor,
+            &selected_content,
+        )
+        .await?;
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
@@ -499,7 +510,7 @@ impl ChatExecutor {
             && context.store.get_chat(chat_id).await?.is_some_and(|chat| {
                 chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
             });
-        let mut messages = if session
+        let messages = if session
             && (options.auto_compaction || compact_requested)
             && continuation.is_none()
             && let Some(context_budget) = context_budget.clone()
@@ -554,10 +565,6 @@ impl ChatExecutor {
                 .map(|(message, _)| message)
                 .collect::<Vec<_>>()
         };
-        if let Some(hook) = &options.turn_context {
-            crate::turn_context::append_line(hook.as_ref(), chat_id, &registry, &mut messages)
-                .await;
-        }
         let sink = Arc::new(history::DurableEvents {
             context: context.clone(),
             chat_id: chat_id.into(),
@@ -592,7 +599,6 @@ impl ChatExecutor {
             model: model.into(),
             messages,
             profile: model_profile.clone(),
-            selected_content,
             content_binding_digest: context.task.payload["contentSnapshot"]["digest"]
                 .as_str()
                 .map(str::to_owned),
@@ -776,6 +782,9 @@ impl ChatHostExt for AgentHost {
             return Err(ChatError::Engine(
                 agentkit_engine::EngineError::UnknownKind(CHAT_TURN_TASK_KIND.into()),
             ));
+        }
+        if crate::turn_context::attach::has_turn_context(&input.content) {
+            return Err(ChatError::HostOnlyContentPart);
         }
         if self
             .store()

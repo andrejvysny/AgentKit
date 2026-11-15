@@ -16,7 +16,7 @@ describe("TypeBox schemas match the Rust-owned schema bundle", () => {
 
   it("exports exactly the bundled schema names", () => {
     expect(Object.keys(emitted).sort()).toEqual(Object.keys(bundle).sort());
-    expect(Object.keys(bundle)).toHaveLength(134);
+    expect(Object.keys(bundle)).toHaveLength(136);
   });
 
   it.each(Object.keys(bundle))("%s", (name) => {

@@ -266,6 +266,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 name: TOptional<TString>;
 toolCallId: TOptional<TString>;
@@ -317,6 +320,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>;
 
 // @public
@@ -469,6 +475,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 
 // @public (undocumented)
@@ -1442,6 +1451,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>>;
 ok: TBoolean;
 status: TUnion<[TLiteral<"ok">, TLiteral<"error">, TLiteral<"partial">]>;
@@ -1506,6 +1518,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>>;
 ok: TBoolean;
 data: TOptional<TUnknown>;
@@ -1535,6 +1550,15 @@ export type AiToolStatus = Static<typeof AiToolStatusSchema>;
 
 // @public (undocumented)
 export const AiToolStatusSchema: TUnion<[TLiteral<"requested">, TLiteral<"running">, TLiteral<"succeeded">, TLiteral<"failed">, TLiteral<"rejected">]>;
+
+// @public (undocumented)
+export type AiTurnContextPart = Static<typeof AiTurnContextPartSchema>;
+
+// @public
+export const AiTurnContextPartSchema: TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
+}>;
 
 // @public (undocumented)
 export type ApplyOutcomeDto = Static<typeof ApplyOutcomeDtoSchema>;
@@ -1883,6 +1907,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 toolCalls: TOptional<TArray<TObject<    {
 id: TString;
@@ -1928,6 +1955,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 toolCalls: TOptional<TArray<TObject<    {
 id: TString;
@@ -2893,6 +2923,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 model: TOptional<TString>;
 providerId: TOptional<TString>;

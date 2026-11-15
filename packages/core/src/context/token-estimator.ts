@@ -29,7 +29,8 @@ function contentChars(content: AiChatMessage["content"]): number {
   if (typeof content === "string") return content.length;
   let chars = 0;
   for (const part of content) {
-    if (part.type === "text") chars += part.text.length;
+    if (part.type === "text" || part.type === "turn_context")
+      chars += part.text.length;
     else if (part.type === "image") chars += IMAGE_CHARS;
     else chars += part.data.length;
   }

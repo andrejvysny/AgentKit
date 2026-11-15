@@ -90,7 +90,7 @@ impl TurnContextHook for FixedLine {
 }
 
 #[tokio::test]
-async fn the_line_is_appended_to_the_user_message_and_nowhere_else() {
+async fn the_line_is_a_persisted_note_of_the_user_message_and_nowhere_else() {
     let store = SqliteStore::memory(64).expect("store");
     let seen = Arc::new(Mutex::new(vec![]));
     let mut registry = ToolRegistry::new();
@@ -169,11 +169,16 @@ async fn the_line_is_appended_to_the_user_message_and_nowhere_else() {
     assert!(user.contains("read my notes"), "{user}");
     assert!(user.contains("HINT for read my notes"), "{user}");
     assert!(!system.contains("HINT"), "never S1-S4: {system}");
+    // The line is a note of the turn context, persisted once with the user
+    // message; no other stored message carries it.
     let stored = store.messages("s1", true).await.unwrap();
-    assert!(
-        stored.iter().all(|m| !m.content.to_string().contains("HINT")),
-        "the line is not persisted"
-    );
+    let carrying: Vec<_> = stored
+        .iter()
+        .filter(|m| m.content.to_string().contains("HINT"))
+        .collect();
+    assert_eq!(carrying.len(), 1);
+    assert_eq!(carrying[0].role, "user");
+    assert!(carrying[0].content.to_string().contains("toolset_recommendation"));
 }
 
 fn view_and_tools() -> (agentkit_core::ToolsetView, Vec<ToolDefinition>) {

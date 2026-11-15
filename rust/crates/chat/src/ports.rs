@@ -35,9 +35,10 @@ pub struct TurnContextInput<'a> {
     pub view: &'a agentkit_core::ToolsetView,
 }
 
-/// Per-turn context port (T4.4). The line it returns is appended to the
-/// user-side message of the turn only; it never enters the cached prefix
-/// (S1-S4) and is not persisted. `observe_tool_record` sees every
+/// Per-turn context port (T4.4). The line it returns is written once, when the
+/// turn starts, as a note in the turn-context part of the user message
+/// (roadmap 1.2); it never enters the cached prefix (S1-S4) and is replayed
+/// unchanged with the message. `observe_tool_record` sees every
 /// `run.tool.record` event of the turn's run so usage can feed the advice.
 #[async_trait]
 pub trait TurnContextHook: Send + Sync {

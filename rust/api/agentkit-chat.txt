@@ -18,6 +18,7 @@ pub agentkit_chat::ChatError::External(alloc::boxed::Box<(dyn core::error::Error
 pub agentkit_chat::ChatError::Failure(agentkit_engine::retry::ExecutionFailure)
 pub agentkit_chat::ChatError::Governance(agentkit_governance::error::GovernanceError)
 pub agentkit_chat::ChatError::HookTimeout(alloc::string::String)
+pub agentkit_chat::ChatError::HostOnlyContentPart
 pub agentkit_chat::ChatError::IdentifyInstructionFile(core::io::error::Error)
 pub agentkit_chat::ChatError::InspectInstructionFile(core::io::error::Error)
 pub agentkit_chat::ChatError::InstructionFileChangedDuringOpen

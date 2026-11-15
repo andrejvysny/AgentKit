@@ -46,12 +46,9 @@ pub(crate) fn build_body(
     input: &ChatRequest,
 ) -> Result<(Value, Vec<String>, Vec<ProfileNote>), CoreError> {
     content::validate_selected(&input.selected_content)?;
-    let history: Vec<ChatMessage> = input
-        .selected_content
-        .iter()
-        .chain(input.messages.iter())
-        .cloned()
-        .collect();
+    // Selected content rides inside the turn's last user message (CE-01),
+    // never ahead of the system messages.
+    let history = agentkit_core::fold_selected_content(&input.messages, &input.selected_content);
     let (history, mut notes) = match &input.profile {
         Some(profile) => apply_message_rules(history, profile),
         None => (history, vec![]),

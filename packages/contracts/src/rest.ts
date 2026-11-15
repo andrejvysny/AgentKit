@@ -28,7 +28,10 @@ import {
  * each one names its source below.
  */
 import { Type, type Static } from "@sinclair/typebox";
-import { AiMessageContentSchema } from "./content.js";
+import {
+  AiInboundMessageContentSchema,
+  AiMessageContentSchema,
+} from "./content.js";
 import {
   AiProviderKindSchema,
   AiProviderModelSchema,
@@ -810,7 +813,7 @@ export const SubmitMessageRequestSchema = Type.Object({
    * attachment is. The host resolves refs per provider pass; see
    * the attachment resolver in the Rust engine.
    */
-  content: AiMessageContentSchema,
+  content: AiInboundMessageContentSchema,
   /** Overrides the provider's default model for this turn only. */
   model: Type.Optional(Type.String()),
   /**

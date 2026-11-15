@@ -132,6 +132,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 name: TOptional<TString>;
 toolCallId: TOptional<TString>;
@@ -260,6 +263,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 
 // @public (undocumented)
@@ -899,6 +905,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>>;
 ok: TBoolean;
 data: TOptional<TUnknown>;

@@ -1,0 +1,51 @@
+{
+  "persisted": {
+    "messages": [
+      {
+        "role": "system",
+        "content": "policy"
+      },
+      {
+        "role": "system",
+        "content": "rules"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "q1"
+          },
+          {
+            "type": "text",
+            "text": "<turn_context>\n<date>2026-11-14</date>\n<skill name=\"release-notes\" revision=\"r1\">\nSKILL BODY\n</skill>\n</turn_context>"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "a1"
+      },
+      {
+        "role": "user",
+        "content": "q2"
+      }
+    ]
+  },
+  "legacy": {
+    "messages": [
+      {
+        "role": "system",
+        "content": "policy"
+      },
+      {
+        "role": "system",
+        "content": "rules"
+      },
+      {
+        "role": "user",
+        "content": "hi\n\n<turn_context>\n<context role=\"system\">\nSKILL BODY\n</context>\n</turn_context>"
+      }
+    ]
+  }
+}

@@ -90,29 +90,31 @@ pub fn build_responses_request_notes(
     } else if input.continuation_required {
         return Err(CoreError::responses("continuation_required"));
     }
-    // Managed content is request-local; never checkpoint it as transcript.
+    // Selected content rides inside the turn's last user message (CE-01),
+    // never ahead of the system segments. The chat executor persists it there
+    // as a turn-context part instead, so this fold only serves callers that
+    // still pass `selected_content`.
     let builtins = builtin_names(input);
     let mut replaced = vec![];
-    let selected_items = map_messages(&input.selected_content, &builtins, &mut replaced)?;
-    items.extend(map_messages(&input.messages[offset..], &builtins, &mut replaced)?);
+    let folded = agentkit_core::fold_selected_content(&input.messages, &input.selected_content);
+    items.extend(map_messages(&folded[offset..], &builtins, &mut replaced)?);
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
     // S2-S4 are joined in segment order into `instructions`; turn context
     // rides the user side and is never hoisted here (CE-07).
     let instructions = input
-        .selected_content
+        .messages
         .iter()
-        .chain(input.messages.iter())
         .filter(|message| message.role == "system")
         .map(|message| content::text(message, true))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
     let (tools, warnings) = tools(input)?;
-    // Segment order on the wire: tools, instructions (S2-S4), then
-    // request-local selected content and history.
-    let mut wire_items = selected_items;
-    wire_items.extend(items);
+    // Wire order: tools, instructions (S2-S4), then history. Selected content
+    // sits inside the last user message (CE-01), so no request-local items
+    // precede the history.
+    let wire_items = items;
     let mut body = json!({"model":input.model,"input":wire_items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
     if !instructions.is_empty() {
         body["instructions"] = instructions.into();
@@ -252,13 +254,9 @@ pub(crate) fn make_continuation(
         .as_array()
         .cloned()
         .ok_or_else(|| CoreError::responses("invalid_request"))?;
-    // Strip request-local content before persisting provider continuation.
-    let selected_count =
-        map_messages(&input.selected_content, &builtin_names(input), &mut vec![])?.len();
-    if selected_count > items.len() {
-        return Err(CoreError::responses("invalid_request"));
-    }
-    items.drain(..selected_count);
+    // Nothing request-local to strip: S3/S4 ride in `instructions` (CE-07) and
+    // selected content lives inside the user message, which the continuation
+    // keeps so a replayed turn matches the persisted history.
     items.extend_from_slice(output);
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
@@ -700,7 +698,11 @@ mod selected_content_tests {
         };
         let body = build_responses_request(&input, &identity, false).unwrap();
         assert_eq!(body["reasoning"]["effort"], "high");
-        assert_eq!(body["input"][0]["content"][0]["text"], "selected first");
+        // The selection rides inside the user message, never ahead of it.
+        assert_eq!(body["input"].as_array().unwrap().len(), 1);
+        let first = body["input"][0]["content"][0]["text"].as_str().unwrap();
+        assert!(first.starts_with("canonical\n\n<turn_context>"), "{first}");
+        assert!(first.contains("selected first"), "{first}");
         let output = vec![
             json!({"type":"reasoning","encrypted_content":"opaque"}),
             json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}),
@@ -710,14 +712,14 @@ mod selected_content_tests {
             .unwrap();
         assert_eq!(state["messageCount"], 2);
         assert_eq!(state["runContent"]["runId"], "run-1");
-        assert!(!state["inputItems"].to_string().contains("selected first"));
+        assert!(state["inputItems"].to_string().contains("selected first"));
         input
             .messages
             .push(ChatMessage::text("assistant", "answer"));
         input.messages.push(ChatMessage::text("user", "next"));
         input.continuation = Some(state.clone());
         let continued = build_responses_request(&input, &identity, false).unwrap();
-        assert_eq!(continued["input"].as_array().unwrap().len(), 5);
+        assert_eq!(continued["input"].as_array().unwrap().len(), 4);
         input.selected_content = vec![ChatMessage::text("user", "selected second")];
         assert_eq!(
             build_responses_request(&input, &identity, false)

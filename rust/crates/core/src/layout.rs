@@ -205,6 +205,138 @@ pub fn segment_of(message: &ChatMessage) -> Option<Segment> {
         .and_then(Segment::parse)
 }
 
+/// Part type of the persisted turn context (roadmap 1.2, ADR 0036).
+pub const TURN_CONTEXT_PART_TYPE: &str = "turn_context";
+/// Every turn-context text opens with this tag and closes with its pair.
+pub const TURN_CONTEXT_OPEN: &str = "<turn_context>";
+pub const TURN_CONTEXT_CLOSE: &str = "</turn_context>";
+
+/// Wrapper tags a body must not carry, or it could close its own wrapper or
+/// pass for a host block.
+const TURN_CONTEXT_TAGS: [&str; 7] = [
+    "turn_context",
+    "skill",
+    "template",
+    "source",
+    "note",
+    "date",
+    "context",
+];
+
+/// A `turn_context` content part holding `text`.
+pub fn turn_context_part(text: &str) -> Value {
+    json!({"type": TURN_CONTEXT_PART_TYPE, "text": text})
+}
+
+/// Whether `text` is the text of a turn-context part.
+pub fn is_turn_context_text(text: &str) -> bool {
+    text.starts_with(TURN_CONTEXT_OPEN)
+}
+
+/// Whether `after_lt` (the text after a `<`) starts one of `tags`, as an
+/// opening or closing tag: any letter case, whitespace allowed around the
+/// slash and before the closing `>`.
+fn starts_tag(after_lt: &str, tags: &[&str]) -> bool {
+    let rest = after_lt.trim_start();
+    let rest = rest.strip_prefix('/').unwrap_or(rest).trim_start();
+    tags.iter().any(|tag| {
+        rest.get(..tag.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(tag))
+            && !rest[tag.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
+/// `text` with a backslash after the `<` of every tag in `tags`.
+fn defang(text: &str, tags: &[&str]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..=at]);
+        rest = &rest[at + 1..];
+        if starts_tag(rest, tags) {
+            out.push('\\');
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` with every turn-context wrapper tag, opening or closing, defanged
+/// (`</skill>` becomes `<\/skill>`), so selected content cannot close its own
+/// wrapper or open a block of its own.
+pub fn escape_turn_context(text: &str) -> String {
+    defang(text, &TURN_CONTEXT_TAGS)
+}
+
+/// A message body as a provider receives it: each `turn_context` part becomes
+/// a text part of the same text. Typed text has any `<turn_context` tag
+/// defanged, so it cannot pass for a host block. The same input always gives
+/// the same bytes, so what was sent once is sent again byte for byte (INV-2).
+pub fn content_for_wire(content: &Value) -> Value {
+    let typed = |text: &str| defang(text, &TURN_CONTEXT_TAGS[..1]);
+    let parts = match content {
+        Value::String(text) => return Value::String(typed(text)),
+        Value::Array(parts) => parts,
+        other => return other.clone(),
+    };
+    Value::Array(
+        parts
+            .iter()
+            .map(|part| {
+                if part["type"] == TURN_CONTEXT_PART_TYPE {
+                    json!({"type": "text", "text": part["text"]})
+                } else if part["type"] == "text"
+                    && let Some(text) = part["text"].as_str()
+                {
+                    let mut part = part.clone();
+                    part["text"] = Value::String(typed(text));
+                    part
+                } else {
+                    part.clone()
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Request-local `selected` content (the legacy carrier,
+/// `ChatRequest::selected_content`) placed inside the turn's last user
+/// message, never ahead of the system segments (CE-01). Nothing is sent when
+/// `selected` is empty. The chat executor does not use this: it persists the
+/// selection as a turn-context part on the user message instead.
+pub fn fold_selected_content(
+    messages: &[ChatMessage],
+    selected: &[ChatMessage],
+) -> Vec<ChatMessage> {
+    let mut folded = messages.to_vec();
+    if selected.is_empty() {
+        return folded;
+    }
+    let mut text = String::from(TURN_CONTEXT_OPEN);
+    for item in selected {
+        let body = escape_turn_context(item.content.as_str().unwrap_or_default());
+        text.push_str(&format!("\n<context role=\"{}\">\n{body}\n</context>", item.role));
+    }
+    text.push('\n');
+    text.push_str(TURN_CONTEXT_CLOSE);
+    let last_user = folded
+        .iter_mut()
+        .rev()
+        .find(|message| message.role == "user" && message.tool_call_id.is_none());
+    match last_user {
+        Some(message) => match &mut message.content {
+            Value::String(existing) => {
+                existing.push_str("\n\n");
+                existing.push_str(&text);
+            }
+            Value::Array(parts) => parts.push(json!({"type": "text", "text": text})),
+            _ => {}
+        },
+        None => folded.push(ChatMessage::text("user", &text)),
+    }
+    folded
+}
+
 /// SHA-256 over the canonical JSON of the tool definitions in request order.
 /// A session sends the frozen, name-sorted manifest (`manifest.rs`), so that
 /// order is canonical.

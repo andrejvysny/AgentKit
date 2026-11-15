@@ -58,10 +58,10 @@ test("native profile defaults and selected content reach the provider callback",
     expect(seen[0]?.reasoningEffort).toBe("high");
     expect(seen[0]?.maxOutputTokens).toBe(13);
     expect(seen[0]?.tools).toEqual([]);
-    expect(JSON.stringify(seen[0]?.runContent)).toContain(
-      "selected native instruction",
-    );
-    expect(JSON.stringify(seen[0]?.messages)).not.toContain(
+    // The selection is the turn context of the user message, not request-local content.
+    expect(seen[0]?.runContent).toBeUndefined();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("<turn_context>");
+    expect(JSON.stringify(seen[0]?.messages)).toContain(
       "selected native instruction",
     );
     expect(authorityCalls).toBe(0);
@@ -253,10 +253,10 @@ test("pure native profile queries match direct session settings and template-onl
     expect(seen).toHaveLength(1);
     expect(seen[0]?.model).toBe("explicit-model");
     expect(seen[0]?.reasoningEffort).toBe("low");
-    expect(JSON.stringify(seen[0]?.runContent)).toContain(
-      "template-only native instruction",
-    );
-    expect(JSON.stringify(seen[0]?.messages)).not.toContain(
+    // The selection is the turn context of the user message, not request-local content.
+    expect(seen[0]?.runContent).toBeUndefined();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("<turn_context>");
+    expect(JSON.stringify(seen[0]?.messages)).toContain(
       "template-only native instruction",
     );
   } finally {

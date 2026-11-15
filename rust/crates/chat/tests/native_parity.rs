@@ -186,18 +186,25 @@ async fn content_revision_profile_defaults_and_reasoning_survive_later_edits() {
             .collect::<Vec<_>>(),
         ["allowed"]
     );
-    assert!(request.selected_content.iter().any(|message| {
-        message
-            .content
-            .as_str()
-            .is_some_and(|text| text.contains("original instruction"))
-    }));
-    assert!(!request.messages.iter().any(|message| {
-        message
-            .content
-            .as_str()
-            .is_some_and(|text| text.contains("original instruction"))
-    }));
+    // The frozen selection travels inside the turn's user message as its turn
+    // context, never as request-local content ahead of the system prompt.
+    assert!(request.selected_content.is_empty());
+    let user = request
+        .messages
+        .iter()
+        .find(|message| message.role == "user")
+        .expect("user message");
+    let text = user.content.to_string();
+    assert!(text.contains("<turn_context>"), "{text}");
+    assert!(text.contains("original instruction"), "{text}");
+    assert!(!text.contains("changed instruction"), "{text}");
+    assert!(
+        request
+            .messages
+            .iter()
+            .filter(|message| message.role != "user")
+            .all(|message| !message.content.to_string().contains("original instruction"))
+    );
 }
 
 #[tokio::test]

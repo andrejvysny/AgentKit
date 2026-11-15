@@ -1,4 +1,4 @@
-use crate::{AiAudioPart, AiImagePart, AiTextPart};
+use crate::{AiAudioPart, AiImagePart, AiTextPart, AiTurnContextPart};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -8,6 +8,7 @@ pub enum AiContentPart {
     Text(AiTextPart),
     Image(AiImagePart),
     Audio(AiAudioPart),
+    TurnContext(AiTurnContextPart),
 }
 crate::impl_json_deserialize!(AiContentPart, |value: Value| {
     if let Ok(member) = <AiTextPart as crate::JsonDeserialize>::from_json(value.clone()) {
@@ -18,6 +19,9 @@ crate::impl_json_deserialize!(AiContentPart, |value: Value| {
     }
     if let Ok(member) = <AiAudioPart as crate::JsonDeserialize>::from_json(value.clone()) {
         return Ok(Self::Audio(member));
+    }
+    if let Ok(member) = <AiTurnContextPart as crate::JsonDeserialize>::from_json(value.clone()) {
+        return Ok(Self::TurnContext(member));
     }
     Err(crate::json_error("invalid AiContentPart"))
 });

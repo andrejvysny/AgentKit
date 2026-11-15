@@ -168,6 +168,14 @@ nor Anthropic's `source` blocks — an adapter maps them onto whatever its
 provider speaks; `OpenAiCompatibleClient` (`@agentkit/core`) is the shipped
 mapping.
 
+**Turn context.** `AiTurnContextPart` (`{ type: "turn_context", text }`) is the
+fourth member. The runtime writes one on the user message that starts a turn
+(selected skills and templates, source snapshots, the date, delta notes) and
+replays it unchanged; transports send it as plain text (ADR 0036). Clients
+should not render it as something the user typed. It is host-only: a submit
+(`SubmitMessageRequestSchema`, and every session send) that carries one is
+refused with `invalid_input`.
+
 **Closed union.** An unknown part `type` must not validate; new kinds
 (audio, file, …) are additive union members, decided when they arrive, not
 an escape hatch left open in advance.

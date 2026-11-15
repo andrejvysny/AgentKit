@@ -25,6 +25,7 @@ export {
   AiImageSourceSchema,
   AiImagePartSchema,
   AiAudioPartSchema,
+  AiTurnContextPartSchema,
   AiContentPartSchema,
   AiMessageContentSchema,
 } from "./content.js";

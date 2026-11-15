@@ -126,6 +126,8 @@ pub enum ChatError {
     ProviderSnapshotModelMismatch,
     #[error("session_submission_required: use AgentSessionService for session turns")]
     SessionSubmissionRequired,
+    #[error("invalid_input: content must not contain a turn_context part; the host builds it")]
+    HostOnlyContentPart,
     #[error("write_tool_requires_write_effect_and_trusted_actor")]
     WriteToolRequiresWriteEffectAndTrustedActor,
 }
@@ -198,6 +200,7 @@ impl ChatError {
             | Self::InvalidVerificationStatus
             | Self::InvalidContextWindowSnapshot
             | Self::InvalidMaxOutputTokens
+            | Self::HostOnlyContentPart
             | Self::InvalidProviderConnection
             | Self::InvalidProviderContextWindow
             | Self::SessionContextInvalid => Rejected,

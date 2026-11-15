@@ -1,5 +1,9 @@
 use agentkit_core::{ChatMessage, CoreError};
 use serde_json::{Value, json};
+/// A text part or the persisted turn context, which crosses as plain text.
+fn is_text(part: &Value) -> bool {
+    part["type"] == "text" || part["type"] == agentkit_core::TURN_CONTEXT_PART_TYPE
+}
 pub(crate) fn text(message: &ChatMessage, strict: bool) -> Result<String, CoreError> {
     if let Some(text) = message.content.as_str() {
         return Ok(text.into());
@@ -10,7 +14,7 @@ pub(crate) fn text(message: &ChatMessage, strict: bool) -> Result<String, CoreEr
         .ok_or_else(|| CoreError::responses("unsupported_modality"))?;
     let mut output = Vec::new();
     for part in parts {
-        if let Some(text) = part["text"].as_str().filter(|_| part["type"] == "text") {
+        if let Some(text) = part["text"].as_str().filter(|_| is_text(part)) {
             output.push(text);
         } else if strict {
             return Err(CoreError::responses("unsupported_modality"));
@@ -70,13 +74,13 @@ pub(crate) fn parts(
     if !["user", "assistant"].contains(&message.role.as_str()) {
         return Ok((
             text(message, responses)?.into(),
-            input.iter().any(|part| part["type"] != "text"),
+            input.iter().any(|part| !is_text(part)),
         ));
     }
     let mut output = vec![];
     let mut dropped = false;
     for part in input {
-        if part["type"] == "text" {
+        if is_text(part) {
             output.push(
                 json!({"type":if responses {"input_text"} else {"text"},"text":part["text"]}),
             );

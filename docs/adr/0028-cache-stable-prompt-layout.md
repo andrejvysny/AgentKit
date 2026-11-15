@@ -77,7 +77,7 @@ resulting breaks.
 - `context.cache_break` is not yet a contract event. `prefix_refrozen` is the
   durable marker until the event type is added; the prefix-stability harness
   counts both as the recorded exception INV-3 allows.
-- Selected skills and templates still precede S2 on Chat Completions and in
-  Responses input; package 1.2 moves them into the user message.
+- Selected skills and templates moved into the user message as a persisted
+  turn-context part (package 1.2, ADR 0036).
 - The correction pass still receives S2-S4 joined as one string.
 - Enforcement stays in report mode until package 1.8.

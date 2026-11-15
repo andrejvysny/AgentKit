@@ -238,7 +238,8 @@ function textContent(message: AiChatMessage): string {
   if (typeof message.content === "string") return message.content;
   return message.content
     .map((part) => {
-      if (part.type !== "text") responsesError("unsupported_modality");
+      if (part.type !== "text" && part.type !== "turn_context")
+        responsesError("unsupported_modality");
       return part.text;
     })
     .join("");
@@ -250,7 +251,8 @@ function contentParts(message: AiChatMessage): Record<string, unknown>[] {
       ? [{ type: "text" as const, text: message.content }]
       : message.content;
   return parts.map((part) => {
-    if (part.type === "text") return { type: "input_text", text: part.text };
+    if (part.type === "text" || part.type === "turn_context")
+      return { type: "input_text", text: part.text };
     if (part.type !== "image" || message.role !== "user")
       responsesError("unsupported_modality");
     const source = part.source;

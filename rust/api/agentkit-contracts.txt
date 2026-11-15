@@ -44,6 +44,7 @@ pub enum agentkit_contracts::AiContentPart
 pub agentkit_contracts::AiContentPart::Audio(agentkit_contracts::AiAudioPart)
 pub agentkit_contracts::AiContentPart::Image(agentkit_contracts::AiImagePart)
 pub agentkit_contracts::AiContentPart::Text(agentkit_contracts::AiTextPart)
+pub agentkit_contracts::AiContentPart::TurnContext(agentkit_contracts::AiTurnContextPart)
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiContentPart
 pub fn agentkit_contracts::AiContentPart::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiContentPart
@@ -352,6 +353,10 @@ pub agentkit_contracts::AiToolStatus::Running
 pub agentkit_contracts::AiToolStatus::Succeeded
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolStatus
 pub fn agentkit_contracts::AiToolStatus::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiTurnContextPartType
+pub agentkit_contracts::AiTurnContextPartType::TurnContext
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiTurnContextPartType
+pub fn agentkit_contracts::AiTurnContextPartType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 pub enum agentkit_contracts::ApplyOutcomeDtoStatus
 pub agentkit_contracts::ApplyOutcomeDtoStatus::Applied
 pub agentkit_contracts::ApplyOutcomeDtoStatus::Failed
@@ -1515,6 +1520,14 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolResult
 pub fn agentkit_contracts::AiToolResult::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiToolResult
 pub fn agentkit_contracts::AiToolResult::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiTurnContextPart
+pub agentkit_contracts::AiTurnContextPart::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiTurnContextPart::text: alloc::string::String
+pub agentkit_contracts::AiTurnContextPart::type_: agentkit_contracts::AiTurnContextPartType
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiTurnContextPart
+pub fn agentkit_contracts::AiTurnContextPart::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiTurnContextPart
+pub fn agentkit_contracts::AiTurnContextPart::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::ApplyOutcomeDto
 pub agentkit_contracts::ApplyOutcomeDto::applied_ops: f64
 pub agentkit_contracts::ApplyOutcomeDto::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
@@ -2484,6 +2497,10 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolResultSta
 pub fn agentkit_contracts::AiToolResultStatus::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolStatus
 pub fn agentkit_contracts::AiToolStatus::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiTurnContextPart
+pub fn agentkit_contracts::AiTurnContextPart::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiTurnContextPartType
+pub fn agentkit_contracts::AiTurnContextPartType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::ApplyOutcomeDto
 pub fn agentkit_contracts::ApplyOutcomeDto::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::ApplyOutcomeDtoFailedOpsItem

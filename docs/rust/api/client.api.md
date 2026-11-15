@@ -2020,6 +2020,9 @@ detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>
 type: TLiteral<"audio">;
 data: TString;
 format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+type: TLiteral<"turn_context">;
+text: TString;
 }>]>>]>;
 model: TOptional<TString>;
 providerId: TOptional<TString>;

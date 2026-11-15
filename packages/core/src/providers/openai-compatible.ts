@@ -792,7 +792,9 @@ function mapMessageContent(
   if (role === "system" || role === "tool") {
     return {
       content: messageContentToText(content),
-      droppedImages: content.some((part) => part.type !== "text"),
+      droppedImages: content.some(
+        (part) => part.type !== "text" && part.type !== "turn_context",
+      ),
     };
   }
   return {
@@ -820,7 +822,8 @@ function mapMessageContent(
 function toOpenAiContentPart(
   part: AiContentPart,
 ): Record<string, unknown> | null {
-  if (part.type === "text") return { type: "text", text: part.text };
+  if (part.type === "text" || part.type === "turn_context")
+    return { type: "text", text: part.text };
   if (part.type === "audio")
     return {
       type: "input_audio",

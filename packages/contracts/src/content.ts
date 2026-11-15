@@ -149,12 +149,38 @@ export const AiAudioPartSchema = Type.Object({
 });
 export type AiAudioPart = Static<typeof AiAudioPartSchema>;
 
+/**
+ * The turn context of a user message (roadmap 1.2): the skills, templates and
+ * source snapshots selected for the turn, the date and delta notes, wrapped in
+ * `<turn_context>` so a model can tell it from what the user typed. The runtime
+ * builds it once when the turn starts, persists it with the message and replays
+ * it unchanged; transports send it as plain text.
+ */
+export const AiTurnContextPartSchema = Type.Object({
+  type: Type.Literal("turn_context"),
+  text: Type.String(),
+});
+export type AiTurnContextPart = Static<typeof AiTurnContextPartSchema>;
+
 export const AiContentPartSchema = Type.Union([
   AiTextPartSchema,
   AiImagePartSchema,
   AiAudioPartSchema,
+  AiTurnContextPartSchema,
 ]);
 export type AiContentPart = Static<typeof AiContentPartSchema>;
+
+/**
+ * The parts a client may submit. `turn_context` is built by the host only; a
+ * submitted one would let a caller write its own trusted block, so the inbound
+ * schema leaves it out. Stored and outbound content uses
+ * {@link AiContentPartSchema}.
+ */
+export const AiInboundContentPartSchema = Type.Union([
+  AiTextPartSchema,
+  AiImagePartSchema,
+  AiAudioPartSchema,
+]);
 
 /**
  * A message body: a plain string (the overwhelmingly common case, unchanged
@@ -170,3 +196,9 @@ export const AiMessageContentSchema = Type.Union([
   Type.Array(AiContentPartSchema, { minItems: 1 }),
 ]);
 export type AiMessageContent = Static<typeof AiMessageContentSchema>;
+
+/** {@link AiMessageContentSchema} for submitted content: no `turn_context` part. */
+export const AiInboundMessageContentSchema = Type.Union([
+  Type.String(),
+  Type.Array(AiInboundContentPartSchema, { minItems: 1 }),
+]);

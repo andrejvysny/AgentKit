@@ -417,10 +417,17 @@ async fn template_only_content_is_frozen_before_admission_and_replay() {
     host.run_once().await.unwrap();
     let prompts = prompts.lock().unwrap();
     assert_eq!(prompts.len(), 1);
-    assert_eq!(
-        prompts[0].selected_content[0].content,
-        "selected instruction"
-    );
+    // The frozen selection is the turn context of the user message.
+    assert!(prompts[0].selected_content.is_empty());
+    let user = prompts[0]
+        .messages
+        .iter()
+        .find(|message| message.role == "user")
+        .expect("user message")
+        .content
+        .to_string();
+    assert!(user.contains("<turn_context>"), "{user}");
+    assert!(user.contains("selected instruction"), "{user}");
     assert_eq!(
         prompts[0].reasoning_effort,
         Some(agentkit_core::ReasoningEffort::High)

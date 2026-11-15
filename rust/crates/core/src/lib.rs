@@ -79,7 +79,9 @@ pub use cache::{
 };
 pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
-    cache_key, freeze, segment_of, tools_digest,
+    TURN_CONTEXT_CLOSE, TURN_CONTEXT_OPEN, TURN_CONTEXT_PART_TYPE, cache_key, content_for_wire,
+    escape_turn_context, fold_selected_content, freeze, is_turn_context_text, segment_of,
+    tools_digest, turn_context_part,
 };
 pub use manifest::{ToolManifest, ToolSurface, manifest_hash};
 pub use model_profile::{

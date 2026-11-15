@@ -1,4 +1,8 @@
-import type { AiMessageContent, AiTextPart } from "@agentkit/contracts";
+import type {
+  AiMessageContent,
+  AiTextPart,
+  AiTurnContextPart,
+} from "@agentkit/contracts";
 
 /**
  * Flatten a message body down to the text a string-only consumer can use.
@@ -13,7 +17,10 @@ import type { AiMessageContent, AiTextPart } from "@agentkit/contracts";
 export function messageContentToText(content: AiMessageContent): string {
   if (typeof content === "string") return content;
   return content
-    .filter((part): part is AiTextPart => part.type === "text")
+    .filter(
+      (part): part is AiTextPart | AiTurnContextPart =>
+        part.type === "text" || part.type === "turn_context",
+    )
     .map((part) => part.text)
     .join("\n");
 }

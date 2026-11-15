@@ -1052,6 +1052,22 @@
                     "format"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "turn_context",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -1291,6 +1307,22 @@
           "type",
           "data",
           "format"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "const": "turn_context",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
         ],
         "type": "object"
       }
@@ -1736,6 +1768,22 @@
                 "type",
                 "data",
                 "format"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "turn_context",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
               ],
               "type": "object"
             }
@@ -6684,6 +6732,22 @@
                 "format"
               ],
               "type": "object"
+            },
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "turn_context",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -7065,6 +7129,22 @@
                 "format"
               ],
               "type": "object"
+            },
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "turn_context",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -7169,6 +7249,22 @@
         "type": "string"
       }
     ]
+  },
+  "AiTurnContextPartSchema": {
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "type": {
+        "const": "turn_context",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "text"
+    ],
+    "type": "object"
   },
   "ApplyOutcomeDtoSchema": {
     "properties": {
@@ -8373,6 +8469,22 @@
                     "format"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "turn_context",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -8610,6 +8722,22 @@
                           "type",
                           "data",
                           "format"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "turn_context",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
                         ],
                         "type": "object"
                       }

@@ -13,6 +13,24 @@ use super::{
     SteerInput, WhenBusy, session_turn_kind, turn_id_for, turn_result,
 };
 
+/// A `turn_context` part is built by the host (roadmap 1.2); one submitted by
+/// a caller would pass for a trusted host block, so every submit refuses it.
+fn reject_host_parts<R: SessionBackend>(
+    content: &Value,
+) -> SessionsResult<(), SessionFault<R>> {
+    let present = content.as_array().is_some_and(|parts| {
+        parts
+            .iter()
+            .any(|part| part["type"] == agentkit_core::TURN_CONTEXT_PART_TYPE)
+    });
+    if present {
+        return Err(SessionsError::invalid_input(
+            "content must not contain a turn_context part; the host builds it",
+        ));
+    }
+    Ok(())
+}
+
 impl<R: SessionBackend> AgentSessionService<R> {
     // -- sending -------------------------------------------------------------
 
@@ -21,6 +39,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
         session_id: &str,
         input: &SendInput,
     ) -> SessionsResult<AgentSendResult, SessionFault<R>> {
+        reject_host_parts::<R>(&input.content)?;
         if input.when_busy != WhenBusy::Reject && input.input_id.is_none() {
             return Err(SessionsError::invalid_input(format!(
                 "inputId is required when whenBusy is \"{}\".",
@@ -72,6 +91,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
         session_id: &str,
         input: &FollowUpInput,
     ) -> SessionsResult<AgentSendResult, SessionFault<R>> {
+        reject_host_parts::<R>(&input.content)?;
         let (_, descriptor) = self.require_session(session_id).await?;
         self.submit_or_queue(
             session_id,
@@ -94,6 +114,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
         session_id: &str,
         input: &SteerInput,
     ) -> SessionsResult<AgentSendResult, SessionFault<R>> {
+        reject_host_parts::<R>(&input.content)?;
         let (_, descriptor) = self.require_session(session_id).await?;
         self.submit_or_queue(
             session_id,

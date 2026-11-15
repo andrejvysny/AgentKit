@@ -41,6 +41,15 @@ pub struct ChatExecutorOptions {
     /// Per-turn, user-side context line (T4.4 recommendations). Appended to
     /// the turn's user message only; absent, nothing is added.
     pub turn_context: Option<Arc<dyn crate::TurnContextHook>>,
+    /// Write the current date (UTC, `YYYY-MM-DD`) into the turn context of a
+    /// turn when it differs from the last date the session sent (roadmap
+    /// 1.2). Off by default: the date is the one value that changes every
+    /// day, so a host opts in.
+    pub turn_context_date: bool,
+    /// Where a selected item over the turn-context budget is kept so the
+    /// placeholder can name a handle (output store, roadmap 2.1). Absent, the
+    /// placeholder names the size only.
+    pub turn_oversize: Option<Arc<dyn crate::OversizedItemSink>>,
     /// Core run-loop hooks (watchdog observation). Hosts that add hooks
     /// must keep them observational: a hook failure or timeout degrades to
     /// the run's warning path, never to a lost turn.
@@ -83,6 +92,8 @@ impl Default for ChatExecutorOptions {
             project_instructions: None,
             delegation_guidance: None,
             turn_context: None,
+            turn_context_date: false,
+            turn_oversize: None,
             run_hooks: None,
             skip_untrusted_project_instructions: false,
             standing: None,
