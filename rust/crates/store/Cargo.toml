@@ -20,6 +20,8 @@ agentkit-kernel = { workspace = true }
 # The MCP configuration context owns the port this crate adapts (ADR 0024 §2):
 # an adapter depends on its context, never the reverse.
 agentkit-mcp = { workspace = true }
+# The memory context owns the ports this crate adapts (ADR 0024 §2, ADR 0035).
+agentkit-memory = { workspace = true }
 agentkit-native = { workspace = true }
 # The sessions context owns the port this crate adapts (ADR 0024 §2): an
 # adapter depends on its context, never the reverse.

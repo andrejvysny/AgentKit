@@ -21,6 +21,11 @@ fn version_one(path: &Path) {
         DROP TABLE managed_skills;
         DROP TABLE run_content_records;
         DROP TABLE uncertainty_barriers;
+        DROP TABLE memory_index_items;
+        DROP TABLE memory_fts;
+        DROP TABLE memory_events;
+        DROP TABLE memory_records;
+        DROP TABLE embedding_models;
         DROP TABLE tool_outputs;
         DROP TABLE subagents;
         DROP TABLE advisor_findings;

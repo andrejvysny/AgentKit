@@ -172,7 +172,7 @@ async fn a_version_eleven_database_upgrades_and_keeps_its_tasks() {
     drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch(
-        "DROP TABLE tool_outputs; DROP INDEX tasks_agent; DROP INDEX tasks_status; DROP INDEX tasks_parent; DROP TABLE agents; \
+        "DROP TABLE memory_index_items; DROP TABLE memory_fts; DROP TABLE memory_events; DROP TABLE memory_records; DROP TABLE embedding_models; DROP TABLE tool_outputs; DROP INDEX tasks_agent; DROP INDEX tasks_status; DROP INDEX tasks_parent; DROP TABLE agents; \
          DROP TABLE agent_config_revisions; DROP TABLE agent_admissions; \
          DROP INDEX agent_inputs_agent; ALTER TABLE agent_inputs DROP COLUMN agent_id; \
          DROP INDEX native_session_bindings_task; DROP TABLE native_session_bindings; \

@@ -8,9 +8,20 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{MemoryError, MemoryResult};
 use crate::ids::{ItemId, RecordId, Timestamp};
-use crate::model::{Actor, Corpus, NewRecord, Record, Scope, Status};
+use crate::model::Page;
+use crate::model::{
+    Actor, Corpus, EventKind, NewRecord, PurgeReport, Record, RecordFilter, Scope, Status,
+};
 use crate::ports::{Embedder, MemoryRepository, NoopReranker, Reranker, RetrievalIndex};
 use crate::retrieval::{IndexItem, Searchability};
+
+/// A retracted record is purged for good this long after its retraction
+/// (spec, "Purge": 30 days).
+pub const RETRACTED_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// A rejected proposal is kept this long (to suppress repeats of it), then
+/// purged by the same sweep (spec, "Purge": 90 days).
+pub const REJECTED_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
 /// The index entry of a record. Only active records are indexed; the
 /// service is the one place that enforces it.
@@ -91,8 +102,9 @@ impl MemoryService {
             let item = index_item(id, &scope, &text, ts, Searchability::Current);
             self.index.upsert(&mut index_tx, &[item]).await?;
         }
-        self.repository.commit(tx).await?;
-        self.index.commit_index(index_tx).await?;
+        self.repository
+            .commit_with_index(tx, &*self.index, index_tx)
+            .await?;
         Ok(id)
     }
 
@@ -129,8 +141,9 @@ impl MemoryService {
                 .delete(&mut index_tx, &[ItemId::from(id)])
                 .await?;
         }
-        self.repository.commit(tx).await?;
-        self.index.commit_index(index_tx).await?;
+        self.repository
+            .commit_with_index(tx, &*self.index, index_tx)
+            .await?;
         Ok(())
     }
 
@@ -165,12 +178,68 @@ impl MemoryService {
         let (scope, text, ts) = fresh;
         let opened = index_item(id, &scope, &text, ts, Searchability::Current);
         self.index.upsert(&mut index_tx, &[closed, opened]).await?;
-        self.repository.commit(tx).await?;
-        self.index.commit_index(index_tx).await?;
+        self.repository
+            .commit_with_index(tx, &*self.index, index_tx)
+            .await?;
         Ok(id)
     }
 
     pub async fn get(&self, id: RecordId) -> MemoryResult<Option<Record>> {
         self.repository.get(id).await
+    }
+
+    /// Remove records for good: the record rows and audit details first,
+    /// then whatever the index still holds for the ids (a repository and
+    /// index that share a database purge both in one transaction, so the
+    /// second step then finds nothing). The merged report carries the rows
+    /// removed per table and the residue check of both stores.
+    pub async fn purge(
+        &self,
+        ids: &[RecordId],
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<PurgeReport> {
+        let mut report = self.repository.purge(ids, actor, at).await?;
+        let items: Vec<ItemId> = ids.iter().copied().map(ItemId::from).collect();
+        report.merge(self.index.purge(&items).await?);
+        Ok(report)
+    }
+
+    /// Purge every record retracted at least [`RETRACTED_RETENTION_MS`]
+    /// before `now` and every rejected proposal rejected at least
+    /// [`REJECTED_RETENTION_MS`] before `now`; the time is the `retracted` /
+    /// `rejected` audit event. Idempotent: a second call finds nothing.
+    pub async fn sweep_retracted(&self, now: Timestamp) -> MemoryResult<PurgeReport> {
+        let mut due = Vec::new();
+        for (status, event, retention) in [
+            (
+                Status::Retracted,
+                EventKind::Retracted,
+                RETRACTED_RETENTION_MS,
+            ),
+            (Status::Rejected, EventKind::Rejected, REJECTED_RETENTION_MS),
+        ] {
+            let filter = RecordFilter {
+                statuses: vec![status],
+                include_superseded: true,
+                ..Default::default()
+            };
+            let cutoff = now.0.saturating_sub(retention);
+            for record in self.repository.list(filter, Page::all()).await? {
+                let events = self.repository.events(record.id).await?;
+                let since = events
+                    .iter()
+                    .rev()
+                    .find(|e| e.kind == event)
+                    .map_or(record.valid_to.unwrap_or(record.created_at), |e| e.at);
+                if since.0 <= cutoff {
+                    due.push(record.id);
+                }
+            }
+        }
+        if due.is_empty() {
+            return Ok(PurgeReport::default());
+        }
+        self.purge(&due, Actor::System, now).await
     }
 }

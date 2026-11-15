@@ -79,3 +79,32 @@ store must be able to replace the adapter without changing ranking.
 - The write gate, hybrid search with rank fusion, the core block and the
   framework tools are later packages; they land in this crate against these
   ports.
+- SQLite adapters (roadmap 3.2, schema v21): `SqliteMemoryRepository` and
+  `SqliteRetrievalIndex` in `agentkit-store`. Both stage a transaction (the
+  worker owns the only connection) and replay it in one SQLite transaction at
+  commit; `MemoryRepository::commit_with_index` lets a repository that
+  recognises its own index apply both queues in one, and the service uses it
+  for every write. Only active records are indexed below the service too: a
+  commit refuses to index a non-active record and a status change away from
+  active deletes its index row in the same transaction. The FTS5 table `memory_fts` is external-content over the
+  index's own item table (`memory_index_items`), not over `memory_records`,
+  because items are addressed by id and need not be records (the indexed
+  text is the item's own copy, which purge must remove too). Timestamps are
+  Unix milliseconds, not ISO text.
+- Purge runs under `secure_delete`, merges the FTS5 segments, and checks for
+  residue (item rows, FTS docsize rows, FTS matches of the purged text). The
+  WAL is checkpointed (`PurgeReport::wal_checkpointed` /
+  `wal_pages_pending`; an incomplete checkpoint is not clean) and an
+  incremental vacuum requested, best-effort. FTS5 `secure-delete` zeroes
+  postings only on segment merge, so every purge runs `optimize`. Fresh
+  databases are created with `auto_vacuum=INCREMENTAL`; migrated databases
+  keep their mode (no forced VACUUM, which rewrites the whole file), so the
+  vacuum is a no-op there and freed pages stay zeroed by `secure_delete`
+  rather than reclaimed.
+  `MemoryService::purge` calls the repository and then the index;
+  `sweep_retracted` purges records 30 days after their `retracted` event and
+  rejected proposals 90 days after `rejected` (`REJECTED_RETENTION_MS`), and
+  `AgentRuntimeBuilder::sqlite_memory()` runs it at build and hourly.
+- Vector storage and kNN are not in the SQLite index yet: a write that
+  carries a vector and `knn` fail with a backend error once the model checks
+  pass. The lexical conformance subset is `retrieval_index::run_lexical`.

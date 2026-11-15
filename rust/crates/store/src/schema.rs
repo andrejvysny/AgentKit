@@ -22,7 +22,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
 /// full scans.
-pub const SCHEMA_VERSION: i64 = 20;
+pub const SCHEMA_VERSION: i64 = 21;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -259,6 +259,10 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys=ON;")?;
     if fresh {
+        // Only settable before the first table exists; a migrated database
+        // keeps its mode (no forced VACUUM), so the purge's incremental
+        // vacuum is a no-op there. See ADR 0035.
+        connection.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
         let transaction = connection.transaction()?;
         transaction.execute_batch(&schema_sql(VERSION))?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -322,6 +326,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         }
         if version < 20 {
             migrate_tool_outputs(&mut connection)?;
+        }
+        if version < 21 {
+            migrate_memory(&mut connection)?;
         }
     }
     if path != Path::new(":memory:") {
@@ -445,7 +452,60 @@ fn schema_sql(version: i64) -> String {
     if version >= 20 {
         sql.push_str(TOOL_OUTPUTS_SCHEMA);
     }
+    if version >= 21 {
+        sql.push_str(MEMORY_SCHEMA);
+    }
     sql
+}
+
+/// Long-term memory (roadmap 3.2, ADR 0035), additive at schema version 21
+/// (provisional: ordered against the other migrations at merge). Records and
+/// their append-only audit trail, the retrieval index's own item table with
+/// an EXTERNAL-CONTENT FTS5 table over it (`memory_fts`, the spec's
+/// tokenizer), and the embedding-model registry. Timestamps are Unix
+/// milliseconds (the domain's `Timestamp`), not ISO text.
+///
+/// The FTS5 table indexes `memory_index_items.text`, not `memory_records`:
+/// the index port addresses items by id and carries their text, and an item
+/// need not be a record (later corpora). Triggers keep the index in step
+/// with the item table; what is indexed is decided by the memory service
+/// (active records, plus superseded history marked `superseded`). The index
+/// is keyed by `memory_index_items.seq`, an explicit INTEGER PRIMARY KEY, so
+/// a VACUUM cannot renumber it. FTS5 `secure-delete` zeroes removed postings
+/// only when segments are merged, not at delete time: the delete itself
+/// appends a tombstone and leaves the old segment bytes in place, so a purge
+/// must run the FTS5 `optimize` merge (it does, for every purged id).
+///
+/// Vector tables are not part of this version: they arrive with the
+/// embedding package, one per (corpus, model).
+const MEMORY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_records(id TEXT PRIMARY KEY, scope_kind TEXT NOT NULL CHECK(scope_kind IN ('user','project','agent')), scope_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('fact','preference','person','routine','lesson','skill_ref')), text TEXT NOT NULL, lang TEXT, status TEXT NOT NULL CHECK(status IN ('active','proposed','rejected','retracted')), origin TEXT NOT NULL CHECK(origin IN ('owner_explicit','owner_statement','agent_proposal','consolidation_proposal','import')), evidence_quote TEXT, evidence_chat_id TEXT, evidence_msg_id TEXT, evidence_sha256 TEXT, approved_at INTEGER, valid_from INTEGER NOT NULL, valid_to INTEGER, supersedes TEXT REFERENCES memory_records(id), superseded_by TEXT REFERENCES memory_records(id), is_core INTEGER NOT NULL DEFAULT 0 CHECK(is_core IN (0,1)), core_order INTEGER, created_at INTEGER NOT NULL, created_by_task TEXT, last_used_at INTEGER, use_count INTEGER NOT NULL DEFAULT 0 CHECK(use_count>=0));
+CREATE INDEX IF NOT EXISTS memory_scope ON memory_records(scope_kind, scope_id, status, valid_to);
+CREATE TABLE IF NOT EXISTS memory_events(seq INTEGER PRIMARY KEY AUTOINCREMENT, record_id TEXT NOT NULL, event TEXT NOT NULL CHECK(event IN ('captured','proposed','approved','rejected','edited','superseded','retracted','pinned','unpinned','purged')), actor TEXT NOT NULL CHECK(actor IN ('owner','extractor','agent','system')), detail TEXT, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS memory_events_record ON memory_events(record_id, seq);
+CREATE TABLE IF NOT EXISTS memory_index_items(seq INTEGER PRIMARY KEY, item_id TEXT NOT NULL UNIQUE, corpus TEXT NOT NULL CHECK(corpus IN ('memory','pages','chat','mail')), scope_key TEXT NOT NULL, ts INTEGER NOT NULL, searchable TEXT NOT NULL CHECK(searchable IN ('current','superseded')), text_sha256 BLOB NOT NULL, text TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS memory_index_scope ON memory_index_items(corpus, scope_key, searchable, ts);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(text, content='memory_index_items', content_rowid='seq', tokenize='unicode61 remove_diacritics 2');
+CREATE TRIGGER IF NOT EXISTS memory_index_insert AFTER INSERT ON memory_index_items BEGIN
+  INSERT INTO memory_fts(rowid, text) VALUES (new.seq, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_index_delete AFTER DELETE ON memory_index_items BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, text) VALUES ('delete', old.seq, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_index_update AFTER UPDATE OF text ON memory_index_items WHEN old.text IS NOT new.text BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, text) VALUES ('delete', old.seq, old.text);
+  INSERT INTO memory_fts(rowid, text) VALUES (new.seq, new.text);
+END;
+INSERT INTO memory_fts(memory_fts, rank) VALUES ('secure-delete', 1);
+CREATE TABLE IF NOT EXISTS embedding_models(model_id TEXT PRIMARY KEY, dims INTEGER NOT NULL CHECK(dims>0), max_tokens INTEGER NOT NULL, query_prefix TEXT NOT NULL, passage_prefix TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('building','active','retired')), created_at INTEGER NOT NULL);
+"#;
+
+fn migrate_memory(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(MEMORY_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 21)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 /// Output store index (roadmap 2.1, ADR 0034), additive at schema version 20

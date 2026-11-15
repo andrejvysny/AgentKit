@@ -535,6 +535,7 @@ dependencies = [
  "agentkit-engine",
  "agentkit-kernel",
  "agentkit-mcp",
+ "agentkit-memory",
  "agentkit-native",
  "agentkit-sessions",
  "agentkit-sys",

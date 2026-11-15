@@ -26,7 +26,9 @@ use agentkit_engine::{
     ExecutionFailure, RetrySafety, SharedRuntime, SystemRuntime, TaskExecutor, VerificationHook,
 };
 use agentkit_governance::{CodingPermissionAuthority, ToolContributor, ToolGuard};
-use agentkit_memory::{Embedder, MemoryRepository, MemoryService, Reranker, RetrievalIndex};
+use agentkit_memory::{
+    Embedder, MemoryRepository, MemoryService, Reranker, RetrievalIndex, Timestamp,
+};
 use agentkit_native_exec::{NativeAgentExecutor, NativeDispatchExecutor};
 use agentkit_providers::NativeProviderFactory;
 use agentkit_sessions::{
@@ -43,6 +45,7 @@ use crate::lanes::coding::{
     CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver,
 };
 use crate::lanes::lsp::{LspLane, LspLaneContributor};
+use crate::lanes::memory::spawn_memory_sweeper;
 use crate::lanes::native::NativeLane;
 use crate::lanes::output::{OutputLaneContributor, spawn_sweeper};
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
@@ -79,6 +82,7 @@ pub struct AgentRuntimeBuilder {
     extra_executors: Vec<(String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>)>,
     native_lane: Option<NativeLane>,
     memory: Option<(Arc<dyn MemoryRepository>, Arc<dyn RetrievalIndex>)>,
+    memory_sweep: bool,
     embedder: Option<Arc<dyn Embedder>>,
     reranker: Option<Arc<dyn Reranker>>,
     output: Option<OutputConfig>,
@@ -118,6 +122,7 @@ impl AgentRuntimeBuilder {
             extra_executors: Vec::new(),
             native_lane: None,
             memory: None,
+            memory_sweep: false,
             embedder: None,
             reranker: None,
             output: None,
@@ -253,6 +258,20 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    /// Enable long-term memory on the runtime's own SQLite store: the
+    /// record repository and the lexical retrieval index share its database,
+    /// so a record and its index entry commit together. Retracted records are
+    /// purged 30 days after their retraction (swept at build and then
+    /// hourly, beside the output store's sweep). Replaces an earlier
+    /// [`Self::memory`] call.
+    pub fn sqlite_memory(mut self) -> Self {
+        let repository = agentkit_store::SqliteMemoryRepository::new(self.store.clone());
+        let index = agentkit_store::SqliteRetrievalIndex::new(self.store.clone());
+        self.memory = Some((Arc::new(repository), Arc::new(index)));
+        self.memory_sweep = true;
+        self
+    }
+
     /// The embedder memory search uses for vectors. Optional: without one,
     /// search runs lexical-only. Refused at `build()` unless `memory(..)` is
     /// also set.
@@ -343,6 +362,7 @@ impl AgentRuntimeBuilder {
             extra_executors,
             native_lane,
             memory,
+            memory_sweep,
             embedder,
             reranker,
             output,
@@ -402,6 +422,15 @@ impl AgentRuntimeBuilder {
             output_lane = Some(Arc::new(OutputLaneContributor::new(shared.clone(), shared))
                 as Arc<dyn ToolContributor>);
         }
+        let memory_sweeper = match (&memory, memory_sweep) {
+            (Some(service), true) => {
+                // Retention sweep: retracted records past their 30 days. A
+                // failed sweep leaves them for the next start.
+                let _ = service.sweep_retracted(Timestamp(runtime.now_ms())).await;
+                Some(spawn_memory_sweeper(service.clone(), runtime.clone()))
+            }
+            _ => None,
+        };
         let has_model_loop = default_provider.is_some();
         let has_native_lane = native_lane.is_some();
         // Every kind the builder itself serves with the turn executor, in a
@@ -679,6 +708,7 @@ impl AgentRuntimeBuilder {
             memory,
             worker: Some(worker),
             _output_sweeper: output_sweeper,
+            _memory_sweeper: memory_sweeper,
         })
     }
 }

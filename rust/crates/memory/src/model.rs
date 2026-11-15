@@ -379,20 +379,41 @@ impl Page {
 /// the same store still holds afterwards (the verification the spec asks
 /// for; zero when clean). `neighbour_events_scrubbed` counts events of
 /// other records whose `detail` named a purged id (the supersession links).
+/// A purge is clean only with no residue and no WAL pages left pending.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PurgeReport {
     pub rows_removed: BTreeMap<String, u64>,
     pub neighbour_events_scrubbed: u64,
     pub residue: u64,
+    /// The WAL checkpoint after the purge ran and finished (stores without a
+    /// WAL report `false` and `wal_pages_pending == 0`).
+    #[serde(default)]
+    pub wal_checkpointed: bool,
+    /// WAL pages the post-purge checkpoint could not fold back (a reader
+    /// held them, or the checkpoint failed: then 1). Earlier page images of
+    /// the purged content may still sit in the `-wal` file; not clean.
+    #[serde(default)]
+    pub wal_pages_pending: u64,
 }
 
 impl PurgeReport {
     pub fn is_clean(&self) -> bool {
-        self.residue == 0
+        self.residue == 0 && self.wal_pages_pending == 0
     }
 
     pub fn removed(&self, table: &str) -> u64 {
         self.rows_removed.get(table).copied().unwrap_or(0)
+    }
+
+    /// Fold another store's report into this one (rows per table add up).
+    pub fn merge(&mut self, other: PurgeReport) {
+        for (table, rows) in other.rows_removed {
+            *self.rows_removed.entry(table).or_default() += rows;
+        }
+        self.neighbour_events_scrubbed += other.neighbour_events_scrubbed;
+        self.residue += other.residue;
+        self.wal_checkpointed |= other.wal_checkpointed;
+        self.wal_pages_pending += other.wal_pages_pending;
     }
 }
 

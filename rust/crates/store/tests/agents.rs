@@ -876,7 +876,7 @@ async fn a_version_thirteen_database_upgrades_non_destructively() {
     // the v17 native-execution ledger (AGENTKIT-112/113) and its indexes,
     // and the v18 continuation ledger and broker receipts.
     db.execute_batch(
-        "DROP TABLE tool_outputs; DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; \
+        "DROP TABLE memory_index_items; DROP TABLE memory_fts; DROP TABLE memory_events; DROP TABLE memory_records; DROP TABLE embedding_models; DROP TABLE tool_outputs; DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; \
          DROP TABLE agent_admissions; \
          DROP TABLE agent_config_revisions; DROP TABLE agents; \
          ALTER TABLE agent_inputs DROP COLUMN agent_id; \

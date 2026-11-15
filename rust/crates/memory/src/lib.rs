@@ -25,4 +25,4 @@ pub use retrieval::{
     Candidate, Hit, IndexFilter, IndexItem, IndexStats, LexicalQuery, ModelSpec, ModelState,
     ModelStats, Searchability,
 };
-pub use service::MemoryService;
+pub use service::{MemoryService, REJECTED_RETENTION_MS, RETRACTED_RETENTION_MS};

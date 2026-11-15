@@ -1282,7 +1282,7 @@ async fn a_version_fourteen_database_upgrades_and_keeps_admissions() {
     // exactly as version 14 defined it.
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch(
-        "DROP TABLE tool_outputs; DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; DROP TABLE agent_admissions;
+        "DROP TABLE memory_index_items; DROP TABLE memory_fts; DROP TABLE memory_events; DROP TABLE memory_records; DROP TABLE embedding_models; DROP TABLE tool_outputs; DROP INDEX tasks_agent; DROP INDEX agent_inputs_agent; DROP TABLE agent_admissions;
          DROP INDEX native_session_bindings_task; DROP TABLE native_session_bindings;
          DROP INDEX native_interactions_task; DROP TABLE native_interactions; DROP INDEX native_call_receipts_invocation; DROP TABLE native_call_receipts; DROP INDEX native_continuations_scope; DROP INDEX native_continuations_attempt; DROP TABLE native_continuations;
          DROP TABLE agent_inputs;

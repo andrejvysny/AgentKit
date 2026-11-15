@@ -158,6 +158,11 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS subagents;
          DROP TABLE IF EXISTS advisor_findings;
          DROP TABLE IF EXISTS advisor_reviews;
+         DROP TABLE IF EXISTS memory_index_items;
+         DROP TABLE IF EXISTS memory_fts;
+         DROP TABLE IF EXISTS memory_events;
+         DROP TABLE IF EXISTS memory_records;
+         DROP TABLE IF EXISTS embedding_models;
          DROP TABLE IF EXISTS tool_outputs;
          DROP TABLE IF EXISTS agents;
          DROP TABLE IF EXISTS agent_config_revisions;

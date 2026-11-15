@@ -100,6 +100,22 @@ pub trait MemoryRepository: Send + Sync {
         at: Timestamp,
     ) -> MemoryResult<()>;
 
+    /// Commit `tx` together with the index transaction `index_tx` of
+    /// `index`. The default commits the records first and the index second,
+    /// two separate commits. An adapter whose repository and index share
+    /// one database overrides it to apply both in a single transaction
+    /// (recognising its own index by the handle's state) so a record and
+    /// its index entry never part ways.
+    async fn commit_with_index(
+        &self,
+        tx: MemoryTx,
+        index: &dyn RetrievalIndex,
+        index_tx: IndexTx,
+    ) -> MemoryResult<()> {
+        self.commit(tx).await?;
+        index.commit_index(index_tx).await
+    }
+
     /// Committed state only.
     async fn get(&self, id: RecordId) -> MemoryResult<Option<Record>>;
 

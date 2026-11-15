@@ -110,7 +110,7 @@ async fn v18_ledger_upgrades_to_the_claim_model_without_losing_rows() {
             .execute_batch("PRAGMA foreign_keys=OFF;")
             .unwrap();
         connection
-            .execute_batch("DROP TABLE tool_outputs;")
+            .execute_batch("DROP TABLE memory_index_items; DROP TABLE memory_fts; DROP TABLE memory_events; DROP TABLE memory_records; DROP TABLE embedding_models; DROP TABLE tool_outputs;")
             .unwrap();
         connection.execute_batch(V18_REBUILD).unwrap();
         connection.pragma_update(None, "user_version", 18).unwrap();

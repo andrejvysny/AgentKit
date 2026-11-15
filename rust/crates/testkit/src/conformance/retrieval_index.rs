@@ -10,7 +10,7 @@ use agentkit_memory::{
     ModelState, RetrievalIndex, Searchability, Timestamp,
 };
 
-use super::case_support::port;
+use super::case_support::{Case, CaseFuture, port, run_cases};
 
 const SCOPE: &str = "user:owner";
 
@@ -558,3 +558,37 @@ suite!(
     purge_removes_items_and_vectors,
     stats_count_items_and_vectors,
 );
+
+/// The cases an index without vector storage can pass: lexical search,
+/// transactions, and the model-registry refusals. Names of every case that
+/// needs stored vectors are left out; an adapter runs this until its vector
+/// tables exist and then switches to [`run`].
+pub async fn run_lexical<T, F, Fut>(make: F)
+where
+    T: RetrievalIndex + 'static,
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    macro_rules! cases {
+        ($($name:ident),+ $(,)?) => {
+            vec![$((
+                stringify!($name),
+                (|subject| Box::pin($name(subject))) as fn(Arc<T>) -> CaseFuture,
+            )),+]
+        };
+    }
+    let cases: Vec<Case<T>> = cases!(
+        lexical_finds_upserted_item,
+        lexical_ignores_case_and_diacritics,
+        lexical_ranks_more_matching_terms_first,
+        lexical_respects_k,
+        lexical_prefix_matches_long_terms_only,
+        lexical_filters_by_corpus_scope_and_time,
+        upsert_replaces_item,
+        dropped_transaction_leaves_nothing,
+        knn_refuses_unknown_model_and_wrong_dims,
+        upsert_refuses_vector_for_unknown_model,
+        reembed_refusals,
+    );
+    run_cases("retrieval index (lexical)", cases, make).await;
+}
