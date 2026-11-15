@@ -8,6 +8,7 @@ mod error;
 mod ports;
 mod project_instructions;
 mod provider_registry;
+mod turn_context;
 
 pub use budget::{
     RoleTaskOverrides, parse_budget_limits, restore_execution_budget, task_overrides,
@@ -20,9 +21,10 @@ pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_too
 pub use error::{ChatError, ChatResult};
 pub use ports::{
     AttachmentResolveContext, AttachmentResolver, Authorization, ContextProvider,
-    DelegationGuidance, MutationIdentity, ProposalApplier, ResolvedAttachment, UsageAuthorizer,
-    is_mutating_subagent_tool,
+    DelegationGuidance, MutationIdentity, ProposalApplier, ResolvedAttachment, TurnContextHook,
+    TurnContextInput, UsageAuthorizer, is_mutating_subagent_tool,
 };
+pub use turn_context::ToolsetRecommendation;
 pub use project_instructions::{
     FileProjectInstructions, MAX_INSTRUCTION_BYTES, PROJECT_INSTRUCTION_FILES,
     ProjectInstructionsBlock, ProjectInstructionsSource, ProjectInstructionsText,

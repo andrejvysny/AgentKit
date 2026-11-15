@@ -516,6 +516,7 @@ pub(super) struct DurableEvents {
     pub usage: Option<Arc<dyn UsageAuthorizer>>,
     pub usage_timeout_ms: u64,
     pub reasoning: std::sync::Mutex<ReasoningTrack>,
+    pub turn_context: Option<Arc<dyn crate::TurnContextHook>>,
 }
 
 /// Public reasoning of the turn in flight (TS `reasoning-projection.ts`).
@@ -580,6 +581,12 @@ impl DurableEvents {
         }
         if event["type"] == "run.input.applied" {
             return self.persist_steered(&event).await;
+        }
+        if event["type"] == "run.tool.record"
+            && let Some(hook) = &self.turn_context
+            && let Ok(record) = serde_json::from_value(event["data"].clone())
+        {
+            hook.observe_tool_record(&self.chat_id, &record);
         }
         let (accumulated, step) = {
             let mut track = self

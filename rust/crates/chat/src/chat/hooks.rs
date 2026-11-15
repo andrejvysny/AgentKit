@@ -38,6 +38,9 @@ pub struct ChatExecutorOptions {
     /// channel for BOTH Chat and Coding profiles. Consulted per turn so
     /// `configure_subagents` takes effect without rebuilding the executor.
     pub delegation_guidance: Option<Arc<dyn crate::DelegationGuidance>>,
+    /// Per-turn, user-side context line (T4.4 recommendations). Appended to
+    /// the turn's user message only; absent, nothing is added.
+    pub turn_context: Option<Arc<dyn crate::TurnContextHook>>,
     /// Core run-loop hooks (watchdog observation). Hosts that add hooks
     /// must keep them observational: a hook failure or timeout degrades to
     /// the run's warning path, never to a lost turn.
@@ -76,6 +79,7 @@ impl Default for ChatExecutorOptions {
             tool_guards: vec![],
             project_instructions: None,
             delegation_guidance: None,
+            turn_context: None,
             run_hooks: None,
             skip_untrusted_project_instructions: false,
             standing: None,

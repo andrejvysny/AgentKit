@@ -463,7 +463,7 @@ impl ChatExecutor {
             && context.store.get_chat(chat_id).await?.is_some_and(|chat| {
                 chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
             });
-        let messages = if session
+        let mut messages = if session
             && (options.auto_compaction || compact_requested)
             && continuation.is_none()
             && let Some(context_budget) = context_budget.clone()
@@ -515,6 +515,10 @@ impl ChatExecutor {
             }
             entries.into_iter().map(|(message, _)| message).collect()
         };
+        if let Some(hook) = &options.turn_context {
+            crate::turn_context::append_line(hook.as_ref(), chat_id, &registry, &mut messages)
+                .await;
+        }
         let sink = Arc::new(history::DurableEvents {
             context: context.clone(),
             chat_id: chat_id.into(),
@@ -536,6 +540,7 @@ impl ChatExecutor {
             usage: options.usage.clone(),
             usage_timeout_ms: options.hook_timeouts.usage_ms,
             reasoning: Default::default(),
+            turn_context: options.turn_context.clone(),
         });
         // The session's frozen model profile (T2.2) rides on the request; the
         // transport applies it. A chat without one is sent as the caller built it.

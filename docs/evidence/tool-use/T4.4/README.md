@@ -19,7 +19,11 @@ top-two hit rate >= `TOP_TWO_HIT_RATE_THRESHOLD` (0.8, a proposal until X7);
 diacritics; line format; usage reorders but never recommends alone; usage
 event counting; promotion off by default; scorer seam; no toolset removed.
 
-## Not done
+## Turn-context hook
 
-Wiring the line into the chat executor's turn context (host call:
-`Recommender::recommend(..).append_to(&mut turn_context)`).
+`agentkit_chat::TurnContextHook` (port, like `DelegationGuidance`) is set on
+`ChatExecutorOptions::turn_context`. Its line is appended to the turn's last
+user message only (not persisted, never S1-S4); resumes that end in a tool
+result get none. `ToolsetRecommendation` is the default implementation
+(core `Recommender` over the session toolset view, `InMemoryUsage` fed from
+`run.tool.record` events). Tests: `chat/tests/turn_context.rs` (written, NOT run).

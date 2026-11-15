@@ -24,6 +24,32 @@ pub trait DelegationGuidance: Send + Sync {
     async fn guidance(&self, chat_id: &str) -> Option<String>;
 }
 
+/// What a [`TurnContextHook`] sees when the turn's request is built.
+pub struct TurnContextInput<'a> {
+    pub chat_id: &'a str,
+    /// The user's text of this turn.
+    pub request: &'a str,
+    /// The tools the request carries (the session manifest once frozen).
+    pub tools: &'a [agentkit_core::ToolDefinition],
+    /// Every registered toolset and the toolset of each offered tool.
+    pub view: &'a agentkit_core::ToolsetView,
+}
+
+/// Per-turn context port (T4.4). The line it returns is appended to the
+/// user-side message of the turn only; it never enters the cached prefix
+/// (S1-S4) and is not persisted. `observe_tool_record` sees every
+/// `run.tool.record` event of the turn's run so usage can feed the advice.
+#[async_trait]
+pub trait TurnContextHook: Send + Sync {
+    async fn line(&self, input: &TurnContextInput<'_>) -> Option<String>;
+    fn observe_tool_record(
+        &self,
+        _chat_id: &str,
+        _record: &agentkit_contracts::AiRunToolRecordEventData,
+    ) {
+    }
+}
+
 #[async_trait]
 pub trait ContextProvider: Send + Sync {
     async fn resolve(&self, input: Value, cancel: CancellationToken) -> ChatResult<Value>;
