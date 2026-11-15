@@ -261,7 +261,14 @@ fn a_direct_set_splits_the_manifest_and_the_meta_tools_join_the_array() {
     );
     assert_eq!(
         names(surface.manifest.definitions()),
-        ["page_search", "read_file", "tool_call", "tool_describe", "tool_search"]
+        [
+            "page_search",
+            "read_file",
+            "tool_call",
+            "tool_describe",
+            "tool_search",
+            "toolset_load"
+        ]
     );
     assert_eq!(
         names(&surface.deferred),

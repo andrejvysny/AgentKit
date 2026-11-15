@@ -22,6 +22,7 @@ pub use subagents::{
     RoleSpec, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SpawnRequest, SpawnedChild,
     SubagentConfig, SubagentContributor, SubagentRoleGuard, SubagentRoleLimits, SubagentService,
     SubagentView, WorkspaceLeaseRegistry, child_identity, default_delegation_guidance,
-    default_role_specs, effective_role, subagent_tool_definitions,
+    default_role_specs, effective_role, subagent_tool_definitions, DELEGATION_TOOLSET,
+    delegation_toolsets,
 };
 pub use teammates::{TeammateAdmission, TeammateService};

@@ -482,7 +482,7 @@ async fn a_session_sends_direct_tools_and_the_meta_tools_with_a_stable_catalog_i
     let (tools_one, system_one) = first.seen.lock().unwrap()[0].clone();
     assert_eq!(
         tools_one,
-        ["read_file", "tool_call", "tool_describe", "tool_search"]
+        ["read_file", "tool_call", "tool_describe", "tool_search", "toolset_load"]
     );
     assert!(system_one.contains("Deferred tools are not in your tool list"));
     let frozen = read_session_prefix(&store.get_chat("s1").await.unwrap().unwrap().metadata)

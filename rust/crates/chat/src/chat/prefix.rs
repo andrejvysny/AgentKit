@@ -7,10 +7,11 @@
 use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
-    Classification, Dialect, Freeze, PrefixDigests, PromptLayout, ToolDefinition, ToolRegistry,
-    ToolSurface, freeze,
+    Classification, CoreError, Dialect, Freeze, PrefixDigests, PromotionObserver, PromptLayout,
+    ToolDefinition, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze, tools_digest,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// Prefix `extra` key holding the S2 catalog index the session froze with.
@@ -43,6 +44,37 @@ fn presented(
     (dialect, offered)
 }
 
+/// The classification of this session (T4.1): the host's own, else the one
+/// the session's frozen model profile asks for (direct tools, visible-tool
+/// bound, load mode), else, when a contributor can join late, the default.
+/// A late contributor keeps the meta tools in the array even when every tool
+/// is direct, because nothing else reaches the tools that join later.
+pub(super) async fn classification_for(
+    context: &ExecutionContext,
+    chat_id: &str,
+    host: Option<&Classification>,
+    late: bool,
+) -> ChatResult<Option<Classification>> {
+    let chat = context
+        .store
+        .get_chat(chat_id)
+        .await?
+        .ok_or(ChatError::SessionDisappeared)?;
+    let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
+    let from_profile = agentkit_sessions::read_model_profile(&chat.metadata).map(|profile| {
+        let dialect = agentkit_core::session_dialect(prior.as_ref(), Some(&profile));
+        Classification::from_profile(&profile, dialect.as_ref())
+    });
+    let mut classification = host
+        .cloned()
+        .or(from_profile)
+        .or_else(|| late.then(Classification::default));
+    if let Some(classification) = &mut classification {
+        classification.keep_meta |= late;
+    }
+    Ok(classification)
+}
+
 /// Bind the meta tools to `registry` and complete `classification` with the
 /// registry's own loading hints. A registry that is shared cannot take new
 /// tools, so it keeps every tool direct.
@@ -53,8 +85,11 @@ pub(super) fn with_deferral(
     let Some(classification) = classification else {
         return (registry, None);
     };
-    let installed = Arc::get_mut(&mut registry)
-        .is_some_and(|registry| registry.install_meta_tools().is_ok());
+    let installed = Arc::get_mut(&mut registry).is_some_and(|registry| {
+        registry
+            .install_meta_tools_with(classification.load_mode)
+            .is_ok()
+    });
     if !installed {
         return (registry, None);
     }
@@ -88,9 +123,82 @@ pub(super) async fn deferred_index(
     {
         return Ok(Some(text.to_owned()));
     }
-    let (_, offered) = presented(&chat.metadata, prior.as_ref(), registry);
+    let (dialect, offered) = presented(&chat.metadata, prior.as_ref(), registry);
     let surface = ToolSurface::reconcile_with(prior.as_ref(), &offered, Some(classification));
-    Ok(surface.index())
+    let view = registry.toolset_view(&offered, dialect.as_ref());
+    Ok(surface.index_with(&view))
+}
+
+/// Records a promotion (T4.1, promote mode) at the turn boundary: the
+/// promoted tools join the session's manifest, which is re-stamped under the
+/// next prefix revision, so later turns send them without another change.
+pub(super) struct PromotionRecorder {
+    pub context: ExecutionContext,
+    pub chat_id: String,
+    pub branch_id: String,
+}
+
+#[async_trait::async_trait]
+impl PromotionObserver for PromotionRecorder {
+    async fn promoted(
+        &self,
+        _toolset: &str,
+        definitions: &[ToolDefinition],
+    ) -> Result<Option<u64>, CoreError> {
+        self.record(definitions)
+            .await
+            .map_err(|error| CoreError::new("promotion_failed", &error.to_string()))
+    }
+}
+
+impl PromotionRecorder {
+    async fn record(&self, definitions: &[ToolDefinition]) -> ChatResult<Option<u64>> {
+        let chat = self
+            .context
+            .store
+            .get_chat(&self.chat_id)
+            .await?
+            .ok_or(ChatError::SessionDisappeared)?;
+        let Some(prior) = agentkit_sessions::read_session_prefix(&chat.metadata) else {
+            return Ok(None);
+        };
+        if ToolManifest::from_prefix(&prior).is_none() {
+            return Ok(None);
+        }
+        let current = ToolSurface::reconcile_with(Some(&prior), &[], None);
+        let names: BTreeSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+        let joined: Vec<ToolDefinition> = current
+            .manifest
+            .definitions()
+            .iter()
+            .chain(definitions)
+            .cloned()
+            .collect();
+        let surface = ToolSurface {
+            manifest: ToolManifest::build(&joined),
+            deferred: current
+                .deferred
+                .into_iter()
+                .filter(|d| !names.contains(d.name.as_str()))
+                .collect(),
+            added: vec![],
+            unavailable: vec![],
+            frozen_now: false,
+        };
+        let revision = prior.revision as u64 + 1;
+        let mut next = prior.clone();
+        surface.stamp(&mut next);
+        next.revision = revision as f64;
+        next.tools_digest = tools_digest(surface.manifest.definitions());
+        next.cache_key = cache_key(&self.chat_id, &self.branch_id, revision);
+        next.frozen_at_task = self.context.task.task_id.clone();
+        let decision = Freeze::Refrozen {
+            prefix: next,
+            changed: vec!["tools"],
+        };
+        persist(&self.context, &self.chat_id, &decision).await?;
+        Ok(Some(revision))
+    }
 }
 
 /// Record or compare the prefix of this turn. `branch_id` feeds the cache

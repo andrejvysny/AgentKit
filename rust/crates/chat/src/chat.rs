@@ -289,10 +289,22 @@ impl ChatExecutor {
         // Deferred tools (roadmap 2.3): bind the meta tools and read this
         // session's classification before the system prompt is built, because
         // the catalog index is part of S2.
-        let (registry, classification) = prefix::with_deferral(
-            registry,
-            options.tool_classification.as_ref().filter(|_| session && stage_tools),
-        );
+        let late = options
+            .tool_contributors
+            .iter()
+            .any(|contributor| contributor.can_join_late());
+        let classification = if session && stage_tools {
+            prefix::classification_for(
+                &context,
+                chat_id,
+                options.tool_classification.as_ref(),
+                late,
+            )
+            .await?
+        } else {
+            None
+        };
+        let (registry, classification) = prefix::with_deferral(registry, classification.as_ref());
         let deferred_index = prefix::deferred_index(
             &context,
             chat_id,
@@ -357,6 +369,13 @@ impl ChatExecutor {
                 },
             )
             .await?;
+            if classification.is_some() {
+                registry.set_promotion_observer(Arc::new(prefix::PromotionRecorder {
+                    context: context.clone(),
+                    chat_id: chat_id.to_owned(),
+                    branch_id: branch.to_owned(),
+                }));
+            }
         }
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to

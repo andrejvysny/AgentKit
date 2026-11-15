@@ -21,6 +21,7 @@ mod provider_retry;
 mod registry;
 mod run;
 mod tool_execution;
+mod toolset;
 mod tool_record;
 mod types;
 
@@ -31,8 +32,14 @@ pub use budget::{BudgetCheckpoint, BudgetLimits, BudgetSnapshot, ExecutionBudget
 pub use agentkit_contracts::AiRunEvent;
 pub use agentkit_kernel::{Runtime, SystemRuntime};
 pub use deferred::{
-    Catalog, CatalogCell, CatalogEntry, Classification, DirectSet, META_TOOLS, Split, TOOL_CALL,
-    TOOL_DESCRIBE, TOOL_SEARCH, ToolLoading, catalog_index, is_meta_tool, namespace_of,
+    Catalog, CatalogCell, CatalogEntry, Classification, DirectSet, LoadMode, META_TOOLS, Split,
+    TOOL_CALL, TOOL_DESCRIBE, TOOL_SEARCH, TOOLSET_LOAD, ToolLoading, catalog_index, is_meta_tool,
+    namespace_of, toolset_index,
+};
+// T4.1: toolsets, cards, guides and promotion (ADR 0033).
+pub use toolset::{
+    Guide, META_TOOLSET, Promotion, PromotionCell, PromotionObserver, Promotions, Toolset,
+    ToolsetView, guide_placeholders, meta_toolset, render_guide,
 };
 // T3.1: the presentation layer; canonical ids stay, dialects render and translate.
 pub use dialect::{
@@ -57,6 +64,7 @@ pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
     cache_key, freeze, segment_of, tools_digest,
 };
+    toolset_load_definition,
 pub use manifest::{ToolManifest, ToolSurface, manifest_hash};
 pub use model_profile::{
     ANTHROPIC_PROFILE_ID, AiModelToolProfile, BODY_EXTRA_ALLOW_LIST, GENERIC_PROFILE_ID, LimitFacts,

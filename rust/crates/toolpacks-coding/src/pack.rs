@@ -238,6 +238,10 @@ impl ToolContributor for CodingToolPack {
         CODING_NAMESPACE
     }
 
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        crate::toolsets::coding_toolsets()
+    }
+
     async fn contribute(
         &self,
         _context: &ToolContributionContext,

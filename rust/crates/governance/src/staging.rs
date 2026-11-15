@@ -75,6 +75,9 @@ impl ToolContributor for StaticToolContributor {
     fn namespace(&self) -> &str {
         "static"
     }
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        self.registry.toolsets()
+    }
     async fn contribute(
         &self,
         _context: &ToolContributionContext,
@@ -113,6 +116,18 @@ impl Tool for DirectWriteTool {
     }
     fn loading(&self) -> agentkit_core::ToolLoading {
         self.inner.loading()
+    }
+    fn toolset(&self) -> Option<&str> {
+        self.inner.toolset()
+    }
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        self.inner.arg_aliases()
+    }
+    fn constraints(&self) -> Vec<agentkit_core::ToolConstraint> {
+        self.inner.constraints()
+    }
+    fn check_constraints(&self, input: &Value) -> Option<String> {
+        self.inner.check_constraints(input)
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         self.inner.execute(context, input).await
@@ -165,7 +180,11 @@ pub async fn stage_tools(
         }
     }
     let allowed = unbound_names(contributors, context.has_primary_binding);
-    register_tools(collected, guards, &context, allowed, failed).await
+    let toolsets = contributors
+        .iter()
+        .flat_map(|contributor| contributor.toolsets())
+        .collect();
+    register_tools(collected, guards, &context, allowed, failed, toolsets).await
 }
 
 async fn contribute(
@@ -215,8 +234,12 @@ async fn register_tools(
     context: &ToolContributionContext,
     allowed: Option<BTreeSet<String>>,
     failed: Vec<ContributorFailure>,
+    toolsets: Vec<agentkit_core::Toolset>,
 ) -> GovernanceResult<StagedTools> {
     let mut registry = ToolRegistry::new();
+    for toolset in toolsets {
+        registry.register_toolset(toolset);
+    }
     let mut namespaces = BTreeMap::new();
     let mut skipped = vec![];
     let mut withheld = vec![];
@@ -293,6 +316,18 @@ impl Tool for GuardedTool {
     }
     fn loading(&self) -> agentkit_core::ToolLoading {
         self.tool.loading()
+    }
+    fn toolset(&self) -> Option<&str> {
+        self.tool.toolset()
+    }
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        self.tool.arg_aliases()
+    }
+    fn constraints(&self) -> Vec<agentkit_core::ToolConstraint> {
+        self.tool.constraints()
+    }
+    fn check_constraints(&self, input: &Value) -> Option<String> {
+        self.tool.check_constraints(input)
     }
     async fn record_schema_refusal(&self, context: &ToolContext, args: &Value, message: &str) {
         // The durable wrapper owns the receipt ledger; without it this host

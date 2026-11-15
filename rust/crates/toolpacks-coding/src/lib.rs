@@ -28,6 +28,7 @@ pub mod process_tree;
 pub mod sandbox;
 pub mod search;
 pub mod search_tools;
+pub mod toolsets;
 pub mod truncate;
 pub mod types;
 pub mod version_ledger;
@@ -69,6 +70,7 @@ pub use guard::{CODING_NAMESPACE, CodingPermissionGuard, CodingPermissionGuardOp
 pub use limits::{CodingLimits, CodingLimitsOverride};
 pub use mutation_queue::with_file_mutation_queue;
 pub use pack::{CODING_TOOL_NAMES, CodingToolPack, create_coding_tool_pack};
+pub use toolsets::coding_toolsets;
 pub use paths::{
     ConfineOptions, ConfinedPath, PathAccess, canonical_root, confine, is_git_segment,
     is_sensitive_path, is_sensitive_segment, resolve_inside_root, sensitive_git_excludes,

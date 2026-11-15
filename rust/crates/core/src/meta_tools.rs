@@ -6,13 +6,15 @@
 //! recorded exactly like a direct call; its own `execute` is only reached by
 //! a host that does not run the pipeline, and refuses.
 use crate::deferred::{
-    Catalog, CatalogCell, CatalogEntry, TOOL_CALL, TOOL_DESCRIBE, TOOL_SEARCH, first_sentence,
-    parameter_names, required_names,
+    Catalog, CatalogCell, CatalogEntry, LoadMode, TOOL_CALL, TOOL_DESCRIBE, TOOL_SEARCH,
+    TOOLSET_LOAD, first_sentence, parameter_names, required_names,
 };
+use crate::toolset::{META_TOOLSET, PromotionCell, render_guide};
 use crate::failure_catalog::{failure, failure_result};
 use crate::{CoreError, Tool, ToolContext, ToolDefinition, ToolLimits, ToolResult, closest_names};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const DEFAULT_LIMIT: usize = 5;
@@ -89,11 +91,29 @@ pub fn tool_call_definition() -> ToolDefinition {
     )
 }
 
+pub fn toolset_load_definition() -> ToolDefinition {
+    definition(
+        TOOLSET_LOAD,
+        "Load a toolset: its usage guide (which tool for which situation, the usual order, worked examples, common mistakes) and the compact definitions of its tools, returned as this call's result. The system prompt lists the toolsets, one line each. Load a toolset before you use its tools for the first time. Some toolsets have topic guides; pass topic to read one. Loaded tools are run with tool_call, or called by name from your next turn when your tool list grows.",
+        json!({
+            "type": "object",
+            "properties": {
+                "toolset": {"type": "string", "description": "The toolset id, as listed in the system prompt, such as files or git."},
+                "topic": {"type": "string", "description": "A topic guide within that set, when it has any."}
+            },
+            "required": ["toolset"],
+            "additionalProperties": false
+        }),
+        json!({"toolset": "git"}),
+    )
+}
+
 pub fn meta_definitions() -> Vec<ToolDefinition> {
     vec![
         tool_search_definition(),
         tool_describe_definition(),
         tool_call_definition(),
+        toolset_load_definition(),
     ]
 }
 
@@ -102,20 +122,29 @@ enum Kind {
     Search,
     Describe,
     Call,
+    Load,
 }
 
 struct MetaTool {
     kind: Kind,
     definition: ToolDefinition,
     catalog: CatalogCell,
+    promotions: PromotionCell,
+    mode: LoadMode,
 }
 
 /// The meta tools bound to `catalog`, which the registry fills at freeze.
-pub fn meta_tools(catalog: &CatalogCell) -> Vec<Arc<dyn Tool>> {
+/// `toolset_load` follows `mode` and asks `promotions` for promote mode.
+pub fn meta_tools(
+    catalog: &CatalogCell,
+    promotions: &PromotionCell,
+    mode: LoadMode,
+) -> Vec<Arc<dyn Tool>> {
     [
         (Kind::Search, tool_search_definition()),
         (Kind::Describe, tool_describe_definition()),
         (Kind::Call, tool_call_definition()),
+        (Kind::Load, toolset_load_definition()),
     ]
     .into_iter()
     .map(|(kind, definition)| {
@@ -123,6 +152,8 @@ pub fn meta_tools(catalog: &CatalogCell) -> Vec<Arc<dyn Tool>> {
             kind,
             definition,
             catalog: catalog.clone(),
+            promotions: promotions.clone(),
+            mode,
         }) as Arc<dyn Tool>
     })
     .collect()
@@ -146,6 +177,7 @@ impl Tool for MetaTool {
         Ok(match self.kind {
             Kind::Search => search(catalog, &input, &limits),
             Kind::Describe => describe(catalog, &input, &limits),
+            Kind::Load => load(catalog, &self.promotions, self.mode, &input, &limits),
             Kind::Call => refusal(
                 "tool_unavailable",
                 "tool_call is run by the session loop and cannot run on its own here. Call the tool directly if it is in your tool list.",
@@ -259,5 +291,139 @@ fn describe(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult
     } else {
         format!("{} is in your tool list: call it directly.", definition.name)
     };
+    ok(data, summary, limits)
+}
+
+/// Names a canonical tool is offered as, for guide placeholders: one name,
+/// or "a, b or c" for a tool a dialect splits.
+fn shown_names(catalog: &Catalog) -> BTreeMap<String, String> {
+    let mut wires: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for entry in catalog.entries() {
+        wires
+            .entry(entry.canonical.clone())
+            .or_default()
+            .push(entry.definition.name.clone());
+    }
+    wires
+        .into_iter()
+        .map(|(canonical, names)| {
+            let shown = match names.as_slice() {
+                [only] => only.clone(),
+                [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+                [] => canonical.clone(),
+            };
+            (canonical, shown)
+        })
+        .collect()
+}
+
+fn load(
+    catalog: &Catalog,
+    promotions: &PromotionCell,
+    mode: LoadMode,
+    input: &Value,
+    limits: &ToolLimits,
+) -> ToolResult {
+    let id = input["toolset"].as_str().unwrap_or_default().trim();
+    let topic = input["topic"].as_str().map(str::trim).filter(|t| !t.is_empty());
+    let view = catalog.toolsets();
+    let mut members: Vec<CatalogEntry> = catalog
+        .entries()
+        .iter()
+        .filter(|entry| entry.namespace == id)
+        .cloned()
+        .collect();
+    if id == META_TOOLSET {
+        members = meta_definitions()
+            .into_iter()
+            .map(|definition| CatalogEntry {
+                canonical: definition.name.clone(),
+                definition,
+                deferred: false,
+                available: true,
+                namespace: META_TOOLSET.to_owned(),
+            })
+            .collect();
+    }
+    let set = view.toolset(id);
+    if members.is_empty() {
+        // A toolset none of whose tools this session has is not loadable.
+        let known: BTreeSet<String> = catalog
+            .entries()
+            .iter()
+            .map(|entry| entry.namespace.clone())
+            .chain([META_TOOLSET.to_owned()])
+            .collect();
+        let known: Vec<String> = known.into_iter().collect();
+        let closest = closest_names(id, &known, 3);
+        let message = format!(
+            "No toolset named {id}. The closest ids are: {}. Use an id from the toolset list in the system prompt.",
+            closest.join(", ")
+        );
+        return failure_result(
+            "tool_not_found",
+            &failure("tool_not_found", &message, None),
+            "execution",
+            Some(json!({"closest": closest})),
+            limits,
+        );
+    }
+    let guide = match (topic, set) {
+        (Some(topic), Some(set)) => match set.topic(topic) {
+            Some(guide) => Some(guide),
+            None => {
+                let topics: Vec<&str> = set.topics.iter().map(|(name, _)| name.as_str()).collect();
+                let message = format!(
+                    "No topic {topic} in toolset {id}. Topics: {}. Call toolset_load again with one of them, or without topic.",
+                    if topics.is_empty() { "none".to_owned() } else { topics.join(", ") }
+                );
+                return failure_result(
+                    "invalid_arguments",
+                    &failure("invalid_arguments", &message, None),
+                    "execution",
+                    Some(json!({"topics": topics})),
+                    limits,
+                );
+            }
+        },
+        (_, set) => set.and_then(|set| set.guide.as_ref()),
+    };
+    let text = guide.map(|guide| render_guide(&guide.text, &shown_names(catalog)));
+    let promotable = members
+        .iter()
+        .any(|entry| entry.deferred && entry.available && !promotions.is_promoted_name(&entry.definition.name));
+    let promoting = mode == LoadMode::Promote && promotable && promotions.request(id);
+    let deferred_left = members.iter().any(|entry| entry.deferred);
+    let summary = match (deferred_left, promoting) {
+        (false, _) => format!("The tools of {id} are in your tool list: call them directly. Guide below."),
+        (true, true) => format!(
+            "Loaded {id}: {} tools. They join your tool list on your next turn and are then called by name; until then run them with tool_call.",
+            members.len()
+        ),
+        (true, false) => format!(
+            "Loaded {id}: {} tools. Run them with tool_call (name and arguments); your tool list does not change.",
+            members.len()
+        ),
+    };
+    let topics: Vec<&str> = set
+        .map(|set| set.topics.iter().map(|(name, _)| name.as_str()).collect())
+        .unwrap_or_default();
+    let tools: Vec<Value> = members.iter().map(compact).collect();
+    let mut data = json!({
+        "toolset": id,
+        "title": set.map_or(id, |set| set.title.as_str()),
+        "mode": if mode == LoadMode::Promote { "promote" } else { "indirect" },
+        "guide": text,
+        "tools": tools,
+    });
+    if let Some(guide) = guide {
+        data["guide_version"] = guide.version.clone().into();
+    }
+    if !topics.is_empty() {
+        data["topics"] = json!(topics);
+    }
+    if promoting {
+        data["joins_tool_list"] = "next turn".into();
+    }
     ok(data, summary, limits)
 }

@@ -9,7 +9,9 @@
 //! direct with the meta tools omitted. Discovery is not authorization: a
 //! catalog entry says only whether the tool is callable this turn.
 
-use crate::ToolDefinition;
+use crate::toolset::ToolsetView;
+use crate::{Dialect, ToolDefinition};
+use agentkit_contracts::{AiModelLoadMode, AiModelToolProfile};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
@@ -17,8 +19,9 @@ use std::sync::{Arc, OnceLock};
 pub const TOOL_SEARCH: &str = "tool_search";
 pub const TOOL_DESCRIBE: &str = "tool_describe";
 pub const TOOL_CALL: &str = "tool_call";
+pub const TOOLSET_LOAD: &str = "toolset_load";
 /// The meta tools, in the order they are documented.
-pub const META_TOOLS: [&str; 3] = [TOOL_SEARCH, TOOL_DESCRIBE, TOOL_CALL];
+pub const META_TOOLS: [&str; 4] = [TOOL_SEARCH, TOOL_DESCRIBE, TOOL_CALL, TOOLSET_LOAD];
 
 pub fn is_meta_tool(name: &str) -> bool {
     META_TOOLS.contains(&name)
@@ -52,6 +55,17 @@ impl DirectSet {
     }
 }
 
+/// What happens to a toolset's tools once `toolset_load` has loaded it
+/// (T4.1, ADR 0033). Frozen with the session profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoadMode {
+    /// The tools array never changes; loaded tools run through `tool_call`.
+    #[default]
+    Indirect,
+    /// Loaded tools join the tools array at the next turn boundary.
+    Promote,
+}
+
 /// Everything the freeze needs to decide direct or deferred.
 #[derive(Clone, Debug)]
 pub struct Classification {
@@ -61,6 +75,11 @@ pub struct Classification {
     /// A manifest within both limits is all direct and needs no meta tools.
     pub max_tokens: usize,
     pub max_definitions: usize,
+    /// Advertise the meta tools even when every tool is direct: a late
+    /// contributor (a connected server) can add tools after the freeze and
+    /// only the meta tools reach them.
+    pub keep_meta: bool,
+    pub load_mode: LoadMode,
 }
 
 impl Default for Classification {
@@ -70,6 +89,8 @@ impl Default for Classification {
             deferred_hints: BTreeSet::new(),
             max_tokens: 3_000,
             max_definitions: 24,
+            keep_meta: false,
+            load_mode: LoadMode::Indirect,
         }
     }
 }
@@ -85,6 +106,29 @@ pub struct Split {
 }
 
 impl Classification {
+    /// The classification a frozen model profile asks for: its direct tools
+    /// (and, under `dialect`, the wire names they are offered as), its
+    /// visible-tool bound and its load mode. The token budget stays the
+    /// default.
+    pub fn from_profile(profile: &AiModelToolProfile, dialect: Option<&Dialect>) -> Self {
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        for name in &profile.direct_tools {
+            names.insert(name.clone());
+            if let Some(dialect) = dialect {
+                names.extend(dialect.wire_names_of(name));
+            }
+        }
+        Self {
+            direct: DirectSet::Names(names),
+            max_definitions: profile.max_visible_tools.max(0.0) as usize,
+            load_mode: match profile.load_mode {
+                AiModelLoadMode::Promote => LoadMode::Promote,
+                AiModelLoadMode::Indirect => LoadMode::Indirect,
+            },
+            ..Self::default()
+        }
+    }
+
     fn is_direct(&self, name: &str) -> bool {
         match &self.direct {
             DirectSet::Names(names) => names.contains(name),
@@ -100,13 +144,18 @@ impl Classification {
         if rest.len() <= self.max_definitions && estimate_tokens(&rest) <= self.max_tokens {
             return Split {
                 direct: rest,
+                meta: if self.keep_meta { meta } else { vec![] },
                 ..Split::default()
             };
         }
         let (direct, deferred): (Vec<_>, Vec<_>) = rest
             .into_iter()
             .partition(|definition| self.is_direct(&definition.name));
-        let meta = if deferred.is_empty() { vec![] } else { meta };
+        let meta = if deferred.is_empty() && !self.keep_meta {
+            vec![]
+        } else {
+            meta
+        };
         Split {
             direct,
             deferred,
@@ -123,9 +172,10 @@ pub fn estimate_tokens(definitions: &[ToolDefinition]) -> usize {
         .sum()
 }
 
-/// A stand-in for the toolset until toolsets exist (T4.1): the part of the
-/// name before the last `__` (`mcp__files__ls` is `mcp__files`), else the
-/// first segment of the capability.
+/// The toolset id of a tool nobody declared a toolset for: the part of the
+/// name before the last `__` (`mcp__files__ls` is the dynamic toolset
+/// `mcp__files` of a connected server), else the first segment of the
+/// capability. Declared toolsets (T4.1) come first; see `ToolRegistry`.
 pub fn namespace_of(definition: &ToolDefinition) -> String {
     match definition.name.rfind("__") {
         Some(at) if at > 0 => definition.name[..at].to_owned(),
@@ -145,7 +195,11 @@ pub struct CatalogEntry {
     pub deferred: bool,
     /// False when no contributor offers it this turn or a guard withheld it.
     pub available: bool,
+    /// The toolset id (the catalog's namespace).
     pub namespace: String,
+    /// The canonical tool id behind `definition.name` (differs when a
+    /// dialect renames the tool).
+    pub canonical: String,
 }
 
 /// The session's tools by name, filled once at freeze and read by the meta
@@ -156,6 +210,7 @@ pub struct Catalog {
     /// True when the session's array carries the meta tools, so a deferred
     /// tool can be run with `tool_call`.
     meta_active: bool,
+    toolsets: ToolsetView,
 }
 
 pub type CatalogCell = Arc<OnceLock<Catalog>>;
@@ -166,7 +221,22 @@ impl Catalog {
         Self {
             entries,
             meta_active,
+            toolsets: ToolsetView::default(),
         }
+    }
+
+    /// The same catalog with the session's toolsets (guides and cards).
+    pub fn with_toolsets(mut self, toolsets: ToolsetView) -> Self {
+        self.toolsets = toolsets;
+        self
+    }
+
+    pub fn toolsets(&self) -> &ToolsetView {
+        &self.toolsets
+    }
+
+    pub fn entries(&self) -> &[CatalogEntry] {
+        &self.entries
     }
 
     pub fn meta_active(&self) -> bool {
@@ -300,42 +370,64 @@ pub fn first_sentence(text: &str, max: usize) -> String {
 const INDEX_NAMESPACES: usize = 24;
 const PURPOSE_CHARS: usize = 100;
 
-/// The S2 catalog index: one line per deferred namespace, sorted, built only
-/// from the definitions, so equal catalogs give equal bytes (cache-stable).
-/// `None` when nothing is deferred.
-pub fn catalog_index(deferred: &[ToolDefinition]) -> Option<String> {
-    if deferred.is_empty() {
+/// The S2 catalog index: one line per toolset with a deferred member or a
+/// guide, sorted, built only from the definitions and the toolset cards, so
+/// equal catalogs give equal bytes (cache-stable). `None` when no line
+/// qualifies.
+pub fn toolset_index(
+    direct: &[ToolDefinition],
+    deferred: &[ToolDefinition],
+    view: &ToolsetView,
+) -> Option<String> {
+    #[derive(Default)]
+    struct Group<'a> {
+        direct: Vec<&'a ToolDefinition>,
+        deferred: Vec<&'a ToolDefinition>,
+    }
+    let mut groups: std::collections::BTreeMap<String, Group> = Default::default();
+    for definition in direct.iter().filter(|d| !is_meta_tool(&d.name)) {
+        groups.entry(view.id_of(definition)).or_default().direct.push(definition);
+    }
+    for definition in deferred {
+        groups.entry(view.id_of(definition)).or_default().deferred.push(definition);
+    }
+    groups.retain(|id, group| {
+        !group.deferred.is_empty() || view.toolset(id).is_some_and(|set| set.guide.is_some())
+    });
+    if groups.is_empty() {
         return None;
     }
-    let mut groups: std::collections::BTreeMap<String, Vec<&ToolDefinition>> = Default::default();
-    for definition in deferred {
-        groups
-            .entry(namespace_of(definition))
-            .or_default()
-            .push(definition);
-    }
     let mut lines = vec![format!(
-        "Deferred tools are not in your tool list. Find one with {TOOL_SEARCH}, read its schema with {TOOL_DESCRIBE}, run it with {TOOL_CALL}. Namespaces:"
+        "Deferred tools are not in your tool list. Find one with {TOOL_SEARCH}, read its schema with {TOOL_DESCRIBE}, run it with {TOOL_CALL}; {TOOLSET_LOAD} returns a toolset's guide and tool list. Toolsets:"
     )];
     let total = groups.len();
-    for (namespace, mut members) in groups.into_iter().take(INDEX_NAMESPACES) {
-        members.sort_by(|a, b| a.name.cmp(&b.name));
+    for (id, mut group) in groups.into_iter().take(INDEX_NAMESPACES) {
+        group.deferred.sort_by(|a, b| a.name.cmp(&b.name));
+        let purpose = match view.toolset(&id) {
+            Some(set) if !set.card.is_empty() => set.card.clone(),
+            _ => first_sentence(
+                group.deferred.first().map_or("", |d| d.description.as_str()),
+                PURPOSE_CHARS,
+            ),
+        };
         lines.push(format!(
             "- {} ({}): {}",
-            if namespace.is_empty() {
-                "general"
-            } else {
-                &namespace
-            },
-            members.len(),
-            first_sentence(&members[0].description, PURPOSE_CHARS)
+            if id.is_empty() { "general" } else { &id },
+            group.direct.len() + group.deferred.len(),
+            purpose
         ));
     }
     if total > INDEX_NAMESPACES {
         lines.push(format!(
-            "- and {} more namespaces: use {TOOL_SEARCH}.",
+            "- and {} more toolsets: use {TOOL_SEARCH}.",
             total - INDEX_NAMESPACES
         ));
     }
     Some(lines.join("\n"))
+}
+
+/// [`toolset_index`] for deferred definitions alone, grouped by the stand-in
+/// namespace rule.
+pub fn catalog_index(deferred: &[ToolDefinition]) -> Option<String> {
+    toolset_index(&[], deferred, &ToolsetView::default())
 }

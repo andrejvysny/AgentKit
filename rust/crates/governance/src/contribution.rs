@@ -48,6 +48,17 @@ pub trait ToolContributor: Send + Sync {
     fn unbound_tool_names(&self) -> Option<BTreeSet<String>> {
         None
     }
+    /// The toolsets (card, guide, member tools) this contributor's tools
+    /// belong to (T4.1). The host registers them with the staged registry.
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        vec![]
+    }
+    /// True when this contributor can add tools after a session's tool list
+    /// froze (a connected server that connects late). Such a session keeps
+    /// the meta tools in its tools array even when every tool is direct.
+    fn can_join_late(&self) -> bool {
+        false
+    }
     async fn contribute(
         &self,
         context: &ToolContributionContext,

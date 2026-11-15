@@ -138,6 +138,9 @@ impl ToolContributor for LspLaneContributor {
     fn namespace(&self) -> &str {
         "lsp"
     }
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        agentkit_lsp::lsp_toolsets()
+    }
     async fn contribute(
         &self,
         context: &ToolContributionContext,

@@ -9,7 +9,8 @@
 //! Room for later fields (dialect, toolset) is the prefix's own optional
 //! fields; the hash covers the definitions as stored.
 
-use crate::deferred::{Classification, TOOL_CALL, catalog_index, is_meta_tool};
+use crate::deferred::{Classification, TOOL_CALL, is_meta_tool, toolset_index};
+use crate::toolset::ToolsetView;
 use crate::ToolDefinition;
 use agentkit_contracts::{AiSessionPrefix, AiToolDefinition, JsonDeserialize, Optional};
 use agentkit_kernel::canonical_sha256;
@@ -161,10 +162,16 @@ impl ToolSurface {
     /// The S2 catalog index (one line per deferred namespace), when the
     /// session's array carries the meta tools to use it.
     pub fn index(&self) -> Option<String> {
+        self.index_with(&ToolsetView::default())
+    }
+
+    /// [`ToolSurface::index`] with the session's toolsets: one card line per
+    /// toolset that has a deferred tool or a guide (T4.1).
+    pub fn index_with(&self, view: &ToolsetView) -> Option<String> {
         if !self.manifest.contains(TOOL_CALL) {
             return None;
         }
-        catalog_index(&self.deferred)
+        toolset_index(self.manifest.definitions(), &self.deferred, view)
     }
 
     /// Names of the deferred tools, for the registry's not-yet-callable set.

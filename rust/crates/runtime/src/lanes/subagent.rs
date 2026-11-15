@@ -143,6 +143,9 @@ impl ToolContributor for SubagentLaneContributor {
     fn namespace(&self) -> &str {
         "subagent"
     }
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        agentkit_agents::delegation_toolsets()
+    }
     async fn contribute(
         &self,
         context: &ToolContributionContext,

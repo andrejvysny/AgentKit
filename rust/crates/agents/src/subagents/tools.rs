@@ -356,6 +356,9 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
     fn namespace(&self) -> &str {
         "subagent"
     }
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        super::toolsets::delegation_toolsets()
+    }
     async fn contribute(
         &self,
         _context: &agentkit_governance::ToolContributionContext,

@@ -394,6 +394,25 @@ impl State {
                 .await?;
             }
             self.check()?;
+            // Promote mode (T4.1): a toolset `toolset_load` asked for joins the
+            // tools array here, at the turn boundary, and is recorded once.
+            for promotion in registry.commit_promotions().await? {
+                self.emit(
+                    "run.warning",
+                    json!({
+                        "code": "toolset_promoted",
+                        "message": format!(
+                            "Toolset {} joined the tool list: {}.",
+                            promotion.toolset,
+                            promotion.tools.join(", ")
+                        ),
+                        "toolset": promotion.toolset,
+                        "tools": promotion.tools,
+                        "revision": promotion.revision,
+                    }),
+                )
+                .await?;
+            }
             let turn = self.provider_turn(provider.clone(), &registry).await?;
             self.step_reasoning = turn.reasoning.clone();
             self.step_salvaged = turn.salvaged;

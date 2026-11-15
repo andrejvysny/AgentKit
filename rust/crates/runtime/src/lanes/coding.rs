@@ -278,6 +278,10 @@ impl ToolContributor for CodingLaneContributor {
         CODING_NAMESPACE
     }
 
+    fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
+        agentkit_toolpacks_coding::coding_toolsets()
+    }
+
     async fn contribute(
         &self,
         context: &ToolContributionContext,

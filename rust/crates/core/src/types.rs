@@ -287,6 +287,12 @@ pub trait Tool: Send + Sync {
     fn loading(&self) -> crate::ToolLoading {
         crate::ToolLoading::Direct
     }
+    /// The id of the toolset this tool belongs to (T4.1). A toolset's own
+    /// member list is the other way to declare it; this one wins. Wrappers
+    /// forward it.
+    fn toolset(&self) -> Option<&str> {
+        None
+    }
     /// Parameter names this tool accepted before a rename, as
     /// `(alias, canonical)`. The registry hands them to the call pipeline so
     /// old calls keep working for one release.

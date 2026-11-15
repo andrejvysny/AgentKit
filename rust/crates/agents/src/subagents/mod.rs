@@ -25,6 +25,7 @@ mod config;
 mod guard;
 mod service;
 mod snapshot;
+mod toolsets;
 mod tools;
 
 pub use config::{
@@ -37,6 +38,7 @@ pub use service::{
     SubagentView, child_identity,
 };
 pub use snapshot::{EffectiveRole, RoleSnapshot, effective_role};
+pub use toolsets::{DELEGATION_TOOLSET, delegation_toolsets};
 pub use tools::{
     SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SubagentContributor, subagent_tool_definitions,
 };

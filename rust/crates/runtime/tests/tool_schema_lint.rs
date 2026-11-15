@@ -17,7 +17,7 @@ use agentkit_agents::{
 use agentkit_core::{
     AuthKind, CancellationToken, ChatProvider, ChatRequest, ConnectionIdentity, CoreError,
     ExampleLane, Tool,
-    ToolConstraint, ToolContext, ToolDefinition, ToolLimits, ToolRegistry, ToolResult,
+    ToolConstraint, meta_definitions, ToolContext, ToolDefinition, ToolLimits, ToolRegistry, ToolResult,
     presented_description,
 };
 use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
@@ -282,6 +282,13 @@ fn l3_depth(def: &ToolDefinition, out: &mut Problems) {
 fn l4_required_and_closed(def: &ToolDefinition, out: &mut Problems) {
     visit(&def.input_schema, "$", &mut |node, path| {
         if !is_type(node, "object") {
+            return;
+        }
+        // An object with no `properties` is opaque: it carries another
+        // tool's own arguments (`tool_call.arguments`), whose schema is
+        // checked where that tool is called. Same rule as OneMind T1.4; no
+        // exception list.
+        if node.get("properties").is_none() {
             return;
         }
         match node.get("required").and_then(Value::as_array) {
@@ -676,6 +683,50 @@ async fn schema_rules_l1_to_l12_hold_for_every_static_tool() {
         problems.extend(check_tool(tool.as_ref(), &registry, &names));
     }
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// The meta tools (T4.1) follow the same rules; `tool_call.arguments` is the
+/// one opaque object.
+#[tokio::test]
+async fn schema_rules_l1_to_l12_hold_for_the_meta_tools() {
+    let mut tools = all_tools().await;
+    tools.extend(
+        meta_definitions()
+            .into_iter()
+            .map(|definition| definition_only(definition, &[])),
+    );
+    let registry = registry_of(&tools);
+    let names: BTreeSet<String> = tools
+        .iter()
+        .map(|tool| tool.definition().name.clone())
+        .collect();
+    let mut problems = Problems::new();
+    for tool in tools.iter().filter(|tool| {
+        meta_definitions()
+            .iter()
+            .any(|meta| meta.name == tool.definition().name)
+    }) {
+        problems.extend(check_tool(tool.as_ref(), &registry, &names));
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+#[test]
+fn an_object_with_properties_is_still_closed_and_required() {
+    let mut problems = Problems::new();
+    let open = ToolDefinition {
+        name: "open_tool".into(),
+        version: "1".into(),
+        effect: "read".into(),
+        capability: "test".into(),
+        description: String::new(),
+        input_schema: json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+        output_schema: None,
+        timeout_ms: None,
+        examples: vec![],
+    };
+    l4_required_and_closed(&open, &mut problems);
+    assert_eq!(problems.len(), 2, "{problems:?}");
 }
 
 /// The lint must not pass vacuously: a definition that breaks every rule is

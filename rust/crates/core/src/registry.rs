@@ -1,8 +1,15 @@
 use crate::{
-    Tool, ToolDefinition,
+    CoreError, Tool, ToolDefinition,
     call_pipeline::{AliasTable, Normalised, normalise},
     dialect::{Dialect, DialectError, Translated},
-    deferred::{Catalog, CatalogCell, CatalogEntry, TOOL_CALL, ToolLoading, is_meta_tool, namespace_of},
+    deferred::{
+        Catalog, CatalogCell, CatalogEntry, LoadMode, TOOL_CALL, ToolLoading, is_meta_tool,
+        namespace_of,
+    },
+    toolset::{
+        META_TOOLSET, Promotion, PromotionCell, PromotionObserver, Toolset, ToolsetView,
+        meta_toolset,
+    },
 };
 use serde_json::{Map, Value};
 use std::{
@@ -49,6 +56,15 @@ pub struct ToolRegistry {
     deferred_hints: BTreeSet<String>,
     /// The session catalog, filled at freeze and read by the meta tools.
     catalog: CatalogCell,
+    /// Registered toolsets by id (T4.1), and the toolset each tool is
+    /// listed in or declares for itself, by canonical id.
+    toolsets: BTreeMap<String, Toolset>,
+    listed: BTreeMap<String, String>,
+    declared: BTreeMap<String, String>,
+    /// Toolsets `toolset_load` asked to promote, and the ones that joined.
+    promotions: PromotionCell,
+    /// The host's record of a promotion (re-stamps the session manifest).
+    observer: OnceLock<Arc<dyn PromotionObserver>>,
 }
 impl ToolRegistry {
     pub fn new() -> Self {
@@ -90,6 +106,9 @@ impl ToolRegistry {
         if tool.loading() == ToolLoading::Deferred {
             self.deferred_hints.insert(name.clone());
         }
+        if let Some(toolset) = tool.toolset() {
+            self.declared.insert(name.clone(), toolset.to_owned());
+        }
         self.order.push(name.clone());
         self.tools.insert(name.clone(), Entry { tool, validator });
         Ok(())
@@ -98,12 +117,114 @@ impl ToolRegistry {
     /// registry's catalog. Whether they reach the model is decided at freeze:
     /// a manifest that fits the budget leaves them out of the array.
     pub fn install_meta_tools(&mut self) -> Result<(), RegistryError> {
-        for tool in crate::meta_tools::meta_tools(&self.catalog) {
+        self.install_meta_tools_with(LoadMode::Indirect)
+    }
+    /// [`ToolRegistry::install_meta_tools`] with the session's load mode
+    /// (T4.1): in promote mode `toolset_load` promotes the loaded tools.
+    pub fn install_meta_tools_with(&mut self, mode: LoadMode) -> Result<(), RegistryError> {
+        for tool in crate::meta_tools::meta_tools(&self.catalog, &self.promotions, mode) {
             if !self.tools.contains_key(&tool.definition().name) {
                 self.register(tool)?;
             }
         }
+        self.toolsets
+            .entry(META_TOOLSET.to_owned())
+            .or_insert_with(meta_toolset);
         Ok(())
+    }
+    /// Register a toolset (T4.1): its card, guide and member tools. The
+    /// first registration of an id wins, so a host and a lane may both
+    /// offer the same set.
+    pub fn register_toolset(&mut self, toolset: Toolset) {
+        for tool in &toolset.tools {
+            self.listed
+                .entry(tool.clone())
+                .or_insert_with(|| toolset.id.clone());
+        }
+        self.toolsets.entry(toolset.id.clone()).or_insert(toolset);
+    }
+    /// The registered toolsets, id order.
+    pub fn toolsets(&self) -> Vec<Toolset> {
+        self.toolsets.values().cloned().collect()
+    }
+    /// The toolset of canonical tool `canonical`: the tool's own declaration,
+    /// else the set that lists it, else the dynamic set its name implies
+    /// (`mcp__alias`).
+    fn toolset_id_for(&self, canonical: &str, definition: &ToolDefinition) -> String {
+        self.declared
+            .get(canonical)
+            .or_else(|| self.listed.get(canonical))
+            .cloned()
+            .unwrap_or_else(|| namespace_of(definition))
+    }
+    /// The toolsets and the toolset of each of `offered` (names as the model
+    /// sees them under `dialect`).
+    pub fn toolset_view(
+        &self,
+        offered: &[ToolDefinition],
+        dialect: Option<&Dialect>,
+    ) -> ToolsetView {
+        let mut toolsets = self.toolsets.clone();
+        toolsets
+            .entry(META_TOOLSET.to_owned())
+            .or_insert_with(meta_toolset);
+        let names = offered
+            .iter()
+            .map(|definition| {
+                let canonical = dialect
+                    .and_then(|dialect| dialect.canonical_of(&definition.name))
+                    .unwrap_or(&definition.name);
+                let id = if is_meta_tool(&definition.name) {
+                    META_TOOLSET.to_owned()
+                } else {
+                    self.toolset_id_for(canonical, definition)
+                };
+                (definition.name.clone(), id)
+            })
+            .collect();
+        ToolsetView::new(toolsets, names)
+    }
+    /// Let the host record promotions (re-stamp the session manifest). The
+    /// first observer wins.
+    pub fn set_promotion_observer(&self, observer: Arc<dyn PromotionObserver>) -> bool {
+        self.observer.set(observer).is_ok()
+    }
+    /// The turn boundary of promote mode: toolsets that `toolset_load`
+    /// asked for join the tools array now, never mid-turn. Each is recorded
+    /// through the observer before the next request is built.
+    pub async fn commit_promotions(&self) -> Result<Vec<Promotion>, CoreError> {
+        let Some(catalog) = self.catalog.get() else {
+            return Ok(vec![]);
+        };
+        let mut done = vec![];
+        for toolset in self.promotions.take_pending() {
+            let definitions: Vec<ToolDefinition> = catalog
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    entry.deferred
+                        && entry.available
+                        && entry.namespace == toolset
+                        && !self.promotions.is_promoted_name(&entry.definition.name)
+                })
+                .map(|entry| entry.definition.clone())
+                .collect();
+            if definitions.is_empty() {
+                continue;
+            }
+            let revision = match self.observer.get() {
+                Some(observer) => observer.promoted(&toolset, &definitions).await?,
+                None => None,
+            };
+            let tools = definitions.iter().map(|d| d.name.clone()).collect();
+            self.promotions.apply(&toolset, definitions);
+            done.push(Promotion {
+                toolset,
+                tools,
+                revision,
+            });
+        }
+        Ok(done)
     }
     /// Names of registered tools that ask to be deferred.
     pub fn deferred_hints(&self) -> BTreeSet<String> {
@@ -118,12 +239,18 @@ impl ToolRegistry {
             .map(|frozen| frozen.surface.as_slice())
             .unwrap_or_default();
         let meta_active = surface.iter().any(|definition| definition.name == TOOL_CALL);
-        let entry = |definition: &ToolDefinition, deferred: bool| CatalogEntry {
-            namespace: namespace_of(definition),
-            available: self.tools.contains_key(&self.canonical_name(&definition.name))
-                && !self.withheld.contains_key(&self.canonical_name(&definition.name)),
-            definition: definition.clone(),
-            deferred,
+        let offered: Vec<ToolDefinition> = surface.iter().chain(deferred).cloned().collect();
+        let view = self.toolset_view(&offered, self.dialect());
+        let entry = |definition: &ToolDefinition, deferred: bool| {
+            let canonical = self.canonical_name(&definition.name);
+            CatalogEntry {
+                namespace: view.id_of(definition),
+                available: self.tools.contains_key(&canonical)
+                    && !self.withheld.contains_key(&canonical),
+                canonical,
+                definition: definition.clone(),
+                deferred,
+            }
         };
         let entries = surface
             .iter()
@@ -131,7 +258,8 @@ impl ToolRegistry {
             .map(|definition| entry(definition, false))
             .chain(deferred.iter().map(|definition| entry(definition, true)))
             .collect();
-        self.catalog.set(Catalog::new(entries, meta_active)).is_ok()
+        let catalog = Catalog::new(entries, meta_active).with_toolsets(view.clone());
+        self.catalog.set(catalog).is_ok()
     }
     /// True when this session's tools array carries the meta tools, so a
     /// deferred tool is called through `tool_call`.
@@ -261,10 +389,10 @@ impl ToolRegistry {
     }
     pub(crate) fn is_deferred(&self, name: &str) -> bool {
         self.frozen.get().is_some_and(|frozen| {
-            frozen
-                .deferred
-                .iter()
-                .any(|deferred| self.canonical_in_surface(deferred) == name)
+            frozen.deferred.iter().any(|deferred| {
+                self.canonical_in_surface(deferred) == name
+                    && !self.promotions.is_promoted_name(deferred)
+            })
         })
     }
     pub(crate) fn withheld_reason(&self, name: &str) -> Option<&str> {
@@ -309,7 +437,14 @@ impl ToolRegistry {
     /// has one, otherwise registered tools in order and then withheld ones.
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         if let Some(frozen) = self.frozen.get() {
-            return frozen.surface.clone();
+            let mut surface = frozen.surface.clone();
+            let promoted = self.promotions.promoted_definitions();
+            if !promoted.is_empty() {
+                // Promoted tools join in manifest (name) order.
+                surface.extend(promoted);
+                surface.sort_by(|a, b| a.name.cmp(&b.name));
+            }
+            return surface;
         }
         self.order
             .iter()

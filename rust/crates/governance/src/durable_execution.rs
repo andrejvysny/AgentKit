@@ -890,6 +890,18 @@ impl agentkit_core::Tool for ReceiptedTool {
     fn loading(&self) -> agentkit_core::ToolLoading {
         self.tool.loading()
     }
+    fn toolset(&self) -> Option<&str> {
+        self.tool.toolset()
+    }
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        self.tool.arg_aliases()
+    }
+    fn constraints(&self) -> Vec<agentkit_core::ToolConstraint> {
+        self.tool.constraints()
+    }
+    fn check_constraints(&self, input: &Value) -> Option<String> {
+        self.tool.check_constraints(input)
+    }
     async fn record_schema_refusal(&self, context: &ToolContext, args: &Value, message: &str) {
         let definition = self.tool.definition();
         let snapshot = ToolGuardContext {
@@ -985,6 +997,9 @@ pub fn wrap_static_writes(
     contribution: &ToolContributionContext,
 ) -> agentkit_core::ToolRegistry {
     let mut wrapped = agentkit_core::ToolRegistry::new();
+    for toolset in registry.toolsets() {
+        wrapped.register_toolset(toolset);
+    }
     for definition in registry.definitions() {
         let Some(tool) = registry.get(&definition.name) else {
             continue;
