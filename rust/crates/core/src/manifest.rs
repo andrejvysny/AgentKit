@@ -9,6 +9,7 @@
 //! Room for later fields (dialect, toolset) is the prefix's own optional
 //! fields; the hash covers the definitions as stored.
 
+use crate::deferred::{Classification, TOOL_CALL, catalog_index, is_meta_tool};
 use crate::ToolDefinition;
 use agentkit_contracts::{AiSessionPrefix, AiToolDefinition, JsonDeserialize, Optional};
 use agentkit_kernel::canonical_sha256;
@@ -92,22 +93,32 @@ pub struct ToolSurface {
 
 impl ToolSurface {
     /// Reconcile this turn's `candidates` (every tool the contributors offer
-    /// now, withheld ones included) with the prefix recorded earlier.
+    /// now, withheld ones included) with the prefix recorded earlier. Every
+    /// candidate is sent: no tool is deferred.
     pub fn reconcile(prior: Option<&AiSessionPrefix>, candidates: &[ToolDefinition]) -> Self {
+        Self::reconcile_with(prior, candidates, None)
+    }
+
+    /// Like [`ToolSurface::reconcile`], and on a session's first turn the
+    /// `classification` (roadmap 2.3) splits the candidates: direct tools and,
+    /// when something is deferred, the meta tools form the manifest; the rest
+    /// form the deferred catalog. Later turns follow the recorded prefix.
+    pub fn reconcile_with(
+        prior: Option<&AiSessionPrefix>,
+        candidates: &[ToolDefinition],
+        classification: Option<&Classification>,
+    ) -> Self {
         let Some(manifest) = prior.and_then(ToolManifest::from_prefix) else {
-            return Self {
-                manifest: ToolManifest::build(candidates),
-                deferred: vec![],
-                added: vec![],
-                unavailable: vec![],
-                frozen_now: true,
-            };
+            return Self::first(candidates, classification);
         };
         let mut deferred = prior.and_then(recorded_deferred).unwrap_or_default();
         let known: BTreeSet<&str> = deferred.iter().map(|d| d.name.as_str()).collect();
         let offered: BTreeSet<&str> = candidates.iter().map(|d| d.name.as_str()).collect();
+        // The meta tools are never "late": the session either froze with
+        // them or never will.
         let late: Vec<ToolDefinition> = sorted_unique(candidates)
             .into_iter()
+            .filter(|d| !is_meta_tool(&d.name))
             .filter(|d| !manifest.contains(&d.name) && !known.contains(d.name.as_str()))
             .collect();
         let added = late.iter().map(|d| d.name.clone()).collect();
@@ -126,6 +137,34 @@ impl ToolSurface {
             unavailable,
             frozen_now: false,
         }
+    }
+
+    fn first(candidates: &[ToolDefinition], classification: Option<&Classification>) -> Self {
+        let (manifest, deferred) = match classification {
+            None => (ToolManifest::build(candidates), vec![]),
+            Some(classification) => {
+                let split = classification.split(candidates);
+                let sent: Vec<ToolDefinition> =
+                    split.direct.into_iter().chain(split.meta).collect();
+                (ToolManifest::build(&sent), sorted_unique(&split.deferred))
+            }
+        };
+        Self {
+            manifest,
+            deferred,
+            added: vec![],
+            unavailable: vec![],
+            frozen_now: true,
+        }
+    }
+
+    /// The S2 catalog index (one line per deferred namespace), when the
+    /// session's array carries the meta tools to use it.
+    pub fn index(&self) -> Option<String> {
+        if !self.manifest.contains(TOOL_CALL) {
+            return None;
+        }
+        catalog_index(&self.deferred)
     }
 
     /// Names of the deferred tools, for the registry's not-yet-callable set.

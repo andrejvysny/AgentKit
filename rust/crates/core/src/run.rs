@@ -924,7 +924,13 @@ impl State {
             }
             let mut message = ChatMessage::text("tool", &outcome.model_json);
             message.tool_call_id = Some(call.id.clone());
-            message.name = Some(call.name.clone());
+            // The transcript pairs the result with the call the model made.
+            message.name = Some(
+                prepared
+                    .outer
+                    .as_ref()
+                    .map_or(call.name.clone(), |outer| outer.name.clone()),
+            );
             self.pending_messages.push(message.clone());
             self.messages.push(message);
             let status = if outcome.kind == "run.tool.succeeded" {

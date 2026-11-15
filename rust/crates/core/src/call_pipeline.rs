@@ -310,6 +310,14 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
             ),
         );
     }
+    if registry.is_deferred(name) && registry.meta_active() {
+        return CoreError::new(
+            "tool_deferred",
+            &format!(
+                "Tool {name} is deferred: it is not in your tool list. Call it through tool_call with its name and arguments; tool_describe shows its schema."
+            ),
+        );
+    }
     if registry.is_deferred(name) {
         return CoreError::new(
             "tool_unavailable",
@@ -353,21 +361,39 @@ fn list_suffix(lead: &str, names: &[String]) -> String {
 /// arguments (the original text when nothing changed).
 pub(crate) struct Prepared {
     pub call: ToolCall,
+    /// The model's own call when `call` is the inner call of a `tool_call`
+    /// (same id). Only its name still matters: the transcript pairs the
+    /// result with it.
+    pub outer: Option<ToolCall>,
     pub aliases_used: Vec<String>,
     pub values_converted: u32,
     pub failure: Option<CoreError>,
 }
 
 pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
+    if call.name == crate::deferred::TOOL_CALL && registry.meta_active() {
+        return crate::meta_call::prepare(registry, call);
+    }
+    prepare_resolved(registry, call, false)
+}
+
+/// The stages for one tool call. `via_meta` is an inner call of `tool_call`:
+/// it may name a deferred tool, which a direct call may not.
+pub(crate) fn prepare_resolved(
+    registry: &ToolRegistry,
+    call: &ToolCall,
+    via_meta: bool,
+) -> Prepared {
     let mut prepared = Prepared {
         call: call.clone(),
+        outer: None,
         aliases_used: vec![],
         values_converted: 0,
         failure: None,
     };
     if call.name == UNNAMED_TOOL
         || registry.get(&call.name).is_none()
-        || registry.is_deferred(&call.name)
+        || (!via_meta && registry.is_deferred(&call.name))
     {
         prepared.failure = Some(resolve_failure(registry, &call.name));
         return prepared;

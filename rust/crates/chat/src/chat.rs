@@ -286,6 +286,20 @@ impl ChatExecutor {
             Some(profile) => profile.filter_tools(&registry)?,
             None => registry,
         };
+        // Deferred tools (roadmap 2.3): bind the meta tools and read this
+        // session's classification before the system prompt is built, because
+        // the catalog index is part of S2.
+        let (registry, classification) = prefix::with_deferral(
+            registry,
+            options.tool_classification.as_ref().filter(|_| session && stage_tools),
+        );
+        let deferred_index = prefix::deferred_index(
+            &context,
+            chat_id,
+            &registry,
+            classification.as_ref(),
+        )
+        .await?;
         let base_prompt = profile
             .as_ref()
             .map(|profile| profile.instructions.clone())
@@ -313,6 +327,13 @@ impl ChatExecutor {
         // surfaced as a `run.warning` event (TS turn-runner parity). It is
         // segment S3 of the prompt layout (ADR 0028), a system block of its
         // own behind the S2 policy text.
+        let base_prompt = match deferred_index.as_deref() {
+            Some(index) => Some(match base_prompt {
+                Some(existing) if !existing.is_empty() => format!("{existing}\n\n{index}"),
+                _ => index.to_owned(),
+            }),
+            None => base_prompt,
+        };
         let rules = crate::project_instructions::project_rules_block(&options, &context, chat_id)
             .await?;
         let layout = agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
@@ -323,8 +344,19 @@ impl ChatExecutor {
             let branch = continuation
                 .as_ref()
                 .map_or("", |cont| cont.scope.branch_id.as_str());
-            prefix::record(&context, chat_id, &layout, &registry, &params, branch)
-                .await?;
+            prefix::record(
+                &context,
+                chat_id,
+                &layout,
+                &registry,
+                &params,
+                branch,
+                prefix::Deferral {
+                    classification: classification.as_ref(),
+                    index: deferred_index.as_deref(),
+                },
+            )
+            .await?;
         }
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to

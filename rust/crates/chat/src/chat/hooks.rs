@@ -55,6 +55,11 @@ pub struct ChatExecutorOptions {
     pub max_output_tokens: Option<u64>,
     pub max_tool_calls_per_iteration: usize,
     pub default_tool_timeout_ms: Option<u64>,
+    /// Deferred tools (roadmap 2.3). Present, a session's first turn sends
+    /// only the direct tools plus `tool_search`, `tool_describe` and
+    /// `tool_call`, and lists the rest in the deferred catalog. The host
+    /// supplies the profile's direct set here; absent, every tool is sent.
+    pub tool_classification: Option<agentkit_core::Classification>,
 }
 impl Default for ChatExecutorOptions {
     fn default() -> Self {
@@ -85,6 +90,7 @@ impl Default for ChatExecutorOptions {
             max_output_tokens: None,
             max_tool_calls_per_iteration: 8,
             default_tool_timeout_ms: None,
+            tool_classification: None,
         }
     }
 }

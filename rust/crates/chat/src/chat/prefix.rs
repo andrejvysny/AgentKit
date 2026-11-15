@@ -5,8 +5,72 @@
 //! provider cache may hold.
 
 use crate::{ChatError, ChatResult, ExecutionContext};
-use agentkit_core::{Freeze, PrefixDigests, PromptLayout, ToolRegistry, ToolSurface, freeze};
+use agentkit_core::{
+    Classification, Freeze, PrefixDigests, PromptLayout, ToolRegistry, ToolSurface, freeze,
+};
 use serde_json::{Value, json};
+use std::sync::Arc;
+
+/// Prefix `extra` key holding the S2 catalog index the session froze with.
+const INDEX_KEY: &str = "deferredIndex";
+
+/// What deferred tools add to a turn's prefix record (roadmap 2.3).
+#[derive(Clone, Copy, Default)]
+pub(super) struct Deferral<'a> {
+    pub classification: Option<&'a Classification>,
+    /// The index text already placed in S2 this turn.
+    pub index: Option<&'a str>,
+}
+
+/// Bind the meta tools to `registry` and complete `classification` with the
+/// registry's own loading hints. A registry that is shared cannot take new
+/// tools, so it keeps every tool direct.
+pub(super) fn with_deferral(
+    mut registry: Arc<ToolRegistry>,
+    classification: Option<&Classification>,
+) -> (Arc<ToolRegistry>, Option<Classification>) {
+    let Some(classification) = classification else {
+        return (registry, None);
+    };
+    let installed = Arc::get_mut(&mut registry)
+        .is_some_and(|registry| registry.install_meta_tools().is_ok());
+    if !installed {
+        return (registry, None);
+    }
+    let mut classification = classification.clone();
+    classification.deferred_hints = registry.deferred_hints();
+    (registry, Some(classification))
+}
+
+/// The S2 catalog index for this turn: the one the session froze with, or on
+/// its first turn the one its classification produces. It must not change
+/// when a late tool joins the catalog, or S2 would be rewritten.
+pub(super) async fn deferred_index(
+    context: &ExecutionContext,
+    chat_id: &str,
+    registry: &ToolRegistry,
+    classification: Option<&Classification>,
+) -> ChatResult<Option<String>> {
+    let Some(classification) = classification else {
+        return Ok(None);
+    };
+    let chat = context
+        .store
+        .get_chat(chat_id)
+        .await?
+        .ok_or(ChatError::SessionDisappeared)?;
+    let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
+    if let Some(text) = prior
+        .as_ref()
+        .and_then(|prefix| prefix.extra.get(INDEX_KEY))
+        .and_then(Value::as_str)
+    {
+        return Ok(Some(text.to_owned()));
+    }
+    let surface =
+        ToolSurface::reconcile_with(prior.as_ref(), &registry.definitions(), Some(classification));
+    Ok(surface.index())
+}
 
 /// Record or compare the prefix of this turn. `branch_id` feeds the cache
 /// key and is empty for lanes without provider continuation.
@@ -21,6 +85,7 @@ pub(super) async fn record(
     registry: &ToolRegistry,
     params: &Value,
     branch_id: &str,
+    deferral: Deferral<'_>,
 ) -> ChatResult<()> {
     let chat = context
         .store
@@ -28,11 +93,16 @@ pub(super) async fn record(
         .await?
         .ok_or(ChatError::SessionDisappeared)?;
     let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
-    let surface = ToolSurface::reconcile(prior.as_ref(), &registry.definitions());
+    let surface = ToolSurface::reconcile_with(
+        prior.as_ref(),
+        &registry.definitions(),
+        deferral.classification,
+    );
     registry.freeze_surface(
         surface.manifest.definitions().to_vec(),
         surface.deferred_names(),
     );
+    registry.freeze_catalog(&surface.deferred);
     let digests = PrefixDigests::compute(layout, &registry.definitions(), params);
     let decision = stamped(
         freeze(
@@ -45,6 +115,7 @@ pub(super) async fn record(
         &surface,
     );
     let decision = stamp_profile(decision, &chat.metadata);
+    let decision = stamp_index(decision, deferral.index);
     warn_tools(context, &surface).await?;
     // An unchanged head still persists a grown deferred catalog or a
     // manifest recorded for the first time on an older session.
@@ -83,6 +154,22 @@ fn stamp_profile(mut decision: Freeze, metadata: &Value) -> Freeze {
             | Freeze::Refrozen { prefix, .. } => {
                 agentkit_core::stamp_model_profile(prefix, &profile);
             }
+        }
+    }
+    decision
+}
+
+/// The decision with the S2 catalog index recorded in its prefix, so later
+/// turns put the same bytes in S2.
+fn stamp_index(mut decision: Freeze, index: Option<&str>) -> Freeze {
+    let Some(index) = index else {
+        return decision;
+    };
+    match &mut decision {
+        Freeze::Created(prefix) | Freeze::Unchanged(prefix) | Freeze::Refrozen { prefix, .. } => {
+            prefix
+                .extra
+                .insert(INDEX_KEY.to_owned(), Value::String(index.to_owned()));
         }
     }
     decision

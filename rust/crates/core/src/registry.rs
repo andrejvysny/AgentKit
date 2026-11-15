@@ -1,6 +1,7 @@
 use crate::{
     Tool, ToolDefinition,
     call_pipeline::{AliasTable, Normalised, normalise},
+    deferred::{Catalog, CatalogCell, CatalogEntry, TOOL_CALL, ToolLoading, is_meta_tool, namespace_of},
 };
 use serde_json::{Map, Value};
 use std::{
@@ -38,6 +39,10 @@ pub struct ToolRegistry {
     /// so the array does not change, refused when called.
     ghosts: BTreeMap<String, ToolDefinition>,
     frozen: OnceLock<Frozen>,
+    /// Tools that ask to be deferred (their own [`ToolLoading`] hint).
+    deferred_hints: BTreeSet<String>,
+    /// The session catalog, filled at freeze and read by the meta tools.
+    catalog: CatalogCell,
 }
 impl ToolRegistry {
     pub fn new() -> Self {
@@ -76,9 +81,60 @@ impl ToolRegistry {
         for (alias, canonical) in tool.arg_aliases() {
             self.aliases.add_for_tool(name, &alias, &canonical);
         }
+        if tool.loading() == ToolLoading::Deferred {
+            self.deferred_hints.insert(name.clone());
+        }
         self.order.push(name.clone());
         self.tools.insert(name.clone(), Entry { tool, validator });
         Ok(())
+    }
+    /// Register `tool_search`, `tool_describe` and `tool_call`, bound to this
+    /// registry's catalog. Whether they reach the model is decided at freeze:
+    /// a manifest that fits the budget leaves them out of the array.
+    pub fn install_meta_tools(&mut self) -> Result<(), RegistryError> {
+        for tool in crate::meta_tools::meta_tools(&self.catalog) {
+            if !self.tools.contains_key(&tool.definition().name) {
+                self.register(tool)?;
+            }
+        }
+        Ok(())
+    }
+    /// Names of registered tools that ask to be deferred.
+    pub fn deferred_hints(&self) -> BTreeSet<String> {
+        self.deferred_hints.clone()
+    }
+    /// Fill the catalog from the frozen surface (direct entries) and the
+    /// deferred definitions. The first call wins; false when already filled.
+    pub fn freeze_catalog(&self, deferred: &[ToolDefinition]) -> bool {
+        let surface = self
+            .frozen
+            .get()
+            .map(|frozen| frozen.surface.as_slice())
+            .unwrap_or_default();
+        let meta_active = surface.iter().any(|definition| definition.name == TOOL_CALL);
+        let entry = |definition: &ToolDefinition, deferred: bool| CatalogEntry {
+            namespace: namespace_of(definition),
+            available: self.tools.contains_key(&definition.name)
+                && !self.withheld.contains_key(&definition.name),
+            definition: definition.clone(),
+            deferred,
+        };
+        let entries = surface
+            .iter()
+            .filter(|definition| !is_meta_tool(&definition.name))
+            .map(|definition| entry(definition, false))
+            .chain(deferred.iter().map(|definition| entry(definition, true)))
+            .collect();
+        self.catalog.set(Catalog::new(entries, meta_active)).is_ok()
+    }
+    /// True when this session's tools array carries the meta tools, so a
+    /// deferred tool is called through `tool_call`.
+    pub fn meta_active(&self) -> bool {
+        self.catalog.get().is_some_and(Catalog::meta_active)
+    }
+    /// The session catalog, once the surface is frozen.
+    pub fn catalog(&self) -> Option<&Catalog> {
+        self.catalog.get()
     }
     /// Parameter aliases for the call pipeline; per-tool entries go here.
     pub fn aliases_mut(&mut self) -> &mut AliasTable {

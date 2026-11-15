@@ -57,6 +57,27 @@ pub(crate) static CORE: &[Spec] = &[
         "Use another offered tool, or try this one again in a later turn.",
     ),
     s(
+        "tool_not_found",
+        C::UnknownTool,
+        true,
+        "No tool has that name.",
+        "Use one of the closest names listed, or call tool_search to find the right tool.",
+    ),
+    s(
+        "tool_deferred",
+        C::Precondition,
+        true,
+        "That tool is deferred: it is not in your tool list.",
+        "Call it through tool_call with its name and arguments; tool_describe shows its schema.",
+    ),
+    s(
+        "invalid_arguments",
+        C::InvalidStructure,
+        true,
+        "The arguments do not match the tool's schema.",
+        "Fix the listed arguments to match the schema shown and call tool_call again.",
+    ),
+    s(
         "bad_args",
         C::InvalidJson,
         true,

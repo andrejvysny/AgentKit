@@ -111,6 +111,9 @@ impl Tool for DirectWriteTool {
     fn records_command_start(&self) -> bool {
         self.inner.records_command_start()
     }
+    fn loading(&self) -> agentkit_core::ToolLoading {
+        self.inner.loading()
+    }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         self.inner.execute(context, input).await
     }
@@ -287,6 +290,9 @@ struct GuardedTool {
 impl Tool for GuardedTool {
     fn definition(&self) -> &ToolDefinition {
         self.tool.definition()
+    }
+    fn loading(&self) -> agentkit_core::ToolLoading {
+        self.tool.loading()
     }
     async fn record_schema_refusal(&self, context: &ToolContext, args: &Value, message: &str) {
         // The durable wrapper owns the receipt ledger; without it this host

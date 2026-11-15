@@ -1,6 +1,7 @@
 //! Provider-neutral asynchronous chat execution. Secrets and connection policy belong to hosts.
 mod budget;
 mod call_pipeline;
+mod deferred;
 mod dispatch;
 mod envelope;
 mod examples_render;
@@ -10,6 +11,8 @@ mod failure_table_agents;
 mod failure_table_files;
 mod layout;
 mod manifest;
+mod meta_call;
+mod meta_tools;
 mod model_profile;
 pub mod permission;
 mod provider_identity;
@@ -26,7 +29,15 @@ pub use budget::{BudgetCheckpoint, BudgetLimits, BudgetSnapshot, ExecutionBudget
 // (and this crate's own tests) need it without a parallel contracts import.
 pub use agentkit_contracts::AiRunEvent;
 pub use agentkit_kernel::{Runtime, SystemRuntime};
+pub use deferred::{
+    Catalog, CatalogCell, CatalogEntry, Classification, DirectSet, META_TOOLS, Split, TOOL_CALL,
+    TOOL_DESCRIBE, TOOL_SEARCH, ToolLoading, catalog_index, is_meta_tool, namespace_of,
+};
 pub use dispatch::{DispatchFence, DispatchGuard};
+pub use meta_call::unwrap_tool_call;
+pub use meta_tools::{
+    meta_definitions, tool_call_definition, tool_describe_definition, tool_search_definition,
+};
 pub use examples_render::{ExampleLane, RenderedExamples, presented_description, render_examples};
 pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,

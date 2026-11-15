@@ -507,7 +507,10 @@ pub(crate) async fn resolve_approved_calls(
             // digest of the same arguments; either spelling is this call
             // (as the durable replay barrier accepts both). Admission spends
             // the grant against the NATIVE digest.
-            let Some(approved_hash) = matching_args_hash(&call.arguments_json, &approved_hash)
+            // A `tool_call` was approved as its inner tool and arguments.
+            let inner = agentkit_core::unwrap_tool_call(call);
+            let hashed = inner.as_ref().unwrap_or(call);
+            let Some(approved_hash) = matching_args_hash(&hashed.arguments_json, &approved_hash)
             else {
                 continue; // this ask was about different arguments
             };

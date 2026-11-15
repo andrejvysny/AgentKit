@@ -281,6 +281,12 @@ pub trait Tool: Send + Sync {
     /// executor refusal takes). The outcome the model sees is unchanged;
     /// this is the audit sink, so the default records nothing.
     async fn record_schema_refusal(&self, _context: &ToolContext, _args: &Value, _message: &str) {}
+    /// Whether this tool asks to be sent every turn or listed in the deferred
+    /// catalog (roadmap 2.3). A host's direct set overrides it; wrappers
+    /// forward it.
+    fn loading(&self) -> crate::ToolLoading {
+        crate::ToolLoading::Direct
+    }
     /// Parameter names this tool accepted before a rename, as
     /// `(alias, canonical)`. The registry hands them to the call pipeline so
     /// old calls keep working for one release.

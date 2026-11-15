@@ -887,6 +887,9 @@ impl agentkit_core::Tool for ReceiptedTool {
     fn definition(&self) -> &ToolDefinition {
         self.tool.definition()
     }
+    fn loading(&self) -> agentkit_core::ToolLoading {
+        self.tool.loading()
+    }
     async fn record_schema_refusal(&self, context: &ToolContext, args: &Value, message: &str) {
         let definition = self.tool.definition();
         let snapshot = ToolGuardContext {

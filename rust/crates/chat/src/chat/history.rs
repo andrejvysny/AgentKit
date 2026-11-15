@@ -379,6 +379,9 @@ fn resolve_receipt(
         // A record without a run cannot own durable execution evidence.
         return ReceiptDecision::Missing;
     };
+    // A `tool_call` ran as its inner tool: the receipt names that tool.
+    let inner = agentkit_core::unwrap_tool_call(call);
+    let call = inner.as_ref().unwrap_or(call);
     // Newest insert wins for this exact operation identity: a newer
     // admitted attempt reads as uncertain even when an older attempt of
     // the same (run, call) completed.
