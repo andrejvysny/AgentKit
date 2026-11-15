@@ -10,3 +10,14 @@ Tests written, NOT run (validation deferred to the owner's pass):
 
 Unverified: compilation, all tests, `rust/api/agentkit-contracts.txt` and `agentkit-core.txt` snapshots (contracts snapshot edited by hand, core snapshot needs regeneration), schema fixtures edited by script (regenerate with `bun scripts/export-rust-fixtures.ts` and the contracts codegen to confirm byte equality).
 Changed assertions: coding pack exact-text tests in `fs_tools.rs` now compare the first line.
+
+## Wire-name wording (follow-up)
+
+Failure text names tools and calls through placeholders, filled from the
+session dialect after the tool returns (`core/src/tool_execution.rs`,
+`core/src/dialect/placeholders.rs`): `{{tool:<id>}}` becomes the wire name(s),
+`{{call:<id> key=value}}` the wire tool that always means that call
+(`git_diff`), else `<name> with key "value"`. The three git constraint errors
+use it. Guard refusal reasons (`role_ceiling: ... (edit_file)`) are exact
+strings other tests and hosts match; not converted. Tests:
+`core/tests/dialect_failure_text.rs` (written, NOT run).

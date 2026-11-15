@@ -14,6 +14,7 @@ mod anthropic;
 mod common;
 mod history;
 mod openai;
+mod placeholders;
 mod strict;
 mod text;
 
@@ -23,6 +24,7 @@ pub use anthropic::{
 };
 pub use common::{COMMON_ID, COMMON_VERSION, common};
 pub use history::present_history;
+pub use placeholders::render_text;
 pub use openai::{
     OPENAI_CHAT_ID, OPENAI_ID, PATCH_NAME as OPENAI_PATCH_NAME, SHELL_NAME as OPENAI_SHELL_NAME,
     openai, openai_chat, strict_dialect,

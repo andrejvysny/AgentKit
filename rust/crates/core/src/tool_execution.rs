@@ -158,7 +158,50 @@ pub(crate) async fn execute(
             _ = closed(&close) => { child.cancel(); Err(cancelled()) }
         }
     };
-    outcome(call, result, max, &context.limits)
+    outcome(call, render_failure_text(registry, result), max, &context.limits)
+}
+/// Fills the placeholders a tool left in its result text (`{{tool:..}}`,
+/// `{{call:..}}`) with the names the session's dialect offered, so a teaching
+/// error never names a tool or parameter the model cannot see.
+fn render_failure_text(
+    registry: &ToolRegistry,
+    result: Result<crate::ToolResult, CoreError>,
+) -> Result<crate::ToolResult, CoreError> {
+    let dialect = registry.dialect();
+    let render = |text: &mut String| {
+        if text.contains("{{") {
+            *text = crate::dialect::render_text(dialect, text);
+        }
+    };
+    match result {
+        Ok(mut result) => {
+            if let Some(summary) = &mut result.summary {
+                render(summary);
+            }
+            result.warnings.iter_mut().for_each(render);
+            render_value(result.data.as_mut(), dialect);
+            render_value(result.model_data.as_mut(), dialect);
+            Ok(result)
+        }
+        Err(mut error) => {
+            render(&mut error.message);
+            Err(error)
+        }
+    }
+}
+fn render_value(value: Option<&mut Value>, dialect: Option<&crate::Dialect>) {
+    match value {
+        Some(Value::String(text)) if text.contains("{{") => {
+            *text = crate::dialect::render_text(dialect, text);
+        }
+        Some(Value::Array(items)) => items
+            .iter_mut()
+            .for_each(|item| render_value(Some(item), dialect)),
+        Some(Value::Object(map)) => map
+            .values_mut()
+            .for_each(|item| render_value(Some(item), dialect)),
+        _ => {}
+    }
 }
 async fn closed(close: &Option<tokio_util::sync::CancellationToken>) {
     match close {
