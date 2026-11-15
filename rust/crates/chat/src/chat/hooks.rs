@@ -63,6 +63,9 @@ pub struct ChatExecutorOptions {
     /// `tool_call`, and lists the rest in the deferred catalog. The host
     /// supplies the profile's direct set here; absent, every tool is sent.
     pub tool_classification: Option<agentkit_core::Classification>,
+    /// Emit one `run.tool.record` per finished tool call (TU-35). On by
+    /// default; a host that cannot take the extra event turns it off.
+    pub tool_call_records: bool,
 }
 impl Default for ChatExecutorOptions {
     fn default() -> Self {
@@ -95,6 +98,7 @@ impl Default for ChatExecutorOptions {
             max_tool_calls_per_iteration: 8,
             default_tool_timeout_ms: None,
             tool_classification: None,
+            tool_call_records: true,
         }
     }
 }

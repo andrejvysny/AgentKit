@@ -455,6 +455,17 @@ impl ChatExecutor {
             crate::restore_execution_budget(&context, execution_limits, runtime.clone()).await?;
         let context_budget =
             context_budget::ContextBudget::resolve(&context, chat_id, provider.id(), model).await?;
+        let record_identity = agentkit_core::RecordIdentity {
+            provider: Some(provider.id().to_owned()),
+            lane: Some(
+                match provider.tool_lane() {
+                    agentkit_core::ToolLane::Responses => "responses",
+                    agentkit_core::ToolLane::ChatCompletions => "chat_completions",
+                }
+                .to_owned(),
+            ),
+            profile: profile.as_ref().map(|profile| profile.id.clone()),
+        };
         let prepared = Arc::new(hooks::PreparedProvider {
             budget: context_budget.clone(),
             inner: provider,
@@ -605,6 +616,8 @@ impl ChatExecutor {
                     as Arc<dyn agentkit_core::SteeringSource>
             }),
             resume_calls,
+            tool_call_records: options.tool_call_records,
+            record_identity,
             ..RunOptions::default()
         };
         let session = correction::ChatSession {

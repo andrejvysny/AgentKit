@@ -696,6 +696,7 @@ impl AdvisorEngine {
             limits: ToolLimits::default(),
             cancellation: cancellation.clone(),
             runtime: self.runtime.clone(),
+            tool_call_records: true,
             ..Default::default()
         };
         let handle = run_chat(options, provider.clone(), registry.clone());

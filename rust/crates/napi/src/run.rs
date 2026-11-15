@@ -348,6 +348,7 @@ fn run_options(
         serde_json::from_value(value["resumeCalls"].clone())
             .map_err(|e| errors::stable("invalid_input", e.to_string(), None))?
     };
+    options.tool_call_records = value["toolCallRecords"].as_bool().unwrap_or(true);
     options.hook_timeout_ms = value["hookTimeoutMs"].as_f64().map(hook_timeout_or_default);
     options.run_id = value["runId"].as_str().map(str::to_owned);
     options.first_seq = value["firstSeq"].as_u64().unwrap_or(0);

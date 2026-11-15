@@ -20,6 +20,16 @@ pub(crate) struct ToolRecords {
     streaks: HashMap<String, Streak>,
 }
 
+/// Run-wide identity stamped on every tool-call record: what the call loop
+/// itself cannot know (provider, lane, session profile).
+#[derive(Clone, Debug, Default)]
+pub struct RecordIdentity {
+    pub provider: Option<String>,
+    pub lane: Option<String>,
+    pub profile: Option<String>,
+}
+
+
 pub(crate) struct Finished<'a> {
     pub tool_call_id: &'a str,
     pub tool_name: &'a str,

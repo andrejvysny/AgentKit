@@ -160,6 +160,11 @@ impl ToolRegistry {
             .cloned()
             .unwrap_or_else(|| namespace_of(definition))
     }
+    /// The toolset of registered canonical tool `canonical`, for records.
+    pub fn toolset_of(&self, canonical: &str) -> Option<String> {
+        let tool = self.tools.get(canonical)?;
+        Some(self.toolset_id_for(canonical, tool.tool.definition()))
+    }
     /// The toolsets and the toolset of each of `offered` (names as the model
     /// sees them under `dialect`).
     pub fn toolset_view(

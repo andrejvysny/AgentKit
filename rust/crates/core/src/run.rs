@@ -63,6 +63,8 @@ pub struct RunOptions {
     pub resume_calls: Vec<ToolCall>,
     /// Emit one `run.tool.record` event per finished tool call (TU-35).
     pub tool_call_records: bool,
+    /// Provider, lane and profile stamped on those records.
+    pub record_identity: crate::RecordIdentity,
 }
 impl Default for RunOptions {
     fn default() -> Self {
@@ -94,6 +96,7 @@ impl Default for RunOptions {
             steering: None,
             resume_calls: vec![],
             tool_call_records: false,
+            record_identity: crate::RecordIdentity::default(),
         }
     }
 }
@@ -1000,6 +1003,19 @@ impl State {
                 }
                 if self.step_salvaged {
                     data["salvaged"] = true.into();
+                }
+                let identity = &self.options.record_identity;
+                for (key, value) in [
+                    ("provider", &identity.provider),
+                    ("lane", &identity.lane),
+                    ("profile", &identity.profile),
+                ] {
+                    if let Some(value) = value {
+                        data[key] = value.clone().into();
+                    }
+                }
+                if let Some(toolset) = registry.toolset_of(&call.name) {
+                    data["toolset"] = toolset.into();
                 }
                 data
             });
