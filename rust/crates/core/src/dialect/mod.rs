@@ -107,6 +107,16 @@ impl Dialect {
         self.find_wire(wire).is_some()
     }
 
+    /// True when `canonical` is offered as one of the vendor's built-in
+    /// tools in this table (not as a common form).
+    fn offers_built_in(&self, canonical: &str) -> bool {
+        self.form(canonical).is_some_and(|form| {
+            form.wires
+                .iter()
+                .any(|tool| tool.name == TEXT_EDITOR_NAME || tool.name == BASH_NAME)
+        })
+    }
+
     /// The canonical id behind a wire name this dialect offers.
     pub fn canonical_of(&self, wire: &str) -> Option<&str> {
         self.find_wire(wire).map(|(form, _)| form.canonical.as_str())
@@ -194,7 +204,10 @@ impl Dialect {
     /// The canonical call for a call the model emitted. A name this dialect
     /// does not offer passes through unchanged. Pure.
     pub fn translate(&self, name: &str, args: Value) -> Result<Translated, DialectError> {
+        // The vendor's built-in names only mean something when this table
+        // offers them (an effective table may have fallen back to common).
         if self.id == ANTHROPIC_ID
+            && self.knows_wire(name)
             && let Some(result) = anthropic::translate(name, &args)
         {
             return result;
@@ -250,6 +263,7 @@ impl Dialect {
     /// when no wire tool of this dialect can express the call.
     pub fn wire_call(&self, canonical: &str, args: &Value) -> Option<(String, Value)> {
         if self.id == ANTHROPIC_ID
+            && self.offers_built_in(canonical)
             && let Some(shown) = anthropic::wire_call(canonical, args)
         {
             return shown;

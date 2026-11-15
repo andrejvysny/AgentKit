@@ -40,6 +40,9 @@ fn presented(
     let profile = agentkit_sessions::read_model_profile(metadata);
     let dialect = agentkit_core::session_dialect(prior, profile.as_ref(), lane);
     let canonical = registry.definitions();
+    // The session freezes the table it actually renders (a partial editor
+    // set falls back to common forms), so offered calls translate back.
+    let dialect = dialect.map(|dialect| dialect.effective_for(&canonical));
     let offered = match &dialect {
         Some(dialect) => dialect.render(&canonical),
         None => canonical,
@@ -58,6 +61,7 @@ pub(super) async fn classification_for(
     host: Option<&Classification>,
     late: bool,
     lane: ToolLane,
+    registry: &ToolRegistry,
 ) -> ChatResult<Option<Classification>> {
     let chat = context
         .store
@@ -66,7 +70,10 @@ pub(super) async fn classification_for(
         .ok_or(ChatError::SessionDisappeared)?;
     let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
     let from_profile = agentkit_sessions::read_model_profile(&chat.metadata).map(|profile| {
-        let dialect = agentkit_core::session_dialect(prior.as_ref(), Some(&profile), lane);
+        // The wire names the profile's direct tools are offered as follow the
+        // table the session actually renders.
+        let dialect = agentkit_core::session_dialect(prior.as_ref(), Some(&profile), lane)
+            .map(|dialect| dialect.effective_for(&registry.definitions()));
         Classification::from_profile(&profile, dialect.as_ref())
     });
     let mut classification = host

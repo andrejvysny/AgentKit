@@ -73,6 +73,20 @@ pub fn anthropic() -> Dialect {
 }
 
 impl Dialect {
+    /// The dialect as it renders `canonical`: for Anthropic, the built-in
+    /// forms are kept only where their prerequisites are offered and the
+    /// common forms stand in elsewhere. A session freezes this table, so the
+    /// call a model sends for what it was shown (`list_directory`, `edit`)
+    /// translates and shows back exactly as rendered. Other dialects are
+    /// returned as they are.
+    pub fn effective_for(&self, canonical: &[ToolDefinition]) -> Dialect {
+        if self.id != ANTHROPIC_ID {
+            return self.clone();
+        }
+        let has = |name: &str| canonical.iter().any(|definition| definition.name == name);
+        self.effective(EDITOR_REQUIRED.iter().all(|name| has(name)), has(RUN_COMMAND))
+    }
+
     /// This dialect's table with the built-in forms replaced by the common
     /// ones for the tools that are not offered as built-ins.
     fn effective(&self, editor: bool, bash: bool) -> Dialect {

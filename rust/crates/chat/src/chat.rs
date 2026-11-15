@@ -300,6 +300,7 @@ impl ChatExecutor {
                 options.tool_classification.as_ref(),
                 late,
                 provider.tool_lane(),
+                &registry,
             )
             .await?
         } else {
