@@ -20,6 +20,8 @@ struct Behaviour {
     drop_every: usize,
     /// Error bodies echo the Authorization header.
     echo_key: bool,
+    /// Echoed into forced-call function names, argument text and error bodies.
+    leak: Option<String>,
 }
 
 fn call(id: &str, name: &str, args: Value) -> Value {
@@ -29,6 +31,14 @@ fn call(id: &str, name: &str, args: Value) -> Value {
 fn reply(b: &Behaviour, body: &Value, n: usize, auth: &str) -> (u16, Value) {
     let messages = body["messages"].as_array().cloned().unwrap_or_default();
     let systems = messages.iter().filter(|m| m["role"] == "system").count();
+    if let Some(leak) = &b.leak
+        && systems > 1
+    {
+        return (
+            400,
+            json!({"error":{"message":format!("bad request, key {leak} / {}", json!(leak))}}),
+        );
+    }
     if b.echo_key && systems > 1 {
         return (
             400,
@@ -66,6 +76,10 @@ fn reply(b: &Behaviour, body: &Value, n: usize, auth: &str) -> (u16, Value) {
                 call("call_a", &name, json!({"city":"Paris"})),
                 call("call_b", &name, json!({"city":"Rome"})),
             ],
+            "get_weather" if forced.is_some() && b.leak.is_some() => {
+                let leaked = format!("{name}_{}", b.leak.clone().unwrap_or_default());
+                vec![call("call_a", &leaked, json!({"city":"Paris"}))]
+            }
             "get_weather" => vec![call("call_a", &name, json!({"city":"Paris"}))],
             "write_file" => {
                 let text = prompt
@@ -98,6 +112,10 @@ fn reply(b: &Behaviour, body: &Value, n: usize, auth: &str) -> (u16, Value) {
                     .nth(1)
                     .and_then(|r| r.split(". Použi").next())
                     .unwrap_or("");
+                let text = match &b.leak {
+                    Some(leak) => format!("{text} {leak}"),
+                    None => text.to_string(),
+                };
                 vec![call("call_a", &name, json!({"text":text}))]
             }
         };
@@ -346,4 +364,32 @@ async fn unreachable_endpoint_is_an_error_not_a_pass() {
     )
     .await;
     assert_eq!(status(&report, "P1"), Status::Error);
+}
+
+#[tokio::test]
+async fn key_in_parsed_values_and_escaped_forms_never_reaches_the_report() {
+    for key in [KEY, "sk-\"q\\x/+ y"] {
+        let url = serve(Behaviour {
+            leak: Some(key.to_string()),
+            ..Default::default()
+        })
+        .await;
+        let only: Vec<String> = ["P12", "P17", "P18"].iter().map(|s| s.to_string()).collect();
+        let report = run_checks(&Endpoint::new(&url, "m", Secret::new(key)), &only, 1).await;
+        let escaped = serde_json::to_string(key).unwrap();
+        let escaped = &escaped[1..escaped.len() - 1];
+        let all = format!("{}{}{:?}", report.to_json(), report.to_markdown(), report);
+        assert!(!all.contains(key), "raw key leaked: {all}");
+        assert!(!all.contains(escaped), "escaped key leaked: {all}");
+        assert!(all.contains("[redacted]"), "{all}");
+    }
+}
+
+#[test]
+fn secret_scrubs_value_trees_and_encoded_forms() {
+    let secret = Secret::new("sk-a b+/");
+    let value = json!({"k sk-a b+/": ["x sk-a%20b%2B%2F y", {"n": "sk-a b+/"}], "n": 3});
+    let out = secret.scrub_value(&value).to_string();
+    assert!(!out.contains("sk-a"), "{out}");
+    assert!(!secret.scrub("c2stYSBiKy8=").contains("c2stYSBiKy8="));
 }

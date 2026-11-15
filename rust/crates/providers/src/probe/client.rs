@@ -3,19 +3,81 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 
 /// API key holder: `Debug` never prints it and `scrub` removes it from text.
+/// Scrubbing covers the raw key plus its JSON-escaped, URL-encoded and base64
+/// forms, so an endpoint that echoes it in any of those shapes is still caught.
 #[derive(Clone)]
-pub struct Secret(String);
+pub struct Secret(String, Vec<String>);
 impl Secret {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        let value = value.into();
+        let forms = secret_forms(&value);
+        Self(value, forms)
     }
     pub fn scrub(&self, text: &str) -> String {
-        if self.0.is_empty() {
-            text.to_string()
-        } else {
-            text.replace(&self.0, "[redacted]")
+        self.1
+            .iter()
+            .fold(text.to_string(), |acc, form| acc.replace(form, "[redacted]"))
+    }
+    /// Scrubs every string (and object key) inside a JSON value.
+    pub fn scrub_value(&self, value: &Value) -> Value {
+        match value {
+            Value::String(text) => Value::String(self.scrub(text)),
+            Value::Array(items) => Value::Array(items.iter().map(|v| self.scrub_value(v)).collect()),
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| (self.scrub(k), self.scrub_value(v)))
+                    .collect(),
+            ),
+            other => other.clone(),
         }
     }
+}
+
+/// Distinct non-empty representations of the key, longest first.
+fn secret_forms(key: &str) -> Vec<String> {
+    if key.is_empty() {
+        return Vec::new();
+    }
+    let json_escaped = serde_json::to_string(key)
+        .map(|quoted| quoted[1..quoted.len() - 1].to_string())
+        .unwrap_or_default();
+    let mut forms = vec![
+        key.to_string(),
+        json_escaped,
+        percent_encode(key),
+        base64_encode(key.as_bytes()),
+    ];
+    forms.retain(|form| !form.is_empty());
+    forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    forms.dedup();
+    forms
+}
+
+fn percent_encode(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            }
+        }
+    }
+    out
 }
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -113,7 +175,9 @@ impl Endpoint {
             .text()
             .await
             .map_err(|e| self.key.scrub(&e.to_string()))?;
-        let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let body = serde_json::from_str(&text)
+            .map(|parsed| self.key.scrub_value(&parsed))
+            .unwrap_or(Value::Null);
         Ok(Reply {
             status,
             body,
@@ -147,7 +211,7 @@ impl Endpoint {
                 };
                 if let Ok(chunk) = serde_json::from_str::<Value>(data.trim()) {
                     first_chunk.get_or_insert_with(|| started.elapsed());
-                    chunks.push(chunk);
+                    chunks.push(self.key.scrub_value(&chunk));
                 }
             }
         }

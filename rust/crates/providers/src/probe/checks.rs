@@ -154,6 +154,7 @@ pub async fn run_checks(endpoint: &Endpoint, only: &[String], runs: usize) -> Re
         base_url: endpoint.base_url.clone(),
         model: endpoint.model.clone(),
         results,
+        secret: endpoint.key.clone(),
     }
 }
 

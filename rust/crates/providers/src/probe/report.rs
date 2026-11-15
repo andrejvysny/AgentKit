@@ -1,4 +1,5 @@
 use serde::Serialize;
+use super::client::Secret;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -49,13 +50,17 @@ pub struct Report {
     pub base_url: String,
     pub model: String,
     pub results: Vec<CheckResult>,
+    /// Scrubs everything at serialization time; never serialized itself.
+    #[serde(skip)]
+    pub secret: Secret,
 }
 impl Report {
     pub fn get(&self, id: &str) -> Option<&CheckResult> {
         self.results.iter().find(|result| result.id == id)
     }
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_default()
+        let value = serde_json::to_value(self).unwrap_or(Value::Null);
+        serde_json::to_string_pretty(&self.secret.scrub_value(&value)).unwrap_or_default()
     }
     pub fn to_markdown(&self) -> String {
         let mut out = format!(
@@ -69,6 +74,6 @@ impl Report {
                 r.id, r.title, r.status, r.decides, detail
             ));
         }
-        out
+        self.secret.scrub(&out)
     }
 }
