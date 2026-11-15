@@ -491,6 +491,42 @@ async fn promote_mode_changes_the_array_once_at_a_turn_boundary_and_records_it()
 }
 
 #[tokio::test]
+async fn promoted_tools_are_direct_for_describe_and_flagged_in_search() {
+    let ran = Ran::default();
+    let (registry, _) = session(
+        catalog_tools(&ran),
+        vec![calendar_toolset()],
+        &classification(&["read_file"], LoadMode::Promote),
+    );
+    let outcome = run(
+        registry,
+        vec![
+            vec![load("l1", "calendar")],
+            vec![
+                call("d1", "tool_describe", json!({"name": "calendar_list_events"})),
+                call("s1", "tool_search", json!({"query": "calendar events"})),
+            ],
+        ],
+    )
+    .await;
+    assert_eq!(outcome.warnings("toolset_promoted").len(), 1);
+    let described = model(&outcome, 1);
+    assert_eq!(described["data"]["loading"], "direct", "{described}");
+    assert!(
+        described["summary"].as_str().unwrap().contains("in your tool list"),
+        "{described}"
+    );
+    let searched = model(&outcome, 2);
+    let matches = searched["data"]["matches"].as_array().expect("matches");
+    assert!(
+        matches
+            .iter()
+            .any(|m| m["name"] == "calendar_list_events" && m["in_tool_list"] == true),
+        "{searched}"
+    );
+}
+
+#[tokio::test]
 async fn loading_a_toolset_twice_promotes_it_once() {
     let ran = Ran::default();
     let (registry, _) = session(

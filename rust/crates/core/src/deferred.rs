@@ -225,6 +225,14 @@ impl Catalog {
         }
     }
 
+    /// This catalog plus `extra` entries (names it does not hold), sorted
+    /// again. Used to show promoted tools that joined after the freeze.
+    pub fn with_extra(&self, extra: Vec<CatalogEntry>) -> Self {
+        let mut entries = self.entries.clone();
+        entries.extend(extra);
+        Self::new(entries, self.meta_active).with_toolsets(self.toolsets.clone())
+    }
+
     /// The same catalog with the session's toolsets (guides and cards).
     pub fn with_toolsets(mut self, toolsets: ToolsetView) -> Self {
         self.toolsets = toolsets;

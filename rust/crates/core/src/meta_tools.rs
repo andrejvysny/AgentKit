@@ -14,6 +14,7 @@ use crate::failure_catalog::{failure, failure_result};
 use crate::{CoreError, Tool, ToolContext, ToolDefinition, ToolLimits, ToolResult, closest_names};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -174,9 +175,11 @@ impl Tool for MetaTool {
                 &limits,
             ));
         };
+        let seen = with_promoted(catalog, &self.promotions);
+        let catalog: &Catalog = &seen;
         Ok(match self.kind {
-            Kind::Search => search(catalog, &input, &limits),
-            Kind::Describe => describe(catalog, &input, &limits),
+            Kind::Search => search(catalog, &self.promotions, &input, &limits),
+            Kind::Describe => describe(catalog, &self.promotions, &input, &limits),
             Kind::Load => load(catalog, &self.promotions, self.mode, &input, &limits),
             Kind::Call => refusal(
                 "tool_unavailable",
@@ -184,6 +187,30 @@ impl Tool for MetaTool {
                 &limits,
             ),
         })
+    }
+}
+
+/// The frozen catalog plus the tools promoted since: a promoted tool the
+/// catalog does not hold (it joined after the freeze) is still found by
+/// search and describe. Promoted tools stay listed so the model learns they
+/// are now in its tool list.
+fn with_promoted<'a>(catalog: &'a Catalog, promotions: &PromotionCell) -> Cow<'a, Catalog> {
+    let extra: Vec<CatalogEntry> = promotions
+        .promoted_definitions()
+        .into_iter()
+        .filter(|definition| catalog.get(&definition.name).is_none())
+        .map(|definition| CatalogEntry {
+            namespace: catalog.toolsets().id_of(&definition),
+            canonical: definition.name.clone(),
+            definition,
+            deferred: true,
+            available: true,
+        })
+        .collect();
+    if extra.is_empty() {
+        Cow::Borrowed(catalog)
+    } else {
+        Cow::Owned(catalog.with_extra(extra))
     }
 }
 
@@ -232,7 +259,12 @@ fn compact(entry: &CatalogEntry) -> Value {
     value
 }
 
-fn search(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult {
+fn search(
+    catalog: &Catalog,
+    promotions: &PromotionCell,
+    input: &Value,
+    limits: &ToolLimits,
+) -> ToolResult {
     let query = input["query"].as_str().unwrap_or_default();
     let limit = input["limit"]
         .as_u64()
@@ -240,7 +272,16 @@ fn search(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult {
         .clamp(1, MAX_LIMIT);
     let namespace = input["namespace"].as_str().filter(|name| !name.is_empty());
     let (matches, total) = catalog.search(query, namespace, limit);
-    let shown: Vec<Value> = matches.into_iter().map(compact).collect();
+    let shown: Vec<Value> = matches
+        .into_iter()
+        .map(|entry| {
+            let mut value = compact(entry);
+            if promotions.is_promoted_name(&entry.definition.name) {
+                value["in_tool_list"] = true.into();
+            }
+            value
+        })
+        .collect();
     let summary = if shown.is_empty() {
         format!("No deferred tool matches \"{query}\". Try other words.")
     } else {
@@ -252,7 +293,12 @@ fn search(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult {
     ok(json!({"matches": shown, "total_matched": total}), summary, limits)
 }
 
-fn describe(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult {
+fn describe(
+    catalog: &Catalog,
+    promotions: &PromotionCell,
+    input: &Value,
+    limits: &ToolLimits,
+) -> ToolResult {
     let name = input["name"].as_str().unwrap_or_default();
     let Some(entry) = catalog.get(name) else {
         let closest = closest_names(name, &catalog.names(), 3);
@@ -269,13 +315,15 @@ fn describe(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult
         );
     };
     let definition = &entry.definition;
+    // A promoted tool is in the tool list now, whatever the frozen catalog says.
+    let deferred = entry.deferred && !promotions.is_promoted_name(&definition.name);
     let mut data = json!({
         "name": definition.name,
         "namespace": entry.namespace,
         "description": definition.description,
         "effect": definition.effect,
         "input_schema": definition.input_schema,
-        "loading": if entry.deferred { "deferred" } else { "direct" },
+        "loading": if deferred { "deferred" } else { "direct" },
     });
     if !definition.examples.is_empty() {
         data["examples"] = definition.examples.clone().into();
@@ -283,7 +331,7 @@ fn describe(catalog: &Catalog, input: &Value, limits: &ToolLimits) -> ToolResult
     if !entry.available {
         data["available"] = false.into();
     }
-    let summary = if entry.deferred {
+    let summary = if deferred {
         format!(
             "{} is deferred: run it with tool_call, name {} and the arguments above.",
             definition.name, definition.name

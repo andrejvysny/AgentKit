@@ -28,3 +28,12 @@ Validation is deferred to the owner: these tests are written, NOT run.
 - Governance wrappers (`GuardedTool`, `DirectWriteTool`, `ReceiptedTool`)
   forward `toolset()`, `arg_aliases()`, `constraints()` and
   `check_constraints()` to the inner tool (aliases were silently lost).
+
+## Promoted tools in search and describe
+
+`tool_search` / `tool_describe` read the catalog plus `Promotions`
+(`meta_tools::with_promoted`): a promoted tool missing from the frozen catalog
+is added, `tool_describe` reports `loading: "direct"` for promoted tools, and
+`tool_search` flags them `in_tool_list`. Test:
+`core/tests/toolsets.rs::promoted_tools_are_direct_for_describe_and_flagged_in_search`
+(written, NOT run).
