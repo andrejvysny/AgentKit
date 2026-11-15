@@ -287,3 +287,147 @@ fn a_preview_footer_yields_its_handle() {
     assert!(find_handle("handle out_short").is_none());
     assert!(find_handle("nothing here").is_none());
 }
+
+fn stored(id: &str, role: &str, order_key: u64, metadata: Value) -> MessageRecord {
+    MessageRecord {
+        id: id.into(),
+        chat_id: "c1".into(),
+        run_id: Some("r1".into()),
+        role: role.into(),
+        content: json!(""),
+        parent_message_id: None,
+        tool_call_id: None,
+        tool_calls: None,
+        model_result_json: None,
+        metadata,
+        order_key,
+        depth: 0,
+        branch_index: 0,
+        active: true,
+        archived: false,
+        created_at: agentkit_store::ConversationTimestamp::from_epoch_millis(1_700_000_000_000)
+            .unwrap(),
+    }
+}
+
+fn read_details(path: &str, complete: bool) -> Value {
+    json!({
+        "path": path, "canonicalPath": format!("/w/{path}"), "sha256": "ab".repeat(32),
+        "offset": 1, "limit": null, "lines": 3, "complete": complete,
+    })
+}
+
+/// A `read_file` result in the view: tool message `id` carrying `call_id`.
+fn read_result(id: &str, call_id: &str, body: &str) -> Entry {
+    let mut message = ChatMessage::text("tool", body);
+    message.tool_call_id = Some(call_id.into());
+    (message, Some(id.into()))
+}
+
+const INTACT: &str = r#"{"ok":true,"status":"ok","warnings":[],"truncated":false,"data":"1\ta"}"#;
+
+fn index_of_reads(reads: &[(&str, Value)]) -> ReadIndex {
+    reads
+        .iter()
+        .enumerate()
+        .map(|(turn, (id, details))| ((*id).to_owned(), (details.clone(), turn as u64)))
+        .collect()
+}
+
+#[test]
+fn a_result_still_shown_whole_is_a_live_read() {
+    let index = index_of_reads(&[("m1", read_details("a.rs", true))]);
+    let live = live_reads(&[read_result("m1", "call_0", INTACT)], &index);
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0]["path"], "/w/a.rs");
+    assert_eq!(live[0]["messageId"], "m1");
+    assert_eq!(live[0]["lines"], 3);
+    assert_eq!(live[0]["limit"], Value::Null);
+}
+
+#[test]
+fn colliding_call_ids_are_told_apart_by_message_id() {
+    // Two results of different runs share the fallback id `call_0`; the
+    // older one was masked. Only the message that is still shown is live.
+    let index = index_of_reads(&[
+        ("m1", read_details("a.rs", true)),
+        ("m2", read_details("b.rs", true)),
+    ]);
+    let masked =
+        "[result masked to save context · 900 bytes · handle out_00000000000000000000000000000000]";
+    let live = live_reads(
+        &[
+            read_result("m1", "call_0", masked),
+            read_result("m2", "call_0", INTACT),
+        ],
+        &index,
+    );
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0]["messageId"], "m2");
+}
+
+#[test]
+fn a_shaped_cut_or_unpersisted_read_is_never_live() {
+    let index = index_of_reads(&[
+        ("shaped", read_details("a.rs", false)),
+        ("cut", read_details("b.rs", true)),
+    ]);
+    let cut = r#"{"ok":true,"status":"ok","warnings":[],"truncated":true,"data":"x"}"#;
+    let live = live_reads(
+        &[
+            read_result("shaped", "c1", INTACT),
+            read_result("cut", "c2", cut),
+            // Synthesised or foreign result: no persisted details.
+            read_result("other", "c3", INTACT),
+            (ChatMessage::text("tool", INTACT), None),
+        ],
+        &index,
+    );
+    assert!(live.is_empty());
+}
+
+#[test]
+fn a_multi_path_result_contributes_only_its_complete_files() {
+    let whole = read_details("a.rs", true);
+    let details =
+        json!({"files": [whole, read_details("b.rs", false), {"path":"c.rs","error":"x"}]});
+    let index = index_of_reads(&[("m1", details)]);
+    let live = live_reads(&[read_result("m1", "c1", INTACT)], &index);
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0]["path"], "/w/a.rs");
+}
+
+#[test]
+fn the_turn_comes_from_the_stored_order_not_the_view() {
+    let details = json!({"readDetails": read_details("a.rs", true)});
+    let records = [
+        stored("u1", "user", 1, json!({})),
+        stored("u2", "user", 10, json!({})),
+        stored("steer", "user", 12, json!({"steering": true})),
+        stored("t1", "tool", 5, details.clone()),
+        stored("t2", "tool", 20, details),
+        stored("plain", "tool", 21, json!({})),
+    ];
+    let index = read_index(&records);
+    assert_eq!(index["t1"].1, 1);
+    assert_eq!(index["t2"].1, 2);
+    assert!(!index.contains_key("plain"));
+}
+
+#[test]
+fn only_the_newest_reads_are_kept() {
+    let reads: Vec<(String, Value)> = (0..MAX_LIVE_READS + 5)
+        .map(|n| (format!("m{n}"), read_details(&format!("f{n}.rs"), true)))
+        .collect();
+    let index: ReadIndex = reads
+        .iter()
+        .map(|(id, details)| (id.clone(), (details.clone(), 0)))
+        .collect();
+    let entries: Vec<Entry> = reads
+        .iter()
+        .map(|(id, _)| read_result(id, "call_0", INTACT))
+        .collect();
+    let live = live_reads(&entries, &index);
+    assert_eq!(live.len(), MAX_LIVE_READS);
+    assert_eq!(live[0]["messageId"], "m5");
+}

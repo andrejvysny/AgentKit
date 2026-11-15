@@ -299,15 +299,21 @@ impl WrappedTool {
             .get(agentkit_core::OUTPUT_STORE_METADATA_KEY)
             .and_then(Value::as_bool)
             == Some(true);
-        if !in_play {
-            return plain;
-        }
         let inline_limit = context
             .metadata
             .get(agentkit_core::OUTPUT_INLINE_LIMIT_METADATA_KEY)
             .and_then(Value::as_u64)
             .and_then(|limit| usize::try_from(limit).ok())
             .unwrap_or(crate::shape::DEFAULT_INLINE_LIMIT);
+        if self.definition.name == "read_file" && in_play && outcome.text.len() > inline_limit {
+            // The model gets a preview or an outline of this read: the host
+            // reads `complete` from the persisted details and never treats
+            // the result as the whole text.
+            mark_incomplete(outcome.details.as_mut());
+        }
+        if !in_play {
+            return plain;
+        }
         let tool = self.definition.name.as_str();
         let full = if outcome.text.len() > inline_limit {
             full_log(tool, outcome).await
@@ -427,6 +433,20 @@ impl Tool for WrappedTool {
 
             model_content: None,
         })
+    }
+}
+
+/// Set `complete: false` on a `read_file` result's details (and on each file
+/// of a multi-path read).
+fn mark_incomplete(details: Option<&mut Value>) {
+    let Some(map) = details.and_then(Value::as_object_mut) else {
+        return;
+    };
+    map.insert("complete".into(), false.into());
+    if let Some(files) = map.get_mut("files").and_then(Value::as_array_mut) {
+        for file in files.iter_mut().filter_map(Value::as_object_mut) {
+            file.insert("complete".into(), false.into());
+        }
     }
 }
 

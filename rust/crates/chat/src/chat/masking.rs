@@ -26,6 +26,7 @@ use super::{
 use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_core::{ChatMessage, OutputHandle, OutputMeta, OutputStore, ToolDefinition};
 use agentkit_kernel::sha256_hex;
+use agentkit_store::MessageRecord;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
@@ -193,6 +194,103 @@ fn is_masked(content: &Value) -> bool {
     content
         .as_str()
         .is_some_and(|text| text.starts_with(MASKED_PREFIX))
+}
+
+/// The `read_file` details persisted with each tool result, by message id,
+/// with the turn each result belongs to: the number of user messages before it
+/// in the stored order, so a turn number never depends on what the view kept.
+pub(super) type ReadIndex = HashMap<String, (Value, u64)>;
+
+pub(super) fn read_index(records: &[MessageRecord]) -> ReadIndex {
+    let mut users: Vec<u64> = records
+        .iter()
+        .filter(|record| {
+            record.role == "user"
+                && record.active
+                && record.metadata["internal"] != true
+                && record.metadata["steering"] != true
+        })
+        .map(|record| record.order_key)
+        .collect();
+    users.sort_unstable();
+    records
+        .iter()
+        .filter(|record| record.role == "tool")
+        .filter_map(|record| {
+            let details = record
+                .metadata
+                .get(agentkit_core::READ_DETAILS_METADATA_KEY)?;
+            let turn = users.partition_point(|key| *key < record.order_key) as u64;
+            Some((record.id.clone(), (details.clone(), turn)))
+        })
+        .collect()
+}
+
+/// Most live reads handed to the tools: the newest ones, since a repeated read
+/// is nearly always of something recent and the list rides in every call's
+/// metadata.
+const MAX_LIVE_READS: usize = 64;
+
+/// The `read_file` results the FINAL provider view (after masking and
+/// compaction) still shows whole: persisted, not masked, an intact envelope
+/// and details that say the model saw the range in full. A tool may answer a
+/// repeat of one with a stub; anything else is answered in full.
+pub(super) fn live_reads(entries: &[Entry], index: &ReadIndex) -> Vec<Value> {
+    let mut live = Vec::new();
+    for (message, id) in entries {
+        let Some(id) = id else {
+            continue;
+        };
+        let Some((details, turn)) = index.get(id) else {
+            continue;
+        };
+        if message.role != "tool"
+            || is_masked(&message.content)
+            || !envelope_intact(&message.content)
+        {
+            continue;
+        }
+        let files = details.get("files").and_then(Value::as_array);
+        let reads = match files {
+            Some(files) => files.iter().collect::<Vec<_>>(),
+            None => vec![details],
+        };
+        for read in reads {
+            if read["complete"] != true {
+                continue;
+            }
+            let (Some(path), Some(sha256)) =
+                (read["canonicalPath"].as_str(), read["sha256"].as_str())
+            else {
+                continue;
+            };
+            let (Some(offset), Some(lines)) = (read["offset"].as_i64(), read["lines"].as_u64())
+            else {
+                continue;
+            };
+            live.push(json!({
+                "path": path,
+                "offset": offset,
+                "limit": read["limit"].as_i64(),
+                "sha256": sha256,
+                "lines": lines,
+                "messageId": id,
+                "turn": turn,
+            }));
+        }
+    }
+    let excess = live.len().saturating_sub(MAX_LIVE_READS);
+    live.drain(..excess);
+    live
+}
+
+/// The stored result reached the model as the tool built it: a successful
+/// envelope the byte budget did not cut.
+fn envelope_intact(content: &Value) -> bool {
+    content
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .is_some_and(|envelope| envelope["ok"] == true && envelope["truncated"] == false)
 }
 
 fn is_excluded(tool: &str) -> bool {

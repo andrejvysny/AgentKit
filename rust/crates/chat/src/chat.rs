@@ -462,6 +462,7 @@ impl ChatExecutor {
             serde_json::to_value(&records).map_err(|_| ChatError::ContextSnapshotFailed)?;
         let receipt_snapshot =
             serde_json::to_value(&receipts).map_err(|_| ChatError::ReceiptSnapshotFailed)?;
+        let read_index = masking::read_index(&records);
         let mut entries = history::assemble_with_ids(
             records,
             usize::MAX,
@@ -572,7 +573,7 @@ impl ChatExecutor {
         let auto_compaction = assembly.auto_compaction.unwrap_or(options.auto_compaction);
         let mut compacted = None;
         let summary_id: Option<String>;
-        let mut messages = if session
+        let entries = if session
             && (auto_compaction || compact_requested)
             && let Some(context_budget) = context_budget.clone()
         {
@@ -594,18 +595,23 @@ impl ChatExecutor {
             .await?;
             compacted = applied.rewrite;
             summary_id = applied_summary(&applied.entries);
-            applied
-                .entries
-                .into_iter()
-                .map(|(message, _)| message)
-                .collect::<Vec<_>>()
+            applied.entries
         } else {
             summary_id = applied_summary(&entries);
             entries
-                .into_iter()
-                .map(|(message, _)| message)
-                .collect::<Vec<_>>()
         };
+        // Reads the final view still shows whole, derived from what was
+        // persisted. The continuation lane replays its own durable branch, so
+        // no read there is known to be in the provider's view.
+        let live_reads = if continuation.is_none() {
+            masking::live_reads(&entries, &read_index)
+        } else {
+            vec![]
+        };
+        let mut messages = entries
+            .into_iter()
+            .map(|(message, _)| message)
+            .collect::<Vec<_>>();
         let mut compaction_break = None;
         if let Some(change) = compacted.as_ref() {
             // A compaction breaks the cache anyway: adopt what waited for such
@@ -787,6 +793,12 @@ impl ChatExecutor {
             tool_call_records: options.tool_call_records,
             record_identity,
             output: options.output.clone(),
+            tool_metadata: serde_json::Map::from_iter((!live_reads.is_empty()).then(|| {
+                (
+                    agentkit_core::LIVE_READS_METADATA_KEY.to_owned(),
+                    Value::Array(live_reads),
+                )
+            })),
             ..RunOptions::default()
         };
         let session = correction::ChatSession {

@@ -75,6 +75,48 @@ fn throw_if_aborted(ctx: &ToolContext) -> Result<(), CodingError> {
     Ok(())
 }
 
+/// What `read_one` may point at instead of repeating itself: the reads the
+/// host found still shown whole in this run's provider view (it derives them
+/// from persisted results, so nothing a tool recorded itself counts).
+struct ReadScope<'a> {
+    chat_id: Option<&'a str>,
+    live_reads: &'a [Value],
+    force: bool,
+}
+
+impl<'a> ReadScope<'a> {
+    fn new(ctx: &'a ToolContext, force: bool) -> Self {
+        Self {
+            chat_id: ctx.chat_id.as_deref(),
+            live_reads: ctx
+                .metadata
+                .get(agentkit_core::LIVE_READS_METADATA_KEY)
+                .and_then(Value::as_array)
+                .map_or(&[], Vec::as_slice),
+            force,
+        }
+    }
+
+    /// The newest live read of exactly this range of this version of the file.
+    fn live(&self, path: &str, offset: i64, limit: Option<i64>, sha: &str) -> Option<&'a Value> {
+        if self.force {
+            return None;
+        }
+        self.live_reads.iter().rev().find(|read| {
+            read["path"].as_str() == Some(path)
+                && read["offset"].as_i64() == Some(offset)
+                && read["limit"].as_i64() == limit
+                && read["sha256"].as_str() == Some(sha)
+        })
+    }
+}
+
+/// The tail of a message id: enough to tell two apart, short enough to read.
+fn short_id(id: &str) -> String {
+    let skip = id.chars().count().saturating_sub(8);
+    id.chars().skip(skip).collect()
+}
+
 struct FileRead {
     text: String,
     summary: String,
@@ -82,6 +124,12 @@ struct FileRead {
     sha256: String,
     total_lines: usize,
     invalid_utf8: bool,
+    /// The file as the confined root resolves it; a live read is matched on it.
+    canonical: String,
+    /// Lines the text shows.
+    lines: usize,
+    /// The text shows the whole requested range (not cut, not a stub).
+    complete: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -92,8 +140,9 @@ async fn read_one(
     offset: i64,
     limit: Option<i64>,
     max_bytes: usize,
-    chat_id: Option<&str>,
+    scope: &ReadScope<'_>,
 ) -> Result<FileRead, CodingError> {
+    let chat_id = scope.chat_id;
     let target = confine(
         root,
         path,
@@ -133,6 +182,9 @@ async fn read_one(
             sha256: digest,
             total_lines: lines.len(),
             invalid_utf8,
+            canonical: target.path,
+            lines: 0,
+            complete: false,
         });
     }
     if offset > lines.len() as i64 {
@@ -143,6 +195,33 @@ async fn read_one(
                 lines.len()
             ),
         ));
+    }
+    if let Some(live) = scope.live(&target.path, offset, limit, &digest) {
+        let shown = live["lines"].as_u64().unwrap_or(0) as usize;
+        // The model holds this text already; the write ledger still learns
+        // the read, since it does not outlive the process as the history does.
+        ledger::record_read(
+            chat_id,
+            &target.path,
+            &digest,
+            offset == 1 && shown == lines.len(),
+        );
+        return Ok(FileRead {
+            text: format!(
+                "[unchanged since call {} (turn {}) · {shown} lines · sha256 {}…]",
+                short_id(live["messageId"].as_str().unwrap_or_default()),
+                live["turn"].as_u64().unwrap_or(0),
+                &digest[..4]
+            ),
+            summary: format!("read {path} (unchanged)"),
+            truncated: false,
+            sha256: digest,
+            total_lines: lines.len(),
+            invalid_utf8,
+            canonical: target.path,
+            lines: shown,
+            complete: false,
+        });
     }
     let wanted = std::cmp::min(
         limit.unwrap_or(env.limits.read_max_lines as i64),
@@ -181,12 +260,8 @@ async fn read_one(
     let last = offset + cut.output_lines as i64 - 1;
     let more = last < lines.len() as i64;
     // Only a read that shows the whole file may later authorise an overwrite.
-    ledger::record_read(
-        chat_id,
-        &target.path,
-        &digest,
-        offset == 1 && !more && !cut.truncated,
-    );
+    let whole = offset == 1 && !more && !cut.truncated;
+    ledger::record_read(chat_id, &target.path, &digest, whole);
     let notice = if more {
         format!(
             "\n[Showing lines {offset}-{last} of {}{}. Use offset={} to continue.]",
@@ -201,13 +276,17 @@ async fn read_one(
     } else {
         String::new()
     };
+    let truncated = cut.truncated || (limit.is_none() && more);
     Ok(FileRead {
         text: format!("{}{}", cut.content, notice),
         summary: format!("read {path} lines {offset}-{last} of {}", lines.len()),
-        truncated: cut.truncated || (limit.is_none() && more),
+        truncated,
         sha256: digest,
         total_lines: lines.len(),
         invalid_utf8,
+        canonical: target.path,
+        lines: cut.output_lines,
+        complete: !truncated,
     })
 }
 
@@ -265,8 +344,10 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         "Read one text file in the workspace and return its lines numbered \"<n>\\t<line>\". \
          Use it before edit_file or write_file; to locate code first use code_search or \
          find_files. Returns at most {} lines or {} per call and ends with a continuation \
-         notice (offset=N) when more remains; offset is 1-based. Read several files with \
-         several calls. {NATIVE_HINT}",
+         notice (offset=N) when more remains; offset is 1-based. A file unchanged since an \
+         earlier read in this chat whose result is still in context returns the one-line stub \
+         \"[unchanged since call <id> ...]\" instead of its text; pass force=true to get the \
+         text. Read several files with several calls. {NATIVE_HINT}",
         env.limits.read_max_lines,
         format_size(env.limits.read_max_bytes),
     );
@@ -296,6 +377,10 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         "maximum": MAX_COUNT_PARAM,
                         "description": "Maximum number of lines to return.",
                     },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Return the text even when the file is unchanged since an earlier read still in context. Default false.",
+                    },
                 },
                 "required": ["file_path"],
                 "additionalProperties": false,
@@ -315,6 +400,8 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let paths = read_paths(input)?;
                 let offset = opt_int(input, "offset", 1, MAX_COUNT_PARAM)?.unwrap_or(1);
                 let limit = opt_int(input, "limit", 1, MAX_COUNT_PARAM)?;
+                let force = opt_bool(input, "force")?.unwrap_or(false);
+                let scope = ReadScope::new(&ctx, force);
                 let root = env.root().await?;
                 if input.get("file_path").is_some() {
                     throw_if_aborted(&ctx)?;
@@ -325,13 +412,18 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         offset,
                         limit,
                         env.limits.read_max_bytes,
-                        ctx.chat_id.as_deref(),
+                        &scope,
                     )
                     .await?;
                     let mut details = json!({
                         "path": paths[0],
                         "sha256": one.sha256,
                         "totalLines": one.total_lines,
+                        "canonicalPath": one.canonical,
+                        "offset": offset,
+                        "limit": limit,
+                        "lines": one.lines,
+                        "complete": one.complete,
                     });
                     if one.invalid_utf8 {
                         details["encoding"] = json!("invalid-utf8");
@@ -357,17 +449,7 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let mut truncated = false;
                 for path in &paths {
                     throw_if_aborted(&ctx)?;
-                    match read_one(
-                        &env,
-                        &root,
-                        path,
-                        offset,
-                        limit,
-                        share,
-                        ctx.chat_id.as_deref(),
-                    )
-                    .await
-                    {
+                    match read_one(&env, &root, path, offset, limit, share, &scope).await {
                         Ok(one) => {
                             blocks.push(format!("==> {path} <==\n{}", one.text));
                             truncated = truncated || one.truncated;
@@ -378,6 +460,11 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                                 "path": path,
                                 "sha256": one.sha256,
                                 "totalLines": one.total_lines,
+                                "canonicalPath": one.canonical,
+                                "offset": offset,
+                                "limit": limit,
+                                "lines": one.lines,
+                                "complete": one.complete,
                             });
                             if one.invalid_utf8 {
                                 file["encoding"] = json!("invalid-utf8");
@@ -1275,6 +1362,35 @@ mod tests {
             tool.execute(context, input).await.unwrap()
         }
 
+        /// A `read_file` call under a run whose tool metadata is `metadata`.
+        async fn read_meta(&self, input: Value, metadata: Map<String, Value>) -> ToolResult {
+            let context = ToolContext {
+                suspension: None,
+                run_id: "r1".to_owned(),
+                tool_call_id: Some("c1".to_owned()),
+                attempt_id: None,
+                chat_id: Some(self.chat.clone()),
+                scope_id: None,
+                user_id: None,
+                bindings: vec![],
+                limits: Default::default(),
+                cancellation: CancellationToken::new(),
+                dispatch_guard: None,
+                metadata,
+            };
+            self.read_file.execute(context, input).await.unwrap()
+        }
+
+        /// A `read_file` call whose run view still shows `live` reads.
+        async fn read_as(&self, input: Value, live: Vec<Value>) -> ToolResult {
+            let mut metadata = Map::new();
+            metadata.insert(
+                agentkit_core::LIVE_READS_METADATA_KEY.to_owned(),
+                Value::Array(live),
+            );
+            self.read_meta(input, metadata).await
+        }
+
         async fn read_file_with(&self, input: Value, chat: Option<&str>) -> ToolResult {
             self.run_with(&self.read_file, input, chat, CancellationToken::new())
                 .await
@@ -1580,6 +1696,129 @@ mod tests {
              Read the whole file (no offset or limit, nothing truncated) before \
              overwriting it."
         );
+        h.remove();
+    }
+
+    const STUB: &str = "[unchanged since call 0123abcd (turn 4) · 3 lines · sha256 ";
+
+    /// The live read the host derives from a persisted, complete result.
+    fn live_read(result: &ToolResult) -> Value {
+        let details = result.data.as_ref().unwrap();
+        assert_eq!(details["complete"], json!(true), "{details}");
+        json!({
+            "path": details["canonicalPath"],
+            "offset": details["offset"],
+            "limit": details["limit"],
+            "sha256": details["sha256"],
+            "lines": details["lines"],
+            "messageId": "msg_0000000000000000000000000123abcd",
+            "turn": 4,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_live_unchanged_read_is_a_stub() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("s.txt", b"a\nb\nc\n");
+        let input = json!({ "file_path": "s.txt" });
+        let first = h.read_as(input.clone(), vec![]).await;
+        assert_eq!(Harness::text(&first), "1\ta\n2\tb\n3\tc");
+        // The same run, a retry or a resume never lists its own result.
+        let unlisted = h.read_as(input.clone(), vec![]).await;
+        assert_eq!(Harness::text(&unlisted), "1\ta\n2\tb\n3\tc");
+        let live = live_read(&first);
+        let text = Harness::text(&h.read_as(input.clone(), vec![live.clone()]).await);
+        assert!(text.starts_with(STUB), "{text}");
+        assert!(text.ends_with("…]"), "{text}");
+        // A range the view does not show is not covered by the stub.
+        let other = h
+            .read_as(
+                json!({ "file_path": "s.txt", "offset": 2 }),
+                vec![live.clone()],
+            )
+            .await;
+        assert_eq!(Harness::text(&other), "2\tb\n3\tc");
+        let forced = h
+            .read_as(json!({ "file_path": "s.txt", "force": true }), vec![live])
+            .await;
+        assert_eq!(Harness::text(&forced), "1\ta\n2\tb\n3\tc");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn a_stub_result_is_not_complete() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("t.txt", b"a\nb\n");
+        let input = json!({ "file_path": "t.txt" });
+        let first = h.read_as(input.clone(), vec![]).await;
+        let stub = h.read_as(input, vec![live_read(&first)]).await;
+        assert_eq!(stub.data.as_ref().unwrap()["complete"], json!(false));
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn a_changed_file_is_read_again() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("e.txt", b"a\nb\n");
+        let input = json!({ "file_path": "e.txt" });
+        let live = live_read(&h.read_as(input.clone(), vec![]).await);
+        h.put("e.txt", b"x\ny\n");
+        let after = h.read_as(input, vec![live]).await;
+        assert_eq!(Harness::text(&after), "1\tx\n2\ty");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn parallel_reads_without_a_live_set_both_return_text() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("p.txt", b"a\nb\n");
+        let input = json!({ "file_path": "p.txt" });
+        let (one, two) = tokio::join!(
+            h.read_as(input.clone(), vec![]),
+            h.read_as(input.clone(), vec![])
+        );
+        assert_eq!(Harness::text(&one), "1\ta\n2\tb");
+        assert_eq!(Harness::text(&two), "1\ta\n2\tb");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn a_cut_read_is_not_complete() {
+        let h = Harness::new(CodingLimits::default());
+        let body = (1..=3000).map(|n| format!("l{n}\n")).collect::<String>();
+        h.put("big.txt", body.as_bytes());
+        let cut = h.read_as(json!({ "file_path": "big.txt" }), vec![]).await;
+        assert_eq!(cut.data.as_ref().unwrap()["complete"], json!(false));
+        let ranged = h
+            .read_as(json!({ "file_path": "big.txt", "limit": 5 }), vec![])
+            .await;
+        assert_eq!(ranged.data.as_ref().unwrap()["complete"], json!(true));
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn a_read_shown_as_a_preview_is_not_complete() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("a.txt", b"one\ntwo\nthree\n");
+        h.put("b.txt", b"four\nfive\n");
+        let mut metadata = Map::new();
+        metadata.insert(agentkit_core::OUTPUT_STORE_METADATA_KEY.into(), true.into());
+        metadata.insert(
+            agentkit_core::OUTPUT_INLINE_LIMIT_METADATA_KEY.into(),
+            8.into(),
+        );
+        let single = h
+            .read_meta(json!({ "file_path": "a.txt" }), metadata.clone())
+            .await;
+        assert_eq!(single.data.as_ref().unwrap()["complete"], json!(false));
+        let many = h
+            .read_meta(json!({ "paths": ["a.txt", "b.txt"] }), metadata)
+            .await;
+        let files = many.data.as_ref().unwrap()["files"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(files.iter().all(|file| file["complete"] == json!(false)));
         h.remove();
     }
 

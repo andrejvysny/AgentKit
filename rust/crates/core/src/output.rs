@@ -46,6 +46,14 @@ pub const OUTPUT_STORE_METADATA_KEY: &str = "outputStore";
 /// being called, so a tool that cuts its own text can leave it whole when
 /// the gate will store it.
 pub const OUTPUT_INLINE_LIMIT_METADATA_KEY: &str = "outputInlineLimit";
+/// Message-metadata key under which the host keeps the details of a persisted
+/// `read_file` result (path, range, hash, whether it showed the range whole).
+pub const READ_DETAILS_METADATA_KEY: &str = "readDetails";
+/// Tool-metadata key carrying the reads the provider view of this run still
+/// shows whole: a JSON array of `{path, offset, limit, sha256, lines,
+/// messageId, turn}`, derived by the host from persisted details. A tool may
+/// point at such a read; with the key absent every read is answered in full.
+pub const LIVE_READS_METADATA_KEY: &str = "liveReads";
 
 /// Keys of a shaped result (roadmap 2.2, ADR 0034 addendum). A tool that has
 /// both the raw text and a smaller shaped text for the model returns

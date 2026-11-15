@@ -130,13 +130,13 @@ pub use model_profile::{
 // Roadmap 2.1 (ADR 0034): the output store port, its shared text helpers and
 // the two framework tools that page a stored result.
 pub use output::{
-    ByteOrLineRange, DEFAULT_INLINE_LIMIT, ExactSession, MAX_STORED_BYTES,
+    ByteOrLineRange, DEFAULT_INLINE_LIMIT, ExactSession, LIVE_READS_METADATA_KEY, MAX_STORED_BYTES,
     MIN_INLINE_LIMIT as MIN_OUTPUT_INLINE_LIMIT, Match, OUTPUT_GRANTS_METADATA_KEY,
     OUTPUT_INLINE_LIMIT_METADATA_KEY, OUTPUT_STORE_METADATA_KEY, OutputCall, OutputError,
     OutputGate, OutputHandle, OutputInfo, OutputMeta, OutputSlice, OutputStore, PurgeReport,
-    READ_OUTPUT, RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT, SHAPED_HIDDEN_KEY,
-    SHAPED_TEXT_KEY, SUBAGENT_METADATA_KEY, SessionTree, count_lines, render_preview, search_bytes,
-    shaped_value, slice_bytes,
+    READ_DETAILS_METADATA_KEY, READ_OUTPUT, RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT,
+    SHAPED_HIDDEN_KEY, SHAPED_TEXT_KEY, SUBAGENT_METADATA_KEY, SessionTree, count_lines,
+    render_preview, search_bytes, shaped_value, slice_bytes,
 };
 pub use output_tools::{
     neutralize_subagent_tags, output_tools, read_output_definition, search_output_definition,

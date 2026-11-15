@@ -638,6 +638,18 @@ impl DurableEvents {
             if let Some(name) = &message.name {
                 metadata["toolName"] = name.clone().into();
             }
+            if message.role == "tool"
+                && event["type"] == "run.tool.succeeded"
+                && event["data"]["toolName"] == "read_file"
+                && let Some(details) = event["data"]["resultJson"]
+                    .as_str()
+                    .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                    .filter(Value::is_object)
+            {
+                // What the model was shown, for the repeated-read stub: the
+                // host later derives its live reads from these details.
+                metadata[agentkit_core::READ_DETAILS_METADATA_KEY] = details;
+            }
             if message.role == "assistant"
                 && let Some(wire) = message
                     .metadata
