@@ -202,6 +202,11 @@ pub trait PromotionObserver: Send + Sync {
 struct PromotionState {
     pending: Vec<String>,
     applied: Vec<(String, Vec<ToolDefinition>)>,
+    /// The tools the array may still take (the profile's visible bound minus
+    /// what the frozen array holds); `None` is unbounded.
+    capacity: Option<usize>,
+    /// Promotions the bound refused at the turn boundary, to be reported.
+    refused: Vec<(String, Vec<String>)>,
 }
 
 /// Toolsets asked to be promoted (by `toolset_load` in promote mode) and the
@@ -228,6 +233,31 @@ impl Promotions {
             state.pending.push(toolset.to_owned());
         }
         !known
+    }
+
+    /// Bound the tools promotion may add to the array.
+    pub(crate) fn set_capacity(&self, capacity: Option<usize>) {
+        self.state().capacity = capacity;
+    }
+
+    /// The tools promotion may still add, or `None` when unbounded.
+    pub fn room(&self) -> Option<usize> {
+        let state = self.state();
+        let used: usize = state.applied.iter().map(|(_, defs)| defs.len()).sum();
+        state.capacity.map(|capacity| capacity.saturating_sub(used))
+    }
+
+    /// True when `count` more tools fit the array now.
+    pub fn fits(&self, count: usize) -> bool {
+        self.room().is_none_or(|room| count <= room)
+    }
+
+    pub(crate) fn refuse(&self, toolset: &str, tools: Vec<String>) {
+        self.state().refused.push((toolset.to_owned(), tools));
+    }
+
+    pub(crate) fn take_refused(&self) -> Vec<(String, Vec<String>)> {
+        std::mem::take(&mut self.state().refused)
     }
 
     pub(crate) fn take_pending(&self) -> Vec<String> {

@@ -80,6 +80,13 @@ pub struct Classification {
     /// only the meta tools reach them.
     pub keep_meta: bool,
     pub load_mode: LoadMode,
+    /// The most tools the rendered array may hold, meta tools included, after
+    /// the dialect expanded its tools (`git_inspect` is four wire tools).
+    /// `None` leaves the array to `max_definitions` alone.
+    pub visible_bound: Option<usize>,
+    /// The wire names of each direct tool, in the profile's priority order.
+    /// A tool over the bound is demoted whole, last group first.
+    pub direct_groups: Vec<Vec<String>>,
 }
 
 impl Default for Classification {
@@ -91,6 +98,8 @@ impl Default for Classification {
             max_definitions: 24,
             keep_meta: false,
             load_mode: LoadMode::Indirect,
+            visible_bound: None,
+            direct_groups: vec![],
         }
     }
 }
@@ -103,6 +112,10 @@ pub struct Split {
     pub deferred: Vec<ToolDefinition>,
     /// The meta tools, present only when something is deferred.
     pub meta: Vec<ToolDefinition>,
+    /// Direct tools moved to the deferred set because the visible bound left
+    /// no room for them (in candidate order). Never silent: the host reports
+    /// them.
+    pub demoted: Vec<String>,
 }
 
 impl Classification {
@@ -112,15 +125,21 @@ impl Classification {
     /// default.
     pub fn from_profile(profile: &AiModelToolProfile, dialect: Option<&Dialect>) -> Self {
         let mut names: BTreeSet<String> = BTreeSet::new();
+        let mut groups = vec![];
         for name in &profile.direct_tools {
-            names.insert(name.clone());
+            let mut group = vec![name.clone()];
             if let Some(dialect) = dialect {
-                names.extend(dialect.wire_names_of(name));
+                group.extend(dialect.wire_names_of(name));
             }
+            names.extend(group.iter().cloned());
+            groups.push(group);
         }
+        let bound = profile.max_visible_tools.max(0.0) as usize;
         Self {
             direct: DirectSet::Names(names),
-            max_definitions: profile.max_visible_tools.max(0.0) as usize,
+            max_definitions: bound,
+            visible_bound: Some(bound),
+            direct_groups: groups,
             load_mode: match profile.load_mode {
                 AiModelLoadMode::Promote => LoadMode::Promote,
                 AiModelLoadMode::Indirect => LoadMode::Indirect,
@@ -141,16 +160,24 @@ impl Classification {
             .iter()
             .cloned()
             .partition(|definition| is_meta_tool(&definition.name));
-        if rest.len() <= self.max_definitions && estimate_tokens(&rest) <= self.max_tokens {
+        let kept_meta = if self.keep_meta { meta.len() } else { 0 };
+        let within_bound = self
+            .visible_bound
+            .is_none_or(|bound| rest.len() + kept_meta <= bound);
+        if rest.len() <= self.max_definitions
+            && estimate_tokens(&rest) <= self.max_tokens
+            && within_bound
+        {
             return Split {
                 direct: rest,
                 meta: if self.keep_meta { meta } else { vec![] },
                 ..Split::default()
             };
         }
-        let (direct, deferred): (Vec<_>, Vec<_>) = rest
+        let (mut direct, mut deferred): (Vec<_>, Vec<_>) = rest
             .into_iter()
             .partition(|definition| self.is_direct(&definition.name));
+        let demoted = self.demote_over_bound(&mut direct, &mut deferred, meta.len());
         let meta = if deferred.is_empty() && !self.keep_meta {
             vec![]
         } else {
@@ -160,7 +187,59 @@ impl Classification {
             direct,
             deferred,
             meta,
+            demoted,
         }
+    }
+
+    /// Holds the rendered array to the visible bound: the direct tools plus
+    /// the meta tools (reserved once anything is deferred) fit, or the
+    /// overflow moves to `deferred`. Whole tools go together (the wires of one
+    /// canonical tool), last of the profile's priority order first.
+    fn demote_over_bound(
+        &self,
+        direct: &mut Vec<ToolDefinition>,
+        deferred: &mut Vec<ToolDefinition>,
+        meta: usize,
+    ) -> Vec<String> {
+        let Some(bound) = self.visible_bound else {
+            return vec![];
+        };
+        let meta_needed = !deferred.is_empty() || self.keep_meta;
+        if direct.len() + if meta_needed { meta } else { 0 } <= bound {
+            return vec![];
+        }
+        // Something is deferred from here on, so the meta tools take slots.
+        let room = bound.saturating_sub(meta);
+        let mut excess = direct.len().saturating_sub(room);
+        let mut out: BTreeSet<String> = BTreeSet::new();
+        let present: BTreeSet<&str> = direct.iter().map(|d| d.name.as_str()).collect();
+        for group in self.direct_groups.iter().rev() {
+            if excess == 0 {
+                break;
+            }
+            let members: Vec<&String> = group
+                .iter()
+                .filter(|name| present.contains(name.as_str()) && !out.contains(*name))
+                .collect();
+            excess = excess.saturating_sub(members.len());
+            out.extend(members.into_iter().cloned());
+        }
+        // Tools no group names go last-in-candidate-order first.
+        for definition in direct.iter().rev() {
+            if excess == 0 {
+                break;
+            }
+            if out.insert(definition.name.clone()) {
+                excess -= 1;
+            }
+        }
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(direct)
+            .into_iter()
+            .partition(|definition| out.contains(&definition.name));
+        *direct = kept;
+        let names = gone.iter().map(|d| d.name.clone()).collect();
+        deferred.extend(gone);
+        names
     }
 }
 

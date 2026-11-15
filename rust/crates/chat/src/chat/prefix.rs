@@ -97,6 +97,7 @@ pub(super) fn with_deferral(
         return (registry, None);
     };
     let installed = Arc::get_mut(&mut registry).is_some_and(|registry| {
+        registry.set_visible_bound(classification.visible_bound);
         registry
             .install_meta_tools_with(classification.load_mode)
             .is_ok()
@@ -195,6 +196,7 @@ impl PromotionRecorder {
                 .collect(),
             added: vec![],
             unavailable: vec![],
+            demoted: vec![],
             frozen_now: false,
         };
         let revision = prior.revision as u64 + 1;
@@ -399,6 +401,23 @@ async fn warn_tools(context: &ExecutionContext, surface: &ToolSurface) -> ChatRe
                         surface.added.join(", ")
                     ),
                     "tools": surface.added,
+                }),
+            )
+            .await?;
+    }
+    if !surface.demoted.is_empty() {
+        context
+            .emit(
+                "run.warning",
+                json!({
+                    "code": "tool_deferred",
+                    "reason": "visible_bound",
+                    "message": format!(
+                        "{} tool(s) did not fit the profile's visible-tool bound and are in the deferred catalog; call them through tool_call: {}.",
+                        surface.demoted.len(),
+                        surface.demoted.join(", ")
+                    ),
+                    "tools": surface.demoted,
                 }),
             )
             .await?;

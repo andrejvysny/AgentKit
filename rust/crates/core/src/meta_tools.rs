@@ -440,9 +440,23 @@ fn load(
     let promotable = members
         .iter()
         .any(|entry| entry.deferred && entry.available && !promotions.is_promoted_name(&entry.definition.name));
-    let promoting = mode == LoadMode::Promote && promotable && promotions.request(id);
+    let promotable_count = members
+        .iter()
+        .filter(|entry| {
+            entry.deferred && entry.available && !promotions.is_promoted_name(&entry.definition.name)
+        })
+        .count();
+    // The array has a bound (the profile's visible-tool limit): a toolset that
+    // does not fit stays deferred and the model is told how to run it.
+    let full = mode == LoadMode::Promote && promotable && !promotions.fits(promotable_count);
+    let promoting = mode == LoadMode::Promote && promotable && !full && promotions.request(id);
     let deferred_left = members.iter().any(|entry| entry.deferred);
     let summary = match (deferred_left, promoting) {
+        (true, false) if full => format!(
+            "Loaded {id}: {} tools. Your tool list has room for {} more tools, so they stay out of it: run them with tool_call (name and arguments).",
+            members.len(),
+            promotions.room().unwrap_or_default()
+        ),
         (false, _) => format!("The tools of {id} are in your tool list: call them directly. Guide below."),
         (true, true) => format!(
             "Loaded {id}: {} tools. They join your tool list on your next turn and are then called by name; until then run them with tool_call.",

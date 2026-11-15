@@ -88,6 +88,9 @@ pub struct ToolSurface {
     pub added: Vec<String>,
     /// Manifest tools no contributor offers this turn.
     pub unavailable: Vec<String>,
+    /// Direct tools moved to the deferred catalog on the first turn because
+    /// the profile's visible-tool bound left no room (T2.1).
+    pub demoted: Vec<String>,
     /// True when the manifest was built or rebuilt this turn.
     pub frozen_now: bool,
 }
@@ -136,18 +139,23 @@ impl ToolSurface {
             deferred,
             added,
             unavailable,
+            demoted: vec![],
             frozen_now: false,
         }
     }
 
     fn first(candidates: &[ToolDefinition], classification: Option<&Classification>) -> Self {
-        let (manifest, deferred) = match classification {
-            None => (ToolManifest::build(candidates), vec![]),
+        let (manifest, deferred, demoted) = match classification {
+            None => (ToolManifest::build(candidates), vec![], vec![]),
             Some(classification) => {
                 let split = classification.split(candidates);
                 let sent: Vec<ToolDefinition> =
                     split.direct.into_iter().chain(split.meta).collect();
-                (ToolManifest::build(&sent), sorted_unique(&split.deferred))
+                (
+                    ToolManifest::build(&sent),
+                    sorted_unique(&split.deferred),
+                    split.demoted,
+                )
             }
         };
         Self {
@@ -155,6 +163,7 @@ impl ToolSurface {
             deferred,
             added: vec![],
             unavailable: vec![],
+            demoted,
             frozen_now: true,
         }
     }

@@ -416,6 +416,24 @@ impl State {
                 )
                 .await?;
             }
+            // A toolset the visible bound had no room for stays deferred; say
+            // so, the model still reaches it through tool_call.
+            for (toolset, tools) in registry.take_refused_promotions() {
+                self.emit(
+                    "run.warning",
+                    json!({
+                        "code": "tool_deferred",
+                        "reason": "visible_bound",
+                        "message": format!(
+                            "Toolset {toolset} did not fit the tool list bound and stays deferred; run its tools with tool_call: {}.",
+                            tools.join(", ")
+                        ),
+                        "toolset": toolset,
+                        "tools": tools,
+                    }),
+                )
+                .await?;
+            }
             let turn = self.provider_turn(provider.clone(), &registry).await?;
             self.step_reasoning = turn.reasoning.clone();
             self.step_salvaged = turn.salvaged;

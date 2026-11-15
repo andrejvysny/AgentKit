@@ -121,6 +121,7 @@ fn session(
     for tool in tools {
         registry.register(tool).unwrap();
     }
+    registry.set_visible_bound(classification.visible_bound);
     registry
         .install_meta_tools_with(classification.load_mode)
         .unwrap();
@@ -580,4 +581,128 @@ fn keep_meta_advertises_the_meta_tools_when_every_tool_is_direct() {
         assert!(surface.manifest.contains(meta), "{meta}");
     }
     assert!(registry.meta_active());
+}
+
+// ---- the visible-tool bound (T2.1) -------------------------------------------
+
+fn bounded(bound: usize) -> Classification {
+    Classification {
+        visible_bound: Some(bound),
+        ..classification(&["read_file"], LoadMode::Promote)
+    }
+}
+
+fn promoted_names(outcome: &Outcome) -> Vec<String> {
+    outcome
+        .warnings("toolset_promoted")
+        .iter()
+        .flat_map(|data| data["tools"].as_array().unwrap().clone())
+        .map(|name| name.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn promotion_that_fits_the_bound_joins_the_array() {
+    let ran = Ran::default();
+    // read_file and the four meta tools fill five of seven slots.
+    let (registry, surface) = session(catalog_tools(&ran), vec![calendar_toolset()], &bounded(7));
+    assert_eq!(surface.manifest.definitions().len(), 5);
+    let outcome = run(registry, vec![vec![load("l1", "calendar")]]).await;
+    assert_eq!(outcome.offered[1].len(), 7, "{:?}", outcome.offered[1]);
+    assert_eq!(promoted_names(&outcome).len(), 2);
+}
+
+#[tokio::test]
+async fn promotion_beyond_the_bound_is_refused_with_a_teaching_result() {
+    let ran = Ran::default();
+    let (registry, _) = session(catalog_tools(&ran), vec![calendar_toolset()], &bounded(6));
+    let outcome = run(
+        registry,
+        vec![
+            vec![load("l1", "calendar")],
+            vec![via("c1", "calendar_list_events", json!({"day": "2026-03-02"}))],
+        ],
+    )
+    .await;
+    // Two tools do not fit one free slot: the array never moves.
+    assert_eq!(outcome.offered[0], outcome.offered[1]);
+    assert_eq!(outcome.offered[1], outcome.offered[2]);
+    assert!(outcome.warnings("toolset_promoted").is_empty());
+    let summary = model(&outcome, 0)["summary"].as_str().unwrap().to_owned();
+    assert!(summary.contains("tool_call"), "{summary}");
+    assert!(summary.contains("room for 1"), "{summary}");
+    // The tools still run, through tool_call.
+    assert_eq!(
+        *ran.lock().unwrap(),
+        [r#"calendar_list_events:{"day":"2026-03-02"}"#]
+    );
+}
+
+fn coding_definitions() -> Vec<ToolDefinition> {
+    let properties = json!({
+        "command": {"type": "string"}, "path": {"type": "string"},
+        "staged": {"type": "boolean"}, "rev": {"type": "string"}, "limit": {"type": "integer"}
+    });
+    ["read_file", "write_file", "edit_file", "list_dir", "find_files", "code_search",
+        "run_command", "git_inspect", "run_tests", "repo_map", "submit_plan", "calendar_list"]
+        .iter()
+        .map(|name| {
+            serde_json::from_value(json!({
+                "name": name, "version": "1", "effect": "read", "capability": "fs.read",
+                "description": format!("{name}."),
+                "inputSchema": {"type": "object", "properties": properties}
+            }))
+            .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn the_qwen_profile_bounds_the_rendered_array_after_dialect_expansion() {
+    let profile = builtin_profile(QWEN_PROFILE_ID).expect("qwen profile");
+    let bound = profile.max_visible_tools as usize;
+    assert_eq!(bound, 12);
+    let dialect = session_dialect(None, Some(&profile), ToolLane::ChatCompletions).unwrap();
+    let mut canonical = coding_definitions();
+    canonical.extend(meta_definitions());
+    let offered = dialect.render(&canonical);
+    // `git_inspect` is four wire tools, so the profile's eight direct tools
+    // are eleven in the array, and the four meta tools make fifteen.
+    for keep_meta in [false, true] {
+        let classification = Classification {
+            keep_meta,
+            ..Classification::from_profile(&profile, Some(&dialect))
+        };
+        let surface = ToolSurface::reconcile_with(None, &offered, Some(&classification));
+        let sent = surface.manifest.definitions();
+        assert!(sent.len() <= bound, "{keep_meta}: {} tools", sent.len());
+        for meta in META_TOOLS {
+            assert!(surface.manifest.contains(meta), "{meta} is reserved a slot");
+        }
+        // Demoted, never dropped: the tools are in the deferred catalog, and
+        // the overflow is reported. The git tools go together.
+        let demoted: Vec<&str> = surface.demoted.iter().map(String::as_str).collect();
+        assert_eq!(demoted.len(), 4, "{demoted:?}");
+        assert!(demoted.iter().all(|name| name.starts_with("git_")), "{demoted:?}");
+        for name in &surface.demoted {
+            assert!(surface.deferred.iter().any(|d| &d.name == name), "{name}");
+        }
+        assert!(surface.manifest.contains("read_file"));
+        assert!(surface.deferred.iter().any(|d| d.name == "calendar_list"));
+    }
+}
+
+#[test]
+fn a_bound_that_the_direct_tools_fit_demotes_nothing() {
+    let profile = builtin_profile(QWEN_PROFILE_ID).expect("qwen profile");
+    let dialect = session_dialect(None, Some(&profile), ToolLane::ChatCompletions).unwrap();
+    let mut canonical = coding_definitions();
+    canonical.extend(meta_definitions());
+    let classification = Classification {
+        visible_bound: Some(40),
+        ..Classification::from_profile(&profile, Some(&dialect))
+    };
+    let surface =
+        ToolSurface::reconcile_with(None, &dialect.render(&canonical), Some(&classification));
+    assert!(surface.demoted.is_empty());
 }

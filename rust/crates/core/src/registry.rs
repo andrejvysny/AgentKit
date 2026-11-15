@@ -67,6 +67,8 @@ pub struct ToolRegistry {
     promotions: PromotionCell,
     /// The host's record of a promotion (re-stamps the session manifest).
     observer: OnceLock<Arc<dyn PromotionObserver>>,
+    /// The most tools the array may hold, promotions included (T2.1).
+    visible_bound: Option<usize>,
     /// Retired tool names, read only by the call pipeline (T5.2): never part
     /// of the surface, the catalog or any listing.
     legacy: BTreeMap<String, crate::LegacyName>,
@@ -194,10 +196,20 @@ impl ToolRegistry {
             .collect();
         ToolsetView::new(toolsets, names)
     }
+    /// Bound the rendered tools array, promoted tools included. Applies
+    /// from [`ToolRegistry::freeze_catalog`] on.
+    pub fn set_visible_bound(&mut self, bound: Option<usize>) {
+        self.visible_bound = bound;
+    }
     /// Let the host record promotions (re-stamp the session manifest). The
     /// first observer wins.
     pub fn set_promotion_observer(&self, observer: Arc<dyn PromotionObserver>) -> bool {
         self.observer.set(observer).is_ok()
+    }
+    /// Promotions the visible bound refused since the last call: each
+    /// toolset with the tools that stayed deferred.
+    pub fn take_refused_promotions(&self) -> Vec<(String, Vec<String>)> {
+        self.promotions.take_refused()
     }
     /// The turn boundary of promote mode: toolsets that `toolset_load`
     /// asked for join the tools array now, never mid-turn. Each is recorded
@@ -220,6 +232,13 @@ impl ToolRegistry {
                 .map(|entry| entry.definition.clone())
                 .collect();
             if definitions.is_empty() {
+                continue;
+            }
+            // The array stays within the visible bound: a toolset that does
+            // not fit stays deferred (reported, and reachable via tool_call).
+            if !self.promotions.fits(definitions.len()) {
+                self.promotions
+                    .refuse(&toolset, definitions.iter().map(|d| d.name.clone()).collect());
                 continue;
             }
             let revision = match self.observer.get() {
@@ -278,6 +297,8 @@ impl ToolRegistry {
             .map(|frozen| frozen.surface.as_slice())
             .unwrap_or_default();
         let meta_active = surface.iter().any(|definition| definition.name == TOOL_CALL);
+        self.promotions
+            .set_capacity(self.visible_bound.map(|bound| bound.saturating_sub(surface.len())));
         let offered: Vec<ToolDefinition> = surface.iter().chain(deferred).cloned().collect();
         let view = self.toolset_view(&offered, self.dialect());
         let entry = |definition: &ToolDefinition, deferred: bool| {
