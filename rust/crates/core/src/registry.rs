@@ -3,7 +3,10 @@ use crate::{
     call_pipeline::{AliasTable, Normalised, normalise},
 };
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, OnceLock},
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -16,6 +19,14 @@ struct Entry {
     tool: Arc<dyn Tool>,
     validator: agentkit_contracts::SchemaValidator,
 }
+/// The session's frozen tool surface (roadmap 1.3): the definitions sent
+/// every turn, in manifest order, whatever the contributors answer now.
+struct Frozen {
+    surface: Vec<ToolDefinition>,
+    /// Late tools: registered, but joined the deferred catalog and are not
+    /// callable until a loader (tool_search, 2.3) promotes them.
+    deferred: BTreeSet<String>,
+}
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Entry>,
@@ -23,6 +34,10 @@ pub struct ToolRegistry {
     aliases: AliasTable,
     /// Known tools this turn may not use, with the reason shown to the model.
     withheld: BTreeMap<String, String>,
+    /// Known tools a guard withheld at staging: offered in the definitions
+    /// so the array does not change, refused when called.
+    ghosts: BTreeMap<String, ToolDefinition>,
+    frozen: OnceLock<Frozen>,
 }
 impl ToolRegistry {
     pub fn new() -> Self {
@@ -74,6 +89,53 @@ impl ToolRegistry {
     pub fn withhold(&mut self, name: &str, reason: &str) {
         self.withheld.insert(name.into(), reason.into());
     }
+    /// Keep `definition` in the offered tools but never run it: a guard
+    /// decides at call time, so the array does not shrink (CE-05). A call
+    /// is refused with `reason`. No effect when the name is registered.
+    pub fn withhold_tool(&mut self, definition: ToolDefinition, reason: &str) {
+        if self.tools.contains_key(&definition.name) {
+            return;
+        }
+        self.withheld.insert(definition.name.clone(), reason.into());
+        self.ghosts.insert(definition.name.clone(), definition);
+    }
+    /// Withheld-but-offered definitions with their reasons, name order.
+    pub fn withheld_definitions(&self) -> Vec<(ToolDefinition, String)> {
+        self.ghosts
+            .iter()
+            .map(|(name, definition)| {
+                let reason = self.withheld.get(name).cloned().unwrap_or_default();
+                (definition.clone(), reason)
+            })
+            .collect()
+    }
+    /// Freeze the offered definitions to `surface` (the session manifest, in
+    /// manifest order) and mark `deferred` tools as not yet callable. The
+    /// first freeze wins; returns false when already frozen.
+    pub fn freeze_surface(&self, surface: Vec<ToolDefinition>, deferred: Vec<String>) -> bool {
+        self.frozen
+            .set(Frozen {
+                surface,
+                deferred: deferred.into_iter().collect(),
+            })
+            .is_ok()
+    }
+    /// True for a tool in the frozen surface that nothing can run this turn
+    /// (its contributor is gone, slow or refused it).
+    pub(crate) fn is_unavailable(&self, name: &str) -> bool {
+        self.frozen.get().is_some_and(|frozen| {
+            frozen
+                .surface
+                .iter()
+                .any(|definition| definition.name == name)
+                && !self.tools.contains_key(name)
+        })
+    }
+    pub(crate) fn is_deferred(&self, name: &str) -> bool {
+        self.frozen
+            .get()
+            .is_some_and(|frozen| frozen.deferred.contains(name))
+    }
     pub(crate) fn withheld_reason(&self, name: &str) -> Option<&str> {
         self.withheld.get(name).map(String::as_str)
     }
@@ -112,10 +174,16 @@ impl ToolRegistry {
             })
             .unwrap_or_default()
     }
+    /// The tools offered to the model: the frozen manifest when the session
+    /// has one, otherwise registered tools in order and then withheld ones.
     pub fn definitions(&self) -> Vec<ToolDefinition> {
+        if let Some(frozen) = self.frozen.get() {
+            return frozen.surface.clone();
+        }
         self.order
             .iter()
             .map(|name| self.tools[name].tool.definition().clone())
+            .chain(self.ghosts.values().cloned())
             .collect()
     }
     pub fn len(&self) -> usize {

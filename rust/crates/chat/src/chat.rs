@@ -323,7 +323,7 @@ impl ChatExecutor {
             let branch = continuation
                 .as_ref()
                 .map_or("", |cont| cont.scope.branch_id.as_str());
-            prefix::record(&context, chat_id, &layout, &registry.definitions(), &params, branch)
+            prefix::record(&context, chat_id, &layout, &registry, &params, branch)
                 .await?;
         }
         // Read the history AFTER the resume pass wrote its records: an

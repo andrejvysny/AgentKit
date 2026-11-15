@@ -443,8 +443,16 @@ pub(super) async fn stage_registry(
     }
     let mut contributors = options.tool_contributors.clone();
     contributors.insert(0, reads);
-    let staged = stage_tools(&contributors, &options.tool_guards, contribution()).await?;
+    let mut staged = stage_tools(&contributors, &options.tool_guards, contribution()).await?;
     context.check_cancelled()?;
+    // Guards decide at call time: a tool they hide stays in the offered
+    // definitions and a call to it is refused (roadmap 1.3, CE-05). The
+    // registry was just built, so this staging call holds its only handle.
+    if let Some(registry) = Arc::get_mut(&mut staged.registry) {
+        for tool in staged.withheld.drain(..) {
+            registry.withhold_tool(tool.definition, &tool.reason);
+        }
+    }
     for failure in staged.failed {
         context.emit("run.warning",json!({"code":if failure.timed_out {"hook_timeout"} else {"tool_contributor_failed"},"message":format!("Tool contributor {} failed: {}.",failure.namespace,failure.reason)})).await?;
     }

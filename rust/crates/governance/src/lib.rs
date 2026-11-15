@@ -43,7 +43,9 @@ pub use proposal_tool::{
     ProposalToolOptions, WriteExecutionMode,
 };
 pub use proposals::{ProposalApplyGuard, ProposalRevisionSource, ProposalService};
-pub use staging::{ContributorFailure, StagedTools, StaticToolContributor, stage_tools};
+pub use staging::{
+    ContributorFailure, StagedTools, StaticToolContributor, WithheldTool, stage_tools,
+};
 
 pub(crate) use agentkit_engine::SharedRuntime;
 

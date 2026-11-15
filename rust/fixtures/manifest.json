@@ -9,7 +9,7 @@
     "schema-validation.json"
   ],
   "routeCount": 63,
-  "schemaCount": 132,
+  "schemaCount": 134,
   "sha256": {
     "golden-traces/cancelled-run.json": "eb4ef4c0ef63b82fa03bd5b88f808588f8c4c18e5c7e8af7b823249b0dcc7ce0",
     "golden-traces/chat-only.json": "a54fc9b3d37d6efe20fc22539e92349edaee0f80c8206dbc2b4c70f5841accc0",
@@ -23,6 +23,6 @@
     "idempotency.json": "15c9f548e68b9a3b06ec004acf7de616200ab0f5f9d7a7bb231bac2f005bcc89",
     "routes.json": "01adfe380f9d309587abe1c30a68c2f1a83d86802599de74be6da98377aa8165",
     "run-events.json": "010844ea0421bc599505ce673ad7b0cbf55697b4a31d2733f3eaf700cb9814da",
-    "schemas.json": "7453a04d0dd2c510955d7eabf78f19f8eba7b654af1592ea028da13cdf686495"
+    "schemas.json": "0180c5a790f5bc99e499a1e5e5a8550a595daf09328a31647448ad9800344c4a"
   }
 }

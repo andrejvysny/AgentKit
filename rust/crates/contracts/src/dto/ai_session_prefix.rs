@@ -1,4 +1,4 @@
-use crate::Optional;
+use crate::{AiToolDefinition, Optional};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -36,6 +36,23 @@ pub struct AiSessionPrefix {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub tool_manifest_hash: Optional<String>,
+    /// The frozen tool manifest (roadmap 1.3): every tool the session was
+    /// frozen with, sorted by name. Later turns send these definitions, not
+    /// what the contributors answer now.
+    #[serde(
+        rename = "toolManifest",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub tool_manifest: Optional<Vec<AiToolDefinition>>,
+    /// Tools that joined after the freeze (late contributors), sorted by
+    /// name. Listed, never sent; a loader (roadmap 2.3) serves them.
+    #[serde(
+        rename = "deferredTools",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub deferred_tools: Optional<Vec<AiToolDefinition>>,
     /// Model profile id (native tool use T2.1); absent until profiles exist.
     #[serde(
         rename = "modelProfileId",
@@ -71,3 +88,5 @@ crate::impl_json_deserialize!(AiSessionPrefix, |value: Value| {
     };
     Ok(output)
 });
+        tool_manifest: crate::optional_field(&mut object, "toolManifest")?,
+        deferred_tools: crate::optional_field(&mut object, "deferredTools")?,

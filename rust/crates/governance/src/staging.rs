@@ -2,7 +2,9 @@ use crate::{
     ApprovalAsk, ContributedTool, GovernanceError, GovernanceResult, ToolContributionContext,
     ToolContributor, ToolGuard, ToolGuardContext, ToolGuardVerdict,
 };
-use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult};
+use agentkit_core::{
+    CoreError, Tool, ToolContext, ToolDefinition, ToolRegistry, ToolResult, failure_catalog,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::{
@@ -120,8 +122,17 @@ pub struct ContributorFailure {
     pub timed_out: bool,
 }
 
+/// A tool a guard or an unbound target hid from the registry. The host keeps
+/// its definition in the offered tools and refuses a call to it with `reason`
+/// (roadmap 1.3: guards decide at call time, they do not shrink the array).
+pub struct WithheldTool {
+    pub definition: ToolDefinition,
+    pub reason: String,
+}
+
 pub struct StagedTools {
     pub registry: Arc<ToolRegistry>,
+    pub withheld: Vec<WithheldTool>,
     pub namespaces: BTreeMap<String, String>,
     pub failed: Vec<ContributorFailure>,
     pub skipped: Vec<String>,
@@ -205,9 +216,14 @@ async fn register_tools(
     let mut registry = ToolRegistry::new();
     let mut namespaces = BTreeMap::new();
     let mut skipped = vec![];
+    let mut withheld = vec![];
     for (namespace, tool) in collected {
         let name = tool.definition().name.clone();
         if allowed.as_ref().is_some_and(|names| !names.contains(&name)) {
+            withheld.push(WithheldTool {
+                definition: tool.definition().clone(),
+                reason: "this session has no bound target for it".into(),
+            });
             continue;
         }
         let snapshot = ToolGuardContext {
@@ -217,6 +233,10 @@ async fn register_tools(
             arguments: None,
         };
         if !visible(guards, &snapshot).await {
+            withheld.push(WithheldTool {
+                definition: tool.definition().clone(),
+                reason: "a guard does not allow it in this session".into(),
+            });
             continue;
         }
         let guarded = Arc::new(GuardedTool {
@@ -233,6 +253,7 @@ async fn register_tools(
     }
     Ok(StagedTools {
         registry: Arc::new(registry),
+        withheld,
         namespaces,
         failed,
         skipped,
@@ -693,20 +714,8 @@ fn approval_spec(
 }
 
 fn guard_refusal(context: &ToolContext, reason: &str) -> ToolResult {
-    let data = serde_json::json!({"errorCode":"tool_guard_refused","errorMessage":reason,"phase":"guard","retryable":false});
-    ToolResult {
-        ok: false,
-        data: Some(data.clone()),
-        model_data: Some(data),
-        summary: Some(reason.into()),
-        sources: vec![],
-        warnings: vec![],
-        truncated: false,
-        limits: context.limits.clone(),
-        status: None,
-
-        model_content: None,
-    }
+    let failure = failure_catalog::from_refusal(reason);
+    failure_catalog::failure_result("tool_guard_refused", &failure, "guard", None, &context.limits)
 }
 
 fn validate_namespace(contributor: &dyn ToolContributor) -> GovernanceResult<()> {

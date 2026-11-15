@@ -310,6 +310,24 @@ pub(crate) fn resolve_failure(registry: &ToolRegistry, name: &str) -> CoreError 
             ),
         );
     }
+    if registry.is_deferred(name) {
+        return CoreError::new(
+            "tool_unavailable",
+            &format!(
+                "Tool {name} joined this session after its tool list was fixed, so it cannot be called yet. Use one of the offered tools instead{}.",
+                list_suffix(": ", &nearest)
+            ),
+        );
+    }
+    if registry.is_unavailable(name) {
+        return CoreError::new(
+            "tool_unavailable",
+            &format!(
+                "Tool {name} is in this session's tool list but is not available right now. Use another tool instead{}, or try {name} again in a later turn.",
+                list_suffix(": ", &nearest)
+            ),
+        );
+    }
     CoreError::new(
         "tool_missing",
         &format!(
@@ -347,7 +365,10 @@ pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
         values_converted: 0,
         failure: None,
     };
-    if call.name == UNNAMED_TOOL || registry.get(&call.name).is_none() {
+    if call.name == UNNAMED_TOOL
+        || registry.get(&call.name).is_none()
+        || registry.is_deferred(&call.name)
+    {
         prepared.failure = Some(resolve_failure(registry, &call.name));
         return prepared;
     }

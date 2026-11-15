@@ -1746,6 +1746,379 @@
       }
     ]
   },
+  "AiModelToolProfileSchema": {
+    "properties": {
+      "bodyExtras": {
+        "additionalProperties": false,
+        "properties": {
+          "chat_template_kwargs": {
+            "patternProperties": {
+              "^(.*)$": {}
+            },
+            "type": "object"
+          },
+          "parallel_tool_calls": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "dialect": {
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "version": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "directTools": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "family": {
+        "anyOf": [
+          {
+            "const": "anthropic",
+            "type": "string"
+          },
+          {
+            "const": "openai",
+            "type": "string"
+          },
+          {
+            "const": "qwen",
+            "type": "string"
+          },
+          {
+            "const": "generic",
+            "type": "string"
+          }
+        ]
+      },
+      "id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "limits": {
+        "properties": {
+          "contextWindow": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxOutput": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "const": "user",
+                "type": "string"
+              },
+              {
+                "const": "proxy",
+                "type": "string"
+              },
+              {
+                "const": "server",
+                "type": "string"
+              },
+              {
+                "const": "probe",
+                "type": "string"
+              },
+              {
+                "const": "estimated",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "contextWindow",
+          "maxOutput",
+          "source"
+        ],
+        "type": "object"
+      },
+      "loadMode": {
+        "anyOf": [
+          {
+            "const": "indirect",
+            "type": "string"
+          },
+          {
+            "const": "promote",
+            "type": "string"
+          }
+        ]
+      },
+      "maxVisibleTools": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "messageRules": {
+        "properties": {
+          "escapeToolResultTags": {
+            "type": "boolean"
+          },
+          "imagePositions": {
+            "items": {
+              "anyOf": [
+                {
+                  "const": "user",
+                  "type": "string"
+                },
+                {
+                  "const": "tool_result",
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "systemFirstOnly": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "systemFirstOnly",
+          "escapeToolResultTags",
+          "imagePositions"
+        ],
+        "type": "object"
+      },
+      "qualifiedToolsets": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reasoning": {
+        "properties": {
+          "effortChannel": {
+            "anyOf": [
+              {
+                "const": "effort_field",
+                "type": "string"
+              },
+              {
+                "const": "template_option",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "type": "string"
+              }
+            ]
+          },
+          "effortMap": {
+            "properties": {
+              "high": {
+                "properties": {
+                  "effort": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "thinking": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "thinking"
+                ],
+                "type": "object"
+              },
+              "low": {
+                "properties": {
+                  "effort": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "thinking": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "thinking"
+                ],
+                "type": "object"
+              },
+              "medium": {
+                "properties": {
+                  "effort": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "thinking": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "thinking"
+                ],
+                "type": "object"
+              },
+              "minimal": {
+                "properties": {
+                  "effort": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "thinking": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "thinking"
+                ],
+                "type": "object"
+              },
+              "off": {
+                "properties": {
+                  "effort": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "thinking": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "thinking"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "sendBack": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "effortChannel",
+          "effortMap",
+          "sendBack"
+        ],
+        "type": "object"
+      },
+      "recovery": {
+        "properties": {
+          "nudge": {
+            "type": "boolean"
+          },
+          "salvage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "salvage",
+          "nudge"
+        ],
+        "type": "object"
+      },
+      "sampling": {
+        "properties": {
+          "nonThinking": {
+            "properties": {
+              "minP": {
+                "type": "number"
+              },
+              "presencePenalty": {
+                "type": "number"
+              },
+              "repetitionPenalty": {
+                "type": "number"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "topK": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "topP": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "thinking": {
+            "properties": {
+              "minP": {
+                "type": "number"
+              },
+              "presencePenalty": {
+                "type": "number"
+              },
+              "repetitionPenalty": {
+                "type": "number"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "topK": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "topP": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "thinking",
+          "nonThinking"
+        ],
+        "type": "object"
+      },
+      "toolChoice": {
+        "anyOf": [
+          {
+            "const": "auto_only",
+            "type": "string"
+          },
+          {
+            "const": "auto_required_named",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "family",
+      "dialect",
+      "directTools",
+      "maxVisibleTools",
+      "loadMode",
+      "toolChoice",
+      "sampling",
+      "reasoning",
+      "bodyExtras",
+      "messageRules",
+      "limits",
+      "recovery",
+      "qualifiedToolsets"
+    ],
+    "type": "object"
+  },
   "AiPromptContextBlockSchema": {
     "properties": {
       "content": {
@@ -5678,6 +6051,71 @@
         "minLength": 1,
         "type": "string"
       },
+      "deferredTools": {
+        "description": "Tools that joined after the freeze; listed, never sent.",
+        "items": {
+          "properties": {
+            "capability": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "effect": {
+              "anyOf": [
+                {
+                  "const": "read",
+                  "type": "string"
+                },
+                {
+                  "const": "write",
+                  "type": "string"
+                }
+              ]
+            },
+            "examples": {
+              "description": "Example calls: each entry is a complete, valid argument object for this tool.",
+              "items": {
+                "patternProperties": {
+                  "^(.*)$": {}
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "inputSchema": {
+              "additionalProperties": true,
+              "description": "A JSON Schema document (see AiJsonSchemaObject).",
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            },
+            "outputSchema": {
+              "additionalProperties": true,
+              "description": "A JSON Schema document (see AiJsonSchemaObject).",
+              "type": "object"
+            },
+            "timeoutMs": {
+              "description": "Optional per-tool execution timeout (ms). When set, the run-loop races execute() against the deadline via an AbortController linked to ctx.signal.",
+              "type": "number"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "effect",
+            "capability",
+            "description",
+            "inputSchema"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
       "dialectVersion": {
         "minLength": 1,
         "type": "string"
@@ -5687,6 +6125,10 @@
         "type": "string"
       },
       "memoryCoreDigest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "modelProfileDigest": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
@@ -5710,6 +6152,71 @@
       "systemDigest": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
+      },
+      "toolManifest": {
+        "description": "The frozen tool manifest, sorted by name; sent every turn (roadmap 1.3).",
+        "items": {
+          "properties": {
+            "capability": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "effect": {
+              "anyOf": [
+                {
+                  "const": "read",
+                  "type": "string"
+                },
+                {
+                  "const": "write",
+                  "type": "string"
+                }
+              ]
+            },
+            "examples": {
+              "description": "Example calls: each entry is a complete, valid argument object for this tool.",
+              "items": {
+                "patternProperties": {
+                  "^(.*)$": {}
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "inputSchema": {
+              "additionalProperties": true,
+              "description": "A JSON Schema document (see AiJsonSchemaObject).",
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            },
+            "outputSchema": {
+              "additionalProperties": true,
+              "description": "A JSON Schema document (see AiJsonSchemaObject).",
+              "type": "object"
+            },
+            "timeoutMs": {
+              "description": "Optional per-tool execution timeout (ms). When set, the run-loop races execute() against the deadline via an AbortController linked to ctx.signal.",
+              "type": "number"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "effect",
+            "capability",
+            "description",
+            "inputSchema"
+          ],
+          "type": "object"
+        },
+        "type": "array"
       },
       "toolManifestHash": {
         "pattern": "^[0-9a-f]{64}$",
@@ -5821,6 +6328,16 @@
             "type": "string"
           }
         ]
+      },
+      "examples": {
+        "description": "Example calls: each entry is a complete, valid argument object for this tool.",
+        "items": {
+          "patternProperties": {
+            "^(.*)$": {}
+          },
+          "type": "object"
+        },
+        "type": "array"
       },
       "inputSchema": {
         "additionalProperties": true,
@@ -6100,6 +6617,89 @@
         "type": "string"
       }
     ]
+  },
+  "AiToolFailureSchema": {
+    "properties": {
+      "cause": {
+        "type": "string"
+      },
+      "class": {
+        "anyOf": [
+          {
+            "const": "ok",
+            "type": "string"
+          },
+          {
+            "const": "ok_after_repair",
+            "type": "string"
+          },
+          {
+            "const": "unknown_tool",
+            "type": "string"
+          },
+          {
+            "const": "invalid_json",
+            "type": "string"
+          },
+          {
+            "const": "invalid_structure",
+            "type": "string"
+          },
+          {
+            "const": "invalid_value",
+            "type": "string"
+          },
+          {
+            "const": "precondition",
+            "type": "string"
+          },
+          {
+            "const": "guard_refused",
+            "type": "string"
+          },
+          {
+            "const": "approval_denied",
+            "type": "string"
+          },
+          {
+            "const": "tool_error",
+            "type": "string"
+          },
+          {
+            "const": "timeout",
+            "type": "string"
+          },
+          {
+            "const": "repeat_identical",
+            "type": "string"
+          },
+          {
+            "const": "announced_no_call",
+            "type": "string"
+          }
+        ]
+      },
+      "code": {
+        "type": "string"
+      },
+      "message": {
+        "type": "string"
+      },
+      "nextStep": {
+        "type": "string"
+      },
+      "retryable": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "code",
+      "class",
+      "message",
+      "nextStep",
+      "retryable"
+    ],
+    "type": "object"
   },
   "AiToolLimitsSchema": {
     "properties": {
@@ -12010,6 +12610,16 @@
             "type": "string"
           }
         ]
+      },
+      "examples": {
+        "description": "Example calls: each entry is a complete, valid argument object for this tool.",
+        "items": {
+          "patternProperties": {
+            "^(.*)$": {}
+          },
+          "type": "object"
+        },
+        "type": "array"
       },
       "inputSchema": {
         "additionalProperties": true,

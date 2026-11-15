@@ -64,3 +64,37 @@ fn malformed_prefixes_are_refused() {
     missing.as_object_mut().unwrap().remove("paramsDigest");
     assert!(validate_schema("AiSessionPrefixSchema", &missing).is_err());
 }
+
+fn tool(name: &str) -> Value {
+    json!({"name": name, "version": "1", "effect": "read", "capability": "c",
+        "description": "d", "inputSchema": {"type": "object"}})
+}
+
+#[test]
+fn the_tool_manifest_and_deferred_catalog_validate_and_round_trip() {
+    let mut value = prefix();
+    value["toolManifestHash"] = json!(digest('f'));
+    value["toolManifest"] = json!([tool("a"), tool("b")]);
+    value["deferredTools"] = json!([tool("late")]);
+    validate_schema("AiSessionPrefixSchema", &value).unwrap();
+    let parsed = AiSessionPrefix::from_json(value.clone()).unwrap();
+    let Optional::Present(manifest) = &parsed.tool_manifest else {
+        panic!("manifest present");
+    };
+    assert_eq!(manifest.len(), 2);
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+}
+
+#[test]
+fn a_malformed_manifest_entry_is_refused() {
+    for bad in [json!("a"), json!([{"name": "a"}]), json!({"a": 1})] {
+        for field in ["toolManifest", "deferredTools"] {
+            let mut value = prefix();
+            value[field] = bad.clone();
+            assert!(
+                validate_schema("AiSessionPrefixSchema", &value).is_err(),
+                "{field}"
+            );
+        }
+    }
+}

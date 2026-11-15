@@ -158,6 +158,12 @@ impl AgentProfile {
                 filtered.register(tool).map_err(invalid)?;
             }
         }
+        // Withheld tools stay offered; a call is refused with the reason.
+        for (definition, reason) in registry.withheld_definitions() {
+            if self.tools.contains(&definition.name) {
+                filtered.withhold_tool(definition, &reason);
+            }
+        }
         Ok(Arc::new(filtered))
     }
 }

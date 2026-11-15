@@ -46,6 +46,27 @@ resulting breaks.
    `run.warning { code: "prefix_refrozen", revision, changed }`, because that
    turn rewrites bytes a cache may hold (INV-3).
 
+6. **The tool manifest is frozen and sorted (package 1.3, CE-04, CE-05).**
+   On a session's first turn every tool the contributors offer, guard-withheld
+   ones included, is sorted by name and stored in the prefix as `toolManifest`
+   with `toolManifestHash` (SHA-256 of the canonical JSON of format and
+   definitions). `toolsDigest` is the digest of that array. Later turns send
+   the stored definitions in manifest order (`ToolRegistry::freeze_surface`),
+   whatever the contributors answer now.
+   - Guards decide at call time. A tool a guard or an unbound target hides
+     stays in the array as a withheld tool (`ToolRegistry::withhold_tool`); a
+     call is refused with `tool_not_allowed` and the reason.
+   - A manifest tool nobody offers this turn (slow or gone contributor) stays
+     in the array; a call fails with `tool_unavailable`, naming alternatives.
+   - A tool offered only after the freeze joins `deferredTools` (the deferred
+     catalog), is announced once with `run.warning { code: "tool_deferred" }`,
+     is not sent and is not callable until a loader exists (package 2.3).
+   - `tool_unavailable` per turn is reported as a `run.warning`.
+   - A prefix recorded before 1.3 gets its manifest on its next turn; if its
+     old request-order digest differs, that turn re-freezes once.
+   - A hash that does not match the stored manifest is not trusted; the
+     manifest is rebuilt and the prefix re-frozen.
+
 ## Consequences
 
 - Rewrites of the head are visible per session instead of silent. Edited

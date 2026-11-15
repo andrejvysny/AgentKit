@@ -4,6 +4,7 @@ mod call_pipeline;
 mod dispatch;
 mod envelope;
 mod layout;
+mod manifest;
 pub mod permission;
 mod provider_identity;
 mod provider_retry;
@@ -24,6 +25,7 @@ pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
     cache_key, freeze, segment_of, tools_digest,
 };
+pub use manifest::{ToolManifest, ToolSurface, manifest_hash};
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 pub use registry::{RegistryError, ToolRegistry};

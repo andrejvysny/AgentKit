@@ -1,4 +1,5 @@
 import { Type, type Static } from "@sinclair/typebox";
+import { AiToolDefinitionSchema } from "./tool.js";
 
 export const AiPromptPresetSchema = Type.Object({
   id: Type.String(),
@@ -34,6 +35,10 @@ export const AiSessionPrefixSchema = Type.Object({
   frozenAtTask: Type.String({ minLength: 1 }),
   cacheKey: Type.String({ minLength: 1 }),
   toolManifestHash: Type.Optional(Sha256HexSchema),
+  /** The frozen tool manifest, sorted by name; sent every turn (roadmap 1.3). */
+  toolManifest: Type.Optional(Type.Array(AiToolDefinitionSchema)),
+  /** Tools that joined after the freeze; listed, never sent. */
+  deferredTools: Type.Optional(Type.Array(AiToolDefinitionSchema)),
   modelProfileId: Type.Optional(Type.String({ minLength: 1 })),
   dialectVersion: Type.Optional(Type.String({ minLength: 1 })),
 });

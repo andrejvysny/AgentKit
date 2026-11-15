@@ -1,0 +1,181 @@
+//! The session tool manifest (roadmap 1.3, CE-04/CE-05, ADR 0028).
+//!
+//! At a session's first turn every tool the contributors offer is sorted by
+//! name, hashed and stored in the [`AiSessionPrefix`]. Later turns send the
+//! stored definitions, in that order, whatever the contributors answer now:
+//! a contributor that is slow or gone leaves its tools in the array (calls
+//! fail with `tool_unavailable`), a late contributor joins the deferred
+//! catalog, and a guard refuses at call time instead of removing a tool.
+//! Room for later fields (dialect, toolset) is the prefix's own optional
+//! fields; the hash covers the definitions as stored.
+
+use crate::ToolDefinition;
+use agentkit_contracts::{AiSessionPrefix, AiToolDefinition, JsonDeserialize, Optional};
+use agentkit_kernel::canonical_sha256;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+
+/// Bumped when the hashed shape of a manifest changes.
+const MANIFEST_FORMAT: u32 = 1;
+
+/// The definitions a session was frozen with, sorted by name.
+#[derive(Clone, Debug)]
+pub struct ToolManifest {
+    definitions: Vec<ToolDefinition>,
+    hash: String,
+}
+
+impl ToolManifest {
+    /// Sort `candidates` by name (a repeated name keeps its first
+    /// definition) and hash them. A definition that is not a valid wire tool
+    /// definition is left out: no provider could be sent it.
+    pub fn build(candidates: &[ToolDefinition]) -> Self {
+        Self::from_sorted(sorted_unique(candidates))
+    }
+
+    fn from_sorted(definitions: Vec<ToolDefinition>) -> Self {
+        let hash = manifest_hash(&definitions);
+        Self { definitions, hash }
+    }
+
+    /// The manifest recorded in `prefix`, if it has one that still matches
+    /// its own hash. A record that does not match is no record.
+    pub fn from_prefix(prefix: &AiSessionPrefix) -> Option<Self> {
+        let Optional::Present(entries) = &prefix.tool_manifest else {
+            return None;
+        };
+        let definitions = from_contract(entries)?;
+        let manifest = Self::from_sorted(sorted_unique(&definitions));
+        match &prefix.tool_manifest_hash {
+            Optional::Present(hash) if *hash == manifest.hash => Some(manifest),
+            _ => None,
+        }
+    }
+
+    /// The definitions to send, in manifest (name) order.
+    pub fn definitions(&self) -> &[ToolDefinition] {
+        &self.definitions
+    }
+
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.definitions
+            .binary_search_by(|definition| definition.name.as_str().cmp(name))
+            .is_ok()
+    }
+}
+
+/// SHA-256 over the canonical JSON of the sorted definitions, tagged with the
+/// manifest format.
+pub fn manifest_hash(sorted: &[ToolDefinition]) -> String {
+    let tools = serde_json::to_value(sorted).expect("tool definitions serialize");
+    canonical_sha256(&json!({"format": MANIFEST_FORMAT, "tools": tools}))
+}
+
+/// What a turn's tools mean for the session's frozen surface.
+#[derive(Clone, Debug)]
+pub struct ToolSurface {
+    /// The frozen manifest (new on a session's first turn).
+    pub manifest: ToolManifest,
+    /// The deferred catalog, sorted by name.
+    pub deferred: Vec<ToolDefinition>,
+    /// Names that joined the deferred catalog this turn.
+    pub added: Vec<String>,
+    /// Manifest tools no contributor offers this turn.
+    pub unavailable: Vec<String>,
+    /// True when the manifest was built or rebuilt this turn.
+    pub frozen_now: bool,
+}
+
+impl ToolSurface {
+    /// Reconcile this turn's `candidates` (every tool the contributors offer
+    /// now, withheld ones included) with the prefix recorded earlier.
+    pub fn reconcile(prior: Option<&AiSessionPrefix>, candidates: &[ToolDefinition]) -> Self {
+        let Some(manifest) = prior.and_then(ToolManifest::from_prefix) else {
+            return Self {
+                manifest: ToolManifest::build(candidates),
+                deferred: vec![],
+                added: vec![],
+                unavailable: vec![],
+                frozen_now: true,
+            };
+        };
+        let mut deferred = prior.and_then(recorded_deferred).unwrap_or_default();
+        let known: BTreeSet<&str> = deferred.iter().map(|d| d.name.as_str()).collect();
+        let offered: BTreeSet<&str> = candidates.iter().map(|d| d.name.as_str()).collect();
+        let late: Vec<ToolDefinition> = sorted_unique(candidates)
+            .into_iter()
+            .filter(|d| !manifest.contains(&d.name) && !known.contains(d.name.as_str()))
+            .collect();
+        let added = late.iter().map(|d| d.name.clone()).collect();
+        deferred.extend(late);
+        deferred.sort_by(|a, b| a.name.cmp(&b.name));
+        let unavailable = manifest
+            .definitions()
+            .iter()
+            .filter(|d| !offered.contains(d.name.as_str()))
+            .map(|d| d.name.clone())
+            .collect();
+        Self {
+            manifest,
+            deferred,
+            added,
+            unavailable,
+            frozen_now: false,
+        }
+    }
+
+    /// Names of the deferred tools, for the registry's not-yet-callable set.
+    pub fn deferred_names(&self) -> Vec<String> {
+        self.deferred.iter().map(|d| d.name.clone()).collect()
+    }
+
+    /// Write the manifest, its hash and the catalog into `prefix`.
+    pub fn stamp(&self, prefix: &mut AiSessionPrefix) {
+        prefix.tool_manifest_hash = Optional::Present(self.manifest.hash.clone());
+        prefix.tool_manifest = Optional::Present(to_contract(self.manifest.definitions()));
+        prefix.deferred_tools = if self.deferred.is_empty() {
+            Optional::Absent
+        } else {
+            Optional::Present(to_contract(&self.deferred))
+        };
+    }
+}
+
+fn recorded_deferred(prefix: &AiSessionPrefix) -> Option<Vec<ToolDefinition>> {
+    match &prefix.deferred_tools {
+        Optional::Present(entries) => from_contract(entries),
+        Optional::Absent => None,
+    }
+}
+
+fn sorted_unique(candidates: &[ToolDefinition]) -> Vec<ToolDefinition> {
+    let mut seen = BTreeSet::new();
+    let mut definitions: Vec<ToolDefinition> = candidates
+        .iter()
+        .filter(|definition| as_contract(definition).is_some())
+        .filter(|definition| seen.insert(definition.name.clone()))
+        .cloned()
+        .collect();
+    definitions.sort_by(|a, b| a.name.cmp(&b.name));
+    definitions
+}
+
+fn as_contract(definition: &ToolDefinition) -> Option<AiToolDefinition> {
+    let value: Value = serde_json::to_value(definition).ok()?;
+    AiToolDefinition::from_json(value).ok()
+}
+
+fn to_contract(definitions: &[ToolDefinition]) -> Vec<AiToolDefinition> {
+    definitions.iter().filter_map(as_contract).collect()
+}
+
+fn from_contract(entries: &[AiToolDefinition]) -> Option<Vec<ToolDefinition>> {
+    entries
+        .iter()
+        .map(|entry| serde_json::from_value(serde_json::to_value(entry).ok()?).ok())
+        .collect()
+}

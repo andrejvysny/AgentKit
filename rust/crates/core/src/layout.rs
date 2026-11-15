@@ -206,7 +206,8 @@ pub fn segment_of(message: &ChatMessage) -> Option<Segment> {
 }
 
 /// SHA-256 over the canonical JSON of the tool definitions in request order.
-/// The sorted manifest of roadmap 1.3 will make that order canonical.
+/// A session sends the frozen, name-sorted manifest (`manifest.rs`), so that
+/// order is canonical.
 pub fn tools_digest(tools: &[ToolDefinition]) -> String {
     canonical_sha256(&serde_json::to_value(tools).expect("tool definitions serialize"))
 }
@@ -293,6 +294,8 @@ pub fn freeze(
         frozen_at_task: task_id.to_owned(),
         cache_key: cache_key(chat_id, branch_id, revision),
         tool_manifest_hash: carried.map_or(Optional::Absent, |p| p.tool_manifest_hash.clone()),
+        tool_manifest: carried.map_or(Optional::Absent, |p| p.tool_manifest.clone()),
+        deferred_tools: carried.map_or(Optional::Absent, |p| p.deferred_tools.clone()),
         model_profile_id: carried.map_or(Optional::Absent, |p| p.model_profile_id.clone()),
         dialect_version: carried.map_or(Optional::Absent, |p| p.dialect_version.clone()),
         extra: BTreeMap::new(),
