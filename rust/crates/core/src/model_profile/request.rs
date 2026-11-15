@@ -157,8 +157,21 @@ fn choose_tool_choice(
     asked: &ToolChoice,
     notes: &mut Vec<ProfileNote>,
 ) -> Value {
+    let (effective, mut downgraded) = policy_tool_choice(profile, asked);
+    notes.append(&mut downgraded);
+    wire_tool_choice(&effective)
+}
+
+/// The tool choice the profile lets a request carry: what was asked, or
+/// `Auto` with a `tool_choice_downgraded` note when the profile allows auto
+/// only. Lane-neutral; each lane writes the result in its own wire shape.
+pub fn policy_tool_choice(
+    profile: &AiModelToolProfile,
+    asked: &ToolChoice,
+) -> (ToolChoice, Vec<ProfileNote>) {
+    let mut notes = vec![];
     if *asked == ToolChoice::Auto {
-        return json!("auto");
+        return (ToolChoice::Auto, notes);
     }
     if profile.tool_choice == AiModelToolChoicePolicy::AutoOnly {
         notes.push(ProfileNote::new(
@@ -173,9 +186,9 @@ fn choose_tool_choice(
                 profile.id
             ),
         ));
-        return json!("auto");
+        return (ToolChoice::Auto, notes);
     }
-    wire_tool_choice(asked)
+    (asked.clone(), notes)
 }
 
 /// The wire value of a `tool_choice` request, with no policy applied.

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 /// Arguments text the next request may carry. A template that maps the
 /// arguments needs an object; anything else is replaced by `{}` and counted.
-fn history_arguments(call: &ToolCall, replaced: &mut Vec<String>) -> String {
+pub(crate) fn history_arguments(call: &ToolCall, replaced: &mut Vec<String>) -> String {
     match agentkit_contracts::parse_javascript_json(&call.arguments_json) {
         Ok(Value::Object(_)) => call.arguments_json.clone(),
         _ => {
@@ -20,6 +20,17 @@ fn history_arguments(call: &ToolCall, replaced: &mut Vec<String>) -> String {
             "{}".into()
         }
     }
+}
+/// The warning for history calls whose malformed arguments were replaced.
+pub(crate) fn sanitized_note(replaced: &[String]) -> Option<ProfileNote> {
+    (!replaced.is_empty()).then(|| ProfileNote {
+        code: "history_arguments_sanitized",
+        message: format!(
+            "Replaced malformed arguments with {{}} in the history of {} earlier tool call(s): {}.",
+            replaced.len(),
+            replaced.join(", ")
+        ),
+    })
 }
 fn history_reasoning(message: &ChatMessage) -> Option<&str> {
     message
@@ -91,15 +102,8 @@ pub(crate) fn build_body(
         }
         messages.push(mapped);
     }
-    if !replaced.is_empty() {
-        notes.push(ProfileNote {
-            code: "history_arguments_sanitized",
-            message: format!(
-                "Replaced malformed arguments with {{}} in the history of {} earlier tool call(s): {}.",
-                replaced.len(),
-                replaced.join(", ")
-            ),
-        });
+    if let Some(note) = sanitized_note(&replaced) {
+        notes.push(note);
     }
     let mut body = json!({
         "model": input.model,

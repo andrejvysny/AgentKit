@@ -82,7 +82,8 @@ pub use model_profile::{
     ProfileNote, QWEN_EFFORT_TEMPLATE_KEY, REASONING_HISTORY_FIELD, REASONING_METADATA_KEY,
     RequestSettings, Salvage, SalvagedCall, THINKING_TEMPLATE_KEY, TOOL_RESPONSE_CLOSE,
     TOOL_RESPONSE_OPEN, ToolChoice, apply_message_rules, escape_tool_response_tags,
-    nudge_after_announced_call, resolve_request_settings, salvage_tool_calls, wire_tool_choice,
+    nudge_after_announced_call, policy_tool_choice, resolve_request_settings, salvage_tool_calls,
+    wire_tool_choice,
 };
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};

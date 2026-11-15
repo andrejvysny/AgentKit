@@ -1,7 +1,7 @@
 use crate::{
     TrustedTransport,
     chat_completions::usage_data,
-    responses_request::{build_responses_request_with_warnings, make_continuation},
+    responses_request::{build_responses_request_notes, make_continuation},
     responses_state::{ResponsesResult, ResponsesState},
     sse::SseDecoder,
     transport::{dispatch, dispatch_status, failure, read_json},
@@ -45,7 +45,7 @@ impl ResponsesProvider {
             if cancellation.is_cancelled() {
                 Err(CoreError::new("cancelled", "aborted"))?;
             }
-            let (body, warnings) = build_responses_request_with_warnings(
+            let (body, warnings, notes) = build_responses_request_notes(
                 &input,
                 &provider.identity,
                 provider.transport.auth_kind() == AuthKind::ChatGptAccount,
@@ -53,6 +53,10 @@ impl ResponsesProvider {
             for message in warnings {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning { code: "tool_schema_unsupported".into(), message };
+            }
+            for note in notes {
+                provider.transport.check_authority().await?;
+                yield ProviderEvent::Warning { code: note.code.into(), message: note.message };
             }
             let mut body = body;
             let response = provider.send(&input, &mut body, cancellation.clone()).await?;

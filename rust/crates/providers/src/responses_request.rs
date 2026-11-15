@@ -1,7 +1,9 @@
+use crate::chat_completions_request::{history_arguments, sanitized_note};
 use crate::content;
 use agentkit_core::{
     ChatMessage, ChatRequest, ConnectionIdentity, CoreError, OPENAI_PATCH_NAME, OPENAI_SHELL_NAME,
-    ReasoningSummary, ToolCall, builtin_tool_type, is_strict_compliant,
+    ProfileNote, ReasoningSummary, ToolCall, ToolChoice, builtin_tool_type, is_strict_compliant,
+    policy_tool_choice,
 };
 use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
@@ -50,6 +52,17 @@ pub fn build_responses_request_with_warnings(
     identity: &ConnectionIdentity,
     account: bool,
 ) -> Result<(Value, Vec<String>), CoreError> {
+    build_responses_request_notes(input, identity, account)
+        .map(|(body, warnings, _)| (body, warnings))
+}
+/// Like [`build_responses_request_with_warnings`], also returning the notes
+/// the request builder itself produced: history arguments it replaced and a
+/// tool choice the session's profile downgraded.
+pub fn build_responses_request_notes(
+    input: &ChatRequest,
+    identity: &ConnectionIdentity,
+    account: bool,
+) -> Result<(Value, Vec<String>, Vec<ProfileNote>), CoreError> {
     content::validate_selected(&input.selected_content)?;
     if account && (input.temperature.is_some() || input.max_output_tokens.is_some()) {
         return Err(CoreError::responses("unsupported_parameter"));
@@ -79,8 +92,9 @@ pub fn build_responses_request_with_warnings(
     }
     // Managed content is request-local; never checkpoint it as transcript.
     let builtins = builtin_names(input);
-    let selected_items = map_messages(&input.selected_content, &builtins)?;
-    items.extend(map_messages(&input.messages[offset..], &builtins)?);
+    let mut replaced = vec![];
+    let selected_items = map_messages(&input.selected_content, &builtins, &mut replaced)?;
+    items.extend(map_messages(&input.messages[offset..], &builtins, &mut replaced)?);
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
@@ -102,7 +116,17 @@ pub fn build_responses_request_with_warnings(
     if !instructions.is_empty() {
         body["instructions"] = instructions.into();
     }
+    let mut notes: Vec<ProfileNote> = sanitized_note(&replaced).into_iter().collect();
     if !tools.is_empty() {
+        let (choice, mut downgraded) = match &input.profile {
+            Some(profile) => policy_tool_choice(profile, &input.tool_choice),
+            None => (input.tool_choice.clone(), vec![]),
+        };
+        // Auto is the Responses default: only a changed choice is written.
+        if choice != ToolChoice::Auto || !downgraded.is_empty() {
+            body["tool_choice"] = responses_tool_choice(&choice, &builtins);
+        }
+        notes.append(&mut downgraded);
         body["tools"] = tools.into();
     }
     let mut reasoning = serde_json::Map::new();
@@ -122,7 +146,17 @@ pub fn build_responses_request_with_warnings(
         body["max_output_tokens"] = value.into();
     }
     bounded(&body)?;
-    Ok((body, warnings))
+    Ok((body, warnings, notes))
+}
+/// The Responses wire form of a tool choice: a named function is
+/// `{"type":"function","name":..}`, a vendor built-in is `{"type":<name>}`.
+fn responses_tool_choice(choice: &ToolChoice, builtins: &[&str]) -> Value {
+    match choice {
+        ToolChoice::Auto => json!("auto"),
+        ToolChoice::Required => json!("required"),
+        ToolChoice::Named(name) if builtins.contains(&name.as_str()) => json!({"type": name}),
+        ToolChoice::Named(name) => json!({"type": "function", "name": name}),
+    }
 }
 fn check_state(
     state: &State,
@@ -214,7 +248,7 @@ pub(crate) fn make_continuation(
     // Strip request-local content before persisting provider continuation.
     let selected_count =
         segment_items(&input.messages)?.len()
-            + map_messages(&input.selected_content, &builtin_names(input))?.len();
+            + map_messages(&input.selected_content, &builtin_names(input), &mut vec![])?.len();
     if selected_count > items.len() {
         return Err(CoreError::responses("invalid_request"));
     }
@@ -310,7 +344,11 @@ fn builtin_names(input: &ChatRequest) -> Vec<&'static str> {
         })
         .collect()
 }
-fn map_messages(messages: &[ChatMessage], builtins: &[&str]) -> Result<Vec<Value>, CoreError> {
+fn map_messages(
+    messages: &[ChatMessage],
+    builtins: &[&str],
+    replaced: &mut Vec<String>,
+) -> Result<Vec<Value>, CoreError> {
     let mut items = vec![];
     for message in messages {
         if message.role == "system" {
@@ -346,7 +384,7 @@ fn map_messages(messages: &[ChatMessage], builtins: &[&str]) -> Result<Vec<Value
                 items.push(builtin_call(call)?);
                 continue;
             }
-            items.push(json!({"type":"function_call","call_id":call.id,"namespace":"agentkit","name":call.name,"arguments":call.arguments_json}));
+            items.push(json!({"type":"function_call","call_id":call.id,"namespace":"agentkit","name":call.name,"arguments":history_arguments(call, replaced)}));
         }
     }
     Ok(items)

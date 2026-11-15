@@ -338,6 +338,21 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `project_instructions_unavailable` — host-emitted on an agent-session turn:
  *   an `AGENTS.md` / `CLAUDE.md` could not be read (symlink, outside the root)
  *   or exceeded its size cap and was truncated.
+ * - `tool_choice_downgraded` — The model profile allows `auto` only, so a `required` or named `tool_choice` was sent as `auto`. The message names what was asked and the profile.
+ * - `reasoning_effort_unmapped` — The requested reasoning level has no mapping in the session's model profile; nothing was sent for it.
+ * - `reasoning_effort_dropped` — The profile has no channel for a reasoning level, so the requested level was not sent.
+ * - `image_position_dropped` — Image parts were dropped from messages where the profile does not allow images (it allows them only in user messages, or nowhere). The message carries the count.
+ * - `system_message_moved` — The profile allows one system message, first; later system messages were moved into user turns. The message carries the count.
+ * - `system_moved_to_user` — The request had no user message, which the profile requires, so the system text was sent as the user turn.
+ * - `no_user_message` — The request has no user message and no system text to stand in for one, which the profile requires. Reported; the request is sent as built.
+ * - `tool_result_tags_escaped` — Tool-response tags in message text were escaped because the model's template would read them as a tool result. The message carries the count.
+ * - `history_arguments_sanitized` — On the Chat Completions lane, malformed arguments of earlier tool calls were replaced with `{}` in the history sent to the server (a strict server rejects the whole request otherwise). The message lists the call ids.
+ * - `tool_call_salvaged` — The server returned tool calls as reply text; they were parsed from it and are marked salvaged on their `run.tool.record`.
+ * - `tool_call_repaired` — A provider tool call was incomplete (cut off or malformed); it is answered with a failure the model reads and can retry. The message names the repairs.
+ * - `toolset_promoted` — Promote mode: a toolset `toolset_load` asked for joined the tools array at the turn boundary. `data` also carries `toolset`, `tools` and `revision` (the manifest revision recorded for it).
+ * - `tool_deferred` — As a warning: tools joined after the session's tool list was fixed and are in the deferred catalog (`data.tools`). As an `errorCode`: a call named a deferred tool directly; the message says to use `tool_call`.
+ * - `tool_unavailable` — As a warning: tools in the session's frozen tool list are not offered by any contributor this turn (`data.tools`). As an `errorCode`: a call named a tool that is not available now.
+ * - `tool_name_collision` — More than one tool would be offered under the same name in the session's dialect; only the first is in the tool list. `data.tools` names them.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -371,6 +386,21 @@ export type AiRunWarningCode =
   | "project_instructions_unavailable"
   | "tool_schema_unsupported"
   | "tool_less_retry"
+  | "tool_choice_downgraded"
+  | "reasoning_effort_unmapped"
+  | "reasoning_effort_dropped"
+  | "image_position_dropped"
+  | "system_message_moved"
+  | "system_moved_to_user"
+  | "no_user_message"
+  | "tool_result_tags_escaped"
+  | "history_arguments_sanitized"
+  | "tool_call_salvaged"
+  | "tool_call_repaired"
+  | "toolset_promoted"
+  | "tool_deferred"
+  | "tool_unavailable"
+  | "tool_name_collision"
   | "prefix_refrozen";
 
 export const AiRunWarningEventSchema = Type.Object({

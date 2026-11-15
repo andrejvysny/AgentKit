@@ -46,3 +46,9 @@ written, NOT run (validation deferred to the owner).
   profiles); Qwen is Chat Completions only.
 - Nudge stays off: the profile flag exists, no hook was added.
 - Context budgeting does not count sent-back reasoning tokens.
+
+## Follow-up: warning codes, Responses lane parity, reasoning tokens
+
+- All profile/pipeline warning codes are in `AiRunWarningCode` (`packages/contracts/src/run-events.ts`) and the table in `docs/contracts.md`.
+- Responses lane: `build_responses_request_notes` applies the history-arguments sanitiser (shared `history_arguments`) and the profile tool-choice policy (`policy_tool_choice`, shared with Chat Completions); notes become `run.warning` events. Tests `providers/tests/openai_lane.rs::responses_*` (written, NOT run).
+- `chat/context_budget.rs::message_tokens` counts the `reasoningContent` metadata (unit test `sent_back_reasoning_counts_toward_message_tokens`, written, NOT run).

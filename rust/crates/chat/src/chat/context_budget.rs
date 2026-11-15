@@ -224,7 +224,16 @@ pub(super) fn message_tokens(message: &ChatMessage) -> u64 {
             .sum(),
         other => chars(&other.to_string()),
     };
+    // Reasoning a profile sends back rides on the assistant message's
+    // metadata and is part of the request, so it counts.
+    let reasoning = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(agentkit_core::REASONING_METADATA_KEY))
+        .and_then(Value::as_str)
+        .map_or(0, chars);
     (content
+        + reasoning
         + message
             .tool_calls
             .iter()
@@ -548,5 +557,19 @@ mod tests {
                 .unwrap();
             assert_eq!((budget.window, budget.reserve), (128, 32));
         }
+    }
+
+    #[test]
+    fn sent_back_reasoning_counts_toward_message_tokens() {
+        let plain = ChatMessage::text("assistant", "abcd");
+        let mut with = plain.clone();
+        with.metadata = Some(
+            json!({"reasoningContent": "x".repeat(400)})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(message_tokens(&plain), 1);
+        assert_eq!(message_tokens(&with), 101);
     }
 }

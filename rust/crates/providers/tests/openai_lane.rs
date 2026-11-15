@@ -348,3 +348,84 @@ async fn nothing_is_salvaged_with_the_option_off_or_when_the_server_parsed_calls
     bare.tools.clear();
     assert!(requested(&send(bare, XML_CALL).await).is_empty());
 }
+
+// ---- the Responses lane shares the history sanitiser and the choice policy -
+
+fn responses_identity() -> ConnectionIdentity {
+    ConnectionIdentity {
+        provider_id: "provider".into(),
+        connection_id: "account".into(),
+        protocol: "responses".into(),
+        generation: 1,
+    }
+}
+
+fn responses_history() -> Vec<ChatMessage> {
+    let mut assistant = ChatMessage::text("assistant", "");
+    assistant.tool_calls = ["{\"a\":", "[1,2]", "{\"ok\":1}"]
+        .iter()
+        .enumerate()
+        .map(|(index, arguments)| ToolCall {
+            id: format!("c{index}"),
+            name: "read_file".into(),
+            arguments_json: (*arguments).into(),
+        })
+        .collect();
+    let mut messages = vec![ChatMessage::text("user", "go"), assistant];
+    for index in 0..3 {
+        let mut result = ChatMessage::text("tool", "{}");
+        result.tool_call_id = Some(format!("c{index}"));
+        messages.push(result);
+    }
+    messages
+}
+
+#[test]
+fn responses_history_arguments_are_sanitised_and_recorded() {
+    for profile in [Some(qwen()), None] {
+        let input = request(profile, responses_history());
+        let (body, _, notes) =
+            build_responses_request_notes(&input, &responses_identity(), false).unwrap();
+        let arguments: Vec<&str> = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "function_call")
+            .map(|item| item["arguments"].as_str().unwrap())
+            .collect();
+        assert_eq!(arguments, ["{}", "{}", "{\"ok\":1}"]);
+        let codes: Vec<&str> = notes.iter().map(|note| note.code).collect();
+        assert_eq!(codes, ["history_arguments_sanitized"]);
+    }
+}
+
+#[test]
+fn responses_tool_choice_follows_the_profile_policy() {
+    let go = || vec![ChatMessage::text("user", "go")];
+    // Auto is the default and stays unwritten.
+    let input = request(Some(qwen()), go());
+    let (body, _, notes) =
+        build_responses_request_notes(&input, &responses_identity(), false).unwrap();
+    assert!(body.get("tool_choice").is_none() && notes.is_empty());
+    // An auto-only profile downgrades a forced tool and says so.
+    let mut input = request(Some(qwen()), go());
+    input.tool_choice = ToolChoice::Named("read_file".into());
+    let (body, _, notes) =
+        build_responses_request_notes(&input, &responses_identity(), false).unwrap();
+    assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(notes.iter().map(|n| n.code).collect::<Vec<_>>(), ["tool_choice_downgraded"]);
+    // A profile that allows it, and no profile, send what was asked.
+    let openai = Arc::new(builtin_profile(OPENAI_PROFILE_ID).unwrap());
+    for profile in [Some(openai), None] {
+        let mut input = request(profile, go());
+        input.tool_choice = ToolChoice::Required;
+        let (body, _, notes) =
+            build_responses_request_notes(&input, &responses_identity(), false).unwrap();
+        assert_eq!(body["tool_choice"], "required");
+        assert!(notes.is_empty());
+        input.tool_choice = ToolChoice::Named("read_file".into());
+        let (body, _, _) =
+            build_responses_request_notes(&input, &responses_identity(), false).unwrap();
+        assert_eq!(body["tool_choice"], json!({"type": "function", "name": "read_file"}));
+    }
+}
