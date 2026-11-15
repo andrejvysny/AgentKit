@@ -1,0 +1,302 @@
+{
+ "toolsets": [
+  {
+   "id": "files",
+   "title": "Files",
+   "card": "Read, search, list and edit files in the workspace.",
+   "tools": [
+    {
+     "name": "file_read",
+     "description": "Read a file"
+    },
+    {
+     "name": "file_write",
+     "description": "Write a file"
+    },
+    {
+     "name": "file_edit",
+     "description": "Replace text in a file"
+    },
+    {
+     "name": "file_search",
+     "description": "Search file contents"
+    },
+    {
+     "name": "file_list",
+     "description": "List a directory"
+    }
+   ],
+   "keywords": [
+    "subor",
+    "subory",
+    "adresar",
+    "priecinok",
+    "citaj",
+    "uprav",
+    "zapis",
+    "obsah"
+   ]
+  },
+  {
+   "id": "shell",
+   "title": "Shell",
+   "card": "Run commands and the project's tests in a sandbox.",
+   "tools": [
+    {
+     "name": "shell_run",
+     "description": "Run a command"
+    },
+    {
+     "name": "test_run",
+     "description": "Run the project tests"
+    }
+   ],
+   "keywords": [
+    "prikaz",
+    "terminal",
+    "spusti",
+    "testy",
+    "build"
+   ]
+  },
+  {
+   "id": "git",
+   "title": "Git",
+   "card": "Inspect repository status, diffs and history (read-only).",
+   "tools": [
+    {
+     "name": "git_status",
+     "description": "Show repository status"
+    },
+    {
+     "name": "git_diff",
+     "description": "Show changes between commits"
+    },
+    {
+     "name": "git_log",
+     "description": "Show commit history"
+    }
+   ],
+   "keywords": [
+    "commit",
+    "vetva",
+    "vetve",
+    "vetvy",
+    "branch",
+    "zmeny",
+    "historia",
+    "rozdiel"
+   ]
+  },
+  {
+   "id": "plan",
+   "title": "Plan",
+   "card": "Submit a written plan and ask for a permission mode.",
+   "tools": [
+    {
+     "name": "plan_submit",
+     "description": "Submit a plan for approval"
+    }
+   ],
+   "keywords": [
+    "plan",
+    "navrh",
+    "schvalenie"
+   ]
+  },
+  {
+   "id": "lsp",
+   "title": "Language server",
+   "card": "Definitions, references, symbols and diagnostics from the language server.",
+   "tools": [
+    {
+     "name": "lsp_definition",
+     "description": "Go to the definition of a symbol"
+    },
+    {
+     "name": "lsp_references",
+     "description": "Find references to a symbol"
+    },
+    {
+     "name": "lsp_diagnostics",
+     "description": "Show compiler diagnostics"
+    },
+    {
+     "name": "lsp_rename",
+     "description": "Rename a symbol"
+    }
+   ],
+   "keywords": [
+    "definicia",
+    "symbol",
+    "funkcia",
+    "chyby"
+   ]
+  },
+  {
+   "id": "web",
+   "title": "Web",
+   "card": "Fetch web pages and search the internet.",
+   "tools": [
+    {
+     "name": "web_fetch",
+     "description": "Fetch a URL"
+    },
+    {
+     "name": "web_search",
+     "description": "Search the web"
+    }
+   ],
+   "keywords": [
+    "internet",
+    "stranka",
+    "vyhladaj",
+    "odkaz",
+    "online",
+    "url"
+   ]
+  }
+ ],
+ "requests": [
+  {
+   "text": "Read the file src/main.rs and show me its contents",
+   "expect": "files"
+  },
+  {
+   "text": "List the files in the docs directory",
+   "expect": "files"
+  },
+  {
+   "text": "Replace the old import in the config file",
+   "expect": "files"
+  },
+  {
+   "text": "Search file contents for TODO comments",
+   "expect": "files"
+  },
+  {
+   "text": "Prečítaj súbor README a uprav nadpis",
+   "expect": "files"
+  },
+  {
+   "text": "Zobraz zoznam súborov v priečinku docs",
+   "expect": "files"
+  },
+  {
+   "text": "Open src/lib.rs and edit the first function",
+   "expect": "files"
+  },
+  {
+   "text": "Write the new content into notes.txt",
+   "expect": "files"
+  },
+  {
+   "text": "Zapíš nový obsah do súboru config.toml",
+   "expect": "files"
+  },
+  {
+   "text": "Run the unit tests and tell me what fails",
+   "expect": "shell"
+  },
+  {
+   "text": "Execute the build command in the terminal",
+   "expect": "shell"
+  },
+  {
+   "text": "Spusti testy a ukáž chyby",
+   "expect": "shell"
+  },
+  {
+   "text": "Spusti príkaz npm install v termináli",
+   "expect": "shell"
+  },
+  {
+   "text": "Run cargo test in the sandbox",
+   "expect": "shell"
+  },
+  {
+   "text": "Show git status and the current diff",
+   "expect": "git"
+  },
+  {
+   "text": "Who changed this line? Show the commit history",
+   "expect": "git"
+  },
+  {
+   "text": "Zobraz históriu commitov",
+   "expect": "git"
+  },
+  {
+   "text": "Aké zmeny sú vo vetve feature?",
+   "expect": "git"
+  },
+  {
+   "text": "Compare the current branch with main",
+   "expect": "git"
+  },
+  {
+   "text": "Show me the last five commits",
+   "expect": "git"
+  },
+  {
+   "text": "Check the status of the repository",
+   "expect": "git"
+  },
+  {
+   "text": "Aký je rozdiel medzi týmito dvoma commitmi",
+   "expect": "git"
+  },
+  {
+   "text": "Write a plan before making changes and ask me to approve",
+   "expect": "plan"
+  },
+  {
+   "text": "Navrhni plán implementácie a čakaj na schválenie",
+   "expect": "plan"
+  },
+  {
+   "text": "Submit the plan for approval",
+   "expect": "plan"
+  },
+  {
+   "text": "Go to the definition of the Config symbol",
+   "expect": "lsp"
+  },
+  {
+   "text": "Find all references to this function",
+   "expect": "lsp"
+  },
+  {
+   "text": "Rename the symbol Parser to Lexer everywhere",
+   "expect": "lsp"
+  },
+  {
+   "text": "Show compiler diagnostics and type errors",
+   "expect": "lsp"
+  },
+  {
+   "text": "Nájdi definíciu funkcie parse",
+   "expect": "lsp"
+  },
+  {
+   "text": "Fetch https://example.com/docs and summarize it",
+   "expect": "web"
+  },
+  {
+   "text": "Search the web for Rust async tutorials",
+   "expect": "web"
+  },
+  {
+   "text": "Vyhľadaj na internete najnovšiu verziu tokio",
+   "expect": "web"
+  },
+  {
+   "text": "Otvor odkaz a zhrň stránku",
+   "expect": "web"
+  },
+  {
+   "text": "Look up the latest release notes online",
+   "expect": "web"
+  }
+ ]
+}

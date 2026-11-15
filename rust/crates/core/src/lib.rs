@@ -18,6 +18,7 @@ mod model_profile;
 pub mod permission;
 mod provider_identity;
 mod provider_retry;
+mod recommender;
 mod registry;
 mod run;
 mod tool_execution;
@@ -85,6 +86,12 @@ pub use model_profile::{
 };
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
+// T4.4: toolset recommender (lexical + usage, seam for a vector term).
+pub use recommender::{
+    DEFAULT_TOP_K as RECOMMENDER_TOP_K, InMemoryUsage, LexicalScorer, Recommendation, Recommender,
+    RecommenderOptions, ScoreRole, Scored, TOP_TWO_HIT_RATE_THRESHOLD, ToolsetDoc, ToolsetScorer,
+    UsageScorer, UsageStore, docs_from_view, record_usage, tokenize as tokenize_request,
+};
 pub use registry::{RegistryError, ToolRegistry};
 pub use run::{RunEventGate, RunHandle, RunOptions, RunResult, Terminal, run_chat};
 pub use tokio_util::sync::CancellationToken;
