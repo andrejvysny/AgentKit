@@ -779,10 +779,17 @@ export const AiRunWaitingEventSchema = Type.Object({
       Type.String({ description: "ISO-8601 expiry of the request." }),
     ),
     kind: Type.Optional(
-      Type.Union([Type.Literal("input"), Type.Literal("approval")], {
-        description:
-          "`approval`: a human must approve this exact call (ADR 0019). Absent means `input`.",
-      }),
+      Type.Union(
+        [
+          Type.Literal("input"),
+          Type.Literal("approval"),
+          Type.Literal("child_wait"),
+        ],
+        {
+          description:
+            "`approval`: a human must approve this exact call (ADR 0019). `child_wait`: the run parked until its delegated children settle. Absent means `input`.",
+        },
+      ),
     ),
     argsSha256: Type.Optional(
       Type.String({

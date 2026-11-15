@@ -320,6 +320,7 @@ pub async fn agentkit_agents::SubagentService::restore_leases(&self) -> agentkit
 pub async fn agentkit_agents::SubagentService::resume(&self, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub async fn agentkit_agents::SubagentService::resume_for_parent(&self, &str, &str, core::option::Option<&str>) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub fn agentkit_agents::SubagentService::session(&self) -> &agentkit_sessions::session::AgentSessionService<agentkit_store::actor::SqliteStore>
+pub async fn agentkit_agents::SubagentService::shutdown_waker(&self)
 pub async fn agentkit_agents::SubagentService::spawn(&self, &agentkit_agents::SpawnRequest) -> agentkit_agents::AgentsResult<agentkit_agents::SpawnedChild>
 pub async fn agentkit_agents::SubagentService::status(&self, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
 pub fn agentkit_agents::SubagentService::store(&self) -> &agentkit_store::actor::SqliteStore

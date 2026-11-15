@@ -118,13 +118,6 @@ pub(crate) static FILES: &[Spec] = &[
         "Read from an earlier line; the message tells how many lines exist.",
     ),
     s(
-        "invalid_arguments",
-        C::InvalidStructure,
-        true,
-        "The arguments are not valid.",
-        "Fix the arguments named in the message and call again.",
-    ),
-    s(
         "invalid_configuration",
         C::ToolError,
         false,

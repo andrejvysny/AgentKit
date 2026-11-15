@@ -99,6 +99,7 @@ pub struct agentkit_runtime::SubagentLane
 impl agentkit_runtime::SubagentLane
 pub fn agentkit_runtime::SubagentLane::configure(&self, agentkit_agents::subagents::config::SubagentConfig)
 pub async fn agentkit_runtime::SubagentLane::list(&self, &str) -> agentkit_agents::errors::AgentsResult<alloc::vec::Vec<agentkit_agents::subagents::service::SubagentView>>
+pub async fn agentkit_runtime::SubagentLane::shutdown(&self)
 pub async fn agentkit_runtime::SubagentLane::status(&self, &str) -> agentkit_agents::errors::AgentsResult<agentkit_agents::subagents::service::SubagentView>
 pub fn agentkit_runtime::SubagentLane::view(&self) -> core::option::Option<serde_json::value::Value>
 impl agentkit_chat::ports::DelegationGuidance for agentkit_runtime::SubagentLane

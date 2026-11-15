@@ -1,17 +1,7 @@
 {
   "persisted": {
-    "instructions": "policy",
+    "instructions": "policy\n\nrules",
     "input": [
-      {
-        "type": "message",
-        "role": "system",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "rules"
-          }
-        ]
-      },
       {
         "type": "message",
         "role": "user",
@@ -49,18 +39,8 @@
     ]
   },
   "legacy": {
-    "instructions": "policy",
+    "instructions": "policy\n\nrules",
     "input": [
-      {
-        "type": "message",
-        "role": "system",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "rules"
-          }
-        ]
-      },
       {
         "type": "message",
         "role": "user",

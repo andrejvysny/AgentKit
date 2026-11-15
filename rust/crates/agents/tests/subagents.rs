@@ -844,9 +844,9 @@ async fn parent_settlement_reaps_live_children() {
         .cancel_task("parent-turn", h.subagents.now_ms())
         .await
         .unwrap();
-    let reaped = h.subagents.reap_orphans().await.unwrap();
-    assert_eq!(reaped, 1);
-    // Re-running the sweep (startup + observer overlap) is idempotent.
+    // The store cancel reaps the children in the same transaction, so the
+    // sweep finds nothing left (and stays idempotent on re-run).
+    assert_eq!(h.subagents.reap_orphans().await.unwrap(), 0);
     assert_eq!(h.subagents.reap_orphans().await.unwrap(), 0);
     // The cancel is recorded while the wedged worker still holds the turn.
     let mid = h.status(&child.child_chat_id).await;
@@ -854,7 +854,7 @@ async fn parent_settlement_reaps_live_children() {
     assert!(
         mid.error
             .as_deref()
-            .is_some_and(|error| error.contains("parent turn settled"))
+            .is_some_and(|error| error.contains("parent cancelled"))
     );
     // Cooperative: the claim is cancelled and the worker lands it.
     h.hold(false);
@@ -887,7 +887,7 @@ async fn reaped_exclusive_orphan_keeps_its_lease_until_the_turn_settles() {
         .cancel_task("parent-turn", h.subagents.now_ms())
         .await
         .unwrap();
-    assert_eq!(h.subagents.reap_orphans().await.unwrap(), 1);
+    assert_eq!(h.subagents.reap_orphans().await.unwrap(), 0);
     // Cooperative cancel: the wedged child may still be mid-tool, so a
     // competing exclusive writer must stay refused until it settles.
     assert_eq!(
@@ -927,8 +927,42 @@ async fn orphan_reaper_cancels_the_live_turn_behind_a_stale_pointer() {
     // Crash shape: the registry still names an already-settled turn (a
     // follow-up promotion, or admission before `set_subagent_turn`), while
     // the child session runs another live turn.
+    // `cancel_task` would reap the child itself, so settle the parent the
+    // non-reaping way: claim it and settle it terminal.
+    // Startup recovery may have parked the never-claimed stand-in as
+    // interrupted; a claim needs it queued.
+    let before = h.store.get_task("parent-turn").await.unwrap();
+    if before
+        .as_ref()
+        .is_some_and(|task| task.status == agentkit_store::TaskStatus::Interrupted)
+    {
+        h.store
+            .resume_task("parent-turn", h.subagents.now_ms())
+            .await
+            .unwrap();
+    }
+    let claimed = h
+        .store
+        .claim(agentkit_store::ClaimInput {
+            owner_id: "test".into(),
+            now: h.subagents.now_ms(),
+            ttl_ms: 60_000,
+            kinds: vec!["parent.hold".into()],
+            busy_scopes: vec![],
+            max_attempts: 3,
+        })
+        .await
+        .unwrap()
+        .unwrap_or_else(|| panic!("parent claimed: {before:?}"));
     h.store
-        .cancel_task("parent-turn", h.subagents.now_ms())
+        .settle(agentkit_store::SettleTask {
+            fence: claimed.lease.fence(),
+            now: h.subagents.now_ms(),
+            status: agentkit_store::TaskStatus::Cancelled,
+            error: None,
+            events: vec![],
+            messages: vec![],
+        })
         .await
         .unwrap();
     h.store

@@ -108,6 +108,13 @@ impl SubagentLane {
         .ok()
     }
 
+    /// Stop the parked-parent waker and wait for it to release the store.
+    pub async fn shutdown(&self) {
+        if let Some(service) = self.service() {
+            service.shutdown_waker().await;
+        }
+    }
+
     pub(crate) async fn reap_orphans(&self) -> AgentsResult<usize> {
         match self.service() {
             Some(service) => service.reap_orphans().await,

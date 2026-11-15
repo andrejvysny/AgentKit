@@ -970,6 +970,9 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     // once no new dispatch can start; a dead process's leftovers
     // die with the process, not with us.
     core.runtime.lsp_lane().close().await;
+    // The parked-parent waker must not outlive the service: it would keep
+    // the store (and its owner lock) alive past `close()`.
+    core.runtime.subagent_lane().shutdown().await;
     drop(core);
     match first_error {
         Some(error) => Err(error),

@@ -341,6 +341,7 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunVerificati
 pub fn agentkit_contracts::AiRunVerificationEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 pub enum agentkit_contracts::AiRunWaitingEventDataKind
 pub agentkit_contracts::AiRunWaitingEventDataKind::Approval
+pub agentkit_contracts::AiRunWaitingEventDataKind::ChildWait
 pub agentkit_contracts::AiRunWaitingEventDataKind::Input
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunWaitingEventDataKind
 pub fn agentkit_contracts::AiRunWaitingEventDataKind::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>

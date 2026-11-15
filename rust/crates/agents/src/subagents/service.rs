@@ -160,9 +160,20 @@ struct WakerState {
     failures: AtomicU64,
     /// A failure streak is reported once, not once per tick.
     warned: AtomicBool,
+    /// Set when the last owning handle drops or the host shuts down.
+    stopped: AtomicBool,
+    /// Wakes the loop out of its sleep so it exits at once.
+    stop: tokio::sync::Notify,
+    /// The loop task, so shutdown can wait until it released everything.
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl WakerState {
+    fn request_stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.stop.notify_one();
+    }
+
     fn note_failure(&self, what: &str, error: &dyn std::fmt::Display) {
         self.failures.fetch_add(1, Ordering::Relaxed);
         if !self.warned.swap(true, Ordering::Relaxed) {
@@ -197,6 +208,21 @@ pub struct SubagentService {
     routable_providers: Option<Arc<std::collections::BTreeSet<String>>>,
     /// Parked-parent waker lifecycle (see `ensure_waker`).
     waker: Arc<WakerState>,
+    /// Keeps the store alive for as long as any handle exists. The waker
+    /// loop holds only a `Weak` to it, so it never pins the store.
+    owner: Option<Arc<ServiceOwner>>,
+}
+
+/// The shared core the waker upgrades per tick. Dropping the last handle
+/// drops it, which stops the waker and releases the store.
+struct ServiceOwner {
+    core: SubagentService,
+}
+
+impl Drop for ServiceOwner {
+    fn drop(&mut self) {
+        self.core.waker.request_stop();
+    }
 }
 
 /// Releases a lease taken during `resume` unless disarmed with `keep`, so
@@ -277,14 +303,28 @@ impl SubagentService {
             spawn_gate: Arc::new(tokio::sync::Mutex::new(())),
             routable_providers: None,
             waker: Arc::new(WakerState::default()),
+            owner: None,
         }
+        .with_owner()
+    }
+
+    /// (Re)build the owner from the current fields; call after any field
+    /// change so the waker's copy matches.
+    fn with_owner(mut self) -> Self {
+        self.owner = None;
+        // Dropping the previous owner requested a stop; this is a rebuild,
+        // not a shutdown.
+        self.waker.stopped.store(false, Ordering::SeqCst);
+        let owner = Arc::new(ServiceOwner { core: self.clone() });
+        self.owner = Some(owner);
+        self
     }
 
     /// Inject the routable provider ids once at bind time so a role pinned
     /// to an unroutable provider fails at spawn, not on the child's turn.
     pub fn with_routable_providers(mut self, ids: std::collections::BTreeSet<String>) -> Self {
         self.routable_providers = Some(Arc::new(ids));
-        self
+        self.with_owner()
     }
 
     /// Refuse a role/provider/model combination the executor cannot honor,
@@ -1174,29 +1214,61 @@ impl SubagentService {
     /// is parked it backs off (a park or a settle nudges it awake) and does
     /// not scan. It ends when every other clone of the service is gone.
     pub fn ensure_waker(&self) {
+        let Some(owner) = &self.owner else {
+            return;
+        };
         if self.waker.started.swap(true, Ordering::SeqCst) {
             return;
         }
-        let service = self.clone();
-        tokio::spawn(async move {
+        let weak = Arc::downgrade(owner);
+        let waker = self.waker.clone();
+        let handle = tokio::spawn(async move {
             let mut idle: u32 = 0;
-            loop {
-                let poll = service.config().limits.await_poll_ms.max(10);
+            while let Some(poll) = weak
+                .upgrade()
+                .map(|owner| owner.core.config().limits.await_poll_ms.max(10))
+            {
                 let delay = std::time::Duration::from_millis(poll << idle.min(3));
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {}
-                    _ = service.waker.nudge.notified() => idle = 0,
+                    _ = waker.nudge.notified() => idle = 0,
+                    _ = waker.stop.notified() => break,
                 }
-                if Arc::strong_count(&service.waker) <= 1 {
+                if waker.stopped.load(Ordering::SeqCst) {
                     break;
                 }
-                match service.sweep_parked().await {
+                // Strong only for the tick: the loop never pins the store.
+                let Some(owner) = weak.upgrade() else {
+                    break;
+                };
+                match owner.core.sweep_parked().await {
                     Ok(Some(_)) => idle = 0,
                     Ok(None) => idle = idle.saturating_add(1),
-                    Err(error) => service.waker.note_failure("sweep", &error),
+                    Err(error) => waker.note_failure("sweep", &error),
                 }
             }
         });
+        *self
+            .waker
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(handle);
+    }
+
+    /// Stop the waker and wait until its task has exited, so the store is
+    /// no longer referenced by it. Idempotent; a stopped waker never
+    /// restarts. The host calls this on shutdown.
+    pub async fn shutdown_waker(&self) {
+        self.waker.request_stop();
+        let handle = self
+            .waker
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
     }
 
     /// Wake sweeps that failed since the service started (health counter).

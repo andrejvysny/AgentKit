@@ -16,6 +16,8 @@ pub enum AiRunWaitingEventDataKind {
     Input,
     #[serde(rename = "approval")]
     Approval,
+    #[serde(rename = "child_wait")]
+    ChildWait,
 }
 crate::impl_json_via_serde!(AiRunWaitingEventDataKind);
 

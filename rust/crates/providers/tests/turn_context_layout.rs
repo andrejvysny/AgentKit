@@ -170,16 +170,11 @@ fn responses_keeps_selected_content_out_of_instructions_and_ahead_of_nothing() {
     for request in [persisted(), legacy()] {
         let body = responses_body(&request);
         assert!(!body["instructions"].to_string().contains("SKILL BODY"));
+        // S2-S4 are joined into `instructions`; no system item remains.
+        assert_eq!(body["instructions"], "policy\n\nrules");
         let input = body["input"].as_array().unwrap();
+        assert!(input.iter().all(|item| item["role"] != "system"));
         let skill = first_mention(input, "SKILL BODY").expect("the skill is sent");
-        let last_system = input
-            .iter()
-            .rposition(|item| item["role"] == "system")
-            .unwrap();
-        assert!(
-            skill > last_system,
-            "selected content precedes system: {input:?}"
-        );
         assert_eq!(input[skill]["role"], "user");
     }
 }
