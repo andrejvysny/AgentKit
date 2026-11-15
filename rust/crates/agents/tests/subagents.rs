@@ -2566,6 +2566,55 @@ async fn spawn_tool_without_a_call_identity_requires_an_explicit_key() {
     h.await_all().await;
 }
 
+/// TU-06: the model sends no key. A retried call (same run id, same call
+/// id) is one spawn; another call id is another child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retried_spawn_call_without_any_key_is_idempotent() {
+    let h = Harness::start().await;
+    let tools = SubagentContributor::new(h.subagents.clone())
+        .contribute(&contribution_context(Some("parent".into())))
+        .await
+        .unwrap();
+    let spawn = tools
+        .into_iter()
+        .find_map(|contributed| match contributed {
+            ContributedTool::Read(tool) if tool.definition().name == "subagent_spawn" => Some(tool),
+            _ => None,
+        })
+        .expect("spawn tool");
+    let context = |call_id: &str| agentkit_core::ToolContext {
+        run_id: "parent-turn".into(),
+        tool_call_id: Some(call_id.into()),
+        attempt_id: None,
+        chat_id: Some("parent".into()),
+        scope_id: Some("parent".into()),
+        user_id: None,
+        bindings: vec![],
+        limits: ToolLimits::default(),
+        cancellation: CancellationToken::new(),
+        dispatch_guard: None,
+        metadata: Default::default(),
+        suspension: None,
+    };
+    let input = json!({"role": "reviewer", "prompt": "audit"});
+    let first = spawn.execute(context("call-1"), input.clone()).await.unwrap();
+    let retry = spawn.execute(context("call-1"), input.clone()).await.unwrap();
+    assert!(first.ok, "{first:?}");
+    assert!(retry.ok, "{retry:?}");
+    assert_eq!(
+        first.data.as_ref().unwrap()["childChatId"],
+        retry.data.as_ref().unwrap()["childChatId"],
+    );
+    let second = spawn.execute(context("call-2"), input).await.unwrap();
+    assert!(second.ok, "{second:?}");
+    assert_ne!(
+        first.data.as_ref().unwrap()["childChatId"],
+        second.data.as_ref().unwrap()["childChatId"],
+    );
+    assert_eq!(h.subagents.list("parent").await.unwrap().len(), 2);
+    h.await_all().await;
+}
+
 #[test]
 fn subagent_mutators_are_flagged_for_receipts_but_reads_are_not() {
     for name in [

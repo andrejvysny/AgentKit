@@ -588,8 +588,10 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
 }
 
 /// Not offered in the schema (lint L7: the model supplies no revision or
-/// hash); still accepted, so a host that holds a hash can pin the version
-/// and the check behind it stays. Follow-up T1.5: runtime-owned revisions.
+/// hash); still accepted for one release, so a host that holds a hash can
+/// pin the version. Absent, the session read ledger supplies the hash
+/// (T1.5): `file_changed` after an outside edit, `file_not_read` when the
+/// session never read the file.
 fn parse_expected_sha(input: &Map<String, Value>) -> Result<Option<String>, CodingError> {
     let value = opt_string(input, "expectedSha256", 64)?;
     let Some(value) = value else {

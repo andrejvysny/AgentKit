@@ -232,6 +232,38 @@ fn spawn_key(context: &ToolContext, input: &Value) -> String {
     )
 }
 
+/// Idempotency key of one logical call: the turn (run id) and the model's
+/// call id. A retry of the same call yields the same key; the same call id
+/// in another turn does not collide. Models never supply it (TU-06); the
+/// old `*Key` parameters stay accepted for one release and win when sent.
+fn call_key(context: &ToolContext) -> String {
+    format!(
+        "{}|{}",
+        context.run_id,
+        context.tool_call_id.as_deref().unwrap_or("")
+    )
+}
+
+/// Without a logical call id the derived key would collapse every call of
+/// one tool into one; only an explicitly sent legacy key can stand in.
+fn require_call_identity(
+    context: &ToolContext,
+    input: &Value,
+    legacy_param: &str,
+) -> Result<(), String> {
+    let sent = input.get(legacy_param).and_then(Value::as_str).is_some();
+    if context.tool_call_id.is_none() && !sent {
+        return Err(
+            "spawn_key_required: this call carries no tool-call identity, so the runtime \
+             cannot tell a retry from a second call. Why: the idempotency key is derived \
+             from the turn and the call id. Next: call the tool again from a normal tool \
+             turn."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// The caller's coordinates: only a session turn with a live task may
 /// coordinate children, and it may coordinate only its OWN.
 fn parent_coordinates(context: &ToolContext) -> Result<(String, String), CoreError> {
@@ -350,19 +382,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                     Box::pin(async move {
                         let (parent_chat_id, parent_task_id) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
-                        // Without a logical call id the derived key would
-                        // collapse every spawn of one role into one child.
-                        if context.tool_call_id.is_none()
-                            && input.get("spawnKey").and_then(Value::as_str).is_none()
-                        {
-                            return Err(
-                                "spawn_key_required: this call carries no tool-call identity, so \
-                                 the runtime cannot tell a retry from a second spawn. Why: the \
-                                 child's identity is derived from the call id. Next: call \
-                                 subagent_spawn again from a normal tool turn."
-                                    .into(),
-                            );
-                        }
+                        require_call_identity(&context, &input, "spawnKey")?;
                         let request = SpawnRequest {
                             parent_chat_id,
                             parent_task_id,
@@ -445,10 +465,11 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             .as_str()
                             .ok_or_else(|| "content is required".to_owned())?;
                         let mode = input["mode"].as_str().unwrap_or("queue");
+                        require_call_identity(&context, &input, "messageKey")?;
                         let message_key = input["messageKey"]
                             .as_str()
                             .map(str::to_owned)
-                            .unwrap_or_else(|| spawn_key(&context, &input));
+                            .unwrap_or_else(|| call_key(&context));
                         let row = service
                             .store()
                             .get_subagent(child)
@@ -554,12 +575,11 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             }
                             None => return Err(format!("subagent_not_found: {child}")),
                         }
+                        require_call_identity(&context, &input, "resumeKey")?;
                         let resume_key = input["resumeKey"]
                             .as_str()
                             .map(str::to_owned)
-                            .unwrap_or_else(|| {
-                                format!("{parent_task_id}:{}", spawn_key(&context, &input))
-                            });
+                            .unwrap_or_else(|| call_key(&context));
                         let view = service
                             .resume_for_parent(child, &resume_key, Some(&parent_task_id))
                             .await
