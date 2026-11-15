@@ -151,14 +151,29 @@ async fn effects_capabilities_and_schemas() {
     );
     assert!(
         registry
-            .validate_input("read_file", &json!({ "path": "a.ts" }))
+            .validate_input("read_file", &json!({ "file_path": "a.ts" }))
             .is_empty()
     );
     assert!(
         !registry
-            .validate_input("read_file", &json!({ "path": "a.ts", "x": 1 }))
+            .validate_input("read_file", &json!({ "file_path": "a.ts", "x": 1 }))
             .is_empty()
     );
+    // The several-files form and the old names are not part of the schema;
+    // the call pipeline maps old names before validation.
+    assert!(
+        !registry
+            .validate_input("read_file", &json!({ "paths": ["a.ts", "b.ts"] }))
+            .is_empty()
+    );
+    assert!(
+        !registry
+            .validate_input("read_file", &json!({ "path": "a.ts" }))
+            .is_empty()
+    );
+    let mapped = registry.normalise("read_file", json!({ "path": "a.ts", "offset": "3" }));
+    assert_eq!(mapped.args, json!({ "file_path": "a.ts", "offset": 3 }));
+    assert!(registry.validate_input("read_file", &mapped.args).is_empty());
     assert!(!registry.validate_input("read_file", &json!({})).is_empty());
     assert!(
         !registry

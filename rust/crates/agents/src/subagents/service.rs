@@ -159,9 +159,9 @@ pub(super) fn is_terminal_status(status: &str) -> bool {
 /// lifted by a request, and no request may exceed these. Chosen far above
 /// any legitimate single child turn while staying impossible to mine for
 /// sustained provider drain.
-const SUBAGENT_ITERATIONS_CEILING: u32 = 64;
+pub(super) const SUBAGENT_ITERATIONS_CEILING: u32 = 64;
 pub(super) const SUBAGENT_PROVIDER_REQUESTS_CEILING: u64 = 200;
-const SUBAGENT_OVERALL_MS_CEILING: u64 = 30 * 60 * 1_000;
+pub(super) const SUBAGENT_OVERALL_MS_CEILING: u64 = 30 * 60 * 1_000;
 
 /// Deterministic child identity for one logical spawn call. Public so
 /// callers (tests, recovery tooling) can precompute the id a given

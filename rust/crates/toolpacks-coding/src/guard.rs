@@ -201,6 +201,7 @@ mod tests {
                 input_schema: json!({}),
                 output_schema: None,
                 timeout_ms: None,
+                examples: vec![],
             },
         }
     }

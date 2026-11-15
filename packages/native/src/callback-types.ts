@@ -87,6 +87,8 @@ export interface ToolDefinitionJson {
   inputSchema: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   timeoutMs?: number;
+  /** Example calls: each entry is a complete, valid argument object. */
+  examples?: Array<Record<string, unknown>>;
 }
 
 export type ToolRunFunction = (

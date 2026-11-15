@@ -593,7 +593,7 @@ pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let sandboxed = env.sandbox == SandboxMode::Required;
     let network = env.network;
     let description = format!(
-        "Run a shell command (bash -c) in the workspace{}. Use it for builds, tests and tooling. Do NOT use it to read or search files, list directories or inspect git: use read_file, list_dir, find_files, code_search, repo_map and git_inspect, which are cheaper and safer. Output keeps the last {} lines / {} KB. Default timeout {}s, max {}s.",
+        "Run a shell command (bash -c) in the workspace{}. Use it for builds, tests and tooling. Do NOT use it to read or search files, list directories or inspect git: use read_file, list_dir, find_files, code_search, repo_map and git_inspect, which are cheaper and safer. Output keeps the last {} lines / {} KB. Default timeout {}s, max {}s; timeout is in milliseconds.",
         if sandboxed {
             format!(
                 ", inside a macOS sandbox: writes only in the workspace, no network{}{}, no access to credentials",
@@ -613,12 +613,25 @@ pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let input_schema = json!({
         "type": "object",
         "properties": {
-            "command": { "type": "string", "description": "Shell command line." },
-            "cwd": {
+            "command": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_COMMAND_CHARS,
+                "description": "Shell command line."
+            },
+            "directory": {
                 "type": "string",
                 "description": "Directory inside the workspace. Default: the root."
             },
-            "timeoutSec": { "type": "integer", "minimum": 1, "maximum": l.command_max_timeout_sec }
+            "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": l.command_max_timeout_sec * 1000,
+                "description": format!(
+                    "Timeout in milliseconds. Default {}.",
+                    l.command_default_timeout_sec * 1000
+                )
+            }
         },
         "required": ["command"],
         "additionalProperties": false
@@ -633,6 +646,12 @@ pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             description,
             input_schema,
             timeout_ms: (l.command_max_timeout_sec + 30) * 1000,
+            examples: vec![
+                json!({ "command": "cargo build --workspace" }),
+                json!({ "command": "npm run lint", "directory": "web", "timeout": 120000 }),
+            ],
+            constraints: vec![],
+            aliases: &[("timeoutMs", "timeout")],
         },
         effect,
         move |ctx: ToolContext, raw: Value| {
@@ -646,15 +665,18 @@ pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     ShellRequest {
                         tool: "run_command",
                         command: req_string(input, "command", MAX_COMMAND_CHARS)?,
-                        cwd: opt_string(input, "cwd", 4096)?,
+                        cwd: opt_string(input, "directory", 4096)?,
+                        // Milliseconds in the schema; the runner counts whole
+                        // seconds, so a partial second rounds up.
                         timeout_sec: opt_int(
                             input,
-                            "timeoutSec",
-                            1,
-                            l.command_max_timeout_sec as i64,
+                            "timeout",
+                            1000,
+                            l.command_max_timeout_sec as i64 * 1000,
                         )?
-                        .unwrap_or(l.command_default_timeout_sec as i64)
-                            as u64,
+                        .map_or(l.command_default_timeout_sec, |ms| {
+                            (ms as u64).div_ceil(1000)
+                        }),
                     },
                 )
                 .await
@@ -676,19 +698,35 @@ pub fn run_tests_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         "(none configured)".to_owned()
     };
     let description = format!(
-        "Run one of the project's configured test commands, exactly as written: {allowed}. Same sandbox and output limits as run_command."
+        "Run one of the project's configured test commands, exactly as written: {allowed}. Use it to check your change; for any other command use run_command. Same sandbox and output limits as run_command, and the run is limited to {}s. The result is the command's output tail and exit status.",
+        l.command_max_timeout_sec
     );
+    // The configured commands are the only valid values, so the schema says
+    // so; with none configured there is nothing to enumerate.
+    let command_schema = if test_commands.is_empty() {
+        json!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_COMMAND_CHARS,
+            "description": "One of the allowed test commands, verbatim."
+        })
+    } else {
+        json!({
+            "type": "string",
+            "enum": test_commands,
+            "description": "One of the allowed test commands, verbatim."
+        })
+    };
     let input_schema = json!({
         "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "One of the allowed test commands, verbatim."
-            }
-        },
+        "properties": { "command": command_schema },
         "required": ["command"],
         "additionalProperties": false
     });
+    let example_command = test_commands
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "cargo test".to_owned());
     let env = Arc::clone(env);
     let effect = shell_effect_context(
         &env,
@@ -704,6 +742,9 @@ pub fn run_tests_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             description,
             input_schema,
             timeout_ms: (l.command_max_timeout_sec + 30) * 1000,
+            examples: vec![json!({ "command": example_command })],
+            constraints: vec![],
+            aliases: &[],
         },
         effect,
         move |ctx: ToolContext, raw: Value| {
@@ -995,6 +1036,61 @@ mod tests {
         h.put("f.txt", "").await;
         let out = run(&tool, json!({ "command": "pwd", "cwd": "f.txt" })).await;
         assert!(text(&out).contains("not_a_directory"));
+    }
+
+    #[tokio::test]
+    async fn directory_is_the_parameter_and_cwd_still_maps_onto_it() {
+        let h = TempRoot::new("directory").await;
+        h.put_dir("sub").await;
+        let tool = run_command_tool(&env_for(&h.root, SandboxMode::Off, vec![]));
+        let ok = run(
+            &tool,
+            json!({ "command": "basename \"$PWD\"", "directory": "sub" }),
+        )
+        .await;
+        assert!(text(&ok).contains("sub"));
+        let old = run_with(
+            &tool,
+            json!({ "command": "basename \"$PWD\"", "workdir": "sub" }),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(text(&old).contains("sub"));
+        assert!(
+            old.warnings
+                .iter()
+                .any(|warning| warning.contains("workdir->directory"))
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_is_milliseconds_with_whole_second_bounds() {
+        let h = TempRoot::new("timeoutms").await;
+        let tool = run_command_tool(&env_for(&h.root, SandboxMode::Off, vec![]));
+        let schema = &tool.definition().input_schema["properties"]["timeout"];
+        assert_eq!(schema["minimum"], json!(1000));
+        assert_eq!(schema["maximum"], json!(600_000));
+        for bad in [0, 999, 600_001] {
+            assert!(
+                !run(&tool, json!({ "command": "true", "timeout": bad }))
+                    .await
+                    .ok,
+                "timeout {bad}"
+            );
+        }
+        assert!(
+            run(&tool, json!({ "command": "true", "timeout": 1500 }))
+                .await
+                .ok
+        );
+        // The old seconds spelling is converted, and the conversion is said.
+        let old = run(&tool, json!({ "command": "true", "timeoutSec": 2 })).await;
+        assert!(old.ok);
+        assert!(
+            old.warnings
+                .iter()
+                .any(|warning| warning.contains("timeoutSec->timeout*1000"))
+        );
     }
 
     #[tokio::test]

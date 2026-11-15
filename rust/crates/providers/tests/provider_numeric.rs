@@ -49,6 +49,7 @@ fn tool(schema: Value) -> ToolDefinition {
         input_schema: schema,
         output_schema: None,
         timeout_ms: None,
+        examples: vec![],
     }
 }
 #[test]

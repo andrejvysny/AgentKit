@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentkit_core::{Tool, ToolContext};
+use agentkit_core::{Tool, ToolConstraint, ToolContext};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncReadExt;
@@ -19,7 +19,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::args::{as_record, opt_bool, opt_int, opt_string, req_string};
-use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
+use crate::context::{ConstraintSpec, Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
 use crate::errors::CodingError;
 use crate::paths::{ConfineOptions, PathAccess, confine, sensitive_git_excludes};
 use crate::truncate::format_size;
@@ -472,41 +472,80 @@ async fn configured_drivers(
         .collect())
 }
 
+/// Rules between `command` and the other parameters that the schema cannot
+/// express (lint L8). Each is checked before the tool runs.
+fn git_constraints() -> Vec<ConstraintSpec> {
+    fn command_is(input: &Map<String, Value>, name: &str) -> bool {
+        input.get("command").and_then(Value::as_str) == Some(name)
+    }
+    vec![
+        ConstraintSpec {
+            constraint: ToolConstraint {
+                code: "git_staged_needs_diff".to_owned(),
+                params: vec!["command".to_owned(), "staged".to_owned()],
+                rule: "staged applies only to command diff".to_owned(),
+                teaching_error: "git_staged_needs_diff: staged only applies to command \"diff\". Why: status, log and show have no staged view. Next: call again with command \"diff\", or drop staged.".to_owned(),
+                violating_example: json!({ "command": "log", "staged": true }),
+            },
+            violated: |input| input.contains_key("staged") && !command_is(input, "diff"),
+        },
+        ConstraintSpec {
+            constraint: ToolConstraint {
+                code: "git_limit_needs_log".to_owned(),
+                params: vec!["command".to_owned(), "limit".to_owned()],
+                rule: "limit applies only to command log".to_owned(),
+                teaching_error: "git_limit_needs_log: limit only applies to command \"log\". Why: status, diff and show are not lists of commits. Next: call again with command \"log\", or drop limit.".to_owned(),
+                violating_example: json!({ "command": "diff", "limit": 5 }),
+            },
+            violated: |input| input.contains_key("limit") && !command_is(input, "log"),
+        },
+        ConstraintSpec {
+            constraint: ToolConstraint {
+                code: "git_rev_not_for_status".to_owned(),
+                params: vec!["command".to_owned(), "rev".to_owned()],
+                rule: "rev does not apply to command status".to_owned(),
+                teaching_error: "git_rev_not_for_status: rev does not apply to command \"status\". Why: status reports the working tree, not a commit. Next: use command \"show\", \"log\" or \"diff\" with rev, or drop rev.".to_owned(),
+                violating_example: json!({ "command": "status", "rev": "HEAD~1" }),
+            },
+            violated: |input| input.contains_key("rev") && command_is(input, "status"),
+        },
+    ]
+}
+
 pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let l = env.limits.clone();
     let allow_sensitive = env.allow_sensitive;
     let description = format!(
-        "Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at {}. Paths are taken literally (no globs or pathspec magic). Prefer this over running git through a shell.",
+        "Read-only git inspection with one of four fixed commands: status, diff (staged or not), log, show. Use it instead of running git through a shell. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Paths are taken literally (no globs or pathspec magic). Output is capped at {}.",
         format_size(l.git_max_output_bytes)
     );
     let input_schema = json!({
         "type": "object",
         "properties": {
-            "command": { "type": "string", "enum": COMMANDS },
-            "args": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
-                    },
-                    "staged": {
-                        "type": "boolean",
-                        "description": "diff only: show staged changes."
-                    },
-                    "maxCount": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": l.git_max_count,
-                        "description": "log only."
-                    },
-                    "rev": {
-                        "type": "string",
-                        "maxLength": 100,
-                        "description": "Commit, branch, tag or range, e.g. HEAD~2."
-                    }
-                },
-                "additionalProperties": false
+            "command": {
+                "type": "string",
+                "enum": COMMANDS,
+                "description": "status, diff, log or show."
+            },
+            "path": {
+                "type": "string",
+                "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
+            },
+            "staged": {
+                "type": "boolean",
+                "description": "Show staged changes (command diff only)."
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": l.git_max_count,
+                "description": "Maximum number of commits (command log only)."
+            },
+            "rev": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "description": "Commit, branch, tag or range, e.g. HEAD~2."
             }
         },
         "required": ["command"],
@@ -521,6 +560,13 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             description,
             input_schema,
             timeout_ms: l.git_timeout_ms + 5000,
+            examples: vec![
+                json!({ "command": "status" }),
+                json!({ "command": "diff", "staged": true, "path": "src/lib.rs" }),
+                json!({ "command": "log", "limit": 10 }),
+            ],
+            constraints: git_constraints(),
+            aliases: &[("maxCount", "limit"), ("max_count", "limit")],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
@@ -538,10 +584,20 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         ),
                     ));
                 };
-                let args = match input.get("args") {
+                // The legacy nested `args` bag still parses for direct
+                // callers; the flat parameters win over it.
+                let mut args = match input.get("args") {
                     None => Map::new(),
                     Some(args) => as_record(args)?.clone(),
                 };
+                for key in ["path", "staged", "rev"] {
+                    if let Some(value) = input.get(key) {
+                        args.insert(key.to_owned(), value.clone());
+                    }
+                }
+                if let Some(value) = input.get("limit") {
+                    args.insert("maxCount".to_owned(), value.clone());
+                }
                 let rev = opt_string(&args, "rev", 100)?;
                 if rev
                     .as_ref()
@@ -1026,6 +1082,65 @@ mod tests {
         let r = run(&tool, json!({})).await;
         assert!(!r.ok);
         assert!(text(&r).contains("\"command\" must be a non-empty string"));
+    }
+
+    #[tokio::test]
+    async fn rules_between_command_and_other_parameters_are_checked_with_a_teaching_error() {
+        let h = TempRoot::new("rules").await;
+        let tool = git_inspect_tool(&env_with(h.path(), CodingLimits::default()));
+        let declared = tool.constraints();
+        assert_eq!(declared.len(), 3);
+        for constraint in &declared {
+            // The checker catches the constraint's own violating example.
+            assert_eq!(
+                tool.check_constraints(&constraint.violating_example)
+                    .as_deref(),
+                Some(constraint.code.as_str())
+            );
+            let refused = run(&tool, constraint.violating_example.clone()).await;
+            assert!(!refused.ok, "{}", constraint.code);
+            let message = text(&refused);
+            assert!(message.contains(&constraint.code), "{message}");
+            assert!(message.contains("Next:"), "{message}");
+        }
+        for fine in [
+            json!({ "command": "diff", "staged": true }),
+            json!({ "command": "log", "limit": 3 }),
+            json!({ "command": "show", "rev": "HEAD" }),
+        ] {
+            assert_eq!(tool.check_constraints(&fine), None, "{fine}");
+        }
+    }
+
+    #[tokio::test]
+    async fn flat_parameters_replace_the_nested_args_bag() {
+        let h = TempRoot::new("flat").await;
+        let tool = git_inspect_tool(&env_with(h.path(), CodingLimits::default()));
+        let schema = &tool.definition().input_schema;
+        assert!(schema["properties"].get("args").is_none());
+        for name in ["command", "path", "staged", "limit", "rev"] {
+            assert!(schema["properties"].get(name).is_some(), "{name}");
+        }
+        // A flat path is confined exactly as the nested one was.
+        let escaped = run(&tool, json!({ "command": "status", "path": ".git/config" })).await;
+        assert!(!escaped.ok);
+        let outside = run(&tool, json!({ "command": "diff", "path": "../x" })).await;
+        assert!(!outside.ok);
+        // The old nested spelling and maxCount still parse.
+        let old = run(
+            &tool,
+            json!({ "command": "log", "args": { "maxCount": 51 } }),
+        )
+        .await;
+        assert!(!old.ok);
+        let renamed = run(&tool, json!({ "command": "log", "maxCount": 51 })).await;
+        assert!(!renamed.ok);
+        assert!(
+            renamed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("maxCount->limit"))
+        );
     }
 
     #[tokio::test]

@@ -17,7 +17,7 @@ use crate::args::{as_record, opt_bool, opt_int, opt_string, req_string};
 use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
 use crate::coordination::{AcquireFileInput, LeaseHolder};
 use crate::diff::unified_diff;
-use crate::edit_engine::{Edit, apply_edits, split_bom};
+use crate::edit_engine::{Edit, apply_edits, apply_replace_all, split_bom};
 use crate::errors::{CodingError, file_changed_error, file_not_read_error};
 use crate::fs_util::{
     atomic_write_in_root, create_if_absent_in_root, decode_utf8, looks_binary, read_regular_file,
@@ -31,6 +31,10 @@ use crate::version_ledger as ledger;
 const NATIVE_HINT: &str = "Prefer the native tools (read_file, list_dir, find_files, code_search, repo_map) over shell commands for exploring code.";
 
 const MAX_READ_PATHS: usize = 8;
+
+/// Upper bound the schema states for line counts; the body clamps to the
+/// pack limits.
+const MAX_COUNT_PARAM: i64 = 1_000_000_000;
 
 /// JS `holderOf`: the label is `slice(0, 200)` over UTF-16 code units.
 fn slice_utf16(value: &str, max_units: usize) -> String {
@@ -207,17 +211,20 @@ async fn read_one(
     })
 }
 
+/// `file_path` is the schema's only way to name the file; `paths` stays
+/// parseable for direct callers of the old several-files form (not offered
+/// in the schema: several files are several calls).
 fn read_paths(input: &Map<String, Value>) -> Result<Vec<String>, CodingError> {
-    let single = input.get("path");
+    let single = input.get("file_path");
     let many = input.get("paths");
     if single.is_none() == many.is_none() {
         return Err(CodingError::new(
             "invalid_arguments",
-            "pass exactly one of \"path\" or \"paths\"",
+            "pass \"file_path\" with the one file to read; read several files with several calls",
         ));
     }
     let Some(many) = many else {
-        return Ok(vec![req_string(input, "path", 4096)?]);
+        return Ok(vec![req_string(input, "file_path", 4096)?]);
     };
     let invalid = CodingError::new(
         "invalid_arguments",
@@ -255,12 +262,11 @@ const INVALID_UTF8_WARNING: &str = "not valid UTF-8; shown with replacement char
 
 pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let description = format!(
-        "Read text files in the workspace: one file with path, or up to {MAX_READ_PATHS} with \
-         paths (each under a \"==> path <==\" header; the output cap is shared; a file that fails \
-         is reported inline). Output lines are numbered \"<n>\\t<line>\". Returns at most {} lines \
-         per file and {} in total, and ends with a continuation notice (offset=N) when more \
-         remains. offset is 1-based. The result data carries sha256 (of the whole file) and \
-         totalLines: pass that sha256 as edit_file's expectedSha256. {NATIVE_HINT}",
+        "Read one text file in the workspace and return its lines numbered \"<n>\\t<line>\". \
+         Use it before edit_file or write_file; to locate code first use code_search or \
+         find_files. Returns at most {} lines or {} per call and ends with a continuation \
+         notice (offset=N) when more remains; offset is 1-based. Read several files with \
+         several calls. {NATIVE_HINT}",
         env.limits.read_max_lines,
         format_size(env.limits.read_max_bytes),
     );
@@ -274,44 +280,43 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "file_path": {
                         "type": "string",
-                        "description": "File path, relative to the workspace root.",
-                    },
-                    "paths": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "minItems": 1,
-                        "maxItems": MAX_READ_PATHS,
-                        "description": format!(
-                            "Several files (1..{MAX_READ_PATHS}) instead of path."
-                        ),
+                        "description": "File to read, relative to the workspace root.",
                     },
                     "offset": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "1-based first line to read (applies to every file).",
+                        "maximum": MAX_COUNT_PARAM,
+                        "description": "1-based first line to read. Default 1.",
                     },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Maximum number of lines per file.",
+                        "maximum": MAX_COUNT_PARAM,
+                        "description": "Maximum number of lines to return.",
                     },
                 },
-                "oneOf": [{ "required": ["path"] }, { "required": ["paths"] }],
+                "required": ["file_path"],
                 "additionalProperties": false,
             }),
             timeout_ms: env.limits.tool_timeout_ms,
+            examples: vec![
+                json!({ "file_path": "src/main.rs" }),
+                json!({ "file_path": "src/main.rs", "offset": 120, "limit": 80 }),
+            ],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
             async move {
                 let input = as_record(&raw)?;
                 let paths = read_paths(input)?;
-                let offset = opt_int(input, "offset", 1, 1_000_000_000)?.unwrap_or(1);
-                let limit = opt_int(input, "limit", 1, 1_000_000_000)?;
+                let offset = opt_int(input, "offset", 1, MAX_COUNT_PARAM)?.unwrap_or(1);
+                let limit = opt_int(input, "limit", 1, MAX_COUNT_PARAM)?;
                 let root = env.root().await?;
-                if input.get("path").is_some() {
+                if input.get("file_path").is_some() {
                     throw_if_aborted(&ctx)?;
                     let one = read_one(
                         &env,
@@ -406,9 +411,11 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
 
 pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let description = format!(
-        "List a directory in the workspace (max {} entries; directories end with /, symlinks \
-         with @; credential files and entries matched by .gitignore are hidden unless \
-         includeIgnored is set). {NATIVE_HINT}",
+        "List the entries of one directory in the workspace; directories end with /, symlinks \
+         with @. Use it to see what a folder holds, find_files to search by name and repo_map \
+         for an overview of the whole project. Shows at most {} entries; credential files and \
+         entries matched by .gitignore are hidden unless include_ignored is true. \
+         {NATIVE_HINT}",
         env.limits.list_max_entries,
     );
     let env = Arc::clone(env);
@@ -425,21 +432,25 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         "type": "string",
                         "description": "Directory, relative to the workspace root. Default: the root.",
                     },
-                    "includeIgnored": {
+                    "include_ignored": {
                         "type": "boolean",
-                        "description": "Also list entries matched by .gitignore / .ignore / .git/info/exclude.",
+                        "description": "Also list entries matched by .gitignore, .ignore and .git/info/exclude.",
                     },
                 },
+                "required": [],
                 "additionalProperties": false,
             }),
             timeout_ms: env.limits.tool_timeout_ms,
+            examples: vec![json!({}), json!({ "path": "src", "include_ignored": true })],
+            constraints: vec![],
+            aliases: &[("includeIgnored", "include_ignored")],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
             async move {
                 let input = as_record(&raw)?;
                 let path = opt_string(input, "path", 4096)?.unwrap_or_else(|| ".".to_owned());
-                let include_ignored = opt_bool(input, "includeIgnored")?.unwrap_or(false);
+                let include_ignored = opt_bool(input, "include_ignored")?.unwrap_or(false);
                 throw_if_aborted(&ctx)?;
                 let root = env.root().await?;
                 let target = confine(
@@ -576,6 +587,9 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     )
 }
 
+/// Not offered in the schema (lint L7: the model supplies no revision or
+/// hash); still accepted, so a host that holds a hash can pin the version
+/// and the check behind it stays. Follow-up T1.5: runtime-owned revisions.
 fn parse_expected_sha(input: &Map<String, Value>) -> Result<Option<String>, CodingError> {
     let value = opt_string(input, "expectedSha256", 64)?;
     let Some(value) = value else {
@@ -626,11 +640,11 @@ async fn assert_unchanged(
 
 pub fn write_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let description = format!(
-        "Create or overwrite a text file inside the workspace (parent directories are created; \
-         .git is refused; max {}). A new file is created only if it does not exist yet. \
-         Overwriting an existing file requires that you read it first in this session (or pass \
-         expectedSha256 from read_file); it is refused with file_changed if the file changed \
-         since. For changing part of an existing file use edit_file instead.",
+        "Create a text file or replace the whole content of an existing one inside the \
+         workspace; parent directories are created, .git is refused, and content is at most {}. \
+         Overwriting a file requires that you read it completely in this session first, and is \
+         refused with file_changed if the file changed since. To change part of a file use \
+         edit_file instead. Returns the new sha256.",
         format_size(env.limits.write_max_bytes),
     );
     let env = Arc::clone(env);
@@ -643,26 +657,28 @@ pub fn write_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "file_path": {
                         "type": "string",
-                        "description": "File path, relative to the workspace root.",
+                        "description": "File to write, relative to the workspace root.",
                     },
                     "content": { "type": "string", "description": "Full new file content." },
-                    "expectedSha256": {
-                        "type": "string",
-                        "description": "sha256 (hex) the existing file must currently have. Default: the version this session last read.",
-                    },
                 },
-                "required": ["path", "content"],
+                "required": ["file_path", "content"],
                 "additionalProperties": false,
             }),
             timeout_ms: env.limits.tool_timeout_ms,
+            examples: vec![json!({
+                "file_path": "docs/notes.md",
+                "content": "# Notes\n\nFirst line.\n",
+            })],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
             async move {
                 let input = as_record(&raw)?;
-                let path = req_string(input, "path", 4096)?;
+                let path = req_string(input, "file_path", 4096)?;
                 let content = match input.get("content") {
                     Some(Value::String(content)) => content.clone(),
                     _ => {
@@ -885,6 +901,51 @@ fn parse_edits(value: Option<&Value>) -> Result<Vec<Edit>, CodingError> {
         .collect()
 }
 
+/// The flat `old_string` / `new_string` call, or the legacy `edits` array
+/// (not offered in the schema; kept parseable for direct callers). Returns
+/// the edits and whether every occurrence is replaced.
+fn parse_edit_request(input: &Map<String, Value>) -> Result<(Vec<Edit>, bool, bool), CodingError> {
+    let replace_all = opt_bool(input, "replace_all")?.unwrap_or(false);
+    let flat = input.contains_key("old_string") || input.contains_key("new_string");
+    if input.contains_key("edits") {
+        if flat || replace_all {
+            return Err(CodingError::new(
+                "invalid_arguments",
+                "pass old_string and new_string (one replacement per call), not edits",
+            ));
+        }
+        return Ok((parse_edits(input.get("edits"))?, false, false));
+    }
+    let text = |key: &str| match input.get(key) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        _ => Err(CodingError::new(
+            "invalid_arguments",
+            format!("\"{key}\" must be a string"),
+        )),
+    };
+    let old_text = text("old_string")?;
+    if old_text.is_empty() {
+        return Err(CodingError::new(
+            "edit_empty_old_text",
+            "old_string must not be empty: pass the exact text to replace",
+        ));
+    }
+    let new_text = text("new_string")?;
+    Ok((vec![Edit { old_text, new_text }], replace_all, true))
+}
+
+/// The engine's messages speak of the legacy `oldText`; the flat call names
+/// its parameter `old_string` and has a bulk option worth pointing at.
+fn flat_edit_error(mut error: CodingError) -> CodingError {
+    error.message = error.message.replace("oldText", "old_string");
+    if error.code == "edit_ambiguous" {
+        error
+            .message
+            .push_str(" Or set replace_all to true to replace every occurrence.");
+    }
+    error
+}
+
 pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let env = Arc::clone(env);
     define_tool(
@@ -892,60 +953,62 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             name: "edit_file",
             effect: ToolEffect::Write,
             capability: "fs.write",
-            description: "Edit an existing text file with exact text replacement. Pass edits[]; \
-                          each oldText must match exactly once in the ORIGINAL file (whitespace, \
-                          quotes and trailing spaces are matched leniently only when no exact \
-                          match exists) and edits must not overlap. Keep oldText as small as \
-                          possible while unique. Each line's original terminator (CRLF, LF or CR) \
-                          and any BOM are preserved; new lines use the file's dominant ending. \
-                          Files that are not valid UTF-8 are refused. The edit is refused with \
-                          file_changed if the file changed since this session last read it (or \
-                          since the optional expectedSha256). Read the file first. Returns a \
+            description: "Replace exact text in an existing file: old_string becomes \
+                          new_string, once per call. old_string must match exactly one place in \
+                          the file (whitespace and quotes are matched leniently only when no \
+                          exact match exists); keep it as small as possible while unique, or set \
+                          replace_all to change every occurrence. Line endings and any BOM are \
+                          preserved, and the call is refused with file_changed if the file \
+                          changed since you last read it. Read the file first. Returns a \
                           unified diff and the new sha256."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "file_path": {
                         "type": "string",
-                        "description": "File path, relative to the workspace root.",
+                        "description": "File to edit, relative to the workspace root.",
                     },
-                    "edits": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": MAX_EDITS,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "oldText": {
-                                    "type": "string",
-                                    "description": "Exact text to replace; unique in the file.",
-                                },
-                                "newText": {
-                                    "type": "string",
-                                    "description": "Replacement text.",
-                                },
-                            },
-                            "required": ["oldText", "newText"],
-                            "additionalProperties": false,
-                        },
-                    },
-                    "expectedSha256": {
+                    "old_string": {
                         "type": "string",
-                        "description": "sha256 (hex) the file must currently have.",
+                        "minLength": 1,
+                        "description": "Exact text to replace; it must match one place in the file.",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement text. An empty string deletes the matched text.",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence instead of requiring a unique match. Default false.",
                     },
                 },
-                "required": ["path", "edits"],
+                "required": ["file_path", "old_string", "new_string"],
                 "additionalProperties": false,
             }),
             timeout_ms: env.limits.tool_timeout_ms,
+            examples: vec![
+                json!({
+                    "file_path": "src/lib.rs",
+                    "old_string": "let retries = 3;",
+                    "new_string": "let retries = 5;",
+                }),
+                json!({
+                    "file_path": "src/lib.rs",
+                    "old_string": "old_name",
+                    "new_string": "new_name",
+                    "replace_all": true,
+                }),
+            ],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
             async move {
                 let input = as_record(&raw)?;
-                let path = req_string(input, "path", 4096)?;
-                let edits = parse_edits(input.get("edits"))?;
+                let path = req_string(input, "file_path", 4096)?;
+                let (edits, replace_all, flat) = parse_edit_request(input)?;
                 let explicit = parse_expected_sha(input)?;
                 let root = env.root().await?;
                 let options = ConfineOptions {
@@ -965,11 +1028,23 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     })
                     .await?;
                 let result = edit_file_body(
-                    &env, &ctx, &root, &path, &edits, &explicit, &target, options,
+                    &env,
+                    &ctx,
+                    &root,
+                    &path,
+                    &edits,
+                    replace_all,
+                    &explicit,
+                    &target,
+                    options,
                 )
                 .await;
                 lease.release().await;
-                result
+                if flat {
+                    result.map_err(flat_edit_error)
+                } else {
+                    result
+                }
             }
         },
     )
@@ -982,6 +1057,7 @@ async fn edit_file_body(
     root: &str,
     path: &str,
     edits: &[Edit],
+    replace_all: bool,
     explicit: &Option<String>,
     target: &ConfinedPath,
     options: ConfineOptions,
@@ -1023,10 +1099,20 @@ async fn edit_file_body(
         edits.to_vec(),
         path.to_owned(),
     );
-    let applied =
-        tokio::task::spawn_blocking(move || apply_edits(&text, &edits_owned, &path_owned))
-            .await
-            .map_err(|error| CodingError::new("io_error", error.to_string()))??;
+    let applied = tokio::task::spawn_blocking(move || {
+        if replace_all {
+            apply_replace_all(
+                &text,
+                &edits_owned[0].old_text,
+                &edits_owned[0].new_text,
+                &path_owned,
+            )
+        } else {
+            apply_edits(&text, &edits_owned, &path_owned)
+        }
+    })
+    .await
+    .map_err(|error| CodingError::new("io_error", error.to_string()))??;
     let out = format!("{}{}", split.bom, applied.output).into_bytes();
     throw_if_aborted(ctx)?;
     let verify = verify_callback(
@@ -1201,6 +1287,15 @@ mod tests {
                 .to_owned()
         }
 
+        /// The `code: message` line; the Why and Next lines follow it.
+        fn first_line(result: &ToolResult) -> String {
+            Self::text(result)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        }
+
         fn summary(result: &ToolResult) -> String {
             result.summary.clone().unwrap_or_default()
         }
@@ -1325,7 +1420,7 @@ mod tests {
         let missing = h.run(&h.read_file, json!({ "path": "nope.txt" })).await;
         assert!(!missing.ok);
         assert_eq!(
-            Harness::text(&missing),
+            Harness::first_line(&missing),
             "not_found: nope.txt does not exist"
         );
         h.put("dir/x.txt", b"x");
@@ -1354,7 +1449,7 @@ mod tests {
             .run(&h.read_file, json!({ "path": "e.txt", "paths": ["e.txt"] }))
             .await;
         assert!(!both.ok);
-        assert!(Harness::text(&both).contains("pass exactly one of \"path\" or \"paths\""));
+        assert!(Harness::text(&both).contains("pass \"file_path\" with the one file to read"));
         let none = h.run(&h.read_file, json!({})).await;
         assert!(!none.ok);
         let dup = h
@@ -1443,7 +1538,7 @@ mod tests {
             .await;
         assert!(!r.ok);
         assert_eq!(
-            Harness::text(&r),
+            Harness::first_line(&r),
             "file_not_read: f.txt already exists. Read it before overwriting it."
         );
         // A full read in the same session authorises the overwrite.
@@ -1478,10 +1573,10 @@ mod tests {
             .await;
         assert!(!r.ok);
         assert_eq!(
-            Harness::text(&r),
+            Harness::first_line(&r),
             "file_not_read: f.txt already exists and you only read part of it. \
-             Read the whole file (no offset/limit, nothing truncated) or pass \
-             expectedSha256 before overwriting it."
+             Read the whole file (no offset or limit, nothing truncated) before \
+             overwriting it."
         );
         h.remove();
     }
@@ -1521,7 +1616,7 @@ mod tests {
             .await;
         assert!(!stale.ok);
         assert_eq!(
-            Harness::text(&stale),
+            Harness::first_line(&stale),
             "file_changed: f.txt changed since this session last read it \
              (another session or an external editor modified it). Read it \
              again and redo the edit."
@@ -1678,12 +1773,12 @@ mod tests {
         crate::fs_util::clear_temp_hooks();
         assert!(!result.ok);
         let text = Harness::text(&result);
-        // `failure()` renders exactly `code: message`.
+        // `failure()` renders `code: message` first, then Why/Next lines.
         let expected = format!(
             "file_changed: {name} was created by someone else while writing it. \
              Read it, then edit or overwrite it."
         );
-        assert_eq!(text, expected);
+        assert_eq!(text.lines().next().unwrap(), expected);
         // The rival's bytes survive; the failed attempt leaves only its
         // (removed) temp behind.
         assert_eq!(h.contents(name), b"B\n");
@@ -1731,6 +1826,133 @@ mod tests {
         assert!(text.contains("--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@"));
         assert!(text.contains("\n one\n-two\n+TWO\n three"));
         assert_eq!(Harness::summary(&r), "edited f.txt (+1 -1)");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_flat_old_and_new_string_replace_one_unique_match() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"one\ntwo\nthree\n");
+        let r = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "old_string": "two", "new_string": "TWO" }),
+            )
+            .await;
+        assert!(r.ok, "{}", Harness::text(&r));
+        assert_eq!(h.contents("f.txt"), b"one\nTWO\nthree\n");
+        // The old names map onto the same call.
+        let old_names = h
+            .run(
+                &h.edit_file,
+                json!({ "path": "f.txt", "oldText": "TWO", "newText": "two" }),
+            )
+            .await;
+        assert!(old_names.ok, "{}", Harness::text(&old_names));
+        assert_eq!(h.contents("f.txt"), b"one\ntwo\nthree\n");
+        assert!(
+            old_names
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("path->file_path"))
+        );
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_flat_ambiguous_match_points_at_replace_all() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"x\nx\n");
+        let r = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "old_string": "x", "new_string": "y" }),
+            )
+            .await;
+        assert!(!r.ok);
+        let text = Harness::text(&r);
+        assert!(text.contains("edit_ambiguous"), "{text}");
+        assert!(text.contains("old_string must be unique"), "{text}");
+        assert!(text.contains("replace_all"), "{text}");
+        assert_eq!(h.contents("f.txt"), b"x\nx\n");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_replace_all_changes_every_occurrence_and_keeps_line_endings() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"a x\r\nb x\r\nc\r\n");
+        let r = h
+            .run(
+                &h.edit_file,
+                json!({
+                    "file_path": "f.txt",
+                    "old_string": "x",
+                    "new_string": "yy",
+                    "replace_all": true,
+                }),
+            )
+            .await;
+        assert!(r.ok, "{}", Harness::text(&r));
+        assert_eq!(h.contents("f.txt"), b"a yy\r\nb yy\r\nc\r\n");
+        let missing = h
+            .run(
+                &h.edit_file,
+                json!({
+                    "file_path": "f.txt",
+                    "old_string": "absent",
+                    "new_string": "z",
+                    "replace_all": true,
+                }),
+            )
+            .await;
+        assert!(!missing.ok);
+        assert!(Harness::text(&missing).contains("edit_no_match"));
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_flat_rejects_empty_old_string_and_mixed_forms() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"a\n");
+        let empty = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "old_string": "", "new_string": "b" }),
+            )
+            .await;
+        assert!(Harness::text(&empty).contains("edit_empty_old_text"));
+        let mixed = h
+            .run(
+                &h.edit_file,
+                json!({
+                    "file_path": "f.txt",
+                    "old_string": "a",
+                    "new_string": "b",
+                    "edits": [{ "oldText": "a", "newText": "b" }],
+                }),
+            )
+            .await;
+        assert!(Harness::text(&mixed).contains("one replacement per call"));
+        assert_eq!(h.contents("f.txt"), b"a\n");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn write_over_an_unread_file_does_not_need_a_model_supplied_hash() {
+        // The check behind expectedSha256 stays: the session ledger refuses an
+        // overwrite of a file this session never read.
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"old\n");
+        let r = h
+            .run(
+                &h.write_file,
+                json!({ "file_path": "f.txt", "content": "new\n" }),
+            )
+            .await;
+        assert!(!r.ok);
+        assert!(Harness::text(&r).contains("file_not_read"));
+        assert_eq!(h.contents("f.txt"), b"old\n");
         h.remove();
     }
 
@@ -1868,7 +2090,7 @@ mod tests {
             .run(&h.edit_file, json!({ "path": "x.bin", "edits": edits }))
             .await;
         assert_eq!(
-            Harness::text(&binary),
+            Harness::first_line(&binary),
             "binary_file: x.bin looks binary; not edited"
         );
         h.put(".env", b"a");
@@ -1951,10 +2173,13 @@ mod tests {
         let empty = h.run(&h.list_dir, json!({ "path": "empty" })).await;
         assert_eq!(Harness::text(&empty), "(empty directory)");
         let missing = h.run(&h.list_dir, json!({ "path": "nope" })).await;
-        assert_eq!(Harness::text(&missing), "not_found: nope does not exist");
+        assert_eq!(
+            Harness::first_line(&missing),
+            "not_found: nope does not exist"
+        );
         let not_dir = h.run(&h.list_dir, json!({ "path": "b.txt" })).await;
         assert_eq!(
-            Harness::text(&not_dir),
+            Harness::first_line(&not_dir),
             "not_a_directory: b.txt is not a directory"
         );
         h.remove();

@@ -279,6 +279,7 @@ pub fn definition(name: &str, effect: &str) -> ToolDefinition {
         input_schema: json!({"type":"object"}),
         output_schema: None,
         timeout_ms: Some(1000),
+        examples: vec![],
     }
 }
 

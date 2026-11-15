@@ -202,6 +202,7 @@ impl McpToolSet {
             input_schema: Value::Object((*tool.input_schema).clone()),
             output_schema: None,
             timeout_ms: None,
+            examples: vec![],
         };
         // Pre-compile the recorded input schema so every dispatch is gated
         // locally (the server side validates identically in handler.rs). A

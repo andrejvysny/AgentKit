@@ -52,6 +52,7 @@ fn context(effect: &str, name: &str, arguments: Option<Value>) -> ToolGuardConte
             input_schema: json!({"type":"object"}),
             output_schema: None,
             timeout_ms: None,
+            examples: vec![],
         },
         arguments,
     }

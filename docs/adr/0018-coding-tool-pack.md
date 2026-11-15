@@ -55,6 +55,16 @@ the guard's decision, not the contributor's.
 | `run_command` | write / `process.exec` | 120 s default, 600 s max; tail 2000 lines / 50 KB |
 | `run_tests` | write / `process.exec` | `run_command` restricted to exact configured strings |
 
+> **Amendment (tool-use track, T1.3).** The parameters below changed to the shared vocabulary and every schema now
+> passes the lint in `rust/crates/runtime/tests/tool_schema_lint.rs` (spec rules L1 to L12, no exceptions):
+> `read_file` takes `file_path`, `offset`, `limit` (several files are several calls); `write_file` and `edit_file` take
+> `file_path`; `edit_file` takes `old_string`, `new_string`, `replace_all` (one replacement per call; the `edits[]`
+> array is no longer offered); `list_dir` takes `include_ignored`; `code_search` takes `pattern`, `path`, `glob`,
+> `limit`; `git_inspect` is flat (`command`, `path`, `staged`, `limit`, `rev`); `run_command` takes `directory` and
+> `timeout` in milliseconds; `run_tests` takes a `command` enum of the configured commands. `expectedSha256` is not
+> in any schema: the session's read ledger is the check (runtime-owned revisions, package T1.5). Old names are
+> mapped by the call pipeline for one release.
+
 Every `inputSchema` is strict (`additionalProperties: false`) and uses only keywords `AiJsonSchemaObject` declares.
 Every tool has a `timeoutMs` and a description. Descriptions tell the model to prefer the native tools over a shell
 for exploration. A user error (bad path, no match, refusal) is an `ok:false` result with `<code>: <message>`; a tool

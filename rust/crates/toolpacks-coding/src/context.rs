@@ -4,10 +4,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
+use agentkit_core::{
+    AliasTable, CoreError, Tool, ToolConstraint, ToolContext, ToolDefinition, ToolResult, normalise,
+};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 
 use crate::coordination::WorkspaceCoordinator;
@@ -211,6 +213,14 @@ impl ToolEffect {
     }
 }
 
+/// A rule between parameters that the schema cannot express: its metadata
+/// (listed on the tool, lint rule L8) plus the pure check that enforces it.
+pub struct ConstraintSpec {
+    pub constraint: ToolConstraint,
+    /// `true` when the arguments break the rule.
+    pub violated: fn(&Map<String, Value>) -> bool,
+}
+
 pub struct ToolSpec {
     pub name: &'static str,
     pub effect: ToolEffect,
@@ -218,6 +228,12 @@ pub struct ToolSpec {
     pub description: String,
     pub input_schema: Value,
     pub timeout_ms: u64,
+    /// Example calls, each a complete valid argument object (lint rule L11).
+    pub examples: Vec<Value>,
+    /// Cross-parameter rules; the wrapper enforces them before the body runs.
+    pub constraints: Vec<ConstraintSpec>,
+    /// Parameter names this tool accepted before a rename: `(alias, canonical)`.
+    pub aliases: &'static [(&'static str, &'static str)],
 }
 
 pub fn failure(error: &CodingError) -> Outcome {
@@ -252,6 +268,28 @@ struct WrappedTool {
     /// so a recorded result replays only for the SAME environment. `None`
     /// keeps the historical empty-object binding.
     effect_context: Option<Value>,
+    constraints: Vec<ConstraintSpec>,
+    aliases: Vec<(String, String)>,
+    alias_table: AliasTable,
+}
+
+impl WrappedTool {
+    /// The call pipeline already normalises real calls; this keeps direct
+    /// callers on the same canonical names, and says what it did.
+    fn normalised(&self, input: Value) -> (Value, Vec<String>) {
+        let normalised = normalise(
+            &self.alias_table,
+            &self.definition.name,
+            &self.definition.input_schema,
+            input,
+        );
+        (normalised.args, normalised.aliases_used)
+    }
+
+    fn broken_constraint(&self, input: &Value) -> Option<&ConstraintSpec> {
+        let map = input.as_object()?;
+        self.constraints.iter().find(|spec| (spec.violated)(map))
+    }
 }
 
 #[async_trait]
@@ -264,6 +302,22 @@ impl Tool for WrappedTool {
         self.effect_context.clone()
     }
 
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        self.aliases.clone()
+    }
+
+    fn constraints(&self) -> Vec<ToolConstraint> {
+        self.constraints
+            .iter()
+            .map(|spec| spec.constraint.clone())
+            .collect()
+    }
+
+    fn check_constraints(&self, input: &Value) -> Option<String> {
+        self.broken_constraint(input)
+            .map(|spec| spec.constraint.code.clone())
+    }
+
     fn records_command_start(&self) -> bool {
         self.effect_context.is_some()
             && self.definition.capability == "process.exec"
@@ -271,7 +325,24 @@ impl Tool for WrappedTool {
     }
 
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
-        let outcome = (self.body)(context.clone(), input).await;
+        let (input, applied) = self.normalised(input);
+        let mut outcome = match self.broken_constraint(&input) {
+            Some(spec) => {
+                // The teaching error carries its code for lint and logs;
+                // `failure` prefixes the code itself.
+                let code = spec.constraint.code.as_str();
+                let prefix = format!("{code}: ");
+                let full = spec.constraint.teaching_error.as_str();
+                let message = full.strip_prefix(prefix.as_str()).unwrap_or(full);
+                failure(&CodingError::new(code, message))
+            }
+            None => (self.body)(context.clone(), input).await,
+        };
+        outcome.warnings.extend(
+            applied
+                .into_iter()
+                .map(|alias| format!("argument alias applied: {alias}")),
+        );
         Ok(ToolResult {
             ok: outcome.ok,
             data: Some(
@@ -301,30 +372,7 @@ where
     F: Fn(ToolContext, Value) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Outcome, CodingError>> + Send + 'static,
 {
-    let definition = ToolDefinition {
-        name: spec.name.to_owned(),
-        version: "1".to_owned(),
-        effect: spec.effect.as_str().to_owned(),
-        capability: spec.capability.to_owned(),
-        description: spec.description,
-        input_schema: spec.input_schema,
-        output_schema: None,
-        timeout_ms: Some(spec.timeout_ms),
-    };
-    let body: BoxBody = Arc::new(move |context: ToolContext, input: Value| {
-        let pending = run(context, input);
-        Box::pin(async move {
-            match pending.await {
-                Ok(outcome) => outcome,
-                Err(error) => failure(&error),
-            }
-        })
-    });
-    Arc::new(WrappedTool {
-        definition,
-        body,
-        effect_context: None,
-    })
+    build_tool(spec, None, run)
 }
 
 /// As `define_tool`, but the tool declares the real environment its effect
@@ -341,6 +389,14 @@ where
     F: Fn(ToolContext, Value) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Outcome, CodingError>> + Send + 'static,
 {
+    build_tool(spec, Some(effect_context), run)
+}
+
+fn build_tool<F, Fut>(spec: ToolSpec, effect_context: Option<Value>, run: F) -> Arc<dyn Tool>
+where
+    F: Fn(ToolContext, Value) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Outcome, CodingError>> + Send + 'static,
+{
     let definition = ToolDefinition {
         name: spec.name.to_owned(),
         version: "1".to_owned(),
@@ -350,7 +406,17 @@ where
         input_schema: spec.input_schema,
         output_schema: None,
         timeout_ms: Some(spec.timeout_ms),
+        examples: spec.examples,
     };
+    let aliases: Vec<(String, String)> = spec
+        .aliases
+        .iter()
+        .map(|(alias, canonical)| ((*alias).to_owned(), (*canonical).to_owned()))
+        .collect();
+    let mut alias_table = AliasTable::standard();
+    for (alias, canonical) in &aliases {
+        alias_table.add_for_tool(spec.name, alias, canonical);
+    }
     let body: BoxBody = Arc::new(move |context: ToolContext, input: Value| {
         let pending = run(context, input);
         Box::pin(async move {
@@ -363,6 +429,9 @@ where
     Arc::new(WrappedTool {
         definition,
         body,
-        effect_context: Some(effect_context),
+        effect_context,
+        constraints: spec.constraints,
+        aliases,
+        alias_table,
     })
 }

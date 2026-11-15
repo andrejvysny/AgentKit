@@ -188,6 +188,7 @@ fn tool_definition(name: &str, effect: &str, capability: &str) -> ToolDefinition
         input_schema: json!({"type":"object"}),
         output_schema: None,
         timeout_ms: None,
+        examples: vec![],
     }
 }
 

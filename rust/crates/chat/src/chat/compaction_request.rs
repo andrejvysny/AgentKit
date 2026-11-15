@@ -80,7 +80,13 @@ pub(super) fn file_details(covered: &[Entry], previous: Option<&Value>) -> (Valu
             let Ok(args) = serde_json::from_str::<Value>(&call.arguments_json) else {
                 continue;
             };
-            if let Some(path) = args["path"].as_str().filter(|path| !path.is_empty()) {
+            // `file_path` is the parameter; `path` is the old name still
+            // present in earlier calls of the covered history.
+            if let Some(path) = args["file_path"]
+                .as_str()
+                .or_else(|| args["path"].as_str())
+                .filter(|path| !path.is_empty())
+            {
                 match call.name.as_str() {
                     "read_file" | "code_search" => {
                         read.insert(path.into());

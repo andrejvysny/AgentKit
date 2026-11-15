@@ -1518,6 +1518,7 @@ fn tool_definition(name: &str, effect: &str) -> ToolDefinition {
         input_schema: json!({"type": "object"}),
         output_schema: None,
         timeout_ms: None,
+        examples: vec![],
     }
 }
 
@@ -1615,7 +1616,7 @@ impl ChatProvider for Delegating {
         match turn {
             1 => tool_call(
                 "subagent_spawn",
-                json!({"role": "general", "prompt": "CHILD-WORK", "spawnKey": format!("k-{key}")}),
+                json!({"role": "general", "prompt": "CHILD-WORK"}),
             ),
             2 => {
                 let Some(child_id) = extract_child_id(&text) else {
@@ -1625,7 +1626,7 @@ impl ChatProvider for Delegating {
                         tool_calls: vec![],
                     });
                 };
-                tool_call("subagent_await", json!({"childIds": [child_id]}))
+                tool_call("subagent_await", json!({"child_ids": [child_id]}))
             }
             _ => one(ProviderEvent::Completed {
                 content: "parent done".into(),

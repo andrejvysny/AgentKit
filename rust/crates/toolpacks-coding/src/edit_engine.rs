@@ -763,6 +763,56 @@ pub fn apply_edits(
     })
 }
 
+/// Replace EVERY exact occurrence of `old_text` (`replace_all`). Matching is
+/// exact only (no whitespace or quote leniency: a bulk replace must not
+/// guess) and non-overlapping, left to right. Line terminators and untouched
+/// lines survive as in `apply_edits`.
+pub fn apply_replace_all(
+    original: &str,
+    old_text: &str,
+    new_text: &str,
+    path: &str,
+) -> Result<AppliedEdits, CodingError> {
+    let (normalized_content, starts) = lf_view(original);
+    let eol = dominant_eol(original);
+    let old_text = normalize_to_lf(old_text);
+    let new_text = normalize_to_lf(new_text);
+    if old_text.is_empty() {
+        return Err(CodingError::new(
+            "edit_empty_old_text",
+            format!("old_string must not be empty in {path}"),
+        ));
+    }
+    let matches: Vec<usize> = normalized_content
+        .match_indices(old_text.as_str())
+        .map(|(at, _)| at)
+        .collect();
+    if matches.is_empty() {
+        return Err(CodingError::new(
+            "edit_no_match",
+            format!(
+                "Could not find old_string in {path}. It must match exactly, including whitespace and newlines."
+            ),
+        ));
+    }
+    let replacements: Vec<Replacement> = matches
+        .into_iter()
+        .map(|at| (at, old_text.len(), new_text.clone()))
+        .collect();
+    let output = splice_original(original, &starts, &replacements, eol);
+    if output == original {
+        return Err(CodingError::new(
+            "edit_no_change",
+            format!("No changes made to {path}: the replacement produced identical content."),
+        ));
+    }
+    Ok(AppliedEdits {
+        base_content: normalized_content,
+        new_content: normalize_to_lf(&output),
+        output,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,6 +822,42 @@ mod tests {
             old_text: old.to_owned(),
             new_text: new.to_owned(),
         }
+    }
+
+    #[test]
+    fn replace_all_changes_every_exact_occurrence_without_overlap() {
+        let applied = apply_replace_all("a x\nb x\naa\n", "x", "yy", "f.txt").expect("applied");
+        assert_eq!(applied.output, "a yy\nb yy\naa\n");
+        let overlapping = apply_replace_all("aaaa", "aa", "b", "f.txt").expect("applied");
+        assert_eq!(overlapping.output, "bb");
+    }
+
+    #[test]
+    fn replace_all_refuses_no_match_empty_needle_and_no_change() {
+        assert_eq!(
+            apply_replace_all("abc", "x", "y", "f.txt")
+                .unwrap_err()
+                .code,
+            "edit_no_match"
+        );
+        assert_eq!(
+            apply_replace_all("abc", "", "y", "f.txt").unwrap_err().code,
+            "edit_empty_old_text"
+        );
+        assert_eq!(
+            apply_replace_all("abc", "b", "b", "f.txt")
+                .unwrap_err()
+                .code,
+            "edit_no_change"
+        );
+        // Exact only: a bulk replace never guesses through quote or space
+        // normalisation.
+        assert_eq!(
+            apply_replace_all("say \u{201c}hi\u{201d}", "\"hi\"", "x", "f.txt")
+                .unwrap_err()
+                .code,
+            "edit_no_match"
+        );
     }
 
     #[test]

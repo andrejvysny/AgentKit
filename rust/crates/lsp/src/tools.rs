@@ -9,7 +9,10 @@ use std::{
     sync::Arc,
 };
 
-use agentkit_core::{CancellationToken, CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
+use agentkit_core::{
+    AliasTable, CancellationToken, CoreError, Tool, ToolContext, ToolDefinition, ToolResult,
+    normalise,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -38,68 +41,125 @@ pub struct LspTool {
     root: PathBuf,
 }
 
+/// Old parameter names as `(alias, canonical)`, accepted for one release
+/// (call pipeline aliases).
+pub const LSP_ARG_ALIASES: &[(&str, &str)] = &[
+    ("file", "file_path"),
+    ("includeDeclaration", "include_declaration"),
+];
+
+const MAX_LINE: i64 = 10_000_000;
+const MAX_CHARACTER: i64 = 1_000_000;
+
+fn tool_kinds() -> [(ToolKind, &'static str, &'static str); 6] {
+    [
+        (ToolKind::Definition, "lsp_definition", "code.navigation"),
+        (ToolKind::References, "lsp_references", "code.navigation"),
+        (ToolKind::Hover, "lsp_hover", "code.navigation"),
+        (ToolKind::Symbols, "lsp_symbols", "code.navigation"),
+        (
+            ToolKind::Implementation,
+            "lsp_implementation",
+            "code.navigation",
+        ),
+        (ToolKind::Diagnostics, "lsp_diagnostics", "code.diagnostics"),
+    ]
+}
+
+fn description(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::Definition => {
+            "Find where the symbol at a file position is defined, using the language server. \
+             Use it to jump from a call or a type name to its declaration; to find every use \
+             instead, call lsp_references. Line and character are 1-based and character counts \
+             Unicode characters. Returns workspace-relative locations."
+        }
+        ToolKind::References => {
+            "Find every reference to the symbol at a file position, using the language server. \
+             Use it before changing or deleting a symbol to see what depends on it; to find only \
+             the declaration call lsp_definition. Line and character are 1-based. Set \
+             include_declaration to also list the declaration itself. Returns workspace-relative \
+             locations."
+        }
+        ToolKind::Hover => {
+            "Get the type signature and documentation of the symbol at a file position, using \
+             the language server. Use it to learn what a name is without opening its \
+             definition; to see the definition itself call lsp_definition. Line and character \
+             are 1-based. Returns the hover text."
+        }
+        ToolKind::Symbols => {
+            "Search workspace symbols (functions, types, constants) by fuzzy name, using the \
+             language server. Use it when you know roughly what a symbol is called but not \
+             where it lives; to search text instead of symbols use code_search. Returns \
+             workspace-relative locations with the symbol kind."
+        }
+        ToolKind::Implementation => {
+            "Find the implementations of the interface or trait method at a file position, using \
+             the language server. Use it to see which types provide a method; to find the \
+             declaration call lsp_definition. Line and character are 1-based. Returns \
+             workspace-relative locations."
+        }
+        ToolKind::Diagnostics => {
+            "Get the language server's normalized diagnostics (errors and warnings) for one file, \
+             or for every document opened so far when no file is given. Use it after editing to \
+             check that the code still compiles; to run the build or tests use run_command. \
+             Returns each diagnostic with file, position, severity and message."
+        }
+    }
+}
+
+fn examples(kind: ToolKind) -> Vec<Value> {
+    match kind {
+        ToolKind::Definition | ToolKind::Hover | ToolKind::Implementation => {
+            vec![json!({"file_path": "src/lib.rs", "line": 12, "character": 8})]
+        }
+        ToolKind::References => vec![
+            json!({"file_path": "src/lib.rs", "line": 12, "character": 8}),
+            json!({"file_path": "src/lib.rs", "line": 12, "character": 8, "include_declaration": true}),
+        ],
+        ToolKind::Symbols => vec![json!({"query": "ConnectionPool"})],
+        ToolKind::Diagnostics => vec![json!({}), json!({"file_path": "src/lib.rs"})],
+    }
+}
+
+fn definition_of(kind: ToolKind, name: &str, capability: &str) -> ToolDefinition {
+    ToolDefinition {
+        name: name.to_owned(),
+        version: "1.0.0".into(),
+        effect: "read".into(),
+        capability: capability.into(),
+        description: description(kind).into(),
+        input_schema: input_schema(kind),
+        output_schema: None,
+        timeout_ms: None,
+        examples: examples(kind),
+    }
+}
+
+/// The six static definitions, without a pool or workspace.
+pub fn lsp_tool_definitions() -> Vec<ToolDefinition> {
+    tool_kinds()
+        .into_iter()
+        .map(|(kind, name, capability)| definition_of(kind, name, capability))
+        .collect()
+}
+
 /// The six LSP tools for one workspace root. The language for positional
 /// tools is chosen per file by extension; `language` overrides explicitly
 /// on every tool.
 pub fn lsp_tools(pool: Arc<LspPool>, workspace_root: &Path) -> Vec<Arc<dyn Tool>> {
     let root = workspace_root.to_path_buf();
-    [
-        (
-            ToolKind::Definition,
-            "lsp_definition",
-            "code.navigation",
-            "Find the definition(s) of the symbol at a 1-based file position (line/character).",
-        ),
-        (
-            ToolKind::References,
-            "lsp_references",
-            "code.navigation",
-            "Find all references of the symbol at a 1-based file position.",
-        ),
-        (
-            ToolKind::Hover,
-            "lsp_hover",
-            "code.navigation",
-            "Get hover documentation (type signature, docs) for the symbol at a 1-based file position.",
-        ),
-        (
-            ToolKind::Symbols,
-            "lsp_symbols",
-            "code.navigation",
-            "Search workspace symbols by fuzzy query.",
-        ),
-        (
-            ToolKind::Implementation,
-            "lsp_implementation",
-            "code.navigation",
-            "Find implementation(s) of the interface/trait method at a 1-based file position.",
-        ),
-        (
-            ToolKind::Diagnostics,
-            "lsp_diagnostics",
-            "code.diagnostics",
-            "Get normalized diagnostics (errors/warnings) for a file, or all documents opened so far when no file is given.",
-        ),
-    ]
-    .into_iter()
-    .map(|(kind, name, capability, description)| {
-        Arc::new(LspTool {
-            definition: ToolDefinition {
-                name: name.to_owned(),
-                version: "1.0.0".into(),
-                effect: "read".into(),
-                capability: capability.into(),
-                description: description.into(),
-                input_schema: input_schema(kind),
-                output_schema: None,
-                timeout_ms: None,
-            },
-            kind,
-            pool: Arc::clone(&pool),
-            root: root.clone(),
-        }) as Arc<dyn Tool>
-    })
-    .collect()
+    tool_kinds()
+        .into_iter()
+        .map(|(kind, name, capability)| {
+            Arc::new(LspTool {
+                definition: definition_of(kind, name, capability),
+                kind,
+                pool: Arc::clone(&pool),
+                root: root.clone(),
+            }) as Arc<dyn Tool>
+        })
+        .collect()
 }
 
 impl LspTool {
@@ -108,9 +168,18 @@ impl LspTool {
     }
 }
 
-fn position_schema() -> Value {
-    json!({"type": "integer", "minimum": 1,
-           "description": "1-based position; character counts Unicode characters"})
+fn line_schema() -> Value {
+    json!({"type": "integer", "minimum": 1, "maximum": MAX_LINE,
+           "description": "1-based line number."})
+}
+
+fn character_schema() -> Value {
+    json!({"type": "integer", "minimum": 1, "maximum": MAX_CHARACTER,
+           "description": "1-based column; counts Unicode characters."})
+}
+
+fn file_path_schema(description: &str) -> Value {
+    json!({"type": "string", "minLength": 1, "description": description})
 }
 
 fn base_properties(extra: Vec<(&str, Value, bool)>) -> Value {
@@ -131,34 +200,39 @@ fn base_properties(extra: Vec<(&str, Value, bool)>) -> Value {
            "additionalProperties": false})
 }
 
+fn position_properties(file_description: &str) -> Vec<(&str, Value, bool)> {
+    vec![
+        ("file_path", file_path_schema(file_description), true),
+        ("line", line_schema(), true),
+        ("character", character_schema(), true),
+    ]
+}
+
 fn input_schema(kind: ToolKind) -> Value {
+    const FILE: &str = "File, relative to the workspace root.";
     match kind {
-        ToolKind::Definition => base_properties(vec![
-            ("file", json!({"type": "string"}), true),
-            ("line", position_schema(), true),
-            ("character", position_schema(), true),
-        ]),
-        ToolKind::References => base_properties(vec![
-            ("file", json!({"type": "string"}), true),
-            ("line", position_schema(), true),
-            ("character", position_schema(), true),
-            ("includeDeclaration", json!({"type": "boolean"}), false),
-        ]),
-        ToolKind::Hover => base_properties(vec![
-            ("file", json!({"type": "string"}), true),
-            ("line", position_schema(), true),
-            ("character", position_schema(), true),
-        ]),
-        ToolKind::Implementation => base_properties(vec![
-            ("file", json!({"type": "string"}), true),
-            ("line", position_schema(), true),
-            ("character", position_schema(), true),
-        ]),
-        ToolKind::Symbols => base_properties(vec![("query", json!({"type": "string"}), true)]),
+        ToolKind::Definition | ToolKind::Hover | ToolKind::Implementation => {
+            base_properties(position_properties(FILE))
+        }
+        ToolKind::References => {
+            let mut properties = position_properties(FILE);
+            properties.push((
+                "include_declaration",
+                json!({"type": "boolean", "description": "Also list the declaration. Default false."}),
+                false,
+            ));
+            base_properties(properties)
+        }
+        ToolKind::Symbols => base_properties(vec![(
+            "query",
+            json!({"type": "string", "minLength": 1, "description": "Fuzzy symbol name to search for."}),
+            true,
+        )]),
         ToolKind::Diagnostics => base_properties(vec![(
-            "file",
-            json!({"type": "string",
-                   "description": "Omit to collect diagnostics from all documents opened so far."}),
+            "file_path",
+            file_path_schema(
+                "File to check, relative to the workspace root. Omit to collect diagnostics from all documents opened so far.",
+            ),
             false,
         )]),
     }
@@ -173,7 +247,27 @@ impl Tool for LspTool {
         Some(self.effect_context())
     }
 
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        LSP_ARG_ALIASES
+            .iter()
+            .map(|(alias, canonical)| ((*alias).to_owned(), (*canonical).to_owned()))
+            .collect()
+    }
+
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
+        // The call pipeline normalises real calls; direct callers get the
+        // same canonical names.
+        let mut aliases = AliasTable::standard();
+        for (alias, canonical) in LSP_ARG_ALIASES {
+            aliases.add_for_tool(&self.definition.name, alias, canonical);
+        }
+        let input = normalise(
+            &aliases,
+            &self.definition.name,
+            &self.definition.input_schema,
+            input,
+        )
+        .args;
         let args = input.as_object().cloned().unwrap_or_default();
         let language_override = match args.get("language") {
             None | Some(Value::Null) => None,
@@ -190,7 +284,7 @@ impl Tool for LspTool {
         let name = self.definition.name.clone();
         let handle = match self.kind {
             ToolKind::Symbols | ToolKind::Diagnostics => {
-                let file = string_arg(&args, "file")?;
+                let file = string_arg(&args, "file_path")?;
                 let language = match &language_override {
                     Some(lang) => lang.clone(),
                     None => self.resolve_language(&canonical_root, file.as_deref())?,
@@ -203,7 +297,7 @@ impl Tool for LspTool {
                 )
             }
             _ => {
-                let raw = req_string(&args, "file")?;
+                let raw = req_string(&args, "file_path")?;
                 let path = resolve_confined(&canonical_root, &raw)?;
                 let language = match &language_override {
                     Some(lang) => lang.clone(),
@@ -297,7 +391,7 @@ impl LspTool {
         };
         match self.kind {
             ToolKind::Definition => {
-                let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
+                let path = resolve_confined(canonical_root, &req_string(args, "file_path")?)?;
                 let result = handle
                     .guarded_request_with_text(
                         "textDocument/definition",
@@ -310,7 +404,7 @@ impl LspTool {
                 Ok(json!({"definitions": self.locations(&result, canonical_root, &columns)}))
             }
             ToolKind::Implementation => {
-                let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
+                let path = resolve_confined(canonical_root, &req_string(args, "file_path")?)?;
                 let result = handle
                     .guarded_request_with_text(
                         "textDocument/implementation",
@@ -323,9 +417,9 @@ impl LspTool {
                 Ok(json!({"implementations": self.locations(&result, canonical_root, &columns)}))
             }
             ToolKind::References => {
-                let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
+                let path = resolve_confined(canonical_root, &req_string(args, "file_path")?)?;
                 let include_declaration = args
-                    .get("includeDeclaration")
+                    .get("include_declaration")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let result = handle
@@ -350,7 +444,7 @@ impl LspTool {
                 Ok(json!({"references": self.locations(&result, canonical_root, &columns)}))
             }
             ToolKind::Hover => {
-                let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
+                let path = resolve_confined(canonical_root, &req_string(args, "file_path")?)?;
                 let result = handle
                     .guarded_request_with_text(
                         "textDocument/hover",
@@ -376,7 +470,7 @@ impl LspTool {
                 Ok(json!({"symbols": self.symbols(&result, canonical_root, &columns)}))
             }
             ToolKind::Diagnostics => {
-                let file = string_arg(args, "file")?;
+                let file = string_arg(args, "file_path")?;
                 let items = match &file {
                     Some(raw) => {
                         let path = resolve_confined(canonical_root, raw)?;
@@ -855,6 +949,7 @@ mod tests {
                 input_schema: json!({}),
                 output_schema: None,
                 timeout_ms: None,
+                examples: vec![],
             },
             kind,
             pool: LspPool::new(LspConfig::default()),
@@ -998,7 +1093,7 @@ mod tests {
         let args = json!({"line": 7}).as_object().unwrap().clone();
         assert_eq!(required_position(&args, "line").unwrap(), 7);
         assert!(required_position(&args, "character").is_err());
-        let schema = position_schema();
+        let schema = line_schema();
         assert_eq!(schema["type"], "integer");
         assert_eq!(schema["minimum"], 1);
     }

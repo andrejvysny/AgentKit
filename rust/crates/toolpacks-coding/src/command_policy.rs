@@ -896,12 +896,19 @@ pub fn shell_args_of(args: &Value) -> Option<ShellArgs> {
     if command.is_empty() {
         return None;
     }
-    let cwd = match map.get("cwd") {
-        None => None,
-        Some(Value::String(cwd)) => Some(cwd.clone()),
+    // `directory` is the parameter; `cwd` and `workdir` are the names the
+    // call pipeline still maps onto it. The tool resolves its working
+    // directory from whichever of them is present, so the approval key must
+    // read the same one: two of them at once is ambiguous, hence uncoverable.
+    let mut present = ["directory", "cwd", "workdir"]
+        .into_iter()
+        .filter_map(|key| map.get(key));
+    let cwd = match (present.next(), present.next()) {
+        (None, _) => None,
+        (Some(Value::String(cwd)), None) => Some(cwd.clone()),
         // TS: `cwd !== undefined && typeof cwd !== "string"` → an explicit
         // JSON null makes the call uncoverable, never a root-cwd key.
-        Some(_) => return None,
+        _ => return None,
     };
     // JS checks `typeof command === 'string' && command !== ""`; a non-null
     // object/array passed the `typeof object` gate but not the string gate.
@@ -1286,6 +1293,35 @@ mod tests {
                 "expected unknown: {command:?}"
             );
         }
+    }
+
+    #[test]
+    fn shell_args_read_the_directory_the_tool_will_run_in() {
+        // `directory` is the parameter; `cwd` and `workdir` are the names the
+        // call pipeline maps onto it. The approval key must see the same
+        // directory the tool resolves, whichever spelling arrives.
+        for key in ["directory", "cwd", "workdir"] {
+            let args = serde_json::json!({ "command": "bun test", key: "pkg" });
+            assert_eq!(
+                shell_args_of(&args),
+                Some(ShellArgs {
+                    command: "bun test".into(),
+                    cwd: Some("pkg".into())
+                }),
+                "{key}"
+            );
+        }
+        // Two spellings at once are ambiguous: uncoverable, never a guess.
+        for pair in [
+            ("directory", "cwd"),
+            ("directory", "workdir"),
+            ("cwd", "workdir"),
+        ] {
+            let args = serde_json::json!({ "command": "bun test", pair.0: "a", pair.1: "b" });
+            assert_eq!(shell_args_of(&args), None, "{pair:?}");
+        }
+        let null_directory = serde_json::json!({ "command": "bun test", "directory": null });
+        assert_eq!(shell_args_of(&null_directory), None);
     }
 
     #[test]
@@ -1789,6 +1825,7 @@ mod tests {
                 input_schema: json!({}),
                 output_schema: None,
                 timeout_ms: None,
+                examples: vec![],
             },
         }
     }

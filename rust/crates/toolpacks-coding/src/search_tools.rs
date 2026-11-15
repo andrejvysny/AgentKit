@@ -40,7 +40,10 @@ fn walk_base(env: &PackEnv, ctx: &ToolContext) -> WalkOptions {
 
 pub fn find_files_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let description = format!(
-        "Find files by glob (e.g. **/*.ts, src/**/*.test.{{ts,tsx}}). Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks and credential files. Up to {} results. {PREFER_NATIVE}",
+        "Find files by name with a glob such as **/*.ts or src/**/*.test.{{ts,tsx}}. Use it to \
+         locate a file; to search inside files use code_search, to see one folder use list_dir. \
+         Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks \
+         and credential files. Returns up to {} paths, one per line. {PREFER_NATIVE}",
         env.limits.find_max_results
     );
     let input_schema = json!({
@@ -48,7 +51,7 @@ pub fn find_files_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Glob matched against the path relative to `path`, or the file name."
+                "description": "Glob matched against paths relative to the search directory, or against the file name."
             },
             "path": {
                 "type": "string",
@@ -57,7 +60,8 @@ pub fn find_files_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             "limit": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": env.limits.find_max_results
+                "maximum": env.limits.find_max_results,
+                "description": "Maximum number of paths to return."
             }
         },
         "required": ["pattern"],
@@ -72,6 +76,12 @@ pub fn find_files_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             description,
             input_schema,
             timeout_ms: env.limits.search_time_budget_ms + 5000,
+            examples: vec![
+                json!({ "pattern": "**/*.rs" }),
+                json!({ "pattern": "*.test.ts", "path": "src", "limit": 20 }),
+            ],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
@@ -128,10 +138,41 @@ pub fn find_files_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     )
 }
 
+/// The engine still pages with `offset` and `literal`; the tool offers four
+/// parameters, so its messages must not send the model to the other two.
+fn teach_search_error(mut error: CodingError) -> CodingError {
+    if error.code == "invalid_pattern" {
+        error.message = error.message.replace(
+            "; pass literal: true to search for the text itself",
+            "; escape special characters with a backslash to search for them literally",
+        );
+    }
+    error
+}
+
+fn teach_search_notice(text: String) -> String {
+    const MARKER: &str = "[more matches: call again with offset=";
+    let Some(start) = text.find(MARKER) else {
+        return text;
+    };
+    let Some(end) = text[start..].find(']') else {
+        return text;
+    };
+    format!(
+        "{}[more matches: narrow the search with path or glob, or raise limit]{}",
+        &text[..start],
+        &text[start + end + 1..]
+    )
+}
+
 pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let l = &env.limits;
     let description = format!(
-        "Search text files for a regex or literal. Output lines are \"<path>:<line>:<text>\". Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks, binary and credential files. Bounded: {} entries, {} MiB per file, {} KiB output, {}s; a bounded search says so. {PREFER_NATIVE}",
+        "Search the text of workspace files for a regular expression. Output lines are \
+         \"<path>:<line>:<text>\". Use it to find where something is defined or used; to find \
+         a file by name use find_files. Respects .gitignore, .ignore and .git/info/exclude; \
+         skips .git, node_modules, symlinks, binary and credential files. Bounded: {} entries, \
+         {} MiB per file, {} KiB output, {}s; a bounded search says so. {PREFER_NATIVE}",
         l.search_max_files,
         js_number(l.search_max_file_bytes as f64 / 1024.0 / 1024.0),
         js_number(l.search_max_output_bytes as f64 / 1024.0),
@@ -142,7 +183,7 @@ pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Regular expression (or literal text with literal=true)."
+                "description": "Regular expression. Escape special characters with a backslash to match them literally."
             },
             "path": {
                 "type": "string",
@@ -150,29 +191,13 @@ pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             },
             "glob": {
                 "type": "string",
-                "description": "Only files whose path or name matches, e.g. *.ts."
-            },
-            "literal": {
-                "type": "boolean",
-                "description": "Treat pattern as plain text."
-            },
-            "ignoreCase": { "type": "boolean" },
-            "context": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": l.search_max_context,
-                "description": "Lines of context around each match."
+                "description": "Only files matching this glob, such as *.ts."
             },
             "limit": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": l.search_max_matches,
                 "description": format!("Maximum matches (default {}).", l.search_default_matches)
-            },
-            "offset": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "Matches to skip, to page through a truncated result (use the offset the notice gives)."
             }
         },
         "required": ["pattern"],
@@ -189,6 +214,12 @@ pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             description,
             input_schema,
             timeout_ms,
+            examples: vec![
+                json!({ "pattern": "fn main" }),
+                json!({ "pattern": "TODO|FIXME", "path": "src", "glob": "*.rs", "limit": 20 }),
+            ],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
@@ -221,10 +252,12 @@ pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         as usize,
                     offset: opt_int(input, "offset", 0, 1_000_000_000)?.unwrap_or(0) as usize,
                 };
-                let outcome = search_text(&search, &walk_base(&env, &ctx)).await?;
+                let outcome = search_text(&search, &walk_base(&env, &ctx))
+                    .await
+                    .map_err(teach_search_error)?;
                 Ok(Outcome {
                     ok: true,
-                    text: outcome.text,
+                    text: teach_search_notice(outcome.text),
                     summary: Some(format!(
                         "{} match(es) for {}",
                         outcome.matches,
@@ -242,7 +275,7 @@ pub fn code_search_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
 pub fn repo_map_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let l = &env.limits;
     let description = format!(
-        "Orient yourself in a repository: top-level manifests (package.json, tsconfig, Cargo.toml, pyproject, go.mod, README) with short excerpts, plus a depth-limited directory tree (default depth {}, max {} entries). Respects ignore files. Call this first, before any shell command.",
+        "Orient yourself in a repository: top-level manifests (package.json, tsconfig, Cargo.toml, pyproject, go.mod, README) with short excerpts, plus a depth-limited directory tree (default depth {}, max {} entries). Respects ignore files. Call this first in an unfamiliar project, before any shell command; to look inside one folder use list_dir.",
         l.repo_map_default_depth, l.repo_map_max_entries
     );
     let input_schema = json!({
@@ -252,8 +285,14 @@ pub fn repo_map_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 "type": "string",
                 "description": "Directory. Default: the workspace root."
             },
-            "depth": { "type": "integer", "minimum": 1, "maximum": l.repo_map_max_depth }
+            "depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": l.repo_map_max_depth,
+                "description": "How many directory levels the tree shows."
+            }
         },
+        "required": [],
         "additionalProperties": false
     });
     let timeout_ms = l.search_time_budget_ms + 5000;
@@ -266,6 +305,9 @@ pub fn repo_map_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             description,
             input_schema,
             timeout_ms,
+            examples: vec![json!({}), json!({ "path": "crates", "depth": 2 })],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
@@ -512,6 +554,35 @@ mod tests {
         let result = run(&tool, json!({ "pattern": "(" })).await;
         assert!(!result.ok);
         assert!(text(&result).contains("invalid_pattern"));
+    }
+
+    #[tokio::test]
+    async fn code_search_offers_four_parameters_and_teaches_only_those() {
+        let h = TempRoot::new("four").await;
+        let lines: String = (0..5).map(|i| format!("hit {i}\n")).collect();
+        h.put("a.txt", &lines).await;
+        let tool = code_search_tool(&env_for(&h.root));
+        let schema = &tool.definition().input_schema;
+        let mut names: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
+        names.sort();
+        assert_eq!(names, ["glob", "limit", "path", "pattern"]);
+
+        // A truncated result points at the offered parameters, not at the
+        // engine's offset paging.
+        let result = run(&tool, json!({ "pattern": "hit", "limit": 2 })).await;
+        let body = text(&result);
+        assert!(result.truncated, "{body}");
+        assert!(!body.contains("offset="), "{body}");
+        assert!(
+            body.contains("[more matches: narrow the search with path or glob, or raise limit]")
+        );
+
+        // An invalid pattern teaches escaping, not the removed `literal`.
+        let bad = run(&tool, json!({ "pattern": "(" })).await;
+        let message = text(&bad);
+        assert!(message.contains("invalid_pattern"));
+        assert!(!message.contains("literal: true"), "{message}");
+        assert!(message.contains("escape special characters with a backslash"));
     }
 
     #[tokio::test]

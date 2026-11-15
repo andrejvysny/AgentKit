@@ -271,6 +271,11 @@ fn parse_definition(parsed: &Value) -> std::result::Result<ToolDefinition, Strin
         .filter(|schema| schema.is_object())
         .cloned();
     let timeout_ms = parsed.get("timeoutMs").and_then(Value::as_u64);
+    let examples = parsed
+        .get("examples")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     Ok(ToolDefinition {
         name,
         version,
@@ -280,6 +285,7 @@ fn parse_definition(parsed: &Value) -> std::result::Result<ToolDefinition, Strin
         input_schema,
         output_schema,
         timeout_ms,
+        examples,
     })
 }
 
@@ -331,6 +337,7 @@ mod tests {
             input_schema: json!({"type":"object","properties":{"text":{"type":"string"}}}),
             output_schema: None,
             timeout_ms: None,
+            examples: vec![],
         }
     }
 

@@ -43,6 +43,13 @@ export const AiToolDefinitionSchema = Type.Object({
         "Optional per-tool execution timeout (ms). When set, the run-loop races execute() against the deadline via an AbortController linked to ctx.signal.",
     }),
   ),
+  /** Example calls as registry data: each entry is a complete, valid argument object. */
+  examples: Type.Optional(
+    Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+      description:
+        "Example calls: each entry is a complete, valid argument object for this tool.",
+    }),
+  ),
 });
 export type AiToolDefinition = Static<typeof AiToolDefinitionSchema>;
 

@@ -1,5 +1,11 @@
-use super::service::{SpawnRequest, SubagentService};
-use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
+use super::config::{BUILTIN_ROLES, SubagentConfig};
+use super::service::{
+    SUBAGENT_ITERATIONS_CEILING, SUBAGENT_OVERALL_MS_CEILING, SUBAGENT_PROVIDER_REQUESTS_CEILING,
+    SpawnRequest, SubagentService,
+};
+use agentkit_core::{
+    AliasTable, CoreError, Tool, ToolContext, ToolDefinition, ToolResult, normalise,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::future::Future;
@@ -19,21 +25,162 @@ pub const SUBAGENT_TOOL_NAMES: [&str; 7] = [
 
 const CAPABILITY: &str = "orchestration";
 
-fn definition(
-    name: &str,
-    description: &str,
-    input_schema: Value,
-    timeout_ms: u64,
-) -> ToolDefinition {
+/// Upper bound the schema states for the child-id list.
+const MAX_CHILD_IDS: usize = 64;
+
+/// Old parameter names as `(alias, canonical)`, accepted for one release
+/// (call pipeline aliases).
+pub const SUBAGENT_ARG_ALIASES: &[(&str, &str)] = &[
+    ("childId", "child_id"),
+    ("childIds", "child_ids"),
+    ("exclusiveWorkspace", "exclusive_workspace"),
+    ("maxIterations", "max_iterations"),
+    ("maxProviderRequests", "max_provider_requests"),
+    ("overallTimeoutMs", "timeout"),
+    ("timeoutMs", "timeout"),
+];
+
+/// The seven static definitions, with the built-in roles and default await
+/// bound. The contributor builds the same definitions with the host's
+/// configured roles and bounds.
+pub fn subagent_tool_definitions() -> Vec<ToolDefinition> {
+    let roles: Vec<String> = BUILTIN_ROLES
+        .iter()
+        .map(|role| (*role).to_owned())
+        .collect();
+    let max_await_ms = SubagentConfig::default().limits.max_await_ms;
+    SUBAGENT_TOOL_NAMES
+        .iter()
+        .map(|name| definition_for(name, &roles, max_await_ms))
+        .collect()
+}
+
+fn child_id_schema() -> Value {
+    json!({"type": "string", "minLength": 1,
+           "description": "Id of a child you spawned, from subagent_spawn or subagent_list."})
+}
+
+fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefinition {
+    let (description, input_schema, timeout_ms, examples): (String, Value, u64, Vec<Value>) =
+        match name {
+            "subagent_spawn" => (
+                format!(
+                    "Spawn a child session that runs one delegated assignment in its own \
+                     context; it sees nothing of yours except the prompt. Roles: {}. Read-only \
+                     roles cannot write, and the child inherits your workspace and permission \
+                     ceiling. Spawn independent children together, then collect them with \
+                     subagent_await. Returns the child id for subagent_status, subagent_message, \
+                     subagent_cancel and subagent_resume. Set exclusive_workspace for an \
+                     implementer whose edits must not race another writer.",
+                    roles.join(", ")
+                ),
+                json!({"type":"object","required":["role","prompt"],"additionalProperties":false,
+                    "properties":{
+                    "role":{"type":"string","enum":roles,"description":"What kind of child to spawn."},
+                    "prompt":{"type":"string","minLength":1,"description":"Self-contained assignment: the child sees nothing of your context."},
+                    "title":{"type":"string","description":"Short label for the child."},
+                    "model":{"type":"string","description":"Model for this child instead of the default."},
+                    "exclusive_workspace":{"type":"boolean","description":"Give the child the workspace to itself while it runs."},
+                    "max_iterations":{"type":"integer","minimum":1,"maximum":SUBAGENT_ITERATIONS_CEILING,"description":"Upper bound on the child's tool iterations."},
+                    "max_provider_requests":{"type":"integer","minimum":1,"maximum":SUBAGENT_PROVIDER_REQUESTS_CEILING,"description":"Upper bound on the child's provider requests."},
+                    "timeout":{"type":"integer","minimum":1000,"maximum":SUBAGENT_OVERALL_MS_CEILING,"description":"Overall time limit for the child, in milliseconds."}
+                }}),
+                30_000,
+                vec![
+                    json!({"role": "explorer", "prompt": "Find where retries are configured and report the file paths and defaults."}),
+                    json!({"role": "implementer", "prompt": "Add a retry limit to src/client.rs and run the tests.", "exclusive_workspace": true, "timeout": 600000}),
+                ],
+            ),
+            "subagent_list" => (
+                "List your delegated children with live status (queued, running, completed, \
+                 failed, cancelled), role, result and error. Use it to see what is still running \
+                 before you await or cancel; use subagent_status for the full detail of one \
+                 child. It takes no parameters and shows only the children you spawned."
+                    .to_owned(),
+                json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
+                15_000,
+                vec![json!({})],
+            ),
+            "subagent_status" => (
+                "Read one child's live detail: status, final result, error, task status, waiting \
+                 state and queued inputs. Use it when subagent_list is not enough or to read the \
+                 result of a finished child; to wait for several children use subagent_await. \
+                 Only children you spawned can be read."
+                    .to_owned(),
+                json!({"type":"object","required":["child_id"],"additionalProperties":false,
+                    "properties":{"child_id":child_id_schema()}}),
+                15_000,
+                vec![json!({"child_id": "child-1"})],
+            ),
+            "subagent_message" => (
+                "Send a follow-up to one of your running children. Mode queue (the default) \
+                 appends an input that runs as the child's next turn; mode steer injects it into \
+                 the live turn at its next tool boundary. Use it to correct or extend an \
+                 assignment; to stop a child use subagent_cancel. Returns a receipt for the \
+                 message."
+                    .to_owned(),
+                json!({"type":"object","required":["child_id","content"],"additionalProperties":false,
+                    "properties":{
+                    "child_id":child_id_schema(),
+                    "content":{"type":"string","minLength":1,"description":"The follow-up text for the child."},
+                    "mode":{"type":"string","enum":["queue","steer"],"description":"queue (default) or steer."}
+                }}),
+                15_000,
+                vec![
+                    json!({"child_id": "child-1", "content": "Also check the tests directory.", "mode": "steer"}),
+                ],
+            ),
+            "subagent_await" => (
+                "Wait for your children to settle and collect their results. Leave child_ids out \
+                 to await every active child. Returns at the first settled moment, on timeout \
+                 (timedOut true, with partial results) or when the turn is cancelled. A timeout \
+                 is not a failure: keep working or await again. Spawn the children first with \
+                 subagent_spawn."
+                    .to_owned(),
+                json!({"type":"object","required":[],"additionalProperties":false,
+                    "properties":{
+                    "child_ids":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"maxItems":MAX_CHILD_IDS,"description":"Children to await. Default: every active child."},
+                    "timeout":{"type":"integer","minimum":0,"maximum":max_await_ms,"description":"How long to wait, in milliseconds."}
+                }}),
+                660_000,
+                vec![
+                    json!({}),
+                    json!({"child_ids": ["child-1", "child-2"], "timeout": 120000}),
+                ],
+            ),
+            "subagent_cancel" => (
+                "Cooperatively cancel one of your children's live turn. Cancellation is durable: \
+                 the child settles as cancelled at its next checkpoint. Use it for work that is \
+                 no longer needed; to change a child's assignment use subagent_message instead, \
+                 and to continue a cancelled child use subagent_resume."
+                    .to_owned(),
+                json!({"type":"object","required":["child_id"],"additionalProperties":false,
+                    "properties":{"child_id":child_id_schema()}}),
+                15_000,
+                vec![json!({"child_id": "child-1"})],
+            ),
+            _ => (
+                "Resume one of your children. An interrupted turn continues in place; a failed \
+                 or cancelled child is re-dispatched as a new turn that continues the \
+                 assignment. Use it after subagent_status shows the child stopped before \
+                 finishing; to give it new instructions use subagent_message."
+                    .to_owned(),
+                json!({"type":"object","required":["child_id"],"additionalProperties":false,
+                    "properties":{"child_id":child_id_schema()}}),
+                15_000,
+                vec![json!({"child_id": "child-1"})],
+            ),
+        };
     ToolDefinition {
         name: name.to_owned(),
         version: "1".to_owned(),
         effect: "read".to_owned(),
         capability: CAPABILITY.to_owned(),
-        description: description.to_owned(),
+        description,
         input_schema,
         output_schema: None,
         timeout_ms: Some(timeout_ms),
+        examples,
     }
 }
 
@@ -101,6 +248,7 @@ struct SubagentTool {
     definition: ToolDefinition,
     service: SubagentService,
     body: Body,
+    alias_table: AliasTable,
 }
 
 type Body = Arc<dyn Fn(SubagentService, ToolContext, Value) -> BodyFuture + Send + Sync>;
@@ -111,10 +259,25 @@ impl Tool for SubagentTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        SUBAGENT_ARG_ALIASES
+            .iter()
+            .map(|(alias, canonical)| ((*alias).to_owned(), (*canonical).to_owned()))
+            .collect()
+    }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         if !self.service.config().enabled {
             return Ok(refused("subagents_disabled".into(), &context));
         }
+        // The call pipeline normalises real calls; direct callers get the
+        // same canonical names.
+        let input = normalise(
+            &self.alias_table,
+            &self.definition.name,
+            &self.definition.input_schema,
+            input,
+        )
+        .args;
         match (self.body)(self.service.clone(), context.clone(), input).await {
             Ok(data) => Ok(payload(data, &context)),
             Err(refusal) => Ok(refused(refusal, &context)),
@@ -124,16 +287,18 @@ impl Tool for SubagentTool {
 
 fn tool(
     service: &SubagentService,
-    name: &str,
-    description: &str,
-    schema: Value,
-    timeout_ms: u64,
+    definition: ToolDefinition,
     body: impl Fn(SubagentService, ToolContext, Value) -> BodyFuture + Send + Sync + 'static,
 ) -> Arc<dyn Tool> {
+    let mut alias_table = AliasTable::standard();
+    for (alias, canonical) in SUBAGENT_ARG_ALIASES {
+        alias_table.add_for_tool(&definition.name, alias, canonical);
+    }
     Arc::new(SubagentTool {
-        definition: definition(name, description, schema, timeout_ms),
+        definition,
         service: service.clone(),
         body: Arc::new(body),
+        alias_table,
     })
 }
 
@@ -163,28 +328,20 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             return Ok(vec![]);
         }
         let service = self.service.clone();
+        let config = service.config();
+        let roles: Vec<String> = if config.roles.is_empty() {
+            BUILTIN_ROLES
+                .iter()
+                .map(|role| (*role).to_owned())
+                .collect()
+        } else {
+            config.roles.keys().cloned().collect()
+        };
+        let max_await_ms = config.limits.max_await_ms;
         Ok(vec![
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_spawn",
-                "Spawn a child session that runs one delegated assignment in its own context. \
-                 Roles: researcher, explorer, implementer, reviewer, general. Independent \
-                 children should be spawned together and collected with subagent_await. The \
-                 child inherits your workspace and permission ceiling; read-only roles cannot \
-                 write. Set exclusiveWorkspace for an implementer whose edits must not race any \
-                 other writer on the workspace.",
-                json!({"type":"object","required":["role","prompt"],"properties":{
-                    "role":{"type":"string"},
-                    "prompt":{"type":"string","description":"Self-contained assignment: the child sees nothing of your context."},
-                    "title":{"type":"string"},
-                    "model":{"type":"string","description":"Override the role's model."},
-                    "exclusiveWorkspace":{"type":"boolean"},
-                    "maxIterations":{"type":"integer","minimum":1},
-                    "maxProviderRequests":{"type":"integer","minimum":1},
-                    "overallTimeoutMs":{"type":"integer","minimum":1000},
-                    "spawnKey":{"type":"string","description":"Stable idempotency key; omit to derive it from this call."}
-                }}),
-                30_000,
+                definition_for("subagent_spawn", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
                         let (parent_chat_id, parent_task_id) =
@@ -195,8 +352,10 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             && input.get("spawnKey").and_then(Value::as_str).is_none()
                         {
                             return Err(
-                                "spawn_key_required: no tool-call identity; pass an explicit \
-                                 spawnKey"
+                                "spawn_key_required: this call carries no tool-call identity, so \
+                                 the runtime cannot tell a retry from a second spawn. Why: the \
+                                 child's identity is derived from the call id. Next: call \
+                                 subagent_spawn again from a normal tool turn."
                                     .into(),
                             );
                         }
@@ -214,12 +373,12 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                                 .to_owned(),
                             title: input["title"].as_str().map(str::to_owned),
                             model: input["model"].as_str().map(str::to_owned),
-                            exclusive_workspace: input["exclusiveWorkspace"]
+                            exclusive_workspace: input["exclusive_workspace"]
                                 .as_bool()
                                 .unwrap_or(false),
-                            max_iterations: input["maxIterations"].as_u64().map(|v| v as u32),
-                            max_provider_requests: input["maxProviderRequests"].as_u64(),
-                            overall_timeout_ms: input["overallTimeoutMs"].as_u64(),
+                            max_iterations: input["max_iterations"].as_u64().map(|v| v as u32),
+                            max_provider_requests: input["max_provider_requests"].as_u64(),
+                            overall_timeout_ms: input["timeout"].as_u64(),
                         };
                         let child = service
                             .spawn(&request)
@@ -231,11 +390,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             )),
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_list",
-                "List your delegated children with live status (queued/running/completed/failed/\
-                 cancelled), role, result and error.",
-                json!({"type":"object","properties":{}}),
-                15_000,
+                definition_for("subagent_list", &roles, max_await_ms),
                 |service, context, _input| {
                     Box::pin(async move {
                         let (parent_chat_id, _) =
@@ -251,20 +406,14 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             )),
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_status",
-                "One child's live detail: status, final result, error, task status, waiting \
-                 state and queued inputs.",
-                json!({"type":"object","required":["childId"],"properties":{
-                    "childId":{"type":"string"}
-                }}),
-                15_000,
+                definition_for("subagent_status", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
                         let (parent_chat_id, _) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
-                        let child = input["childId"]
+                        let child = input["child_id"]
                             .as_str()
-                            .ok_or_else(|| "childId is required".to_owned())?;
+                            .ok_or_else(|| "child_id is required".to_owned())?;
                         let view = service
                             .status(child)
                             .await
@@ -280,24 +429,14 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             )),
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_message",
-                "Send a follow-up to one of your children: mode \"queue\" appends an input that \
-                 runs as its next turn; mode \"steer\" injects into the live turn at its next \
-                 tool boundary.",
-                json!({"type":"object","required":["childId","content"],"properties":{
-                    "childId":{"type":"string"},
-                    "content":{"type":"string"},
-                    "mode":{"type":"string","enum":["queue","steer"]},
-                    "messageKey":{"type":"string","description":"Stable idempotency key for this message."}
-                }}),
-                15_000,
+                definition_for("subagent_message", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
                         let (parent_chat_id, _) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
-                        let child = input["childId"]
+                        let child = input["child_id"]
                             .as_str()
-                            .ok_or_else(|| "childId is required".to_owned())?;
+                            .ok_or_else(|| "child_id is required".to_owned())?;
                         let content = input["content"]
                             .as_str()
                             .ok_or_else(|| "content is required".to_owned())?;
@@ -330,21 +469,12 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             )),
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_await",
-                "Wait for your children to settle and collect their results. Omit childIds to \
-                 await every active child. Returns on the first settled moment, on timeout \
-                 (timedOut:true, partial results), or when the turn is cancelled — a timeout \
-                 is not a failure: keep working or await again.",
-                json!({"type":"object","properties":{
-                    "childIds":{"type":"array","items":{"type":"string"}},
-                    "timeoutMs":{"type":"integer","minimum":0}
-                }}),
-                660_000,
+                definition_for("subagent_await", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
                         let (parent_chat_id, _) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
-                        let ids: Option<Vec<String>> = input["childIds"].as_array().map(|items| {
+                        let ids: Option<Vec<String>> = input["child_ids"].as_array().map(|items| {
                             items
                                 .iter()
                                 .filter_map(Value::as_str)
@@ -355,7 +485,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                             .await_children(
                                 &parent_chat_id,
                                 ids.as_deref(),
-                                input["timeoutMs"].as_u64(),
+                                input["timeout"].as_u64(),
                                 &context.cancellation,
                             )
                             .await
@@ -366,20 +496,14 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             )),
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_cancel",
-                "Cooperatively cancel one of your children's live turn. Cancellation is \
-                 durable; the child settles cancelled at its next checkpoint.",
-                json!({"type":"object","required":["childId"],"properties":{
-                    "childId":{"type":"string"}
-                }}),
-                15_000,
+                definition_for("subagent_cancel", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
                         let (parent_chat_id, _) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
-                        let child = input["childId"]
+                        let child = input["child_id"]
                             .as_str()
-                            .ok_or_else(|| "childId is required".to_owned())?;
+                            .ok_or_else(|| "child_id is required".to_owned())?;
                         let row = service
                             .store()
                             .get_subagent(child)
@@ -404,22 +528,14 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
             )),
             agentkit_governance::ContributedTool::Read(tool(
                 &service,
-                "subagent_resume",
-                "Resume one of your children: an interrupted turn continues in place; a failed \
-                 or cancelled one is re-dispatched as a new turn that continues the \
-                 assignment.",
-                json!({"type":"object","required":["childId"],"properties":{
-                    "childId":{"type":"string"},
-                    "resumeKey":{"type":"string","description":"Stable idempotency key for this resume."}
-                }}),
-                15_000,
+                definition_for("subagent_resume", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
                         let (parent_chat_id, parent_task_id) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
-                        let child = input["childId"]
+                        let child = input["child_id"]
                             .as_str()
-                            .ok_or_else(|| "childId is required".to_owned())?;
+                            .ok_or_else(|| "child_id is required".to_owned())?;
                         let row = service
                             .store()
                             .get_subagent(child)

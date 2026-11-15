@@ -30,6 +30,12 @@ pub struct AiToolDefinition {
         serialize_with = "crate::serialize_optional_number"
     )]
     pub timeout_ms: Optional<f64>,
+    #[serde(
+        rename = "examples",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub examples: Optional<Vec<BTreeMap<String, Value>>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -44,6 +50,7 @@ crate::impl_json_deserialize!(AiToolDefinition, |value: Value| {
         input_schema: crate::required_field(&mut object, "inputSchema")?,
         output_schema: crate::optional_field(&mut object, "outputSchema")?,
         timeout_ms: crate::optional_field(&mut object, "timeoutMs")?,
+        examples: crate::optional_field(&mut object, "examples")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)

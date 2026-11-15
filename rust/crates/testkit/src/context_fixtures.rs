@@ -125,6 +125,7 @@ impl ScriptedReadTool {
                 input_schema: json!({"type":"object"}),
                 output_schema: None,
                 timeout_ms: None,
+                examples: vec![],
             },
             count: AtomicUsize::new(0),
             results,

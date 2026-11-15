@@ -71,6 +71,12 @@ pub fn submit_plan_tool(
                 "additionalProperties": false,
             }),
             timeout_ms,
+            examples: vec![json!({
+                "plan": "1. Add the retry limit to src/client.rs.\n2. Cover it in tests/client.rs.\n3. Verify with the configured test command.",
+                "mode": "auto_edit",
+            })],
+            constraints: vec![],
+            aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
             let authority = authority.clone();

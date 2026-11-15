@@ -37,4 +37,6 @@ pub use service::{
     SubagentView, child_identity,
 };
 pub use snapshot::{EffectiveRole, RoleSnapshot, effective_role};
-pub use tools::{SUBAGENT_TOOL_NAMES, SubagentContributor};
+pub use tools::{
+    SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SubagentContributor, subagent_tool_definitions,
+};

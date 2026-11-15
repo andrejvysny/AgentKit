@@ -11,6 +11,11 @@ use std::sync::PoisonError;
 /// The tool the main agent uses to request an explicit advisory review.
 pub const ADVISOR_TOOL_NAMES: [&str; 1] = ["advisor_review"];
 
+/// The static definition of `advisor_review`.
+pub fn advisor_tool_definition() -> ToolDefinition {
+    definition()
+}
+
 fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "advisor_review".into(),
@@ -21,13 +26,18 @@ fn definition() -> ToolDefinition {
                       the current session's work: implementation risks, repeated failures, \
                       scope deviation, potential regressions. Provide a `focus` stating what to \
                       scrutinize (files, decisions, diffs). The advisor investigates with its \
-                      own read tools on its own model and returns structured findings."
+                      own read tools on its own model and returns structured findings. Use it \
+                      before a risky change or when you are stuck, not for routine questions."
             .into(),
-        input_schema: json!({"type":"object","required":["focus"],"properties":{
-            "focus":{"type":"string","description":"What to review and why."}
+        input_schema: json!({"type":"object","required":["focus"],"additionalProperties":false,
+            "properties":{
+            "focus":{"type":"string","minLength":1,"description":"What to review and why."}
         }}),
         output_schema: None,
         timeout_ms: Some(150_000),
+        examples: vec![
+            json!({"focus": "Review the retry change in src/client.rs for regressions and missing tests."}),
+        ],
     }
 }
 

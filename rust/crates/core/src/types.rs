@@ -101,6 +101,29 @@ pub struct ToolDefinition {
     pub output_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Example calls as registry data: each entry is a complete, valid
+    /// argument object for this tool. Lint checks them against the schema.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<Value>,
+}
+
+/// A rule between two or more parameters that the JSON schema cannot
+/// express. Listed here so the rule has a checker and a teaching error
+/// instead of living only in prose.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConstraint {
+    /// Stable identifier of the rule, returned by the checker.
+    pub code: String,
+    /// The parameters the rule relates.
+    pub params: Vec<String>,
+    /// The rule in one sentence.
+    pub rule: String,
+    /// What the model reads when the rule is broken: what happened, why,
+    /// and the next step.
+    pub teaching_error: String,
+    /// A call that breaks the rule; lint runs the checker on it.
+    pub violating_example: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -258,6 +281,20 @@ pub trait Tool: Send + Sync {
     /// executor refusal takes). The outcome the model sees is unchanged;
     /// this is the audit sink, so the default records nothing.
     async fn record_schema_refusal(&self, _context: &ToolContext, _args: &Value, _message: &str) {}
+    /// Parameter names this tool accepted before a rename, as
+    /// `(alias, canonical)`. The registry hands them to the call pipeline so
+    /// old calls keep working for one release.
+    fn arg_aliases(&self) -> Vec<(String, String)> {
+        vec![]
+    }
+    /// Cross-parameter rules the schema cannot express (lint rule L8).
+    fn constraints(&self) -> Vec<ToolConstraint> {
+        vec![]
+    }
+    /// The code of the first constraint `input` breaks, if any.
+    fn check_constraints(&self, _input: &Value) -> Option<String> {
+        None
+    }
     /// Numeric inputs follow JavaScript binary64 semantics. Overflow remains a
     /// numeric node; `agentkit_contracts::javascript_number` reads its infinity.
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError>;

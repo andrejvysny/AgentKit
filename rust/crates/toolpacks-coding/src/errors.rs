@@ -35,7 +35,7 @@ pub fn file_not_read_error(label: &str, partial: bool) -> CodingError {
         "file_not_read",
         if partial {
             format!(
-                "{label} already exists and you only read part of it. Read the whole file (no offset/limit, nothing truncated) or pass expectedSha256 before overwriting it."
+                "{label} already exists and you only read part of it. Read the whole file (no offset or limit, nothing truncated) before overwriting it."
             )
         } else {
             format!("{label} already exists. Read it before overwriting it.")

@@ -103,6 +103,7 @@ fn echo_registry(executions: Arc<AtomicUsize>) -> Arc<ToolRegistry> {
                 input_schema: json!({"type":"object"}),
                 output_schema: None,
                 timeout_ms: None,
+                examples: vec![],
             },
             executions,
         }))

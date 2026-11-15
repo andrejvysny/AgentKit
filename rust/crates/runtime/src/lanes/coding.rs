@@ -800,6 +800,7 @@ mod tests {
                 input_schema: Value::Null,
                 output_schema: None,
                 timeout_ms: None,
+                examples: vec![],
             },
             arguments: None,
         }
