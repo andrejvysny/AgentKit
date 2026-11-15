@@ -36,7 +36,11 @@ fn coding_seed_tasks_name_tools_as_the_common_dialect_does() {
     for task in coding_tasks() {
         for tool in &task.allowed_tools {
             // A canonical id the dialect renames is not a name the model sees.
-            if let Some(form) = dialect.tools.iter().find(|form| form.canonical == tool.name) {
+            if let Some(form) = dialect
+                .tools
+                .iter()
+                .find(|form| form.canonical == tool.name)
+            {
                 assert!(
                     form.wires.iter().any(|wire| wire.name == tool.name),
                     "{}: {} is a canonical id, the model sees {:?}",
@@ -50,13 +54,26 @@ fn coding_seed_tasks_name_tools_as_the_common_dialect_does() {
             }
             // The common shape names the path parameter file_path.
             if matches!(tool.name.as_str(), "read_file" | "write_file") {
-                assert!(tool.required.contains(&"file_path".to_owned()), "{}", task.id);
+                assert!(
+                    tool.required.contains(&"file_path".to_owned()),
+                    "{}",
+                    task.id
+                );
                 assert!(!tool.required.contains(&"path".to_owned()), "{}", task.id);
             }
         }
     }
-    for expected in ["read_file", "write_file", "run_shell_command", "git_status", "git_log"] {
-        assert!(seen_wire.contains(expected), "no seed task offers {expected}");
+    for expected in [
+        "read_file",
+        "write_file",
+        "run_shell_command",
+        "git_status",
+        "git_log",
+    ] {
+        assert!(
+            seen_wire.contains(expected),
+            "no seed task offers {expected}"
+        );
     }
 }
 
@@ -68,7 +85,12 @@ async fn every_coding_seed_task_passes_on_the_mock_model_with_common_names() {
     let matrix = run_matrix(&[&perfect], &tasks, 3, Thresholds::default()).await;
     assert_eq!(matrix.cells.len(), CODING_TOOLSETS.len());
     for cell in &matrix.cells {
-        assert_eq!((cell.tasks, cell.runs, cell.successes), (3, 3, 9), "{}", cell.toolset);
+        assert_eq!(
+            (cell.tasks, cell.runs, cell.successes),
+            (3, 3, 9),
+            "{}",
+            cell.toolset
+        );
         assert!(cell.qualified, "{}", cell.toolset);
         assert_eq!(cell.invalid_calls, 0, "{}", cell.toolset);
     }
@@ -118,8 +140,10 @@ fn sse(values: &[Value]) -> String {
 }
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!("../../core/tests/fixtures/dialect-common-v1.json"))
-        .expect("common dialect fixture")
+    serde_json::from_str(include_str!(
+        "../../core/tests/fixtures/dialect-common-v1.json"
+    ))
+    .expect("common dialect fixture")
 }
 
 fn canonical_definitions() -> Vec<ToolDefinition> {
@@ -202,7 +226,10 @@ async fn the_request_carries_the_common_tools_and_nothing_canonical() {
     assert_eq!(
         shape,
         [
-            owned("edit", &["file_path", "new_string", "old_string", "replace_all"]),
+            owned(
+                "edit",
+                &["file_path", "new_string", "old_string", "replace_all"]
+            ),
             owned("git_status", &["path"]),
             owned("git_diff", &["path", "rev", "staged"]),
             owned("git_log", &["limit", "path", "rev"]),
@@ -220,7 +247,10 @@ async fn the_request_carries_the_common_tools_and_nothing_canonical() {
         );
     }
     let text = sent["tools"].to_string();
-    assert!(!text.contains("git_inspect") && !text.contains("edit_file"), "{text}");
+    assert!(
+        !text.contains("git_inspect") && !text.contains("edit_file"),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -230,7 +260,8 @@ async fn the_recorded_response_translates_to_the_canonical_call() {
     for pair in fixture["response"]["calls"].as_array().unwrap() {
         let wire = &pair["wire"];
         let arguments = wire["arguments"].to_string();
-        let (_, calls) = round_trip(reply_calling(wire["name"].as_str().unwrap(), &arguments)).await;
+        let (_, calls) =
+            round_trip(reply_calling(wire["name"].as_str().unwrap(), &arguments)).await;
         assert_eq!(calls.len(), 1, "{wire}");
         assert_eq!(calls[0].name, wire["name"], "{wire}");
         let args: Value = serde_json::from_str(&calls[0].arguments_json).unwrap();

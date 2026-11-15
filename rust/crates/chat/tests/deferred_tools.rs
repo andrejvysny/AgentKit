@@ -4,17 +4,17 @@
 //! The guards here are the real staging wrappers (`stage_tools`); the only
 //! difference between the two routes is how the model names the call.
 
+use agentkit_chat::*;
 use agentkit_core::{
     CancellationToken, ChatProvider, ChatRequest, Classification, CoreError, DirectSet,
     ProviderEvent, ProviderStream, RunOptions, Tool, ToolCall, ToolContext, ToolDefinition,
     ToolLimits, ToolResult, ToolSurface, run_chat,
 };
+use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_governance::{
     ApprovalAsk, ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
     ToolGuard, ToolGuardContext, ToolGuardVerdict, args_sha256, stage_tools,
 };
-use agentkit_chat::*;
-use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_sessions::*;
 use agentkit_store::{SqliteStore, TaskStatus};
 use async_trait::async_trait;
@@ -199,7 +199,8 @@ async fn observe(tool: &str, note: &str, through_tool_call: bool) -> Observed {
             max_definitions: 0,
             ..Classification::default()
         };
-        let surface = ToolSurface::reconcile_with(None, &registry_mut.definitions(), Some(&classification));
+        let surface =
+            ToolSurface::reconcile_with(None, &registry_mut.definitions(), Some(&classification));
         registry_mut.freeze_surface(
             surface.manifest.definitions().to_vec(),
             surface.deferred_names(),
@@ -297,7 +298,11 @@ async fn ce08_a_refusal_is_the_same_refusal_through_tool_call() {
     assert!(direct.body_ran.is_empty(), "the refused body never runs");
     assert_eq!(direct.failures.len(), 1);
     assert!(
-        direct.failures[0].1.as_str().unwrap().contains("admin is not allowed here"),
+        direct.failures[0]
+            .1
+            .as_str()
+            .unwrap()
+            .contains("admin is not allowed here"),
         "{:?}",
         direct.failures
     );
@@ -308,10 +313,16 @@ async fn ce08_an_approval_names_the_inner_tool_and_binds_the_inner_arguments() {
     let direct = observe("notes_write", "draft", false).await;
     let through = observe("notes_write", "draft", true).await;
     assert_eq!(direct, through);
-    assert!(through.body_ran.is_empty(), "nothing runs before the answer");
+    assert!(
+        through.body_ran.is_empty(),
+        "nothing runs before the answer"
+    );
     assert_eq!(through.waiting.len(), 1);
     let (tool, prompt, hash) = &through.waiting[0];
-    assert_eq!(tool, "notes_write", "the prompt shows the inner tool, never tool_call");
+    assert_eq!(
+        tool, "notes_write",
+        "the prompt shows the inner tool, never tool_call"
+    );
     assert_eq!(prompt, "Write this note?");
     // The approval hash is over the inner arguments. A grant for any other
     // arguments, including the tool_call wrapper's own, does not match.
@@ -327,14 +338,22 @@ async fn ce08_the_guard_decides_on_the_inner_call_even_when_the_wrapper_is_read_
     // `tool_call` itself is a read tool. The admin refusal still wins.
     let through = observe("notes_admin", "x", true).await;
     assert_eq!(through.guard_saw[0].0, "notes_admin");
-    assert!(through.guard_saw.iter().all(|(name, _)| name != "tool_call"));
+    assert!(
+        through
+            .guard_saw
+            .iter()
+            .all(|(name, _)| name != "tool_call")
+    );
 }
 
 // ---- the live session path -------------------------------------------------
 
+/// Per request: tools array and S2 text.
+type Seen = Arc<Mutex<Vec<(Vec<String>, String)>>>;
+
 /// Records each request's tools array and S2 text.
 struct Capturing {
-    seen: Arc<Mutex<Vec<(Vec<String>, String)>>>,
+    seen: Seen,
 }
 
 #[async_trait]
@@ -346,7 +365,9 @@ impl ChatProvider for Capturing {
         let system = input
             .messages
             .iter()
-            .filter(|message| agentkit_core::segment_of(message) == Some(agentkit_core::Segment::System))
+            .filter(|message| {
+                agentkit_core::segment_of(message) == Some(agentkit_core::Segment::System)
+            })
             .map(|message| message.content.to_string())
             .collect::<String>();
         self.seen.lock().unwrap().push((
@@ -377,7 +398,7 @@ fn static_tools(names: &[&str]) -> Arc<agentkit_core::ToolRegistry> {
 struct Rig {
     host: AgentHost,
     service: AgentSessionService<SqliteStore>,
-    seen: Arc<Mutex<Vec<(Vec<String>, String)>>>,
+    seen: Seen,
 }
 
 fn rig(store: &SqliteStore, tools: Arc<agentkit_core::ToolRegistry>) -> Rig {
@@ -457,7 +478,10 @@ async fn turn(rig: &Rig, store: &SqliteStore, input_id: &str) {
 #[tokio::test]
 async fn a_session_sends_direct_tools_and_the_meta_tools_with_a_stable_catalog_index() {
     let store = SqliteStore::memory(64).expect("store");
-    let first = rig(&store, static_tools(&["read_file", "list_dir", "find_files"]));
+    let first = rig(
+        &store,
+        static_tools(&["read_file", "list_dir", "find_files"]),
+    );
     first
         .service
         .create_session(&CreateSessionInput {
@@ -482,7 +506,13 @@ async fn a_session_sends_direct_tools_and_the_meta_tools_with_a_stable_catalog_i
     let (tools_one, system_one) = first.seen.lock().unwrap()[0].clone();
     assert_eq!(
         tools_one,
-        ["read_file", "tool_call", "tool_describe", "tool_search", "toolset_load"]
+        [
+            "read_file",
+            "tool_call",
+            "tool_describe",
+            "tool_search",
+            "toolset_load"
+        ]
     );
     assert!(system_one.contains("Deferred tools are not in your tool list"));
     let frozen = read_session_prefix(&store.get_chat("s1").await.unwrap().unwrap().metadata)
@@ -504,7 +534,10 @@ async fn a_session_sends_direct_tools_and_the_meta_tools_with_a_stable_catalog_i
     let kept = read_session_prefix(&store.get_chat("s1").await.unwrap().unwrap().metadata)
         .expect("prefix kept");
     assert_eq!(kept.revision, 1.0, "no re-freeze");
-    assert_eq!(kept.extra.get("deferredIndex"), frozen.extra.get("deferredIndex"));
+    assert_eq!(
+        kept.extra.get("deferredIndex"),
+        frozen.extra.get("deferredIndex")
+    );
     let agentkit_contracts::Optional::Present(catalog) = &kept.deferred_tools else {
         panic!("the catalog grew");
     };
@@ -597,17 +630,15 @@ async fn a_profiled_session_keeps_toolsets_and_legacy_names() {
     });
     let store = SqliteStore::memory(64).expect("store");
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(provider.clone(), Arc::new(registry)).with_options(
-            ChatExecutorOptions {
-                tool_classification: Some(Classification {
-                    direct: DirectSet::names(["read_file"]),
-                    max_tokens: 0,
-                    max_definitions: 0,
-                    ..Classification::default()
-                }),
-                ..Default::default()
-            },
-        ),
+        ChatExecutor::new(provider.clone(), Arc::new(registry)).with_options(ChatExecutorOptions {
+            tool_classification: Some(Classification {
+                direct: DirectSet::names(["read_file"]),
+                max_tokens: 0,
+                max_definitions: 0,
+                ..Classification::default()
+            }),
+            ..Default::default()
+        }),
     );
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let host = AgentHost::new(
@@ -659,7 +690,12 @@ async fn a_profiled_session_keeps_toolsets_and_legacy_names() {
     let loaded = result("c1");
     assert_eq!(loaded["ok"], true, "{loaded}");
     assert_eq!(loaded["data"]["toolset"], "files", "{loaded}");
-    assert!(loaded["data"]["guide"].as_str().unwrap().contains("read_file"));
+    assert!(
+        loaded["data"]["guide"]
+            .as_str()
+            .unwrap()
+            .contains("read_file")
+    );
     // The members that remain are the ones listed (list_dir stays deferred).
     assert_eq!(result("c2")["ok"], true);
     assert_eq!(*ran.lock().unwrap(), [r#"read_file:{"note":"x"}"#]);

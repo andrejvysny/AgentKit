@@ -399,10 +399,8 @@ impl AgentRuntimeBuilder {
                 gate = gate.with_tool_limit(tool, bytes);
             }
             output_gate = Some(Arc::new(gate));
-            output_lane = Some(Arc::new(OutputLaneContributor::new(
-                shared.clone(),
-                shared,
-            )) as Arc<dyn ToolContributor>);
+            output_lane = Some(Arc::new(OutputLaneContributor::new(shared.clone(), shared))
+                as Arc<dyn ToolContributor>);
         }
         let has_model_loop = default_provider.is_some();
         let has_native_lane = native_lane.is_some();
@@ -680,7 +678,7 @@ impl AgentRuntimeBuilder {
             lsp: lsp_lane,
             memory,
             worker: Some(worker),
-            output_sweeper,
+            _output_sweeper: output_sweeper,
         })
     }
 }

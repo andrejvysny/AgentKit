@@ -80,6 +80,7 @@ export {
   AiRunUsageEventSchema,
   AiRunContextCompactedEventSchema,
   AiRunContextAdmittedEventSchema,
+  AiRunContextCacheBreakEventSchema,
   AiRunVerificationEventSchema,
   AiRunProgressEventSchema,
   AiRunInputAppliedEventSchema,

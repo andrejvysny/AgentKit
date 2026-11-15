@@ -121,9 +121,11 @@ fn responses_turn(items: Vec<Value>) -> String {
     sse(&[json!({"type":"response.completed","response":{"status":"completed","output":items}})])
 }
 fn responses_answer() -> String {
-    sse(&[json!({"type":"response.completed","response":{"status":"completed","output":[
+    sse(&[
+        json!({"type":"response.completed","response":{"status":"completed","output":[
         {"id":"message1","type":"message","role":"assistant","status":"completed",
-         "content":[{"type":"output_text","text":"done"}]}]}})])
+         "content":[{"type":"output_text","text":"done"}]}]}}),
+    ])
 }
 
 struct Run {

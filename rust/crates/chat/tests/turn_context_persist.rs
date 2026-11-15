@@ -242,7 +242,13 @@ async fn queued_notes_reach_the_next_turn_only() {
     let requests = seen.lock().unwrap().clone();
     // No selection, no date, no notes: the first message is exactly as typed.
     assert_eq!(requests[0].messages.last().unwrap().content, json!("q1"));
-    let second = requests[1].messages.last().unwrap().content.to_string();
+    let second = requests[1]
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .to_string()
+        .replace("\\\"", "\"");
     assert!(
         second.contains("<note kind=\"project_rules_changed\" file=\"AGENTS.md\">"),
         "{second}"
@@ -339,8 +345,17 @@ async fn a_note_queued_while_the_turn_starts_is_rendered_and_cleared_not_lost() 
     create(&service, None).await;
     turn(&host, &store, &service, "q1", "in1").await;
     let requests = seen.lock().unwrap().clone();
-    let first = requests[0].messages.last().unwrap().content.to_string();
-    assert!(first.contains("<note kind=\"core_memory_changed\">"), "{first}");
+    let first = requests[0]
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .to_string()
+        .replace("\\\"", "\"");
+    assert!(
+        first.contains("<note kind=\"core_memory_changed\">"),
+        "{first}"
+    );
     assert!(first.contains("raced"), "{first}");
     // The hook queues one more note on every turn; none of them is lost, and
     // each is sent once with the turn that was starting.
@@ -411,7 +426,7 @@ async fn a_submitted_turn_context_part_is_refused() {
             },
         )
         .await;
-    let error = refused.err().expect("refused").to_string();
+    let error = refused.expect_err("refused").to_string();
     assert!(error.starts_with("invalid_input:"), "{error}");
     assert!(error.contains("turn_context"), "{error}");
     let follow = service

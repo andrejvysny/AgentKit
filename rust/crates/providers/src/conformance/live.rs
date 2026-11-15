@@ -79,7 +79,10 @@ impl Model for LiveModel {
                         id: call["id"]
                             .as_str()
                             .map_or_else(|| format!("call_{i}"), str::to_owned),
-                        name: call["function"]["name"].as_str().unwrap_or_default().to_owned(),
+                        name: call["function"]["name"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
                         arguments: call["function"]["arguments"]
                             .as_str()
                             .unwrap_or_default()

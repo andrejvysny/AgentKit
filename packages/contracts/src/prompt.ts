@@ -36,9 +36,18 @@ export const AiSessionPrefixSchema = Type.Object({
   cacheKey: Type.String({ minLength: 1 }),
   toolManifestHash: Type.Optional(Sha256HexSchema),
   /** The frozen tool manifest, sorted by name; sent every turn (roadmap 1.3). */
-  toolManifest: Type.Optional(Type.Array(AiToolDefinitionSchema)),
+  toolManifest: Type.Optional(
+    Type.Array(AiToolDefinitionSchema, {
+      description:
+        "The frozen tool manifest, sorted by name; sent every turn (roadmap 1.3).",
+    }),
+  ),
   /** Tools that joined after the freeze; listed, never sent. */
-  deferredTools: Type.Optional(Type.Array(AiToolDefinitionSchema)),
+  deferredTools: Type.Optional(
+    Type.Array(AiToolDefinitionSchema, {
+      description: "Tools that joined after the freeze; listed, never sent.",
+    }),
+  ),
   modelProfileId: Type.Optional(Type.String({ minLength: 1 })),
   dialectVersion: Type.Optional(Type.String({ minLength: 1 })),
   modelProfileDigest: Type.Optional(Sha256HexSchema),

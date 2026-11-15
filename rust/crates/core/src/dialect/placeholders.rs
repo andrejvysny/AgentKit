@@ -60,7 +60,7 @@ fn shown_tool(dialect: Option<&Dialect>, id: &str) -> String {
 fn same_value(value: &Value, wanted: &str) -> bool {
     match value {
         Value::String(text) => text == wanted,
-        other => other.to_string() == wanted,
+        other => other.to_string().as_str() == wanted,
     }
 }
 

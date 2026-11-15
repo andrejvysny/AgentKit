@@ -142,7 +142,11 @@ async fn a_read_only_session_advertises_list_directory_and_it_runs() {
     let names: Vec<&str> = rendered.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(names, ["read_file", "list_directory"]);
     assert!(rendered.iter().all(|d| builtin_tool_type(d).is_none()));
-    let events = call_all(registry, vec![call("c1", "list_directory", json!({"path":"src"}))]).await;
+    let events = call_all(
+        registry,
+        vec![call("c1", "list_directory", json!({"path":"src"}))],
+    )
+    .await;
     assert!(failed(&events).is_empty(), "{events:?}");
     assert_eq!(*ran.lock().unwrap(), [r#"list_dir:{"path":"src"}"#]);
 }
@@ -157,7 +161,11 @@ async fn a_partial_editor_set_advertises_edit_and_it_runs() {
     let events = call_all(
         registry,
         vec![
-            call("c1", "edit", json!({"file_path":"a","old_string":"x","new_string":"y"})),
+            call(
+                "c1",
+                "edit",
+                json!({"file_path":"a","old_string":"x","new_string":"y"}),
+            ),
             call("c2", "bash", json!({"command":"ls"})),
         ],
     )
@@ -199,9 +207,14 @@ fn an_unoffered_built_in_name_is_not_translated_and_history_keeps_the_common_for
         .collect();
     let dialect = anthropic_dialect().effective_for(&canonical);
     let translated = dialect
-        .translate("str_replace_based_edit_tool", json!({"command":"view","path":"a"}))
+        .translate(
+            "str_replace_based_edit_tool",
+            json!({"command":"view","path":"a"}),
+        )
         .unwrap();
     assert_eq!(translated.name, "str_replace_based_edit_tool");
-    let shown = dialect.wire_call("list_dir", &json!({"path":"src"})).unwrap();
+    let shown = dialect
+        .wire_call("list_dir", &json!({"path":"src"}))
+        .unwrap();
     assert_eq!(shown.0, "list_directory");
 }

@@ -35,9 +35,9 @@
 //! strict schemas, no built-in tools.
 
 use super::strict::{fill_nulls, strict_schema};
-use super::{common, Dialect, DialectError, Translated, WireTool, BUILTIN_KEY};
+use super::{BUILTIN_KEY, Dialect, DialectError, Translated, WireTool, common};
 use crate::ToolDefinition;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 pub const OPENAI_ID: &str = "openai";
 pub const OPENAI_CHAT_ID: &str = "openai-chat";
@@ -53,9 +53,7 @@ impl Dialect {
     /// carrying the vendor's own argument shape.
     pub fn built_in(&self, wire: &str) -> bool {
         match self.id.as_str() {
-            super::ANTHROPIC_ID => {
-                wire == super::TEXT_EDITOR_NAME || wire == super::BASH_NAME
-            }
+            super::ANTHROPIC_ID => wire == super::TEXT_EDITOR_NAME || wire == super::BASH_NAME,
             OPENAI_ID => wire == PATCH_NAME || wire == SHELL_NAME,
             _ => false,
         }
@@ -110,8 +108,7 @@ fn effective(dialect: &Dialect, patch: bool, shell: bool) -> Dialect {
     for form in &mut out.tools {
         let swap = (PATCH_TOOLS.contains(&form.canonical.as_str()) && !patch)
             || (form.canonical == RUN_COMMAND && !shell);
-        if swap && let Some(original) = plain.tools.iter().find(|f| f.canonical == form.canonical)
-        {
+        if swap && let Some(original) = plain.tools.iter().find(|f| f.canonical == form.canonical) {
             *form = original.clone();
         }
     }
@@ -359,7 +356,11 @@ fn replaced_text(diff: &str) -> Result<(String, String), DialectError> {
 fn translate_shell(args: &Value) -> Result<Translated, DialectError> {
     let tool = SHELL_NAME;
     let object = object(tool, args)?;
-    only(tool, object, &["commands", "timeout_ms", "max_output_length"])?;
+    only(
+        tool,
+        object,
+        &["commands", "timeout_ms", "max_output_length"],
+    )?;
     let commands = object
         .get("commands")
         .and_then(Value::as_array)
@@ -370,7 +371,9 @@ fn translate_shell(args: &Value) -> Result<Translated, DialectError> {
         ));
     };
     let Some(command) = command.as_str().filter(|command| !command.is_empty()) else {
-        return Err(fail("Tool shell needs a non-empty command string in commands."));
+        return Err(fail(
+            "Tool shell needs a non-empty command string in commands.",
+        ));
     };
     let mut args = json!({ "command": command });
     match object.get("timeout_ms") {

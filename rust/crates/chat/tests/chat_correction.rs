@@ -379,7 +379,11 @@ async fn generic_400_does_not_retry_without_tools() {
         host.store().get_task("run").await.unwrap().unwrap().status,
         TaskStatus::Failed
     );
-    assert!(!warning_codes(&host).await.contains(&"tool_less_retry".to_owned()));
+    assert!(
+        !warning_codes(&host)
+            .await
+            .contains(&"tool_less_retry".to_owned())
+    );
 }
 #[tokio::test]
 async fn tool_capable_provider_never_retries_without_tools() {
@@ -397,7 +401,11 @@ async fn tool_capable_provider_never_retries_without_tools() {
         host.store().get_task("run").await.unwrap().unwrap().status,
         TaskStatus::Failed
     );
-    assert!(!warning_codes(&host).await.contains(&"tool_less_retry".to_owned()));
+    assert!(
+        !warning_codes(&host)
+            .await
+            .contains(&"tool_less_retry".to_owned())
+    );
 }
 #[tokio::test]
 async fn correction_hard_cap_is_five_despite_larger_host_configuration() {

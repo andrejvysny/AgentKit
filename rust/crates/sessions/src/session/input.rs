@@ -15,9 +15,7 @@ use super::{
 
 /// A `turn_context` part is built by the host (roadmap 1.2); one submitted by
 /// a caller would pass for a trusted host block, so every submit refuses it.
-fn reject_host_parts<R: SessionBackend>(
-    content: &Value,
-) -> SessionsResult<(), SessionFault<R>> {
+fn reject_host_parts<R: SessionBackend>(content: &Value) -> SessionsResult<(), SessionFault<R>> {
     let present = content.as_array().is_some_and(|parts| {
         parts
             .iter()

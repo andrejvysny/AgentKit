@@ -413,7 +413,10 @@ fn responses_tool_choice_follows_the_profile_policy() {
     let (body, _, notes) =
         build_responses_request_notes(&input, &responses_identity(), false).unwrap();
     assert_eq!(body["tool_choice"], "auto");
-    assert_eq!(notes.iter().map(|n| n.code).collect::<Vec<_>>(), ["tool_choice_downgraded"]);
+    assert_eq!(
+        notes.iter().map(|n| n.code).collect::<Vec<_>>(),
+        ["tool_choice_downgraded"]
+    );
     // A profile that allows it, and no profile, send what was asked.
     let openai = Arc::new(builtin_profile(OPENAI_PROFILE_ID).unwrap());
     for profile in [Some(openai), None] {
@@ -426,6 +429,9 @@ fn responses_tool_choice_follows_the_profile_policy() {
         input.tool_choice = ToolChoice::Named("read_file".into());
         let (body, _, _) =
             build_responses_request_notes(&input, &responses_identity(), false).unwrap();
-        assert_eq!(body["tool_choice"], json!({"type": "function", "name": "read_file"}));
+        assert_eq!(
+            body["tool_choice"],
+            json!({"type": "function", "name": "read_file"})
+        );
     }
 }

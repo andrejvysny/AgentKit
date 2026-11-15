@@ -33,6 +33,6 @@ pub use error::{
 pub use jsonrpc::{Connection, RpcErrorObject, RpcFailure};
 pub use pool::{LspConfig, LspPool, ServerCommand};
 pub use server::{ServerHandle, ServerProcess};
-pub use toolsets::{CODE_INTEL_TOOLSET, lsp_toolsets};
 pub use tools::{LSP_ARG_ALIASES, lsp_tool_definitions, lsp_tools};
+pub use toolsets::{CODE_INTEL_TOOLSET, lsp_toolsets};
 pub use uri::{path_to_uri, uri_to_path};

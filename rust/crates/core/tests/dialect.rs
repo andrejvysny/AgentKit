@@ -66,7 +66,10 @@ fn recorded_response_calls_translate_to_the_canonical_calls() {
 #[test]
 fn common_v1_table_matches_the_spec_and_has_no_collisions() {
     let dialect = common_dialect();
-    assert_eq!((dialect.id.as_str(), dialect.version.as_str()), ("common", "1"));
+    assert_eq!(
+        (dialect.id.as_str(), dialect.version.as_str()),
+        ("common", "1")
+    );
     let wires = dialect.wire_names();
     let expected = [
         "read_file",
@@ -127,7 +130,14 @@ fn render_is_pure_and_leaves_other_tools_alone() {
     let rendered = dialect.render(&canonical);
     assert_eq!(
         names(&rendered),
-        ["edit", "git_status", "git_diff", "git_log", "git_show", "calendar_list"]
+        [
+            "edit",
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_show",
+            "calendar_list"
+        ]
     );
     // A tool the dialect does not know keeps its definition byte for byte.
     assert_eq!(as_values(&rendered[5..]), as_values(&canonical[2..]));
@@ -139,12 +149,20 @@ fn split_git_tools_are_flat_and_hold_no_command() {
     let rendered = common_dialect().render(&canonical);
     for definition in &rendered[1..5] {
         let schema = &definition.input_schema;
-        assert!(schema["properties"].get("command").is_none(), "{}", definition.name);
+        assert!(
+            schema["properties"].get("command").is_none(),
+            "{}",
+            definition.name
+        );
         assert_eq!(schema["required"], json!([]), "{}", definition.name);
         assert!(!definition.description.contains("git_inspect"));
     }
     let diff = &rendered[2];
-    let keys: Vec<&String> = diff.input_schema["properties"].as_object().unwrap().keys().collect();
+    let keys: Vec<&String> = diff.input_schema["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect();
     assert_eq!(keys, ["path", "rev", "staged"]);
 }
 
@@ -153,7 +171,12 @@ fn split_git_tools_are_flat_and_hold_no_command() {
 #[test]
 fn unknown_names_and_canonical_ids_pass_through() {
     let dialect = common_dialect();
-    for name in ["tool_search", "mcp__srv__lookup", "edit_file", "git_inspect"] {
+    for name in [
+        "tool_search",
+        "mcp__srv__lookup",
+        "edit_file",
+        "git_inspect",
+    ] {
         let call = dialect.translate(name, json!({"a": 1})).unwrap();
         assert_eq!((call.name.as_str(), &call.args), (name, &json!({"a": 1})));
         assert!(!call.args_changed);
@@ -163,13 +186,19 @@ fn unknown_names_and_canonical_ids_pass_through() {
 #[test]
 fn a_fixed_argument_is_added_and_a_conflicting_one_is_refused() {
     let dialect = common_dialect();
-    let added = dialect.translate("git_diff", json!({"staged": true})).unwrap();
+    let added = dialect
+        .translate("git_diff", json!({"staged": true}))
+        .unwrap();
     assert_eq!(added.args, json!({"staged": true, "command": "diff"}));
     assert!(added.args_changed);
     // The model repeating the fixed value is not a conflict.
-    let same = dialect.translate("git_diff", json!({"command": "diff"})).unwrap();
+    let same = dialect
+        .translate("git_diff", json!({"command": "diff"}))
+        .unwrap();
     assert!(!same.args_changed);
-    let conflict = dialect.translate("git_diff", json!({"command": "log"})).unwrap_err();
+    let conflict = dialect
+        .translate("git_diff", json!({"command": "log"}))
+        .unwrap_err();
     assert!(conflict.message.contains("git_diff") && conflict.message.contains("command"));
     let not_object = dialect.translate("git_status", json!([1])).unwrap_err();
     assert!(not_object.message.contains("JSON object"));
@@ -178,7 +207,11 @@ fn a_fixed_argument_is_added_and_a_conflicting_one_is_refused() {
 #[test]
 fn a_call_no_wire_tool_can_express_is_not_rendered_as_one() {
     let dialect = common_dialect();
-    assert!(dialect.wire_call("git_inspect", &json!({"command": "stash"})).is_none());
+    assert!(
+        dialect
+            .wire_call("git_inspect", &json!({"command": "stash"}))
+            .is_none()
+    );
     assert!(dialect.wire_call("git_inspect", &json!("nope")).is_none());
     assert_eq!(
         dialect.wire_call("calendar_list", &json!({"day": "x"})),
@@ -208,9 +241,21 @@ fn prefix(manifest: bool, dialect_version: Option<&str>) -> AiSessionPrefix {
 
 #[test]
 fn a_new_session_uses_common_and_the_profile_selects() {
-    assert_eq!(session_dialect(None, None, ToolLane::Responses).unwrap().id, "common");
-    assert_eq!(session_dialect(Some(&prefix(false, None)), None, ToolLane::Responses).unwrap().id, "common");
-    for (id, expected) in [("generic", "common"), ("anthropic", "anthropic"), ("openai", "openai")] {
+    assert_eq!(
+        session_dialect(None, None, ToolLane::Responses).unwrap().id,
+        "common"
+    );
+    assert_eq!(
+        session_dialect(Some(&prefix(false, None)), None, ToolLane::Responses)
+            .unwrap()
+            .id,
+        "common"
+    );
+    for (id, expected) in [
+        ("generic", "common"),
+        ("anthropic", "anthropic"),
+        ("openai", "openai"),
+    ] {
         let profile = builtin_profile(id).expect(id);
         let chosen = session_dialect(None, Some(&profile), ToolLane::Responses).unwrap();
         assert_eq!(chosen.id, expected, "{id}");
@@ -222,7 +267,12 @@ fn a_new_session_uses_common_and_the_profile_selects() {
     }
     let mut unknown = builtin_profile("generic").unwrap();
     unknown.dialect.version = "99".into();
-    assert_eq!(session_dialect(None, Some(&unknown), ToolLane::Responses).unwrap().id, "common");
+    assert_eq!(
+        session_dialect(None, Some(&unknown), ToolLane::Responses)
+            .unwrap()
+            .id,
+        "common"
+    );
 }
 
 #[test]
@@ -234,7 +284,10 @@ fn the_openai_profile_follows_the_provider_lane() {
     // Other profiles do not change with the lane.
     let anthropic = builtin_profile("anthropic").expect("anthropic");
     for lane in [ToolLane::Responses, ToolLane::ChatCompletions] {
-        assert_eq!(session_dialect(None, Some(&anthropic), lane).unwrap().id, "anthropic");
+        assert_eq!(
+            session_dialect(None, Some(&anthropic), lane).unwrap().id,
+            "anthropic"
+        );
     }
     // The Chat Completions lane offers the common coding names, no built-ins.
     let chat = session_dialect(None, Some(&profile), ToolLane::ChatCompletions).unwrap();
@@ -463,7 +516,11 @@ async fn tools_run_under_canonical_ids_and_the_record_shows_both_names() {
     let outcome = run(
         frozen_registry(&received),
         vec![
-            call("a", "edit", r#"{"file_path":"a.rs","old_string":"x","new_string":"y"}"#),
+            call(
+                "a",
+                "edit",
+                r#"{"file_path":"a.rs","old_string":"x","new_string":"y"}"#,
+            ),
             call("b", "git_diff", r#"{"staged":true}"#),
             call("c", "calendar_list", r#"{"day":"d"}"#),
         ],
@@ -476,7 +533,10 @@ async fn tools_run_under_canonical_ids_and_the_record_shows_both_names() {
                 "edit_file".to_owned(),
                 json!({"file_path":"a.rs","old_string":"x","new_string":"y"})
             ),
-            ("git_inspect".to_owned(), json!({"staged":true,"command":"diff"})),
+            (
+                "git_inspect".to_owned(),
+                json!({"staged":true,"command":"diff"})
+            ),
             ("calendar_list".to_owned(), json!({"day":"d"})),
         ]
     );
@@ -504,14 +564,25 @@ async fn the_request_offers_wire_names_and_history_comes_back_in_them() {
     let outcome = run(
         frozen_registry(&received),
         vec![
-            call("a", "edit", r#"{"file_path":"a.rs","old_string":"x","new_string":"y"}"#),
+            call(
+                "a",
+                "edit",
+                r#"{"file_path":"a.rs","old_string":"x","new_string":"y"}"#,
+            ),
             call("b", "git_diff", r#"{"staged":true}"#),
         ],
     )
     .await;
     assert_eq!(
         names(&outcome.requests[0].tools),
-        ["edit", "git_status", "git_diff", "git_log", "git_show", "calendar_list"]
+        [
+            "edit",
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_show",
+            "calendar_list"
+        ]
     );
     let history = &outcome.requests[1].messages;
     let assistant = history.iter().find(|m| m.role == "assistant").unwrap();
@@ -561,7 +632,10 @@ async fn failures_name_tools_as_the_model_sees_them() {
         .content
         .to_string();
     assert!(text.contains("edit"), "{text}");
-    assert!(!text.contains("edit_file") && !text.contains("git_inspect"), "{text}");
+    assert!(
+        !text.contains("edit_file") && !text.contains("git_inspect"),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -580,7 +654,11 @@ async fn a_registry_without_a_dialect_is_unchanged() {
     registry.freeze_surface(surface, vec![]);
     let outcome = run(
         registry,
-        vec![call("a", "edit_file", r#"{"file_path":"a","old_string":"x","new_string":"y"}"#)],
+        vec![call(
+            "a",
+            "edit_file",
+            r#"{"file_path":"a","old_string":"x","new_string":"y"}"#,
+        )],
     )
     .await;
     assert_eq!(received.lock().unwrap()[0].0, "edit_file");

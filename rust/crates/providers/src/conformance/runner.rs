@@ -54,8 +54,7 @@ pub struct RunOutcome {
     pub failure: Option<String>,
 }
 
-const SYSTEM_PROMPT: &str =
-    "You are a careful assistant. Use the provided tools to complete the task, then answer briefly.";
+const SYSTEM_PROMPT: &str = "You are a careful assistant. Use the provided tools to complete the task, then answer briefly.";
 const ANNOUNCE: [&str; 8] = [
     "let me",
     "i will",

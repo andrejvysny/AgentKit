@@ -10,8 +10,10 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!("../../core/tests/fixtures/dialect-openai-v1.json"))
-        .expect("fixture")
+    serde_json::from_str(include_str!(
+        "../../core/tests/fixtures/dialect-openai-v1.json"
+    ))
+    .expect("fixture")
 }
 
 struct Transport {
@@ -72,8 +74,10 @@ fn completed(output: Vec<Value>) -> String {
     sse(&[json!({"type":"response.completed","response":{"status":"completed","output":output}})])
 }
 fn answer() -> String {
-    completed(vec![json!({"id":"m1","type":"message","role":"assistant","status":"completed",
-        "content":[{"type":"output_text","text":"done"}]})])
+    completed(vec![
+        json!({"id":"m1","type":"message","role":"assistant","status":"completed",
+        "content":[{"type":"output_text","text":"done"}]}),
+    ])
 }
 
 /// A canonical coding tool that succeeds the way the real one reports.
@@ -226,19 +230,23 @@ async fn a_refused_patch_is_answered_as_a_failed_output() {
         .unwrap_or_else(|| panic!("{events:?}"));
     assert_eq!(output["call_id"], "call_d");
     assert_eq!(output["status"], "failed");
-    assert!(output["output"].as_str().unwrap().contains("delete_file"), "{output}");
+    assert!(
+        output["output"].as_str().unwrap().contains("delete_file"),
+        "{output}"
+    );
 }
 
 #[tokio::test]
 async fn a_built_in_call_the_request_did_not_offer_is_refused_by_the_parser() {
     // A plain registry offers no patch tool; the vendor item has no tool to map to.
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(Coding {
-        definition: definitions().remove(3),
-        text: "x",
-        summary: "x",
-    }))
-    .unwrap();
+    registry
+        .register(Arc::new(Coding {
+            definition: definitions().remove(3),
+            text: "x",
+            summary: "x",
+        }))
+        .unwrap();
     let items = fixture()["response"]["items"].clone();
     let transport = Transport::new(vec![completed(vec![items[0].clone()]), answer()]);
     let provider = ResponsesProvider::new(transport.clone()).unwrap();
@@ -262,8 +270,12 @@ async fn a_built_in_call_the_request_did_not_offer_is_refused_by_the_parser() {
         .map(|event| serde_json::to_value(event).unwrap())
         .collect();
     assert_eq!(transport.sent.lock().unwrap().len(), 1, "{events:?}");
-    assert!(events.iter().any(|event| event["type"] == "run.failed" || event["type"] == "run.error"
-        || event.to_string().contains("unknown_tool")), "{events:?}");
+    assert!(
+        events.iter().any(|event| event["type"] == "run.failed"
+            || event["type"] == "run.error"
+            || event.to_string().contains("unknown_tool")),
+        "{events:?}"
+    );
 }
 
 /// A continued run (T3.3): the history of request 2 shows the emitted patch
@@ -313,7 +325,11 @@ async fn a_continued_run_shows_the_emitted_patch_call_unchanged() {
         .find(|item| item["type"] == "apply_patch_call")
         .expect("patch call echoed");
     assert_eq!(call["operation"]["diff"], diff);
-    assert!(input.iter().any(|item| item["type"] == "apply_patch_call_output"));
+    assert!(
+        input
+            .iter()
+            .any(|item| item["type"] == "apply_patch_call_output")
+    );
 }
 
 fn identity() -> ConnectionIdentity {

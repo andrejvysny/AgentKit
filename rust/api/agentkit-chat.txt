@@ -74,6 +74,24 @@ impl core::convert::From<agentkit_sessions::error::SessionsError<agentkit_store:
 pub fn agentkit_chat::ChatError::from(agentkit_sessions::error::SessionsError<agentkit_store::StoreError>) -> Self
 impl core::convert::From<agentkit_sessions::error::SessionsError> for agentkit_chat::ChatError
 pub fn agentkit_chat::ChatError::from(agentkit_sessions::error::SessionsError) -> Self
+pub enum agentkit_chat::TurnItemKind
+pub agentkit_chat::TurnItemKind::Skill
+pub agentkit_chat::TurnItemKind::Source
+pub agentkit_chat::TurnItemKind::Template
+impl agentkit_chat::TurnItemKind
+pub fn agentkit_chat::TurnItemKind::as_str(self) -> &'static str
+pub enum agentkit_chat::TurnNoteKind
+pub agentkit_chat::TurnNoteKind::CoreMemoryChanged
+pub agentkit_chat::TurnNoteKind::ProjectRulesChanged
+pub agentkit_chat::TurnNoteKind::SkillDeactivated
+pub agentkit_chat::TurnNoteKind::SkillReactivated
+pub agentkit_chat::TurnNoteKind::TemplateDeactivated
+pub agentkit_chat::TurnNoteKind::TemplateReactivated
+pub agentkit_chat::TurnNoteKind::ToolNamespaceAdded
+pub agentkit_chat::TurnNoteKind::ToolNamespaceRemoved
+pub agentkit_chat::TurnNoteKind::ToolsetRecommendation
+impl agentkit_chat::TurnNoteKind
+pub fn agentkit_chat::TurnNoteKind::as_str(self) -> &'static str
 pub struct agentkit_chat::AttachmentBudgets
 pub agentkit_chat::AttachmentBudgets::max_bytes_per_image: usize
 pub agentkit_chat::AttachmentBudgets::max_images: usize
@@ -108,14 +126,20 @@ pub agentkit_chat::ChatExecutorOptions::hook_timeouts: agentkit_chat::ChatHookTi
 pub agentkit_chat::ChatExecutorOptions::max_output_tokens: core::option::Option<u64>
 pub agentkit_chat::ChatExecutorOptions::max_tool_calls_per_iteration: usize
 pub agentkit_chat::ChatExecutorOptions::max_tool_iterations: u32
+pub agentkit_chat::ChatExecutorOptions::output: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::output::OutputGate>>
 pub agentkit_chat::ChatExecutorOptions::project_instructions: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ProjectInstructionsSource>>
 pub agentkit_chat::ChatExecutorOptions::provider_factory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>>
 pub agentkit_chat::ChatExecutorOptions::providers: core::option::Option<alloc::rcs::arc::Arc<agentkit_chat::ProviderRegistry>>
 pub agentkit_chat::ChatExecutorOptions::run_hooks: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::types::RunHooks>>
 pub agentkit_chat::ChatExecutorOptions::skip_untrusted_project_instructions: bool
 pub agentkit_chat::ChatExecutorOptions::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
+pub agentkit_chat::ChatExecutorOptions::tool_call_records: bool
+pub agentkit_chat::ChatExecutorOptions::tool_classification: core::option::Option<agentkit_core::deferred::Classification>
 pub agentkit_chat::ChatExecutorOptions::tool_contributors: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>
 pub agentkit_chat::ChatExecutorOptions::tool_guards: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>>
+pub agentkit_chat::ChatExecutorOptions::turn_context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::TurnContextHook>>
+pub agentkit_chat::ChatExecutorOptions::turn_context_date: bool
+pub agentkit_chat::ChatExecutorOptions::turn_oversize: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::OversizedItemSink>>
 pub agentkit_chat::ChatExecutorOptions::usage: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::UsageAuthorizer>>
 pub agentkit_chat::ChatExecutorOptions::verification: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_engine::ports::VerificationHook<agentkit_store::actor::SqliteStore>>>
 impl core::default::Default for agentkit_chat::ChatExecutorOptions
@@ -162,9 +186,34 @@ pub agentkit_chat::SubmitChat::content: serde_json::value::Value
 pub agentkit_chat::SubmitChat::model: alloc::string::String
 pub agentkit_chat::SubmitChat::parent_message_id: core::option::Option<alloc::string::String>
 pub agentkit_chat::SubmitChat::task_id: alloc::string::String
+pub struct agentkit_chat::ToolsetRecommendation
+impl agentkit_chat::ToolsetRecommendation
+pub fn agentkit_chat::ToolsetRecommendation::new() -> Self
+impl agentkit_chat::TurnContextHook for agentkit_chat::ToolsetRecommendation
+pub fn agentkit_chat::ToolsetRecommendation::line<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_chat::TurnContextInput<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_chat::ToolsetRecommendation::observe_tool_record(&self, &str, &agentkit_contracts::dto::ai_run_tool_record_event::AiRunToolRecordEventData)
+pub struct agentkit_chat::TurnContextInput<'a>
+pub agentkit_chat::TurnContextInput::chat_id: &'a str
+pub agentkit_chat::TurnContextInput::request: &'a str
+pub agentkit_chat::TurnContextInput::tools: &'a [agentkit_core::types::ToolDefinition]
+pub agentkit_chat::TurnContextInput::view: &'a agentkit_core::toolset::ToolsetView
+pub struct agentkit_chat::TurnItem
+pub agentkit_chat::TurnItem::kind: agentkit_chat::TurnItemKind
+pub agentkit_chat::TurnItem::name: alloc::string::String
+pub agentkit_chat::TurnItem::revision: core::option::Option<alloc::string::String>
+pub agentkit_chat::TurnItem::text: alloc::string::String
+pub agentkit_chat::TurnItem::untrusted: bool
+pub struct agentkit_chat::TurnNote
+pub agentkit_chat::TurnNote::kind: agentkit_chat::TurnNoteKind
+pub agentkit_chat::TurnNote::subject: core::option::Option<alloc::string::String>
+pub agentkit_chat::TurnNote::text: alloc::string::String
+impl agentkit_chat::TurnNote
+pub fn agentkit_chat::TurnNote::new(agentkit_chat::TurnNoteKind, core::option::Option<&str>, &str) -> Self
 pub const agentkit_chat::EMULATED_TOOL_CALL_MESSAGE: &str
 pub const agentkit_chat::MAX_INSTRUCTION_BYTES: usize
 pub const agentkit_chat::PROJECT_INSTRUCTION_FILES: [&str; 2]
+pub const agentkit_chat::TURN_CONTEXT_BUDGET_TOKENS: usize
+pub const agentkit_chat::TURN_CONTEXT_METADATA_KEY: &str
 pub trait agentkit_chat::AttachmentResolver: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::AttachmentResolver::resolve<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 agentkit_chat::AttachmentResolveContext, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ResolvedAttachment>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_chat::ChatHostExt
@@ -177,20 +226,30 @@ pub trait agentkit_chat::ContextProvider: core::marker::Send + core::marker::Syn
 pub fn agentkit_chat::ContextProvider::resolve<'life0, 'async_trait>(&'life0 self, serde_json::value::Value, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<serde_json::value::Value>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait agentkit_chat::DelegationGuidance: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::DelegationGuidance::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_chat::OversizedItemSink: core::marker::Send + core::marker::Sync
+pub fn agentkit_chat::OversizedItemSink::keep(&self, &str, &str, &str) -> core::option::Option<alloc::string::String>
 pub trait agentkit_chat::ProjectInstructionsSource: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::ProjectInstructionsSource::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl agentkit_chat::ProjectInstructionsSource for agentkit_chat::FileProjectInstructions
 pub fn agentkit_chat::FileProjectInstructions::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_chat::TurnContextHook: core::marker::Send + core::marker::Sync
+pub fn agentkit_chat::TurnContextHook::line<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_chat::TurnContextInput<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_chat::TurnContextHook::observe_tool_record(&self, &str, &agentkit_contracts::dto::ai_run_tool_record_event::AiRunToolRecordEventData)
+impl agentkit_chat::TurnContextHook for agentkit_chat::ToolsetRecommendation
+pub fn agentkit_chat::ToolsetRecommendation::line<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_chat::TurnContextInput<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_chat::ToolsetRecommendation::observe_tool_record(&self, &str, &agentkit_contracts::dto::ai_run_tool_record_event::AiRunToolRecordEventData)
 pub trait agentkit_chat::UsageAuthorizer: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::UsageAuthorizer::authorize<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_chat::UsageAuthorizer::record<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_chat::append_to_system_prompt(core::option::Option<&str>, &str) -> core::option::Option<alloc::string::String>
+pub async fn agentkit_chat::append_turn_note(&agentkit_store::actor::SqliteStore, &str, agentkit_chat::TurnNote, i64) -> agentkit_chat::ChatResult<()>
 pub fn agentkit_chat::is_mutating_subagent_tool(&str) -> bool
 pub async fn agentkit_chat::load_project_instructions(&dyn agentkit_chat::ProjectInstructionsSource, &str, bool) -> core::option::Option<agentkit_chat::ProjectInstructionsBlock>
 pub fn agentkit_chat::looks_like_emulated_tool_call(&str, &std::collections::hash::set::HashSet<alloc::string::String>) -> bool
 pub fn agentkit_chat::parse_budget_limits(core::option::Option<&serde_json::value::Value>) -> agentkit_chat::ChatResult<agentkit_core::budget::BudgetLimits>
 pub async fn agentkit_chat::restore_execution_budget(&agentkit_chat::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
 pub async fn agentkit_chat::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_chat::ChatResult<agentkit_chat::RoleTaskOverrides>
+pub fn agentkit_chat::with_turn_note(&serde_json::value::Value, agentkit_chat::TurnNote) -> serde_json::value::Value
 pub type agentkit_chat::AgentHost = agentkit_engine::runner::AgentHost<agentkit_store::actor::SqliteStore>
 pub type agentkit_chat::ChatResult<T> = core::result::Result<T, agentkit_chat::ChatError>
 pub type agentkit_chat::ExecutionContext = agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>

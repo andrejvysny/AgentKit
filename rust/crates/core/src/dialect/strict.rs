@@ -9,7 +9,7 @@
 //! parameter is read by [`drop_nulls`], which leaves the parameter out: the
 //! canonical call has what the model meant and nothing it did not say.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 /// Keywords strict mode accepts. Everything else makes a schema unfit for
@@ -71,10 +71,13 @@ fn strictify(node: &mut Value, root: bool) -> bool {
         };
         return !root && options.iter_mut().all(|option| strictify(option, false));
     }
-    let is_object = map.get("type").is_some_and(|kind| kind == "object")
-        || map.contains_key("properties");
+    let is_object =
+        map.get("type").is_some_and(|kind| kind == "object") || map.contains_key("properties");
     if is_object {
-        if !matches!(map.get("additionalProperties"), None | Some(Value::Bool(false))) {
+        if !matches!(
+            map.get("additionalProperties"),
+            None | Some(Value::Bool(false))
+        ) {
             return false;
         }
         // An object with no declared properties is open; only the root of a
@@ -140,16 +143,12 @@ fn make_nullable(node: &mut Value) {
         return;
     }
     match map.get_mut("type") {
-        Some(Value::String(kind)) => {
-            if kind != "null" {
-                let kind = kind.clone();
-                map.insert("type".to_owned(), json!([kind, "null"]));
-            }
+        Some(Value::String(kind)) if kind != "null" => {
+            let kind = kind.clone();
+            map.insert("type".to_owned(), json!([kind, "null"]));
         }
-        Some(Value::Array(kinds)) => {
-            if !kinds.iter().any(|kind| kind == "null") {
-                kinds.push(json!("null"));
-            }
+        Some(Value::Array(kinds)) if !kinds.iter().any(|kind| kind == "null") => {
+            kinds.push(json!("null"));
         }
         _ => {}
     }
@@ -180,8 +179,8 @@ fn compliant(node: &Value, root: bool) -> bool {
                 .as_array()
                 .is_some_and(|options| options.iter().all(|option| compliant(option, false)));
     }
-    let is_object = map.get("type").is_some_and(|kind| kind == "object")
-        || map.contains_key("properties");
+    let is_object =
+        map.get("type").is_some_and(|kind| kind == "object") || map.contains_key("properties");
     if is_object {
         if map.get("additionalProperties") != Some(&Value::Bool(false)) {
             return false;
@@ -195,7 +194,9 @@ fn compliant(node: &Value, root: bool) -> bool {
             .map(|names| names.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         if properties.len() != required.len()
-            || !properties.keys().all(|name| required.contains(name.as_str()))
+            || !properties
+                .keys()
+                .all(|name| required.contains(name.as_str()))
             || !properties.values().all(|child| compliant(child, false))
         {
             return false;
@@ -279,9 +280,9 @@ pub fn drop_nulls(value: &mut Value, schema: &Value) -> bool {
             let Some(item_schema) = schema.get("items") else {
                 return false;
             };
-            items
-                .iter_mut()
-                .fold(false, |changed, item| drop_nulls(item, item_schema) | changed)
+            items.iter_mut().fold(false, |changed, item| {
+                drop_nulls(item, item_schema) | changed
+            })
         }
         _ => false,
     }

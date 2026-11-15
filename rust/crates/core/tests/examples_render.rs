@@ -1,7 +1,9 @@
 //! TU-13: examples are registry data, rendered natively where the provider
 //! has a field and inside the description elsewhere. Per-lane snapshots.
 
-use agentkit_core::{ExampleLane, RenderedExamples, ToolDefinition, presented_description, render_examples};
+use agentkit_core::{
+    ExampleLane, RenderedExamples, ToolDefinition, presented_description, render_examples,
+};
 use serde_json::json;
 
 fn tool(examples: serde_json::Value) -> ToolDefinition {

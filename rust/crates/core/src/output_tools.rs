@@ -97,7 +97,13 @@ struct OutputTool {
 }
 
 fn refusal(code: &str, message: &str, limits: &ToolLimits) -> ToolResult {
-    failure_result(code, &failure(code, message, None), "execution", None, limits)
+    failure_result(
+        code,
+        &failure(code, message, None),
+        "execution",
+        None,
+        limits,
+    )
 }
 
 fn unknown_handle(limits: &ToolLimits) -> ToolResult {
@@ -205,10 +211,7 @@ impl OutputTool {
             end_line = start_line + count_lines(text.as_bytes()).saturating_sub(1);
         }
         let mut footer = if slice.end_line < start_line {
-            format!(
-                "[no lines: the output has {} lines]",
-                slice.total_lines
-            )
+            format!("[no lines: the output has {} lines]", slice.total_lines)
         } else {
             format!(
                 "[lines {start_line}-{end_line} of {}{}]",
@@ -226,11 +229,19 @@ impl OutputTool {
         if line_cut {
             footer.push_str(" [line cut at the size limit]");
         }
-        let summary = format!("Read lines {start_line}-{end_line} of {}.", slice.total_lines);
+        let summary = format!(
+            "Read lines {start_line}-{end_line} of {}.",
+            slice.total_lines
+        );
         ok(format!("{text}\n{footer}"), summary, limits)
     }
 
-    async fn search(&self, handle: &OutputHandle, input: &Value, limits: &ToolLimits) -> ToolResult {
+    async fn search(
+        &self,
+        handle: &OutputHandle,
+        input: &Value,
+        limits: &ToolLimits,
+    ) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or_default();
         let max = input["max_matches"]
             .as_u64()

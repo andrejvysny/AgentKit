@@ -406,9 +406,8 @@ pub(crate) fn translate_call(
     let args = match agentkit_contracts::parse_javascript_json(&call.arguments_json) {
         Ok(args) => args,
         Err(error) if built_in => {
-            let message = format!(
-                "Invalid arguments JSON: {error}. Send the arguments as one JSON object."
-            );
+            let message =
+                format!("Invalid arguments JSON: {error}. Send the arguments as one JSON object.");
             return (out, Some(CoreError::new("bad_args", &message)));
         }
         Err(_) => return (out, None),
@@ -447,7 +446,8 @@ pub(crate) fn stored_call(
     }
     let canonical = (|| {
         let mut args = agentkit_contracts::parse_javascript_json(&outer.arguments_json).ok()?;
-        let inner = agentkit_contracts::parse_javascript_json(&prepared.call.arguments_json).ok()?;
+        let inner =
+            agentkit_contracts::parse_javascript_json(&prepared.call.arguments_json).ok()?;
         let object = args.as_object_mut()?;
         object.insert("name".into(), prepared.call.name.clone().into());
         object.insert("arguments".into(), inner);
@@ -509,9 +509,7 @@ pub(crate) fn prepare_resolved(
         Err(error) => {
             prepared.failure = Some(CoreError::new(
                 "bad_args",
-                &format!(
-                    "Invalid arguments JSON: {error}. Send the arguments as one JSON object."
-                ),
+                &format!("Invalid arguments JSON: {error}. Send the arguments as one JSON object."),
             ));
             return prepared;
         }
@@ -559,7 +557,11 @@ mod tests {
             ("timeout_ms", "timeout"),
         ];
         for (alias, canonical) in rows {
-            let value = if canonical == "timeout" { json!(5) } else { json!("v") };
+            let value = if canonical == "timeout" {
+                json!(5)
+            } else {
+                json!("v")
+            };
             let n = run(json!({ alias: value }));
             assert!(n.args.get(canonical).is_some(), "{alias}");
             assert!(n.args.get(alias).is_none(), "{alias}");
@@ -624,7 +626,8 @@ mod tests {
         assert_eq!(n.args["tags"], json!([1, 2]));
         assert_eq!(n.args["options"], json!({"depth":1}));
         assert_eq!(n.values_converted, 4);
-        let n = run(json!({"limit":"25x","all":"yes","tags":"1,2","note":"7","options":{"depth":"3"}}));
+        let n =
+            run(json!({"limit":"25x","all":"yes","tags":"1,2","note":"7","options":{"depth":"3"}}));
         assert_eq!(n.args["limit"], "25x");
         assert_eq!(n.args["all"], "yes");
         assert_eq!(n.args["tags"], "1,2");

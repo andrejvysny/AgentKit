@@ -25,8 +25,8 @@ mod config;
 mod guard;
 mod service;
 mod snapshot;
-mod toolsets;
 mod tools;
+mod toolsets;
 
 pub use config::{
     BUILTIN_ROLES, RoleSpec, SubagentConfig, SubagentRoleLimits, default_delegation_guidance,
@@ -34,11 +34,11 @@ pub use config::{
 };
 pub use guard::{SubagentRoleGuard, WorkspaceLeaseRegistry};
 pub use service::{
-    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, MessageReceipt, SpawnRequest, SpawnedChild, SubagentService,
-    SubagentView, child_identity,
+    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, MessageReceipt, SpawnRequest,
+    SpawnedChild, SubagentService, SubagentView, child_identity,
 };
 pub use snapshot::{EffectiveRole, RoleSnapshot, effective_role};
-pub use toolsets::{DELEGATION_TOOLSET, delegation_toolsets};
 pub use tools::{
     SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SubagentContributor, subagent_tool_definitions,
 };
+pub use toolsets::{DELEGATION_TOOLSET, delegation_toolsets};

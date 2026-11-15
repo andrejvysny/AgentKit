@@ -8,7 +8,8 @@ use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
     Classification, CoreError, Dialect, Freeze, PrefixDigests, PromotionObserver, PromptLayout,
-    ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze, tools_digest,
+    ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze,
+    tools_digest,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

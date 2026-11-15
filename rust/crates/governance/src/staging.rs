@@ -191,7 +191,10 @@ pub async fn stage_tools(
         .iter()
         .flat_map(|contributor| contributor.legacy_names())
         .collect();
-    register_tools(collected, guards, &context, allowed, failed, toolsets, legacy).await
+    register_tools(
+        collected, guards, &context, allowed, failed, toolsets, legacy,
+    )
+    .await
 }
 
 async fn contribute(
@@ -768,7 +771,13 @@ fn approval_spec(
 
 fn guard_refusal(context: &ToolContext, reason: &str) -> ToolResult {
     let failure = failure_catalog::from_refusal(reason);
-    failure_catalog::failure_result("tool_guard_refused", &failure, "guard", None, &context.limits)
+    failure_catalog::failure_result(
+        "tool_guard_refused",
+        &failure,
+        "guard",
+        None,
+        &context.limits,
+    )
 }
 
 fn validate_namespace(contributor: &dyn ToolContributor) -> GovernanceResult<()> {

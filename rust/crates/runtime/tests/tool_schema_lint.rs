@@ -16,9 +16,8 @@ use agentkit_agents::{
 };
 use agentkit_core::{
     AuthKind, CancellationToken, ChatProvider, ChatRequest, ConnectionIdentity, CoreError,
-    ExampleLane, Tool,
-    ToolConstraint, meta_definitions, ToolContext, ToolDefinition, ToolLimits, ToolRegistry, ToolResult,
-    presented_description,
+    ExampleLane, Tool, ToolConstraint, ToolContext, ToolDefinition, ToolLimits, ToolRegistry,
+    ToolResult, meta_definitions, presented_description,
 };
 use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
 use agentkit_lsp::{LSP_ARG_ALIASES, lsp_tool_definitions};
@@ -762,7 +761,7 @@ async fn the_lint_catches_each_rule() {
         examples: vec![],
     };
     let tool = definition_only(bad.clone(), &[]);
-    let registry = registry_of(&[tool.clone()]);
+    let registry = registry_of(std::slice::from_ref(&tool));
     let names: BTreeSet<String> = ["bad_tool".to_owned()].into();
     let problems = check_tool(tool.as_ref(), &registry, &names).join("\n");
     for rule in [

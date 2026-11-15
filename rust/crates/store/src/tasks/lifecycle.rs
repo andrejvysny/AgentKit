@@ -461,7 +461,11 @@ fn reap_subagents(db: &Connection, parent_task_id: &str, now: i64) -> Result<()>
         }
         if let Some(turn_task_id) = turn_task_id
             && db
-                .query_row("SELECT 1 FROM tasks WHERE id=?", [&turn_task_id], |_| Ok(()))
+                .query_row(
+                    "SELECT 1 FROM tasks WHERE id=?",
+                    [&turn_task_id],
+                    |_| Ok(()),
+                )
                 .optional()?
                 .is_some()
         {

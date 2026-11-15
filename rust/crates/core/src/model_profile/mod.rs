@@ -26,8 +26,8 @@ pub use messages::{
 };
 pub use request::{
     ProfileNote, QWEN_EFFORT_TEMPLATE_KEY, REASONING_HISTORY_FIELD, REASONING_METADATA_KEY,
-    RequestSettings, THINKING_TEMPLATE_KEY, ToolChoice, policy_tool_choice, resolve_request_settings,
-    wire_tool_choice,
+    RequestSettings, THINKING_TEMPLATE_KEY, ToolChoice, policy_tool_choice,
+    resolve_request_settings, wire_tool_choice,
 };
 pub use resolve::{LimitFacts, ModelFacts, ProfileQuery, resolve_profile};
 pub use salvage::{Salvage, SalvagedCall, nudge_after_announced_call, salvage_tool_calls};

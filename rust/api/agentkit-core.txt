@@ -1,8 +1,27 @@
 pub mod agentkit_core
+pub use agentkit_core::AiModelToolProfile
 pub use agentkit_core::AiRunEvent
 pub use agentkit_core::CancellationToken
 pub use agentkit_core::Runtime
 pub use agentkit_core::SystemRuntime
+pub mod agentkit_core::failure_catalog
+pub struct agentkit_core::failure_catalog::Spec
+pub agentkit_core::failure_catalog::Spec::class: agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass
+pub agentkit_core::failure_catalog::Spec::code: &'static str
+pub agentkit_core::failure_catalog::Spec::message: &'static str
+pub agentkit_core::failure_catalog::Spec::next_step: &'static str
+pub agentkit_core::failure_catalog::Spec::retryable: bool
+pub const agentkit_core::failure_catalog::STOP_RETRYING: &str
+pub fn agentkit_core::failure_catalog::catalog() -> impl core::iter::traits::iterator::Iterator<Item = &'static agentkit_core::failure_catalog::Spec>
+pub fn agentkit_core::failure_catalog::class_of(&str, &str) -> agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass
+pub fn agentkit_core::failure_catalog::failure(&str, &str, core::option::Option<&str>) -> agentkit_contracts::dto::ai_tool_failure::AiToolFailure
+pub fn agentkit_core::failure_catalog::failure_json(&agentkit_contracts::dto::ai_tool_failure::AiToolFailure) -> serde_json::value::Value
+pub fn agentkit_core::failure_catalog::failure_result(&str, &agentkit_contracts::dto::ai_tool_failure::AiToolFailure, &str, core::option::Option<serde_json::value::Value>, &agentkit_core::ToolLimits) -> agentkit_core::ToolResult
+pub fn agentkit_core::failure_catalog::from_refusal(&str) -> agentkit_contracts::dto::ai_tool_failure::AiToolFailure
+pub fn agentkit_core::failure_catalog::render(&agentkit_contracts::dto::ai_tool_failure::AiToolFailure) -> alloc::string::String
+pub fn agentkit_core::failure_catalog::spec(&str) -> core::option::Option<&'static agentkit_core::failure_catalog::Spec>
+pub fn agentkit_core::failure_catalog::split_refusal(&str) -> (&str, &str)
+pub fn agentkit_core::failure_catalog::with_stop_retrying(&str) -> alloc::string::String
 pub mod agentkit_core::permission
 pub enum agentkit_core::permission::BlockedFinal
 pub agentkit_core::permission::BlockedFinal::PlanMode
@@ -47,6 +66,79 @@ pub fn agentkit_core::permission::role_ceiling_allows(agentkit_core::permission:
 pub enum agentkit_core::AuthKind
 pub agentkit_core::AuthKind::ApiKey
 pub agentkit_core::AuthKind::ChatGptAccount
+pub enum agentkit_core::BreakpointAt
+pub agentkit_core::BreakpointAt::AfterMessage(usize)
+pub agentkit_core::BreakpointAt::EndOfSegment(agentkit_core::Segment)
+pub agentkit_core::BreakpointAt::LastTool
+pub enum agentkit_core::ByteOrLineRange
+pub agentkit_core::ByteOrLineRange::Bytes
+pub agentkit_core::ByteOrLineRange::Bytes::len: u64
+pub agentkit_core::ByteOrLineRange::Bytes::start: u64
+pub agentkit_core::ByteOrLineRange::Lines
+pub agentkit_core::ByteOrLineRange::Lines::max_lines: u64
+pub agentkit_core::ByteOrLineRange::Lines::start_line: u64
+pub enum agentkit_core::CacheCapability
+pub agentkit_core::CacheCapability::ExplicitBreakpoints
+pub agentkit_core::CacheCapability::ExplicitBreakpoints::max_breakpoints: u8
+pub agentkit_core::CacheCapability::ExplicitBreakpoints::min_tokens: u64
+pub agentkit_core::CacheCapability::ExplicitBreakpoints::ttls: alloc::vec::Vec<agentkit_core::CacheTtl>
+pub agentkit_core::CacheCapability::ImplicitPrefix
+pub agentkit_core::CacheCapability::ImplicitPrefix::hint: core::option::Option<agentkit_core::CacheHint>
+pub agentkit_core::CacheCapability::LocalSlot
+pub agentkit_core::CacheCapability::LocalSlot::pinning: bool
+pub agentkit_core::CacheCapability::None
+impl agentkit_core::CacheStrategy for agentkit_core::CacheCapability
+pub fn agentkit_core::CacheCapability::plan(&self, &agentkit_core::PromptLayout, &agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> agentkit_core::CacheDirectives
+pub fn agentkit_core::CacheCapability::plan_request(&self, &agentkit_core::CacheRequest<'_>) -> agentkit_core::CacheDirectives
+pub enum agentkit_core::CacheHint
+pub agentkit_core::CacheHint::ConversationHeader
+pub agentkit_core::CacheHint::PromptCacheKey
+pub agentkit_core::CacheHint::SessionIdField
+pub enum agentkit_core::CacheTtl
+pub agentkit_core::CacheTtl::FiveMinutes
+pub agentkit_core::CacheTtl::OneHour
+pub enum agentkit_core::CallFailure<'a>
+pub agentkit_core::CallFailure::Class(agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass)
+pub agentkit_core::CallFailure::Code
+pub agentkit_core::CallFailure::Code::code: &'a str
+pub agentkit_core::CallFailure::Code::message: &'a str
+pub enum agentkit_core::DirectSet
+pub agentkit_core::DirectSet::Names(alloc::collections::btree::set::BTreeSet<alloc::string::String>)
+pub agentkit_core::DirectSet::Unspecified
+impl agentkit_core::DirectSet
+pub fn agentkit_core::DirectSet::names<I, S>(I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
+pub enum agentkit_core::ExampleLane
+pub agentkit_core::ExampleLane::Anthropic
+pub agentkit_core::ExampleLane::AnthropicNative
+pub agentkit_core::ExampleLane::ChatCompletions
+pub agentkit_core::ExampleLane::Responses
+pub enum agentkit_core::Freeze
+pub agentkit_core::Freeze::Created(agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix)
+pub agentkit_core::Freeze::Refrozen
+pub agentkit_core::Freeze::Refrozen::changed: alloc::vec::Vec<&'static str>
+pub agentkit_core::Freeze::Refrozen::prefix: agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix
+pub agentkit_core::Freeze::Unchanged(agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix)
+impl agentkit_core::Freeze
+pub fn agentkit_core::Freeze::prefix(&self) -> &agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix
+pub enum agentkit_core::LayoutError
+pub agentkit_core::LayoutError::NotSystem(&'static str)
+pub agentkit_core::LayoutError::OutOfOrder
+pub agentkit_core::LayoutError::OutOfOrder::after: &'static str
+pub agentkit_core::LayoutError::OutOfOrder::segment: &'static str
+pub enum agentkit_core::LoadMode
+pub agentkit_core::LoadMode::Indirect
+pub agentkit_core::LoadMode::Promote
+pub enum agentkit_core::OutputError
+pub agentkit_core::OutputError::Integrity(alloc::string::String)
+pub agentkit_core::OutputError::Invalid(alloc::string::String)
+pub agentkit_core::OutputError::InvalidHandle(alloc::string::String)
+pub agentkit_core::OutputError::NotFound(alloc::string::String)
+pub agentkit_core::OutputError::Storage(alloc::string::String)
+pub enum agentkit_core::ProfileError
+pub agentkit_core::ProfileError::BodyExtraNotAllowed(alloc::string::String)
+pub agentkit_core::ProfileError::EstimatedLimitForQualified
+pub agentkit_core::ProfileError::EstimatedLimitForQualified::profile: alloc::string::String
+pub agentkit_core::ProfileError::Invalid(alloc::string::String)
 pub enum agentkit_core::ProviderEvent
 pub agentkit_core::ProviderEvent::Activity
 pub agentkit_core::ProviderEvent::Completed
@@ -80,10 +172,63 @@ pub agentkit_core::ReasoningSummary::Auto
 pub agentkit_core::ReasoningSummary::Concise
 pub agentkit_core::ReasoningSummary::Detailed
 pub agentkit_core::ReasoningSummary::Off
+pub enum agentkit_core::RenderedExamples
+pub agentkit_core::RenderedExamples::InDescription(alloc::string::String)
+pub agentkit_core::RenderedExamples::Native(alloc::vec::Vec<serde_json::value::Value>)
+pub agentkit_core::RenderedExamples::None
+pub enum agentkit_core::ScoreRole
+pub agentkit_core::ScoreRole::Prior
+pub agentkit_core::ScoreRole::Relevance
+pub enum agentkit_core::Segment
+pub agentkit_core::Segment::History
+pub agentkit_core::Segment::Memory
+pub agentkit_core::Segment::Rules
+pub agentkit_core::Segment::System
+pub agentkit_core::Segment::Tools
+pub agentkit_core::Segment::Turn
+impl agentkit_core::Segment
+pub const agentkit_core::Segment::ALL: [agentkit_core::Segment; 6]
+pub fn agentkit_core::Segment::code(self) -> &'static str
+pub fn agentkit_core::Segment::is_system(self) -> bool
+pub fn agentkit_core::Segment::parse(&str) -> core::option::Option<agentkit_core::Segment>
 pub enum agentkit_core::Terminal
 pub agentkit_core::Terminal::Cancelled
 pub agentkit_core::Terminal::Completed
 pub agentkit_core::Terminal::Failed
+pub enum agentkit_core::ToolChoice
+pub agentkit_core::ToolChoice::Auto
+pub agentkit_core::ToolChoice::Named(alloc::string::String)
+pub agentkit_core::ToolChoice::Required
+pub enum agentkit_core::ToolLane
+pub agentkit_core::ToolLane::ChatCompletions
+pub agentkit_core::ToolLane::Responses
+pub enum agentkit_core::ToolLoading
+pub agentkit_core::ToolLoading::Deferred
+pub agentkit_core::ToolLoading::Direct
+pub struct agentkit_core::AliasRule
+pub agentkit_core::AliasRule::alias: alloc::string::String
+pub agentkit_core::AliasRule::canonical: alloc::string::String
+pub agentkit_core::AliasRule::scale: core::option::Option<u64>
+pub struct agentkit_core::AliasTable
+impl agentkit_core::AliasTable
+pub fn agentkit_core::AliasTable::add(&mut self, &str, &str)
+pub fn agentkit_core::AliasTable::add_for_tool(&mut self, &str, &str, &str)
+pub fn agentkit_core::AliasTable::add_scaled(&mut self, &str, &str, u64)
+pub fn agentkit_core::AliasTable::empty() -> Self
+pub fn agentkit_core::AliasTable::standard() -> Self
+impl core::default::Default for agentkit_core::AliasTable
+pub fn agentkit_core::AliasTable::default() -> Self
+pub struct agentkit_core::Breakpoint
+pub agentkit_core::Breakpoint::at: agentkit_core::BreakpointAt
+pub agentkit_core::Breakpoint::ttl: agentkit_core::CacheTtl
+pub struct agentkit_core::BreakpointShape
+pub agentkit_core::BreakpointShape::has_tools: bool
+pub agentkit_core::BreakpointShape::last_system: core::option::Option<agentkit_core::Segment>
+pub agentkit_core::BreakpointShape::prefix_tokens: u64
+pub agentkit_core::BreakpointShape::previous_end: core::option::Option<usize>
+pub agentkit_core::BreakpointShape::request_end: core::option::Option<usize>
+impl agentkit_core::BreakpointShape
+pub fn agentkit_core::BreakpointShape::of_request(&agentkit_core::CacheRequest<'_>) -> Self
 pub struct agentkit_core::BudgetLimits
 pub agentkit_core::BudgetLimits::correction_passes: core::option::Option<u64>
 pub agentkit_core::BudgetLimits::first_byte_ms: core::option::Option<u64>
@@ -100,6 +245,40 @@ pub agentkit_core::BudgetSnapshot::retries: u64
 pub agentkit_core::BudgetSnapshot::started_at: u64
 pub agentkit_core::BudgetSnapshot::tool_calls: u64
 pub agentkit_core::BudgetSnapshot::version: u8
+pub struct agentkit_core::CacheDirectives
+pub agentkit_core::CacheDirectives::breakpoints: alloc::vec::Vec<agentkit_core::Breakpoint>
+pub agentkit_core::CacheDirectives::cache_key: core::option::Option<alloc::string::String>
+pub agentkit_core::CacheDirectives::key_field: core::option::Option<agentkit_core::CacheHint>
+pub agentkit_core::CacheDirectives::pin_slot: bool
+impl agentkit_core::CacheDirectives
+pub fn agentkit_core::CacheDirectives::is_empty(&self) -> bool
+pub struct agentkit_core::CacheRequest<'a>
+pub agentkit_core::CacheRequest::layout: &'a agentkit_core::PromptLayout
+pub agentkit_core::CacheRequest::long_ttl: agentkit_core::CacheTtl
+pub agentkit_core::CacheRequest::prefix: &'a agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix
+pub agentkit_core::CacheRequest::previous_end: core::option::Option<usize>
+pub agentkit_core::CacheRequest::request_end: core::option::Option<usize>
+pub agentkit_core::CacheRequest::tools: core::option::Option<&'a [agentkit_core::ToolDefinition]>
+impl<'a> agentkit_core::CacheRequest<'a>
+pub fn agentkit_core::CacheRequest<'a>::of_prefix(&'a agentkit_core::PromptLayout, &'a agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> Self
+pub struct agentkit_core::Catalog
+impl agentkit_core::Catalog
+pub fn agentkit_core::Catalog::deferred_len(&self) -> usize
+pub fn agentkit_core::Catalog::entries(&self) -> &[agentkit_core::CatalogEntry]
+pub fn agentkit_core::Catalog::get(&self, &str) -> core::option::Option<&agentkit_core::CatalogEntry>
+pub fn agentkit_core::Catalog::meta_active(&self) -> bool
+pub fn agentkit_core::Catalog::names(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::Catalog::new(alloc::vec::Vec<agentkit_core::CatalogEntry>, bool) -> Self
+pub fn agentkit_core::Catalog::search(&self, &str, core::option::Option<&str>, usize) -> (alloc::vec::Vec<&agentkit_core::CatalogEntry>, usize)
+pub fn agentkit_core::Catalog::toolsets(&self) -> &agentkit_core::ToolsetView
+pub fn agentkit_core::Catalog::with_extra(&self, alloc::vec::Vec<agentkit_core::CatalogEntry>) -> Self
+pub fn agentkit_core::Catalog::with_toolsets(self, agentkit_core::ToolsetView) -> Self
+pub struct agentkit_core::CatalogEntry
+pub agentkit_core::CatalogEntry::available: bool
+pub agentkit_core::CatalogEntry::canonical: alloc::string::String
+pub agentkit_core::CatalogEntry::deferred: bool
+pub agentkit_core::CatalogEntry::definition: agentkit_core::ToolDefinition
+pub agentkit_core::CatalogEntry::namespace: alloc::string::String
 pub struct agentkit_core::ChatMessage
 pub agentkit_core::ChatMessage::content: serde_json::value::Value
 pub agentkit_core::ChatMessage::metadata: core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
@@ -112,6 +291,7 @@ pub fn agentkit_core::ChatMessage::is_synthetic_missing(&self) -> bool
 pub fn agentkit_core::ChatMessage::text(&str, &str) -> Self
 pub struct agentkit_core::ChatRequest
 pub agentkit_core::ChatRequest::budget: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::ExecutionBudget>>
+pub agentkit_core::ChatRequest::cache: core::option::Option<agentkit_core::CacheDirectives>
 pub agentkit_core::ChatRequest::content_binding_digest: core::option::Option<alloc::string::String>
 pub agentkit_core::ChatRequest::continuation: core::option::Option<serde_json::value::Value>
 pub agentkit_core::ChatRequest::continuation_required: bool
@@ -120,14 +300,31 @@ pub agentkit_core::ChatRequest::continuation_store: core::option::Option<alloc::
 pub agentkit_core::ChatRequest::max_output_tokens: core::option::Option<u64>
 pub agentkit_core::ChatRequest::messages: alloc::vec::Vec<agentkit_core::ChatMessage>
 pub agentkit_core::ChatRequest::model: alloc::string::String
+pub agentkit_core::ChatRequest::profile: core::option::Option<alloc::rcs::arc::Arc<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>>
 pub agentkit_core::ChatRequest::reasoning_effort: core::option::Option<agentkit_core::ReasoningEffort>
+pub agentkit_core::ChatRequest::reasoning_off: bool
 pub agentkit_core::ChatRequest::reasoning_summary: agentkit_core::ReasoningSummary
 pub agentkit_core::ChatRequest::request_guard: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::DispatchGuard>>
 pub agentkit_core::ChatRequest::run_id: alloc::string::String
 pub agentkit_core::ChatRequest::runtime: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>>
 pub agentkit_core::ChatRequest::selected_content: alloc::vec::Vec<agentkit_core::ChatMessage>
 pub agentkit_core::ChatRequest::temperature: core::option::Option<f64>
+pub agentkit_core::ChatRequest::tool_choice: agentkit_core::ToolChoice
 pub agentkit_core::ChatRequest::tools: alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub struct agentkit_core::Classification
+pub agentkit_core::Classification::deferred_hints: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub agentkit_core::Classification::direct: agentkit_core::DirectSet
+pub agentkit_core::Classification::direct_groups: alloc::vec::Vec<alloc::vec::Vec<alloc::string::String>>
+pub agentkit_core::Classification::keep_meta: bool
+pub agentkit_core::Classification::load_mode: agentkit_core::LoadMode
+pub agentkit_core::Classification::max_definitions: usize
+pub agentkit_core::Classification::max_tokens: usize
+pub agentkit_core::Classification::visible_bound: core::option::Option<usize>
+impl agentkit_core::Classification
+pub fn agentkit_core::Classification::from_profile(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, core::option::Option<&agentkit_core::Dialect>) -> Self
+pub fn agentkit_core::Classification::split(&self, &[agentkit_core::ToolDefinition]) -> agentkit_core::Split
+impl core::default::Default for agentkit_core::Classification
+pub fn agentkit_core::Classification::default() -> Self
 pub struct agentkit_core::ConnectionIdentity
 pub agentkit_core::ConnectionIdentity::connection_id: alloc::string::String
 pub agentkit_core::ConnectionIdentity::generation: u64
@@ -143,10 +340,35 @@ pub agentkit_core::CoreError::retryable: bool
 impl agentkit_core::CoreError
 pub fn agentkit_core::CoreError::new(&str, &str) -> Self
 pub fn agentkit_core::CoreError::responses(&str) -> Self
+pub struct agentkit_core::Dialect
+pub agentkit_core::Dialect::id: alloc::string::String
+pub agentkit_core::Dialect::tools: alloc::vec::Vec<agentkit_core::ToolForm>
+pub agentkit_core::Dialect::version: alloc::string::String
+impl agentkit_core::Dialect
+pub fn agentkit_core::Dialect::built_in(&self, &str) -> bool
+impl agentkit_core::Dialect
+pub fn agentkit_core::Dialect::canonical_of(&self, &str) -> core::option::Option<&str>
+pub fn agentkit_core::Dialect::collisions(&self, &[agentkit_core::ToolDefinition]) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::Dialect::knows_wire(&self, &str) -> bool
+pub fn agentkit_core::Dialect::render(&self, &[agentkit_core::ToolDefinition]) -> alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub fn agentkit_core::Dialect::translate(&self, &str, serde_json::value::Value) -> core::result::Result<agentkit_core::Translated, agentkit_core::DialectError>
+pub fn agentkit_core::Dialect::wire_call(&self, &str, &serde_json::value::Value) -> core::option::Option<(alloc::string::String, serde_json::value::Value)>
+pub fn agentkit_core::Dialect::wire_names(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::Dialect::wire_names_of(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::Dialect::with_id(self, &str) -> Self
+impl agentkit_core::Dialect
+pub fn agentkit_core::Dialect::effective_for(&self, &[agentkit_core::ToolDefinition]) -> agentkit_core::Dialect
+impl agentkit_core::Dialect
+pub fn agentkit_core::Dialect::strict(&self) -> bool
+pub struct agentkit_core::DialectError
+pub agentkit_core::DialectError::message: alloc::string::String
 pub struct agentkit_core::DispatchFence
 pub agentkit_core::DispatchFence::attempt_id: alloc::string::String
 pub agentkit_core::DispatchFence::fencing_token: u64
 pub agentkit_core::DispatchFence::task_id: alloc::string::String
+pub struct agentkit_core::ExactSession
+impl agentkit_core::SessionTree for agentkit_core::ExactSession
+pub fn agentkit_core::ExactSession::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_core::ExecutionBudget
 pub agentkit_core::ExecutionBudget::limits: agentkit_core::BudgetLimits
 impl agentkit_core::ExecutionBudget
@@ -157,15 +379,178 @@ pub fn agentkit_core::ExecutionBudget::new(agentkit_core::BudgetLimits, alloc::r
 pub fn agentkit_core::ExecutionBudget::remaining_ms(&self) -> core::option::Option<u64>
 pub fn agentkit_core::ExecutionBudget::snapshot(&self) -> agentkit_core::BudgetSnapshot
 pub fn agentkit_core::ExecutionBudget::with_checkpoint(self, alloc::rcs::arc::Arc<dyn agentkit_core::BudgetCheckpoint>) -> Self
+pub struct agentkit_core::Guide
+pub agentkit_core::Guide::text: alloc::string::String
+pub agentkit_core::Guide::version: alloc::string::String
+impl agentkit_core::Guide
+pub fn agentkit_core::Guide::estimated_tokens(&self) -> usize
+pub fn agentkit_core::Guide::parse(&str) -> Self
 pub struct agentkit_core::HumanRequestSpec
 pub agentkit_core::HumanRequestSpec::content: serde_json::value::Value
 pub agentkit_core::HumanRequestSpec::content_hash: alloc::string::String
 pub agentkit_core::HumanRequestSpec::expires_at: core::option::Option<alloc::string::String>
 pub agentkit_core::HumanRequestSpec::request_id: alloc::string::String
+pub struct agentkit_core::InMemoryUsage
+impl agentkit_core::UsageStore for agentkit_core::InMemoryUsage
+pub fn agentkit_core::InMemoryUsage::counts(&self, &str) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, u64>
+pub fn agentkit_core::InMemoryUsage::record_ok(&self, &str, &str)
+pub struct agentkit_core::LegacyName
+pub agentkit_core::LegacyName::new: core::option::Option<alloc::string::String>
+pub agentkit_core::LegacyName::old: alloc::string::String
+pub agentkit_core::LegacyName::teach: alloc::string::String
+pub struct agentkit_core::LexicalScorer
+impl agentkit_core::ToolsetScorer for agentkit_core::LexicalScorer
+pub fn agentkit_core::LexicalScorer::role(&self) -> agentkit_core::ScoreRole
+pub fn agentkit_core::LexicalScorer::score(&self, &str, &[agentkit_core::ToolsetDoc]) -> alloc::vec::Vec<f64>
+pub struct agentkit_core::LimitFacts
+pub agentkit_core::LimitFacts::context_window: core::option::Option<u64>
+pub agentkit_core::LimitFacts::max_output: core::option::Option<u64>
+pub struct agentkit_core::Match
+pub agentkit_core::Match::line: u64
+pub agentkit_core::Match::text: alloc::string::String
+pub struct agentkit_core::ModelFacts
+pub agentkit_core::ModelFacts::probe: core::option::Option<agentkit_core::LimitFacts>
+pub agentkit_core::ModelFacts::proxy: core::option::Option<agentkit_core::LimitFacts>
+pub agentkit_core::ModelFacts::server: core::option::Option<agentkit_core::LimitFacts>
+pub agentkit_core::ModelFacts::user: core::option::Option<agentkit_core::LimitFacts>
+pub struct agentkit_core::Normalised
+pub agentkit_core::Normalised::aliases_used: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::Normalised::args: serde_json::value::Value
+pub agentkit_core::Normalised::values_converted: u32
+pub struct agentkit_core::OutcomeClassifier
+impl agentkit_core::OutcomeClassifier
+pub fn agentkit_core::OutcomeClassifier::judge(&mut self, &str, &str, core::option::Option<agentkit_core::CallFailure<'_>>) -> agentkit_core::OutcomeVerdict
+pub fn agentkit_core::OutcomeClassifier::new() -> Self
+pub struct agentkit_core::OutcomeVerdict
+pub agentkit_core::OutcomeVerdict::class: agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass
+pub agentkit_core::OutcomeVerdict::prior: u32
+pub agentkit_core::OutcomeVerdict::stop_retrying: bool
+pub struct agentkit_core::OutputCall<'a>
+pub agentkit_core::OutputCall::call_id: &'a str
+pub agentkit_core::OutputCall::max_bytes: usize
+pub agentkit_core::OutputCall::session: &'a str
+pub agentkit_core::OutputCall::task: &'a str
+pub agentkit_core::OutputCall::tool: &'a str
+pub struct agentkit_core::OutputGate
+impl agentkit_core::OutputGate
+pub fn agentkit_core::OutputGate::effective_limit(&self, &str, usize) -> usize
+pub fn agentkit_core::OutputGate::inline_limit(&self, &str) -> usize
+pub fn agentkit_core::OutputGate::new(alloc::rcs::arc::Arc<dyn agentkit_core::OutputStore>) -> Self
+pub async fn agentkit_core::OutputGate::shape(&self, agentkit_core::OutputCall<'_>, agentkit_core::ToolResult) -> agentkit_core::ToolResult
+pub fn agentkit_core::OutputGate::store(&self) -> &alloc::rcs::arc::Arc<dyn agentkit_core::OutputStore>
+pub fn agentkit_core::OutputGate::will_store(&self, &str, usize, &agentkit_core::ToolResult) -> bool
+pub fn agentkit_core::OutputGate::with_inline_limit(self, usize) -> Self
+pub fn agentkit_core::OutputGate::with_redactor(self, alloc::rcs::arc::Arc<(dyn core::ops::function::Fn(&str) -> alloc::string::String + core::marker::Send + core::marker::Sync)>) -> Self
+pub fn agentkit_core::OutputGate::with_tool_limit(self, impl core::convert::Into<alloc::string::String>, usize) -> Self
+pub struct agentkit_core::OutputHandle(_)
+impl agentkit_core::OutputHandle
+pub fn agentkit_core::OutputHandle::as_str(&self) -> &str
+pub fn agentkit_core::OutputHandle::generate() -> Self
+pub fn agentkit_core::OutputHandle::parse(&str) -> core::result::Result<Self, agentkit_core::OutputError>
+impl core::fmt::Display for agentkit_core::OutputHandle
+pub fn agentkit_core::OutputHandle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_core::OutputHandle
+pub fn agentkit_core::OutputHandle::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_core::OutputInfo
+pub agentkit_core::OutputInfo::byte_len: u64
+pub agentkit_core::OutputInfo::created_ms: i64
+pub agentkit_core::OutputInfo::expires_ms: i64
+pub agentkit_core::OutputInfo::handle: agentkit_core::OutputHandle
+pub agentkit_core::OutputInfo::line_count: u64
+pub agentkit_core::OutputInfo::meta: agentkit_core::OutputMeta
+pub agentkit_core::OutputInfo::sha256: alloc::string::String
+pub struct agentkit_core::OutputMeta
+pub agentkit_core::OutputMeta::call_id: alloc::string::String
+pub agentkit_core::OutputMeta::exit_code: core::option::Option<i32>
+pub agentkit_core::OutputMeta::mime: alloc::string::String
+pub agentkit_core::OutputMeta::session: alloc::string::String
+pub agentkit_core::OutputMeta::task: alloc::string::String
+pub agentkit_core::OutputMeta::tool: alloc::string::String
+pub struct agentkit_core::OutputSlice
+pub agentkit_core::OutputSlice::end_line: u64
+pub agentkit_core::OutputSlice::has_more: bool
+pub agentkit_core::OutputSlice::start_line: u64
+pub agentkit_core::OutputSlice::text: alloc::string::String
+pub agentkit_core::OutputSlice::total_bytes: u64
+pub agentkit_core::OutputSlice::total_lines: u64
+pub struct agentkit_core::PrefixDigests
+pub agentkit_core::PrefixDigests::memory_core: alloc::string::String
+pub agentkit_core::PrefixDigests::params: alloc::string::String
+pub agentkit_core::PrefixDigests::rules: alloc::string::String
+pub agentkit_core::PrefixDigests::system: alloc::string::String
+pub agentkit_core::PrefixDigests::tools: alloc::string::String
+impl agentkit_core::PrefixDigests
+pub fn agentkit_core::PrefixDigests::changed(&self, &agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> alloc::vec::Vec<&'static str>
+pub fn agentkit_core::PrefixDigests::compute(&agentkit_core::PromptLayout, &[agentkit_core::ToolDefinition], &serde_json::value::Value) -> Self
+pub struct agentkit_core::ProfileNote
+pub agentkit_core::ProfileNote::code: &'static str
+pub agentkit_core::ProfileNote::message: alloc::string::String
+pub struct agentkit_core::ProfileQuery<'a>
+pub agentkit_core::ProfileQuery::facts: agentkit_core::ModelFacts
+pub agentkit_core::ProfileQuery::model: &'a str
+pub agentkit_core::ProfileQuery::provider: &'a str
+pub agentkit_core::ProfileQuery::user_profile: core::option::Option<&'a serde_json::value::Value>
+pub struct agentkit_core::Promotion
+pub agentkit_core::Promotion::revision: core::option::Option<u64>
+pub agentkit_core::Promotion::tools: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::Promotion::toolset: alloc::string::String
+pub struct agentkit_core::Promotions
+impl agentkit_core::Promotions
+pub fn agentkit_core::Promotions::fits(&self, usize) -> bool
+pub fn agentkit_core::Promotions::is_promoted_name(&self, &str) -> bool
+pub fn agentkit_core::Promotions::promoted_definitions(&self) -> alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub fn agentkit_core::Promotions::request(&self, &str) -> bool
+pub fn agentkit_core::Promotions::room(&self) -> core::option::Option<usize>
+pub struct agentkit_core::PromptLayout
+impl agentkit_core::PromptLayout
+pub fn agentkit_core::PromptLayout::blocks(&self) -> &[agentkit_core::SystemBlock]
+pub fn agentkit_core::PromptLayout::digest(&self, agentkit_core::Segment) -> alloc::string::String
+pub fn agentkit_core::PromptLayout::from_system(core::option::Option<&str>) -> Self
+pub fn agentkit_core::PromptLayout::joined(&self) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::PromptLayout::new() -> Self
+pub fn agentkit_core::PromptLayout::of(core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>) -> Self
+pub fn agentkit_core::PromptLayout::push(&mut self, agentkit_core::Segment, impl core::convert::Into<alloc::string::String>) -> core::result::Result<(), agentkit_core::LayoutError>
+pub fn agentkit_core::PromptLayout::text(&self, agentkit_core::Segment) -> core::option::Option<&str>
+pub fn agentkit_core::PromptLayout::text_blocks(&self) -> alloc::vec::Vec<serde_json::value::Value>
+pub fn agentkit_core::PromptLayout::to_messages(&self) -> alloc::vec::Vec<agentkit_core::ChatMessage>
+pub struct agentkit_core::PurgeReport
+pub agentkit_core::PurgeReport::bytes: u64
+pub agentkit_core::PurgeReport::outputs: u64
+pub struct agentkit_core::Recommendation
+pub agentkit_core::Recommendation::promote: core::option::Option<alloc::string::String>
+pub agentkit_core::Recommendation::top: alloc::vec::Vec<agentkit_core::Scored>
+impl agentkit_core::Recommendation
+pub fn agentkit_core::Recommendation::append_to(&self, &mut alloc::string::String)
+pub fn agentkit_core::Recommendation::line(&self) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::Recommendation::request_promotion(&self, &agentkit_core::Promotions) -> bool
+pub struct agentkit_core::Recommender
+impl agentkit_core::Recommender
+pub fn agentkit_core::Recommender::new(alloc::vec::Vec<agentkit_core::ToolsetDoc>) -> Self
+pub fn agentkit_core::Recommender::rank(&self, &str) -> alloc::vec::Vec<agentkit_core::Scored>
+pub fn agentkit_core::Recommender::recommend(&self, &str, &[alloc::string::String]) -> agentkit_core::Recommendation
+pub fn agentkit_core::Recommender::with_options(self, agentkit_core::RecommenderOptions) -> Self
+pub fn agentkit_core::Recommender::with_scorer(self, alloc::rcs::arc::Arc<dyn agentkit_core::ToolsetScorer>, f64) -> Self
+pub fn agentkit_core::Recommender::with_usage(self, alloc::rcs::arc::Arc<dyn agentkit_core::UsageStore>, &str) -> Self
+pub struct agentkit_core::RecommenderOptions
+pub agentkit_core::RecommenderOptions::min_score: f64
+pub agentkit_core::RecommenderOptions::promote_min_score: f64
+pub agentkit_core::RecommenderOptions::promote_top: bool
+pub agentkit_core::RecommenderOptions::top_k: usize
+impl core::default::Default for agentkit_core::RecommenderOptions
+pub fn agentkit_core::RecommenderOptions::default() -> Self
+pub struct agentkit_core::RecordIdentity
+pub agentkit_core::RecordIdentity::lane: core::option::Option<alloc::string::String>
+pub agentkit_core::RecordIdentity::profile: core::option::Option<alloc::string::String>
+pub agentkit_core::RecordIdentity::provider: core::option::Option<alloc::string::String>
 pub struct agentkit_core::RegistryError
 pub agentkit_core::RegistryError::code: &'static str
 pub agentkit_core::RegistryError::message: alloc::string::String
 pub agentkit_core::RegistryError::tool_name: alloc::string::String
+pub struct agentkit_core::RequestSettings
+pub agentkit_core::RequestSettings::fields: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub agentkit_core::RequestSettings::notes: alloc::vec::Vec<agentkit_core::ProfileNote>
+pub agentkit_core::RequestSettings::thinking: bool
+pub agentkit_core::RequestSettings::tool_choice: core::option::Option<serde_json::value::Value>
 pub struct agentkit_core::RetryPolicy
 pub agentkit_core::RetryPolicy::base_delay_ms: f64
 pub agentkit_core::RetryPolicy::max_attempts: u32
@@ -177,11 +562,13 @@ pub agentkit_core::RetryProvider::provider: alloc::rcs::arc::Arc<dyn agentkit_co
 impl agentkit_core::ChatProvider for agentkit_core::RetryProvider
 pub fn agentkit_core::RetryProvider::allows_implicit_output_limit(&self) -> bool
 pub fn agentkit_core::RetryProvider::apply_request_defaults(&self, &mut agentkit_core::ChatRequest)
+pub fn agentkit_core::RetryProvider::cache_capability(&self) -> agentkit_core::CacheCapability
 pub fn agentkit_core::RetryProvider::connection_identity(&self) -> core::option::Option<agentkit_core::ConnectionIdentity>
 pub fn agentkit_core::RetryProvider::id(&self) -> &str
 pub fn agentkit_core::RetryProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_core::RetryProvider::stream_chat(&self, agentkit_core::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::ProviderStream
 pub fn agentkit_core::RetryProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_core::RetryProvider::tool_lane(&self) -> agentkit_core::ToolLane
 pub fn agentkit_core::RetryProvider::tracks_transport_requests(&self) -> bool
 pub struct agentkit_core::RunHandle
 pub agentkit_core::RunHandle::events: tokio_stream::wrappers::mpsc_bounded::ReceiverStream<agentkit_contracts::dto::ai_run_event::AiRunEvent>
@@ -203,6 +590,8 @@ pub agentkit_core::RunOptions::interruption: core::option::Option<tokio_util::sy
 pub agentkit_core::RunOptions::limits: agentkit_core::ToolLimits
 pub agentkit_core::RunOptions::max_tool_calls_per_iteration: usize
 pub agentkit_core::RunOptions::max_tool_iterations: u32
+pub agentkit_core::RunOptions::output: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::OutputGate>>
+pub agentkit_core::RunOptions::record_identity: agentkit_core::RecordIdentity
 pub agentkit_core::RunOptions::request: agentkit_core::ChatRequest
 pub agentkit_core::RunOptions::resume_calls: alloc::vec::Vec<agentkit_core::ToolCall>
 pub agentkit_core::RunOptions::run_id: core::option::Option<alloc::string::String>
@@ -223,16 +612,39 @@ pub agentkit_core::RunResult::iterations: u32
 pub agentkit_core::RunResult::run_id: alloc::string::String
 pub agentkit_core::RunResult::suspended: bool
 pub agentkit_core::RunResult::terminal: agentkit_core::Terminal
+pub struct agentkit_core::Salvage
+pub agentkit_core::Salvage::calls: alloc::vec::Vec<agentkit_core::SalvagedCall>
+pub agentkit_core::Salvage::text: alloc::string::String
+pub struct agentkit_core::SalvagedCall
+pub agentkit_core::SalvagedCall::arguments: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub agentkit_core::SalvagedCall::name: alloc::string::String
+pub struct agentkit_core::Scored
+pub agentkit_core::Scored::score: f64
+pub agentkit_core::Scored::toolset: alloc::string::String
+pub struct agentkit_core::Split
+pub agentkit_core::Split::deferred: alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub agentkit_core::Split::demoted: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::Split::direct: alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub agentkit_core::Split::meta: alloc::vec::Vec<agentkit_core::ToolDefinition>
 pub struct agentkit_core::SteeringItem
 pub agentkit_core::SteeringItem::input_id: alloc::string::String
 pub agentkit_core::SteeringItem::message: agentkit_core::ChatMessage
 pub struct agentkit_core::SuspendSlot
 impl agentkit_core::SuspendSlot
 pub fn agentkit_core::SuspendSlot::set(&self, agentkit_core::HumanRequestSpec)
+pub struct agentkit_core::SystemBlock
+pub agentkit_core::SystemBlock::segment: agentkit_core::Segment
+pub agentkit_core::SystemBlock::text: alloc::string::String
 pub struct agentkit_core::ToolCall
 pub agentkit_core::ToolCall::arguments_json: alloc::string::String
 pub agentkit_core::ToolCall::id: alloc::string::String
 pub agentkit_core::ToolCall::name: alloc::string::String
+pub struct agentkit_core::ToolConstraint
+pub agentkit_core::ToolConstraint::code: alloc::string::String
+pub agentkit_core::ToolConstraint::params: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::ToolConstraint::rule: alloc::string::String
+pub agentkit_core::ToolConstraint::teaching_error: alloc::string::String
+pub agentkit_core::ToolConstraint::violating_example: serde_json::value::Value
 pub struct agentkit_core::ToolContext
 pub agentkit_core::ToolContext::attempt_id: core::option::Option<alloc::string::String>
 pub agentkit_core::ToolContext::bindings: alloc::vec::Vec<serde_json::value::Value>
@@ -253,26 +665,68 @@ pub struct agentkit_core::ToolDefinition
 pub agentkit_core::ToolDefinition::capability: alloc::string::String
 pub agentkit_core::ToolDefinition::description: alloc::string::String
 pub agentkit_core::ToolDefinition::effect: alloc::string::String
+pub agentkit_core::ToolDefinition::examples: alloc::vec::Vec<serde_json::value::Value>
 pub agentkit_core::ToolDefinition::input_schema: serde_json::value::Value
 pub agentkit_core::ToolDefinition::name: alloc::string::String
 pub agentkit_core::ToolDefinition::output_schema: core::option::Option<serde_json::value::Value>
 pub agentkit_core::ToolDefinition::timeout_ms: core::option::Option<u64>
 pub agentkit_core::ToolDefinition::version: alloc::string::String
+pub struct agentkit_core::ToolForm
+pub agentkit_core::ToolForm::canonical: alloc::string::String
+pub agentkit_core::ToolForm::wires: alloc::vec::Vec<agentkit_core::WireTool>
 pub struct agentkit_core::ToolLimits
 pub agentkit_core::ToolLimits::max_bytes: usize
 pub agentkit_core::ToolLimits::max_items: core::option::Option<usize>
 pub agentkit_core::ToolLimits::profile: alloc::string::String
 impl core::default::Default for agentkit_core::ToolLimits
 pub fn agentkit_core::ToolLimits::default() -> Self
+pub struct agentkit_core::ToolManifest
+impl agentkit_core::ToolManifest
+pub fn agentkit_core::ToolManifest::build(&[agentkit_core::ToolDefinition]) -> Self
+pub fn agentkit_core::ToolManifest::contains(&self, &str) -> bool
+pub fn agentkit_core::ToolManifest::definitions(&self) -> &[agentkit_core::ToolDefinition]
+pub fn agentkit_core::ToolManifest::from_prefix(&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> core::option::Option<Self>
+pub fn agentkit_core::ToolManifest::hash(&self) -> &str
 pub struct agentkit_core::ToolRegistry
 impl agentkit_core::ToolRegistry
+pub fn agentkit_core::ToolRegistry::aliases_mut(&mut self) -> &mut agentkit_core::AliasTable
+pub fn agentkit_core::ToolRegistry::canonical_name(&self, &str) -> alloc::string::String
+pub fn agentkit_core::ToolRegistry::catalog(&self) -> core::option::Option<&agentkit_core::Catalog>
+pub async fn agentkit_core::ToolRegistry::commit_promotions(&self) -> core::result::Result<alloc::vec::Vec<agentkit_core::Promotion>, agentkit_core::CoreError>
+pub fn agentkit_core::ToolRegistry::deferred_hints(&self) -> alloc::collections::btree::set::BTreeSet<alloc::string::String>
 pub fn agentkit_core::ToolRegistry::definitions(&self) -> alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub fn agentkit_core::ToolRegistry::dialect(&self) -> core::option::Option<&agentkit_core::Dialect>
+pub fn agentkit_core::ToolRegistry::freeze_catalog(&self, &[agentkit_core::ToolDefinition]) -> bool
+pub fn agentkit_core::ToolRegistry::freeze_presented(&self, alloc::vec::Vec<agentkit_core::ToolDefinition>, alloc::vec::Vec<alloc::string::String>, agentkit_core::Dialect) -> bool
+pub fn agentkit_core::ToolRegistry::freeze_surface(&self, alloc::vec::Vec<agentkit_core::ToolDefinition>, alloc::vec::Vec<alloc::string::String>) -> bool
 pub fn agentkit_core::ToolRegistry::get(&self, &str) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::Tool>>
+pub fn agentkit_core::ToolRegistry::install_meta_tools(&mut self) -> core::result::Result<(), agentkit_core::RegistryError>
+pub fn agentkit_core::ToolRegistry::install_meta_tools_with(&mut self, agentkit_core::LoadMode) -> core::result::Result<(), agentkit_core::RegistryError>
 pub fn agentkit_core::ToolRegistry::is_empty(&self) -> bool
+pub fn agentkit_core::ToolRegistry::legacy_names(&self) -> alloc::vec::Vec<agentkit_core::LegacyName>
 pub fn agentkit_core::ToolRegistry::len(&self) -> usize
+pub fn agentkit_core::ToolRegistry::meta_active(&self) -> bool
+pub fn agentkit_core::ToolRegistry::names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agentkit_core::ToolRegistry::new() -> Self
+pub fn agentkit_core::ToolRegistry::normalise(&self, &str, serde_json::value::Value) -> agentkit_core::Normalised
+pub fn agentkit_core::ToolRegistry::present_name(&self, &str) -> alloc::string::String
+pub fn agentkit_core::ToolRegistry::presented_names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agentkit_core::ToolRegistry::register(&mut self, alloc::rcs::arc::Arc<dyn agentkit_core::Tool>) -> core::result::Result<(), agentkit_core::RegistryError>
+pub fn agentkit_core::ToolRegistry::register_legacy_name(&mut self, agentkit_core::LegacyName) -> bool
+pub fn agentkit_core::ToolRegistry::register_toolset(&mut self, agentkit_core::Toolset)
+pub fn agentkit_core::ToolRegistry::set_promotion_observer(&self, alloc::rcs::arc::Arc<dyn agentkit_core::PromotionObserver>) -> bool
+pub fn agentkit_core::ToolRegistry::set_visible_bound(&mut self, core::option::Option<usize>)
+pub fn agentkit_core::ToolRegistry::take_refused_promotions(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<alloc::string::String>)>
+pub fn agentkit_core::ToolRegistry::toolset_of(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::ToolRegistry::toolset_view(&self, &[agentkit_core::ToolDefinition], core::option::Option<&agentkit_core::Dialect>) -> agentkit_core::ToolsetView
+pub fn agentkit_core::ToolRegistry::toolsets(&self) -> alloc::vec::Vec<agentkit_core::Toolset>
+pub fn agentkit_core::ToolRegistry::translate(&self, &str, serde_json::value::Value) -> core::result::Result<agentkit_core::Translated, agentkit_core::DialectError>
 pub fn agentkit_core::ToolRegistry::validate_input(&self, &str, &serde_json::value::Value) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::ToolRegistry::withheld_definitions(&self) -> alloc::vec::Vec<(agentkit_core::ToolDefinition, alloc::string::String)>
+pub fn agentkit_core::ToolRegistry::withhold(&mut self, &str, &str)
+pub fn agentkit_core::ToolRegistry::withhold_tool(&mut self, agentkit_core::ToolDefinition, &str)
+impl agentkit_core::ToolRegistry
+pub fn agentkit_core::ToolRegistry::inherit_metadata(&mut self, &agentkit_core::ToolRegistry, &dyn core::ops::function::Fn(&str) -> bool)
 pub struct agentkit_core::ToolResult
 pub agentkit_core::ToolResult::data: core::option::Option<serde_json::value::Value>
 pub agentkit_core::ToolResult::limits: agentkit_core::ToolLimits
@@ -286,6 +740,52 @@ pub agentkit_core::ToolResult::truncated: bool
 pub agentkit_core::ToolResult::warnings: alloc::vec::Vec<alloc::string::String>
 impl agentkit_core::ToolResult
 pub fn agentkit_core::ToolResult::serialize_data<T: serde_core::ser::Serialize>(&str, &T) -> core::result::Result<serde_json::value::Value, agentkit_core::CoreError>
+pub struct agentkit_core::ToolSurface
+pub agentkit_core::ToolSurface::added: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::ToolSurface::deferred: alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub agentkit_core::ToolSurface::demoted: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::ToolSurface::frozen_now: bool
+pub agentkit_core::ToolSurface::manifest: agentkit_core::ToolManifest
+pub agentkit_core::ToolSurface::unavailable: alloc::vec::Vec<alloc::string::String>
+impl agentkit_core::ToolSurface
+pub fn agentkit_core::ToolSurface::deferred_names(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::ToolSurface::index(&self) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::ToolSurface::index_with(&self, &agentkit_core::ToolsetView) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::ToolSurface::reconcile(core::option::Option<&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix>, &[agentkit_core::ToolDefinition]) -> Self
+pub fn agentkit_core::ToolSurface::reconcile_with(core::option::Option<&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix>, &[agentkit_core::ToolDefinition], core::option::Option<&agentkit_core::Classification>) -> Self
+pub fn agentkit_core::ToolSurface::stamp(&self, &mut agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix)
+pub struct agentkit_core::Toolset
+pub agentkit_core::Toolset::card: alloc::string::String
+pub agentkit_core::Toolset::guide: core::option::Option<agentkit_core::Guide>
+pub agentkit_core::Toolset::id: alloc::string::String
+pub agentkit_core::Toolset::title: alloc::string::String
+pub agentkit_core::Toolset::tools: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::Toolset::topics: alloc::vec::Vec<(alloc::string::String, agentkit_core::Guide)>
+impl agentkit_core::Toolset
+pub fn agentkit_core::Toolset::new(&str, &str, &str) -> Self
+pub fn agentkit_core::Toolset::topic(&self, &str) -> core::option::Option<&agentkit_core::Guide>
+pub fn agentkit_core::Toolset::with_guide(self, &str) -> Self
+pub fn agentkit_core::Toolset::with_tools(self, &[&str]) -> Self
+pub fn agentkit_core::Toolset::with_topic(self, &str, &str) -> Self
+pub struct agentkit_core::ToolsetDoc
+pub agentkit_core::ToolsetDoc::card: alloc::string::String
+pub agentkit_core::ToolsetDoc::guide: alloc::string::String
+pub agentkit_core::ToolsetDoc::id: alloc::string::String
+pub agentkit_core::ToolsetDoc::keywords: alloc::vec::Vec<alloc::string::String>
+pub agentkit_core::ToolsetDoc::title: alloc::string::String
+pub agentkit_core::ToolsetDoc::tools: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+impl agentkit_core::ToolsetDoc
+pub fn agentkit_core::ToolsetDoc::with_keywords(self, &[&str]) -> Self
+pub struct agentkit_core::ToolsetView
+impl agentkit_core::ToolsetView
+pub fn agentkit_core::ToolsetView::id_of(&self, &agentkit_core::ToolDefinition) -> alloc::string::String
+pub fn agentkit_core::ToolsetView::new(alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_core::Toolset>, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn agentkit_core::ToolsetView::toolset(&self, &str) -> core::option::Option<&agentkit_core::Toolset>
+pub fn agentkit_core::ToolsetView::toolsets(&self) -> impl core::iter::traits::iterator::Iterator<Item = &agentkit_core::Toolset>
+pub struct agentkit_core::Translated
+pub agentkit_core::Translated::args: serde_json::value::Value
+pub agentkit_core::Translated::args_changed: bool
+pub agentkit_core::Translated::name: alloc::string::String
 pub struct agentkit_core::UsageRecord
 pub agentkit_core::UsageRecord::cache_read: core::option::Option<u64>
 pub agentkit_core::UsageRecord::cache_write_long: core::option::Option<u64>
@@ -294,32 +794,106 @@ pub agentkit_core::UsageRecord::input_uncached: core::option::Option<u64>
 pub agentkit_core::UsageRecord::output: core::option::Option<u64>
 pub agentkit_core::UsageRecord::provider_raw: serde_json::value::Value
 pub agentkit_core::UsageRecord::reasoning: core::option::Option<u64>
+pub struct agentkit_core::UsageScorer
+impl agentkit_core::UsageScorer
+pub fn agentkit_core::UsageScorer::new(alloc::rcs::arc::Arc<dyn agentkit_core::UsageStore>, &str) -> Self
+impl agentkit_core::ToolsetScorer for agentkit_core::UsageScorer
+pub fn agentkit_core::UsageScorer::role(&self) -> agentkit_core::ScoreRole
+pub fn agentkit_core::UsageScorer::score(&self, &str, &[agentkit_core::ToolsetDoc]) -> alloc::vec::Vec<f64>
+pub struct agentkit_core::WireTool
+pub agentkit_core::WireTool::description: core::option::Option<alloc::string::String>
+pub agentkit_core::WireTool::fixed: alloc::vec::Vec<(alloc::string::String, serde_json::value::Value)>
+pub agentkit_core::WireTool::name: alloc::string::String
+pub agentkit_core::WireTool::params: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub const agentkit_core::ANTHROPIC_BASH_NAME: &str
+pub const agentkit_core::ANTHROPIC_BASH_TYPE: &str
+pub const agentkit_core::ANTHROPIC_DIALECT_ID: &str
+pub const agentkit_core::ANTHROPIC_PROFILE_ID: &str
+pub const agentkit_core::ANTHROPIC_TEXT_EDITOR_NAME: &str
+pub const agentkit_core::ANTHROPIC_TEXT_EDITOR_TYPE: &str
+pub const agentkit_core::BODY_EXTRA_ALLOW_LIST: [&str; 2]
+pub const agentkit_core::BUILTIN_TOOL_KEY: &str
+pub const agentkit_core::COMMON_DIALECT_ID: &str
+pub const agentkit_core::COMMON_DIALECT_VERSION: &str
+pub const agentkit_core::DEFAULT_INLINE_LIMIT: usize
+pub const agentkit_core::GENERIC_PROFILE_ID: &str
+pub const agentkit_core::MAX_STORED_BYTES: usize
+pub const agentkit_core::META_TOOLS: [&str; 4]
+pub const agentkit_core::META_TOOLSET: &str
+pub const agentkit_core::MIN_OUTPUT_INLINE_LIMIT: usize
+pub const agentkit_core::OPENAI_CHAT_DIALECT_ID: &str
+pub const agentkit_core::OPENAI_DIALECT_ID: &str
+pub const agentkit_core::OPENAI_PATCH_NAME: &str
+pub const agentkit_core::OPENAI_PROFILE_ID: &str
+pub const agentkit_core::OPENAI_SHELL_NAME: &str
+pub const agentkit_core::OUTPUT_INLINE_LIMIT_METADATA_KEY: &str
+pub const agentkit_core::OUTPUT_RETENTION_MS: i64
+pub const agentkit_core::OUTPUT_STORE_METADATA_KEY: &str
+pub const agentkit_core::QWEN_EFFORT_TEMPLATE_KEY: &str
+pub const agentkit_core::QWEN_PROFILE_ID: &str
+pub const agentkit_core::READ_OUTPUT: &str
+pub const agentkit_core::REASONING_HISTORY_FIELD: &str
+pub const agentkit_core::REASONING_METADATA_KEY: &str
+pub const agentkit_core::RECOMMENDER_TOP_K: usize
+pub const agentkit_core::SEARCH_OUTPUT: &str
+pub const agentkit_core::SEGMENT_METADATA_KEY: &str
+pub const agentkit_core::THINKING_TEMPLATE_KEY: &str
+pub const agentkit_core::TOOLSET_LOAD: &str
+pub const agentkit_core::TOOL_CALL: &str
+pub const agentkit_core::TOOL_DESCRIBE: &str
+pub const agentkit_core::TOOL_RESPONSE_CLOSE: &str
+pub const agentkit_core::TOOL_RESPONSE_OPEN: &str
 pub const agentkit_core::TOOL_RESULT_MISSING_CODE: &str
+pub const agentkit_core::TOOL_SEARCH: &str
+pub const agentkit_core::TOP_TWO_HIT_RATE_THRESHOLD: f64
+pub const agentkit_core::TURN_CONTEXT_CLOSE: &str
+pub const agentkit_core::TURN_CONTEXT_OPEN: &str
+pub const agentkit_core::TURN_CONTEXT_PART_TYPE: &str
+pub const agentkit_core::UNNAMED_TOOL: &str
+pub const agentkit_core::WIRE_CALLS_METADATA_KEY: &str
 pub trait agentkit_core::BudgetCheckpoint: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::BudgetCheckpoint::checkpoint<'life0, 'async_trait>(&'life0 self, agentkit_core::BudgetSnapshot) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_core::CacheStrategy
+pub fn agentkit_core::CacheStrategy::plan(&self, &agentkit_core::PromptLayout, &agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> agentkit_core::CacheDirectives
+pub fn agentkit_core::CacheStrategy::plan_request(&self, &agentkit_core::CacheRequest<'_>) -> agentkit_core::CacheDirectives
+impl agentkit_core::CacheStrategy for agentkit_core::CacheCapability
+pub fn agentkit_core::CacheCapability::plan(&self, &agentkit_core::PromptLayout, &agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> agentkit_core::CacheDirectives
+pub fn agentkit_core::CacheCapability::plan_request(&self, &agentkit_core::CacheRequest<'_>) -> agentkit_core::CacheDirectives
 pub trait agentkit_core::ChatProvider: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::ChatProvider::allows_implicit_output_limit(&self) -> bool
 pub fn agentkit_core::ChatProvider::apply_request_defaults(&self, &mut agentkit_core::ChatRequest)
+pub fn agentkit_core::ChatProvider::cache_capability(&self) -> agentkit_core::CacheCapability
 pub fn agentkit_core::ChatProvider::connection_identity(&self) -> core::option::Option<agentkit_core::ConnectionIdentity>
 pub fn agentkit_core::ChatProvider::id(&self) -> &str
 pub fn agentkit_core::ChatProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_core::ChatProvider::stream_chat(&self, agentkit_core::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::ProviderStream
 pub fn agentkit_core::ChatProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_core::ChatProvider::tool_lane(&self) -> agentkit_core::ToolLane
 pub fn agentkit_core::ChatProvider::tracks_transport_requests(&self) -> bool
 impl agentkit_core::ChatProvider for agentkit_core::RetryProvider
 pub fn agentkit_core::RetryProvider::allows_implicit_output_limit(&self) -> bool
 pub fn agentkit_core::RetryProvider::apply_request_defaults(&self, &mut agentkit_core::ChatRequest)
+pub fn agentkit_core::RetryProvider::cache_capability(&self) -> agentkit_core::CacheCapability
 pub fn agentkit_core::RetryProvider::connection_identity(&self) -> core::option::Option<agentkit_core::ConnectionIdentity>
 pub fn agentkit_core::RetryProvider::id(&self) -> &str
 pub fn agentkit_core::RetryProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_core::RetryProvider::stream_chat(&self, agentkit_core::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::ProviderStream
 pub fn agentkit_core::RetryProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_core::RetryProvider::tool_lane(&self) -> agentkit_core::ToolLane
 pub fn agentkit_core::RetryProvider::tracks_transport_requests(&self) -> bool
 pub trait agentkit_core::ContinuationStore: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::ContinuationStore::save<'life0, 'async_trait>(&'life0 self, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait agentkit_core::DispatchGuard: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn agentkit_core::DispatchGuard::check<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_core::DispatchGuard::fence(&self) -> agentkit_core::DispatchFence
+pub trait agentkit_core::OutputStore: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::OutputStore::info<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_core::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::OutputInfo, agentkit_core::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_core::OutputStore::purge_session<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::PurgeReport, agentkit_core::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_core::OutputStore::put<'life0, 'async_trait>(&'life0 self, agentkit_core::OutputMeta, alloc::vec::Vec<u8>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::OutputHandle, agentkit_core::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::OutputStore::read<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_core::OutputHandle, agentkit_core::ByteOrLineRange) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::OutputSlice, agentkit_core::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_core::OutputStore::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::OutputHandle, &'life2 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::Match>, agentkit_core::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agentkit_core::PromotionObserver: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::PromotionObserver::promoted<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [agentkit_core::ToolDefinition]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<u64>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_core::RetryHooks: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::RetryHooks::random<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<f64, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_core::RetryHooks::sleep<'life0, 'life1, 'async_trait>(&'life0 self, u64, &'life1 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -331,18 +905,113 @@ pub fn agentkit_core::RunEventSink::append_messages<'life0, 'life1, 'life2, 'asy
 pub trait agentkit_core::RunHooks: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::RunHooks::call<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, usize, serde_json::value::Value, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<serde_json::value::Value, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_core::RunHooks::indexes(&self, &str) -> alloc::vec::Vec<usize>
+pub trait agentkit_core::SessionTree: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::SessionTree::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_core::SessionTree for agentkit_core::ExactSession
+pub fn agentkit_core::ExactSession::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_core::SteeringSource: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::SteeringSource::pending<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_core::SteeringItem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_core::SteeringSource::pending_context<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::SteeringItem>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_core::SuspendSink: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::SuspendSink::park<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::HumanRequestSpec, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_core::Tool: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::Tool::arg_aliases(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub fn agentkit_core::Tool::check_constraints(&self, &serde_json::value::Value) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::Tool::constraints(&self) -> alloc::vec::Vec<agentkit_core::ToolConstraint>
 pub fn agentkit_core::Tool::definition(&self) -> &agentkit_core::ToolDefinition
 pub fn agentkit_core::Tool::effect_context(&self) -> core::option::Option<serde_json::value::Value>
 pub fn agentkit_core::Tool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::ToolResult, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_core::Tool::loading(&self) -> agentkit_core::ToolLoading
 pub fn agentkit_core::Tool::record_schema_refusal<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_core::ToolContext, &'life2 serde_json::value::Value, &'life3 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn agentkit_core::Tool::records_command_start(&self) -> bool
+pub fn agentkit_core::Tool::toolset(&self) -> core::option::Option<&str>
+pub trait agentkit_core::ToolsetScorer: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::ToolsetScorer::role(&self) -> agentkit_core::ScoreRole
+pub fn agentkit_core::ToolsetScorer::score(&self, &str, &[agentkit_core::ToolsetDoc]) -> alloc::vec::Vec<f64>
+impl agentkit_core::ToolsetScorer for agentkit_core::LexicalScorer
+pub fn agentkit_core::LexicalScorer::role(&self) -> agentkit_core::ScoreRole
+pub fn agentkit_core::LexicalScorer::score(&self, &str, &[agentkit_core::ToolsetDoc]) -> alloc::vec::Vec<f64>
+impl agentkit_core::ToolsetScorer for agentkit_core::UsageScorer
+pub fn agentkit_core::UsageScorer::role(&self) -> agentkit_core::ScoreRole
+pub fn agentkit_core::UsageScorer::score(&self, &str, &[agentkit_core::ToolsetDoc]) -> alloc::vec::Vec<f64>
+pub trait agentkit_core::UsageStore: core::marker::Send + core::marker::Sync
+pub fn agentkit_core::UsageStore::counts(&self, &str) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, u64>
+pub fn agentkit_core::UsageStore::record_ok(&self, &str, &str)
+impl agentkit_core::UsageStore for agentkit_core::InMemoryUsage
+pub fn agentkit_core::InMemoryUsage::counts(&self, &str) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, u64>
+pub fn agentkit_core::InMemoryUsage::record_ok(&self, &str, &str)
+pub fn agentkit_core::anthropic_dialect() -> agentkit_core::Dialect
+pub fn agentkit_core::apply_message_rules(alloc::vec::Vec<agentkit_core::ChatMessage>, &agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> (alloc::vec::Vec<agentkit_core::ChatMessage>, alloc::vec::Vec<agentkit_core::ProfileNote>)
+pub fn agentkit_core::builtin_profile(&str) -> core::option::Option<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>
+pub fn agentkit_core::builtin_tool_type(&agentkit_core::ToolDefinition) -> core::option::Option<&str>
+pub fn agentkit_core::cache_key(&str, &str, u64) -> alloc::string::String
+pub fn agentkit_core::catalog_index(&[agentkit_core::ToolDefinition]) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::closest_names(&str, &[alloc::string::String], usize) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::common_dialect() -> agentkit_core::Dialect
+pub fn agentkit_core::content_for_wire(&serde_json::value::Value) -> serde_json::value::Value
+pub fn agentkit_core::count_lines(&[u8]) -> u64
 pub fn agentkit_core::dedupe_tool_call_ids(&mut [agentkit_core::ToolCall]) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::docs_from_view(&agentkit_core::ToolsetView, &[agentkit_core::ToolDefinition]) -> alloc::vec::Vec<agentkit_core::ToolsetDoc>
+pub fn agentkit_core::drop_null_arguments(&mut serde_json::value::Value, &serde_json::value::Value) -> bool
+pub fn agentkit_core::escape_tool_response_tags(&str) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::escape_turn_context(&str) -> alloc::string::String
+pub fn agentkit_core::fold_selected_content(&[agentkit_core::ChatMessage], &[agentkit_core::ChatMessage]) -> alloc::vec::Vec<agentkit_core::ChatMessage>
+pub fn agentkit_core::freeze(core::option::Option<&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix>, agentkit_core::PrefixDigests, &str, &str, &str) -> agentkit_core::Freeze
+pub fn agentkit_core::frozen_profile(core::option::Option<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>, impl core::ops::function::FnOnce() -> core::result::Result<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, agentkit_core::ProfileError>) -> core::result::Result<(agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, bool), agentkit_core::ProfileError>
+pub fn agentkit_core::guide_placeholders(&str) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::is_bag_key(&str) -> bool
+pub fn agentkit_core::is_meta_tool(&str) -> bool
+pub fn agentkit_core::is_sensitive_key(&str) -> bool
+pub fn agentkit_core::is_strict_compliant(&serde_json::value::Value) -> bool
+pub fn agentkit_core::is_turn_context_text(&str) -> bool
+pub fn agentkit_core::lookup_dialect(&str, &str) -> core::option::Option<agentkit_core::Dialect>
+pub fn agentkit_core::manifest_hash(&[agentkit_core::ToolDefinition]) -> alloc::string::String
+pub fn agentkit_core::meta_definitions() -> alloc::vec::Vec<agentkit_core::ToolDefinition>
+pub fn agentkit_core::meta_toolset() -> agentkit_core::Toolset
+pub fn agentkit_core::model_profile_digest(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> alloc::string::String
+pub fn agentkit_core::namespace_of(&agentkit_core::ToolDefinition) -> alloc::string::String
+pub fn agentkit_core::normalise(&agentkit_core::AliasTable, &str, &serde_json::value::Value, serde_json::value::Value) -> agentkit_core::Normalised
+pub fn agentkit_core::nudge_after_announced_call(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, &str) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::openai_chat_dialect() -> agentkit_core::Dialect
+pub fn agentkit_core::openai_dialect() -> agentkit_core::Dialect
+pub fn agentkit_core::output_tools(alloc::rcs::arc::Arc<dyn agentkit_core::OutputStore>, alloc::rcs::arc::Arc<dyn agentkit_core::SessionTree>) -> alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::Tool>>
+pub fn agentkit_core::plan_breakpoints(&agentkit_core::CacheCapability, &agentkit_core::BreakpointShape, agentkit_core::CacheTtl) -> alloc::vec::Vec<agentkit_core::Breakpoint>
+pub fn agentkit_core::policy_tool_choice(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, &agentkit_core::ToolChoice) -> (agentkit_core::ToolChoice, alloc::vec::Vec<agentkit_core::ProfileNote>)
+pub fn agentkit_core::present_history(&agentkit_core::Dialect, alloc::vec::Vec<agentkit_core::ChatMessage>) -> alloc::vec::Vec<agentkit_core::ChatMessage>
+pub fn agentkit_core::presented_description(&agentkit_core::ToolDefinition, agentkit_core::ExampleLane) -> alloc::string::String
+pub fn agentkit_core::read_output_definition() -> agentkit_core::ToolDefinition
+pub fn agentkit_core::record_usage(&dyn agentkit_core::UsageStore, &str, &agentkit_contracts::dto::ai_run_tool_record_event::AiRunToolRecordEventData) -> bool
+pub fn agentkit_core::redact_value(&mut serde_json::value::Value)
+pub fn agentkit_core::render_dialect_text(core::option::Option<&agentkit_core::Dialect>, &str) -> alloc::string::String
+pub fn agentkit_core::render_examples(&agentkit_core::ToolDefinition, agentkit_core::ExampleLane) -> agentkit_core::RenderedExamples
+pub fn agentkit_core::render_guide(&str, &alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> alloc::string::String
+pub fn agentkit_core::render_preview(&str, &agentkit_core::OutputHandle, bool, usize, core::option::Option<usize>) -> alloc::string::String
+pub fn agentkit_core::resolve_profile(&agentkit_core::ProfileQuery<'_>) -> core::result::Result<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, agentkit_core::ProfileError>
+pub fn agentkit_core::resolve_request_settings(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, core::option::Option<agentkit_core::ReasoningEffort>, bool, core::option::Option<f64>, bool, &agentkit_core::ToolChoice) -> agentkit_core::RequestSettings
+pub fn agentkit_core::restore_wire_calls(alloc::vec::Vec<agentkit_core::ChatMessage>) -> alloc::vec::Vec<agentkit_core::ChatMessage>
 pub fn agentkit_core::run_chat(agentkit_core::RunOptions, alloc::rcs::arc::Arc<dyn agentkit_core::ChatProvider>, alloc::rcs::arc::Arc<agentkit_core::ToolRegistry>) -> agentkit_core::RunHandle
+pub fn agentkit_core::salvage_tool_calls(&str) -> core::option::Option<agentkit_core::Salvage>
+pub fn agentkit_core::search_bytes(&[u8], &str, u32) -> core::result::Result<alloc::vec::Vec<agentkit_core::Match>, agentkit_core::OutputError>
+pub fn agentkit_core::search_output_definition() -> agentkit_core::ToolDefinition
+pub fn agentkit_core::segment_of(&agentkit_core::ChatMessage) -> core::option::Option<agentkit_core::Segment>
+pub fn agentkit_core::session_dialect(core::option::Option<&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix>, core::option::Option<&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>, agentkit_core::ToolLane) -> core::option::Option<agentkit_core::Dialect>
+pub fn agentkit_core::slice_bytes(&[u8], agentkit_core::ByteOrLineRange) -> agentkit_core::OutputSlice
+pub fn agentkit_core::stamp_model_profile(&mut agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix, &agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> bool
+pub fn agentkit_core::strict_dialect(&str) -> bool
+pub fn agentkit_core::strict_schema(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_core::tokenize_request(&str) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_core::tool_call_definition() -> agentkit_core::ToolDefinition
+pub fn agentkit_core::tool_describe_definition() -> agentkit_core::ToolDefinition
 pub fn agentkit_core::tool_model_envelope(&agentkit_core::ToolResult, &agentkit_core::ToolLimits) -> alloc::string::String
+pub fn agentkit_core::tool_search_definition() -> agentkit_core::ToolDefinition
+pub fn agentkit_core::tools_digest(&[agentkit_core::ToolDefinition]) -> alloc::string::String
+pub fn agentkit_core::toolset_index(&[agentkit_core::ToolDefinition], &[agentkit_core::ToolDefinition], &agentkit_core::ToolsetView) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::toolset_load_definition() -> agentkit_core::ToolDefinition
+pub fn agentkit_core::turn_context_part(&str) -> serde_json::value::Value
+pub fn agentkit_core::unwrap_tool_call(&agentkit_core::ToolCall) -> core::option::Option<agentkit_core::ToolCall>
+pub fn agentkit_core::validate_profile(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> core::result::Result<(), agentkit_core::ProfileError>
+pub fn agentkit_core::validate_profile_json(&serde_json::value::Value) -> core::result::Result<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, agentkit_core::ProfileError>
+pub fn agentkit_core::wire_tool_choice(&agentkit_core::ToolChoice) -> serde_json::value::Value
+pub type agentkit_core::CatalogCell = alloc::rcs::arc::Arc<std::sync::once_lock::OnceLock<agentkit_core::Catalog>>
+pub type agentkit_core::PromotionCell = alloc::rcs::arc::Arc<agentkit_core::Promotions>
 pub type agentkit_core::ProviderStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<agentkit_core::ProviderEvent, agentkit_core::CoreError>> + core::marker::Send)>>

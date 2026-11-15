@@ -446,6 +446,25 @@ type: TLiteral<"run.context.admitted">;
 }>;
 
 // @public (undocumented)
+type AiRunContextCacheBreakEvent = Static<typeof AiRunContextCacheBreakEventSchema>;
+
+// @public
+const AiRunContextCacheBreakEventSchema: TObject<    {
+data: TObject<    {
+reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">]>;
+tokens_before: TOptional<TInteger>;
+tokens_after: TOptional<TInteger>;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"context.cache_break">;
+}>;
+
+// @public (undocumented)
 type AiRunContextCompactedEvent = Static<typeof AiRunContextCompactedEventSchema>;
 
 // @public
@@ -467,7 +486,7 @@ type: TLiteral<"run.context.compacted">;
 }>;
 
 // @public
-type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolPreparingEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunVerificationEvent | AiRunProgressEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
+type AiRunEvent = AiRunStartedEvent | AiRunMessageDeltaEvent | AiRunMessageReasoningDeltaEvent | AiRunMessageCompletedEvent | AiRunToolPreparingEvent | AiRunToolRequestedEvent | AiRunToolRunningEvent | AiRunToolSucceededEvent | AiRunToolFailedEvent | AiRunToolRecordEvent | AiRunWarningEvent | AiRunUsageEvent | AiRunContextCompactedEvent | AiRunContextAdmittedEvent | AiRunContextCacheBreakEvent | AiRunVerificationEvent | AiRunProgressEvent | AiRunInputAppliedEvent | AiRunWaitingEvent | AiRunCompletedEvent | AiRunFailedEvent | AiRunCancelledEvent;
 
 // @public (undocumented)
 type AiRunFailedEvent = Static<typeof AiRunFailedEventSchema>;
@@ -652,6 +671,42 @@ type: TLiteral<"run.tool.preparing">;
 }>;
 
 // @public (undocumented)
+type AiRunToolRecordEvent = Static<typeof AiRunToolRecordEventSchema>;
+
+// @public (undocumented)
+const AiRunToolRecordEventSchema: TObject<    {
+data: TObject<    {
+toolCallId: TString;
+toolName: TString;
+canonicalTool: TOptional<TString>;
+step: TNumber;
+model: TString;
+provider: TOptional<TString>;
+lane: TOptional<TString>;
+dialect: TOptional<TString>;
+dialectVersion: TOptional<TString>;
+profile: TOptional<TString>;
+toolset: TOptional<TString>;
+outcomeClass: TUnion<[TLiteral<"ok">, TLiteral<"ok_after_repair">, TLiteral<"unknown_tool">, TLiteral<"invalid_json">, TLiteral<"invalid_structure">, TLiteral<"invalid_value">, TLiteral<"precondition">, TLiteral<"guard_refused">, TLiteral<"approval_denied">, TLiteral<"tool_error">, TLiteral<"timeout">, TLiteral<"repeat_identical">, TLiteral<"announced_no_call">]>;
+failureCode: TOptional<TString>;
+aliasesUsed: TArray<TString>;
+valuesConverted: TNumber;
+salvaged: TBoolean;
+repairAttempt: TNumber;
+durationMs: TNumber;
+argumentBytes: TNumber;
+resultBytes: TNumber;
+}>;
+runId: TString;
+timestamp: TString;
+contractVersion: TString;
+eventId: TString;
+seq: TNumber;
+attemptId: TOptional<TString>;
+type: TLiteral<"run.tool.record">;
+}>;
+
+// @public (undocumented)
 type AiRunToolRequestedEvent = Static<typeof AiRunToolRequestedEventSchema>;
 
 // @public (undocumented)
@@ -807,7 +862,7 @@ type: TLiteral<"run.waiting">;
 }>;
 
 // @public
-type AiRunWarningCode = "tool_call_cap" | "tool_call_unparseable" | "truncated" | "max_iterations" | "sse_parse" | "multimodal_flattened" | "attachment_unresolved" | "attachment_budget_exceeded" | "stream_incomplete" | "result_unserializable" | "duplicate_tool_call_id" | "tool_late_result" | "retry_pass" | "hook_timeout" | "hook_failed" | "empty_response" | "emulated_tool_call" | "context_budget_fallback" | "context_trimmed" | "compaction_failed" | "skill_unavailable" | "project_instructions_unavailable";
+type AiRunWarningCode = "tool_call_cap" | "tool_call_unparseable" | "truncated" | "max_iterations" | "sse_parse" | "multimodal_flattened" | "attachment_unresolved" | "attachment_budget_exceeded" | "stream_incomplete" | "result_unserializable" | "duplicate_tool_call_id" | "tool_late_result" | "retry_pass" | "hook_timeout" | "hook_failed" | "empty_response" | "emulated_tool_call" | "context_budget_fallback" | "context_trimmed" | "compaction_failed" | "skill_unavailable" | "project_instructions_unavailable" | "tool_schema_unsupported" | "tool_less_retry" | "tool_choice_downgraded" | "reasoning_effort_unmapped" | "reasoning_effort_dropped" | "image_position_dropped" | "system_message_moved" | "system_moved_to_user" | "no_user_message" | "tool_result_tags_escaped" | "history_arguments_sanitized" | "tool_call_salvaged" | "tool_call_repaired" | "toolset_promoted" | "tool_deferred" | "tool_unavailable" | "tool_name_collision" | "prefix_refrozen";
 
 // @public
 type AiRunWarningEvent = Omit<Static<typeof AiRunWarningEventSchema>, "data"> & {
@@ -875,6 +930,7 @@ description: TString;
 inputSchema: TUnsafe<AiJsonSchemaObject>;
 outputSchema: TOptional<TUnsafe<AiJsonSchemaObject>>;
 timeoutMs: TOptional<TNumber>;
+examples: TOptional<TArray<TRecord<TString, TUnknown>>>;
 }>;
 
 // @public

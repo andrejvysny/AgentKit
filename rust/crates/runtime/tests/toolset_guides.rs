@@ -62,7 +62,10 @@ fn a_card_is_one_short_line_and_a_guide_is_versioned_and_small() {
             "{}: card",
             set.id
         );
-        let guide = set.guide.as_ref().unwrap_or_else(|| panic!("{} has a guide", set.id));
+        let guide = set
+            .guide
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has a guide", set.id));
         assert!(!guide.version.is_empty(), "{}: version", set.id);
         assert!(
             guide.estimated_tokens() <= 600,
@@ -100,7 +103,11 @@ fn guides_name_only_known_tools_and_render_the_dialect_names() {
     for set in all_toolsets() {
         let guide = set.guide.expect("guide");
         for id in guide_placeholders(&guide.text) {
-            assert!(known.contains(&id), "{}: placeholder {id} is not a tool", set.id);
+            assert!(
+                known.contains(&id),
+                "{}: placeholder {id} is not a tool",
+                set.id
+            );
         }
         let text = render_guide(&guide.text, &shown);
         assert!(!text.contains("{{"), "{}: placeholder left", set.id);

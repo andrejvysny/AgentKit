@@ -12,6 +12,9 @@ pub fn agentkit_testkit::cache_provider::WireObserver::observe(&self, &[u8])
 pub fn agentkit_testkit::cache_provider::WireObserver::snapshot(&self) -> alloc::vec::Vec<alloc::vec::Vec<u8>>
 pub fn agentkit_testkit::cache_provider::mock_request_bytes(&agentkit_core::types::ChatRequest) -> alloc::vec::Vec<u8>
 pub mod agentkit_testkit::conformance
+pub mod agentkit_testkit::conformance::embedder
+pub const agentkit_testkit::conformance::embedder::CASES: &[&str]
+pub async fn agentkit_testkit::conformance::embedder::run<T, F, Fut>(F) where T: agentkit_memory::ports::Embedder + 'static, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
 pub mod agentkit_testkit::conformance::mcp_repository
 pub const agentkit_testkit::conformance::mcp_repository::CASES: &[&str]
 pub const agentkit_testkit::conformance::mcp_repository::CONFIG_KEY: &str
@@ -31,6 +34,9 @@ pub fn agentkit_testkit::InMemoryMcpConfigFixture::new_repo(&self) -> Self::Repo
 pub fn agentkit_testkit::InMemoryMcpConfigFixture::put_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_testkit::InMemoryMcpConfigFixture::repo(&self) -> &Self::Repo
 pub async fn agentkit_testkit::conformance::mcp_repository::run<T, F, Fut>(F) where T: agentkit_testkit::conformance::mcp_repository::McpRepositoryFixture, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
+pub mod agentkit_testkit::conformance::memory_repository
+pub const agentkit_testkit::conformance::memory_repository::CASES: &[&str]
+pub async fn agentkit_testkit::conformance::memory_repository::run<T, F, Fut>(F) where T: agentkit_memory::ports::MemoryRepository + 'static, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
 pub mod agentkit_testkit::conformance::native_backend
 pub struct agentkit_testkit::conformance::native_backend::ConformanceCase
 pub agentkit_testkit::conformance::native_backend::ConformanceCase::id: &'static str
@@ -42,6 +48,23 @@ pub agentkit_testkit::conformance::native_backend::ConformanceReport::passed: bo
 pub agentkit_testkit::conformance::native_backend::ConformanceReport::title: alloc::string::String
 pub fn agentkit_testkit::conformance::native_backend::required_cases() -> alloc::vec::Vec<agentkit_testkit::conformance::native_backend::ConformanceCase>
 pub async fn agentkit_testkit::conformance::native_backend::run_driver_conformance(&dyn agentkit_native::ports::NativeBackend, &dyn agentkit_native::ports::ExecutableLocator, fn() -> agentkit_native::target::NativeExecutionTarget, &[agentkit_testkit::conformance::native_backend::ConformanceCase]) -> alloc::vec::Vec<agentkit_testkit::conformance::native_backend::ConformanceReport>
+pub mod agentkit_testkit::conformance::output_store
+pub const agentkit_testkit::conformance::output_store::CASES: &[&str]
+pub const agentkit_testkit::conformance::output_store::START_MS: i64
+pub trait agentkit_testkit::conformance::output_store::OutputStoreFixture: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub type agentkit_testkit::conformance::output_store::OutputStoreFixture::Store: agentkit_core::output::OutputStore + agentkit_core::output::SessionTree
+pub fn agentkit_testkit::conformance::output_store::OutputStoreFixture::artifacts<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = usize> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::conformance::output_store::OutputStoreFixture::link_child<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::conformance::output_store::OutputStoreFixture::purge_expired<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_core::output::PurgeReport> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::conformance::output_store::OutputStoreFixture::set_now(&self, i64)
+pub fn agentkit_testkit::conformance::output_store::OutputStoreFixture::store(&self) -> &Self::Store
+pub async fn agentkit_testkit::conformance::output_store::run<T, F, Fut>(F) where T: agentkit_testkit::conformance::output_store::OutputStoreFixture, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
+pub mod agentkit_testkit::conformance::reranker
+pub const agentkit_testkit::conformance::reranker::CASES: &[&str]
+pub async fn agentkit_testkit::conformance::reranker::run<T, F, Fut>(F) where T: agentkit_memory::ports::Reranker + 'static, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
+pub mod agentkit_testkit::conformance::retrieval_index
+pub const agentkit_testkit::conformance::retrieval_index::CASES: &[&str]
+pub async fn agentkit_testkit::conformance::retrieval_index::run<T, F, Fut>(F) where T: agentkit_memory::ports::RetrievalIndex + 'static, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
 pub mod agentkit_testkit::conformance::session_repository
 pub const agentkit_testkit::conformance::session_repository::CASES: &[&str]
 pub const agentkit_testkit::conformance::session_repository::CONTEXT_SUMMARIES_NAMESPACE: &str
@@ -110,6 +133,8 @@ pub agentkit_testkit::prefix_harness::EventMark::turn: usize
 pub fn agentkit_testkit::prefix_harness::compare(&serde_json::value::Value, &serde_json::value::Value, &str) -> core::option::Option<agentkit_testkit::prefix_harness::Break>
 pub fn agentkit_testkit::prefix_harness::compare_recorded(&serde_json::value::Value, &serde_json::value::Value, &str, agentkit_testkit::prefix_harness::EventMark, agentkit_testkit::prefix_harness::EventMark, &[agentkit_testkit::prefix_harness::EventMark]) -> core::option::Option<agentkit_testkit::prefix_harness::Break>
 pub fn agentkit_testkit::prefix_harness::exception_between(agentkit_testkit::prefix_harness::EventMark, agentkit_testkit::prefix_harness::EventMark, &[agentkit_testkit::prefix_harness::EventMark]) -> bool
+pub fn agentkit_testkit::prefix_harness::layout_violations(&serde_json::value::Value, &str) -> alloc::vec::Vec<alloc::string::String>
+pub fn agentkit_testkit::prefix_harness::system_block_count(&serde_json::value::Value, &str) -> usize
 pub mod agentkit_testkit::scripted
 pub struct agentkit_testkit::scripted::ScriptedAdapter
 impl agentkit_testkit::scripted::ScriptedAdapter
@@ -250,6 +275,16 @@ pub fn agentkit_testkit::InMemorySessionRepositoryError::from(agentkit_kernel::t
 pub enum agentkit_testkit::ReceiptRefusal
 pub agentkit_testkit::ReceiptRefusal::NotUncertain
 pub agentkit_testkit::ReceiptRefusal::RunActive
+pub struct agentkit_testkit::HashEmbedder
+impl agentkit_testkit::HashEmbedder
+pub fn agentkit_testkit::HashEmbedder::new() -> Self
+pub fn agentkit_testkit::HashEmbedder::with_id(&str) -> Self
+impl agentkit_memory::ports::Embedder for agentkit_testkit::HashEmbedder
+pub fn agentkit_testkit::HashEmbedder::embed_documents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<alloc::vec::Vec<f32>>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::HashEmbedder::embed_query<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<f32>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::HashEmbedder::spec(&self) -> &agentkit_memory::retrieval::ModelSpec
+impl core::default::Default for agentkit_testkit::HashEmbedder
+pub fn agentkit_testkit::HashEmbedder::default() -> Self
 pub struct agentkit_testkit::InMemoryMcpConfigFixture
 impl agentkit_testkit::InMemoryMcpConfigFixture
 pub fn agentkit_testkit::InMemoryMcpConfigFixture::new() -> Self
@@ -268,6 +303,49 @@ pub fn agentkit_testkit::InMemoryMcpConfigRepository::actor_identity(&self) -> a
 pub fn agentkit_testkit::InMemoryMcpConfigRepository::compare_and_set_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<serde_json::value::Value>, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_testkit::InMemoryMcpConfigRepository::compare_and_set_settings<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, core::option::Option<serde_json::value::Value>, alloc::vec::Vec<agentkit_mcp::repository::SettingWrite>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_mcp::repository::SettingsCommit<Self::Error>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_testkit::InMemoryMcpConfigRepository::get_setting<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<serde_json::value::Value>, Self::Error>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_testkit::InMemoryMemoryRepository
+impl agentkit_testkit::InMemoryMemoryRepository
+pub fn agentkit_testkit::InMemoryMemoryRepository::new() -> Self
+impl agentkit_memory::ports::MemoryRepository for agentkit_testkit::InMemoryMemoryRepository
+pub fn agentkit_testkit::InMemoryMemoryRepository::begin<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ports::MemoryTx>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::commit<'life0, 'async_trait>(&'life0 self, agentkit_memory::ports::MemoryTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::core_block<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::model::Scope]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::model::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::events<'life0, 'async_trait>(&'life0 self, agentkit_memory::ids::RecordId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::model::MemoryEvent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::get<'life0, 'async_trait>(&'life0 self, agentkit_memory::ids::RecordId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<core::option::Option<agentkit_memory::model::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::insert<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::model::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ids::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::list<'life0, 'async_trait>(&'life0 self, agentkit_memory::model::RecordFilter, agentkit_memory::model::Page) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::model::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::ids::RecordId], agentkit_memory::model::Actor, agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::model::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::set_status<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::ids::RecordId, agentkit_memory::model::Status, agentkit_memory::model::Actor, agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryMemoryRepository::supersede<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::ids::RecordId, agentkit_memory::model::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ids::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_testkit::InMemoryOutputStore
+impl agentkit_testkit::InMemoryOutputStore
+pub fn agentkit_testkit::InMemoryOutputStore::link_child(&self, &str, &str)
+pub fn agentkit_testkit::InMemoryOutputStore::new(alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> Self
+pub fn agentkit_testkit::InMemoryOutputStore::purge_expired(&self) -> agentkit_core::output::PurgeReport
+pub fn agentkit_testkit::InMemoryOutputStore::stored(&self, &str) -> usize
+impl agentkit_core::output::OutputStore for agentkit_testkit::InMemoryOutputStore
+pub fn agentkit_testkit::InMemoryOutputStore::info<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::OutputInfo, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryOutputStore::purge_session<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::PurgeReport, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryOutputStore::put<'life0, 'async_trait>(&'life0 self, agentkit_core::output::OutputMeta, alloc::vec::Vec<u8>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::OutputHandle, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryOutputStore::read<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle, agentkit_core::output::ByteOrLineRange) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::OutputSlice, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryOutputStore::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle, &'life2 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::output::Match>, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_core::output::SessionTree for agentkit_testkit::InMemoryOutputStore
+pub fn agentkit_testkit::InMemoryOutputStore::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_testkit::InMemoryRetrievalIndex
+impl agentkit_testkit::InMemoryRetrievalIndex
+pub fn agentkit_testkit::InMemoryRetrievalIndex::new() -> Self
+impl agentkit_memory::ports::RetrievalIndex for agentkit_testkit::InMemoryRetrievalIndex
+pub fn agentkit_testkit::InMemoryRetrievalIndex::begin_index<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ports::IndexTx>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::begin_reembed<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::retrieval::ModelSpec) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::commit_index<'life0, 'async_trait>(&'life0 self, agentkit_memory::ports::IndexTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::commit_reembed<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::delete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::IndexTx, &'life2 [agentkit_memory::ids::ItemId]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::drop_model<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::knn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId, &'life2 [f32], &'life3 agentkit_memory::retrieval::IndexFilter, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::retrieval::Hit>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::lexical<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_memory::retrieval::LexicalQuery, &'life2 agentkit_memory::retrieval::IndexFilter, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::retrieval::Hit>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::ids::ItemId]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::model::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::stats<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::retrieval::IndexStats>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryRetrievalIndex::upsert<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::IndexTx, &'life2 [agentkit_memory::retrieval::IndexItem]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_testkit::InMemorySessionFixture
 impl agentkit_testkit::InMemorySessionFixture
 pub fn agentkit_testkit::InMemorySessionFixture::new() -> Self
@@ -353,6 +431,14 @@ pub fn agentkit_testkit::InMemoryTaskRepository::submit<'life0, 'async_trait>(&'
 pub fn agentkit_testkit::InMemoryTaskRepository::submit_child<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::InMemoryTaskRepository::update_progress<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::InMemoryTaskRepository::wait_for_children<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_testkit::ManualClock
+impl agentkit_testkit::ManualClock
+pub fn agentkit_testkit::ManualClock::advance(&self, i64)
+pub fn agentkit_testkit::ManualClock::new(i64) -> alloc::rcs::arc::Arc<Self>
+pub fn agentkit_testkit::ManualClock::set(&self, i64)
+impl agentkit_kernel::runtime::Runtime for agentkit_testkit::ManualClock
+pub fn agentkit_testkit::ManualClock::id(&self) -> alloc::string::String
+pub fn agentkit_testkit::ManualClock::now_ms(&self) -> i64
 pub struct agentkit_testkit::ScriptedAdapter
 impl agentkit_testkit::scripted::ScriptedAdapter
 pub fn agentkit_testkit::scripted::ScriptedAdapter::new(impl core::convert::Into<alloc::string::String>) -> Self
@@ -406,6 +492,7 @@ pub fn agentkit_testkit::scripted::ScriptedSupervisor::drain_owned<'life0, 'asyn
 pub fn agentkit_testkit::scripted::ScriptedSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::ports::LaunchPlan, &'life2 agentkit_native::ports::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::ports::OwnedChildHandle>, agentkit_native::error::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn agentkit_testkit::scripted::ScriptedSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub const agentkit_testkit::CONTEXT_SUMMARIES_NAMESPACE: &str
+pub const agentkit_testkit::HASH_EMBEDDER_DIMS: u32
 pub const agentkit_testkit::PROMPT_TEMPLATES_NAMESPACE: &str
 pub const agentkit_testkit::PROVIDERS_NAMESPACE: &str
 pub const agentkit_testkit::PROVIDER_CAPABILITIES_NAMESPACE: &str

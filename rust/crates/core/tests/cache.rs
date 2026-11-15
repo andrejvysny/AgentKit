@@ -11,7 +11,9 @@ fn tool(name: &str) -> ToolDefinition {
 }
 fn prefix(tools: &[ToolDefinition]) -> agentkit_contracts::AiSessionPrefix {
     let digests = PrefixDigests::compute(&layout(), tools, &json!({"model":"m"}));
-    freeze(None, digests, "chat", "branch", "task").prefix().clone()
+    freeze(None, digests, "chat", "branch", "task")
+        .prefix()
+        .clone()
 }
 fn anthropic() -> CacheCapability {
     CacheCapability::ExplicitBreakpoints {
@@ -68,7 +70,10 @@ fn explicit_planner_places_four_breakpoints_in_request_order() {
         got,
         [
             (BreakpointAt::LastTool, CacheTtl::OneHour),
-            (BreakpointAt::EndOfSegment(Segment::Memory), CacheTtl::OneHour),
+            (
+                BreakpointAt::EndOfSegment(Segment::Memory),
+                CacheTtl::OneHour
+            ),
             (BreakpointAt::AfterMessage(6), CacheTtl::FiveMinutes),
             (BreakpointAt::AfterMessage(8), CacheTtl::FiveMinutes),
         ]
@@ -85,7 +90,11 @@ fn long_ttl_is_per_profile_and_falls_back_when_unsupported() {
         min_tokens: 0,
     };
     let points = plan_breakpoints(&five_only, &shape(), CacheTtl::OneHour);
-    assert!(points.iter().all(|point| point.ttl == CacheTtl::FiveMinutes));
+    assert!(
+        points
+            .iter()
+            .all(|point| point.ttl == CacheTtl::FiveMinutes)
+    );
 }
 
 #[test]
@@ -116,7 +125,11 @@ fn over_budget_drops_bp3_then_bp1() {
     };
     let three = plan_breakpoints(&capability(3), &shape(), CacheTtl::OneHour);
     assert_eq!(three.len(), 3);
-    assert!(three.iter().all(|point| point.at != BreakpointAt::AfterMessage(6)));
+    assert!(
+        three
+            .iter()
+            .all(|point| point.at != BreakpointAt::AfterMessage(6))
+    );
     let two = plan_breakpoints(&capability(2), &shape(), CacheTtl::OneHour);
     let got: Vec<_> = two.iter().map(|point| point.at).collect();
     assert_eq!(
@@ -148,7 +161,11 @@ fn strategy_plan_derives_the_static_sites_from_layout_and_prefix() {
         min_tokens: 0,
     };
     let with_tools = anthropic.plan(&layout(), &prefix(&[tool("a")]));
-    let got: Vec<_> = with_tools.breakpoints.iter().map(|point| point.at).collect();
+    let got: Vec<_> = with_tools
+        .breakpoints
+        .iter()
+        .map(|point| point.at)
+        .collect();
     assert_eq!(
         got,
         [
@@ -171,7 +188,10 @@ fn capability_round_trips_as_tagged_json() {
         hint: Some(CacheHint::SessionIdField),
     })
     .unwrap();
-    assert_eq!(value, json!({"kind":"implicit_prefix","hint":"session_id_field"}));
+    assert_eq!(
+        value,
+        json!({"kind":"implicit_prefix","hint":"session_id_field"})
+    );
     assert_eq!(
         serde_json::from_value::<CacheCapability>(json!({"kind":"none"})).unwrap(),
         CacheCapability::None

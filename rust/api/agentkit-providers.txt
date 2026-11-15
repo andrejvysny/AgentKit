@@ -1,4 +1,145 @@
 pub mod agentkit_providers
+pub mod agentkit_providers::conformance
+pub mod agentkit_providers::conformance::cli
+pub async fn agentkit_providers::conformance::cli::run_cli(&[alloc::string::String], &str) -> i32
+pub enum agentkit_providers::conformance::Effect
+pub agentkit_providers::conformance::Effect::Append
+pub agentkit_providers::conformance::Effect::Append::key_arg: alloc::string::String
+pub agentkit_providers::conformance::Effect::Append::value_arg: alloc::string::String
+pub agentkit_providers::conformance::Effect::Log
+pub agentkit_providers::conformance::Effect::Log::key: alloc::string::String
+pub agentkit_providers::conformance::Effect::Log::value_arg: alloc::string::String
+pub agentkit_providers::conformance::Effect::Read
+pub agentkit_providers::conformance::Effect::Read::key_arg: alloc::string::String
+pub agentkit_providers::conformance::Effect::Remove
+pub agentkit_providers::conformance::Effect::Remove::key_arg: alloc::string::String
+pub agentkit_providers::conformance::Effect::Reply
+pub agentkit_providers::conformance::Effect::Reply::text: alloc::string::String
+pub agentkit_providers::conformance::Effect::Write
+pub agentkit_providers::conformance::Effect::Write::key_arg: alloc::string::String
+pub agentkit_providers::conformance::Effect::Write::value_arg: alloc::string::String
+pub enum agentkit_providers::conformance::MockMode
+pub agentkit_providers::conformance::MockMode::Broken
+pub agentkit_providers::conformance::MockMode::FailEvery(usize)
+pub agentkit_providers::conformance::MockMode::Perfect
+pub agentkit_providers::conformance::MockMode::WrongArgs
+pub enum agentkit_providers::conformance::Predicate
+pub agentkit_providers::conformance::Predicate::EntryAbsent
+pub agentkit_providers::conformance::Predicate::EntryAbsent::key: alloc::string::String
+pub agentkit_providers::conformance::Predicate::EntryContains
+pub agentkit_providers::conformance::Predicate::EntryContains::key: alloc::string::String
+pub agentkit_providers::conformance::Predicate::EntryContains::text: alloc::string::String
+pub agentkit_providers::conformance::Predicate::EntryEquals
+pub agentkit_providers::conformance::Predicate::EntryEquals::key: alloc::string::String
+pub agentkit_providers::conformance::Predicate::EntryEquals::value: alloc::string::String
+pub agentkit_providers::conformance::Predicate::EntryExists
+pub agentkit_providers::conformance::Predicate::EntryExists::key: alloc::string::String
+pub struct agentkit_providers::conformance::CallRecord
+pub agentkit_providers::conformance::CallRecord::class: agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass
+pub agentkit_providers::conformance::CallRecord::step: u32
+pub agentkit_providers::conformance::CallRecord::tool: alloc::string::String
+pub struct agentkit_providers::conformance::Cell
+pub agentkit_providers::conformance::Cell::calls: u32
+pub agentkit_providers::conformance::Cell::calls_per_task: f64
+pub agentkit_providers::conformance::Cell::invalid_calls: u32
+pub agentkit_providers::conformance::Cell::invalid_rate: f64
+pub agentkit_providers::conformance::Cell::model: alloc::string::String
+pub agentkit_providers::conformance::Cell::outcome_classes: alloc::collections::btree::map::BTreeMap<alloc::string::String, u32>
+pub agentkit_providers::conformance::Cell::qualified: bool
+pub agentkit_providers::conformance::Cell::runs: u32
+pub agentkit_providers::conformance::Cell::success_rate: f64
+pub agentkit_providers::conformance::Cell::successes: u32
+pub agentkit_providers::conformance::Cell::tasks: u32
+pub agentkit_providers::conformance::Cell::toolset: alloc::string::String
+pub struct agentkit_providers::conformance::Expect
+pub agentkit_providers::conformance::Expect::answer_contains: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::Expect::calls: alloc::vec::Vec<agentkit_providers::conformance::ExpectedCall>
+pub agentkit_providers::conformance::Expect::state: alloc::vec::Vec<agentkit_providers::conformance::Predicate>
+pub struct agentkit_providers::conformance::ExpectedCall
+pub agentkit_providers::conformance::ExpectedCall::args: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub agentkit_providers::conformance::ExpectedCall::tool: alloc::string::String
+pub struct agentkit_providers::conformance::LiveConfig
+pub agentkit_providers::conformance::LiveConfig::base_url: alloc::string::String
+pub agentkit_providers::conformance::LiveConfig::key: agentkit_providers::probe::Secret
+pub agentkit_providers::conformance::LiveConfig::model: alloc::string::String
+pub struct agentkit_providers::conformance::LiveModel
+impl agentkit_providers::conformance::Model for agentkit_providers::conformance::LiveModel
+pub fn agentkit_providers::conformance::LiveModel::name(&self) -> &str
+pub fn agentkit_providers::conformance::LiveModel::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub struct agentkit_providers::conformance::Matrix
+pub agentkit_providers::conformance::Matrix::cells: alloc::vec::Vec<agentkit_providers::conformance::Cell>
+pub agentkit_providers::conformance::Matrix::thresholds: agentkit_providers::conformance::Thresholds
+impl agentkit_providers::conformance::Matrix
+pub fn agentkit_providers::conformance::Matrix::cell(&self, &str, &str) -> core::option::Option<&agentkit_providers::conformance::Cell>
+pub fn agentkit_providers::conformance::Matrix::to_json(&self) -> alloc::string::String
+pub fn agentkit_providers::conformance::Matrix::to_markdown(&self) -> alloc::string::String
+pub struct agentkit_providers::conformance::MockModel
+impl agentkit_providers::conformance::MockModel
+pub fn agentkit_providers::conformance::MockModel::new(&str, agentkit_providers::conformance::MockMode) -> Self
+impl agentkit_providers::conformance::Model for agentkit_providers::conformance::MockModel
+pub fn agentkit_providers::conformance::MockModel::name(&self) -> &str
+pub fn agentkit_providers::conformance::MockModel::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub struct agentkit_providers::conformance::MockScript
+pub agentkit_providers::conformance::MockScript::final_text: alloc::string::String
+pub agentkit_providers::conformance::MockScript::turns: alloc::vec::Vec<alloc::vec::Vec<agentkit_providers::conformance::ExpectedCall>>
+pub struct agentkit_providers::conformance::ModelCall
+pub agentkit_providers::conformance::ModelCall::arguments: alloc::string::String
+pub agentkit_providers::conformance::ModelCall::id: alloc::string::String
+pub agentkit_providers::conformance::ModelCall::name: alloc::string::String
+pub struct agentkit_providers::conformance::ModelTurn
+pub agentkit_providers::conformance::ModelTurn::calls: alloc::vec::Vec<agentkit_providers::conformance::ModelCall>
+pub agentkit_providers::conformance::ModelTurn::text: alloc::string::String
+pub struct agentkit_providers::conformance::RunCtx
+pub agentkit_providers::conformance::RunCtx::run: u32
+pub agentkit_providers::conformance::RunCtx::seq: usize
+pub agentkit_providers::conformance::RunCtx::turn: u32
+pub struct agentkit_providers::conformance::RunOutcome
+pub agentkit_providers::conformance::RunOutcome::calls: alloc::vec::Vec<agentkit_providers::conformance::CallRecord>
+pub agentkit_providers::conformance::RunOutcome::failure: core::option::Option<alloc::string::String>
+pub agentkit_providers::conformance::RunOutcome::run: u32
+pub agentkit_providers::conformance::RunOutcome::success: bool
+pub agentkit_providers::conformance::RunOutcome::task_id: alloc::string::String
+pub agentkit_providers::conformance::RunOutcome::toolset: alloc::string::String
+pub agentkit_providers::conformance::RunOutcome::turns: u32
+pub struct agentkit_providers::conformance::Task
+pub agentkit_providers::conformance::Task::allowed_tools: alloc::vec::Vec<agentkit_providers::conformance::ToolSpec>
+pub agentkit_providers::conformance::Task::expect: agentkit_providers::conformance::Expect
+pub agentkit_providers::conformance::Task::id: alloc::string::String
+pub agentkit_providers::conformance::Task::lang: alloc::string::String
+pub agentkit_providers::conformance::Task::max_turns: u32
+pub agentkit_providers::conformance::Task::mock: core::option::Option<agentkit_providers::conformance::MockScript>
+pub agentkit_providers::conformance::Task::prompt: alloc::string::String
+pub agentkit_providers::conformance::Task::toolset: alloc::string::String
+pub agentkit_providers::conformance::Task::workspace: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub struct agentkit_providers::conformance::Thresholds
+pub agentkit_providers::conformance::Thresholds::max_invalid: f64
+pub agentkit_providers::conformance::Thresholds::min_success: f64
+impl agentkit_providers::conformance::Thresholds
+pub fn agentkit_providers::conformance::Thresholds::qualifies(&self, f64, f64) -> bool
+impl core::default::Default for agentkit_providers::conformance::Thresholds
+pub fn agentkit_providers::conformance::Thresholds::default() -> Self
+pub struct agentkit_providers::conformance::ToolSpec
+pub agentkit_providers::conformance::ToolSpec::effect: agentkit_providers::conformance::Effect
+pub agentkit_providers::conformance::ToolSpec::name: alloc::string::String
+pub agentkit_providers::conformance::ToolSpec::optional: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::ToolSpec::required: alloc::vec::Vec<alloc::string::String>
+pub trait agentkit_providers::conformance::Model: core::marker::Send + core::marker::Sync
+pub fn agentkit_providers::conformance::Model::name(&self) -> &str
+pub fn agentkit_providers::conformance::Model::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+impl agentkit_providers::conformance::Model for agentkit_providers::conformance::LiveModel
+pub fn agentkit_providers::conformance::LiveModel::name(&self) -> &str
+pub fn agentkit_providers::conformance::LiveModel::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+impl agentkit_providers::conformance::Model for agentkit_providers::conformance::MockModel
+pub fn agentkit_providers::conformance::MockModel::name(&self) -> &str
+pub fn agentkit_providers::conformance::MockModel::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_providers::conformance::build_matrix(alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<agentkit_providers::conformance::RunOutcome>)>, u32, agentkit_providers::conformance::Thresholds) -> agentkit_providers::conformance::Matrix
+pub fn agentkit_providers::conformance::class_name(agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass) -> alloc::string::String
+pub fn agentkit_providers::conformance::is_invalid(agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass) -> bool
+pub fn agentkit_providers::conformance::live_model(agentkit_providers::conformance::LiveConfig, bool) -> core::result::Result<agentkit_providers::conformance::LiveModel, alloc::string::String>
+pub fn agentkit_providers::conformance::load_dir(&std::path::Path) -> core::result::Result<alloc::vec::Vec<agentkit_providers::conformance::Task>, alloc::string::String>
+pub fn agentkit_providers::conformance::parse_task_file(&str) -> core::result::Result<alloc::vec::Vec<agentkit_providers::conformance::Task>, alloc::string::String>
+pub async fn agentkit_providers::conformance::run_matrix(&[&dyn agentkit_providers::conformance::Model], &[agentkit_providers::conformance::Task], u32, agentkit_providers::conformance::Thresholds) -> agentkit_providers::conformance::Matrix
+pub async fn agentkit_providers::conformance::run_task(&dyn agentkit_providers::conformance::Model, &agentkit_providers::conformance::Task, u32, usize) -> agentkit_providers::conformance::RunOutcome
 pub mod agentkit_providers::probe
 pub enum agentkit_providers::probe::Status
 pub agentkit_providers::probe::Status::Error
@@ -30,14 +171,16 @@ pub struct agentkit_providers::probe::Report
 pub agentkit_providers::probe::Report::base_url: alloc::string::String
 pub agentkit_providers::probe::Report::model: alloc::string::String
 pub agentkit_providers::probe::Report::results: alloc::vec::Vec<agentkit_providers::probe::CheckResult>
+pub agentkit_providers::probe::Report::secret: agentkit_providers::probe::Secret
 impl agentkit_providers::probe::Report
 pub fn agentkit_providers::probe::Report::get(&self, &str) -> core::option::Option<&agentkit_providers::probe::CheckResult>
 pub fn agentkit_providers::probe::Report::to_json(&self) -> alloc::string::String
 pub fn agentkit_providers::probe::Report::to_markdown(&self) -> alloc::string::String
-pub struct agentkit_providers::probe::Secret(_)
+pub struct agentkit_providers::probe::Secret(_, _)
 impl agentkit_providers::probe::Secret
 pub fn agentkit_providers::probe::Secret::new(impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agentkit_providers::probe::Secret::scrub(&self, &str) -> alloc::string::String
+pub fn agentkit_providers::probe::Secret::scrub_value(&self, &serde_json::value::Value) -> serde_json::value::Value
 impl core::fmt::Debug for agentkit_providers::probe::Secret
 pub fn agentkit_providers::probe::Secret::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const agentkit_providers::probe::CHECK_IDS: [&str; 18]
@@ -47,6 +190,10 @@ pub agentkit_providers::BindError::AuthorityDiffers
 pub agentkit_providers::BindError::Connection(agentkit_connections::types::ConnectionError)
 pub agentkit_providers::BindError::Lock
 pub agentkit_providers::BindError::VaultOrConsentChanged
+pub enum agentkit_providers::SchemaLane
+pub agentkit_providers::SchemaLane::Anthropic
+pub agentkit_providers::SchemaLane::ChatCompletions
+pub agentkit_providers::SchemaLane::Responses
 pub struct agentkit_providers::Approval
 pub agentkit_providers::Approval::token: agentkit_connections::execution::ConsentToken
 impl agentkit_providers::Approval
@@ -56,7 +203,9 @@ pub fn agentkit_providers::Approval::drop(&mut self)
 pub struct agentkit_providers::ChatCompletionsProvider
 impl agentkit_providers::ChatCompletionsProvider
 pub fn agentkit_providers::ChatCompletionsProvider::new(alloc::rcs::arc::Arc<dyn agentkit_providers::TrustedTransport>) -> core::result::Result<Self, agentkit_core::types::CoreError>
+pub fn agentkit_providers::ChatCompletionsProvider::with_cache_capability(self, agentkit_core::cache::CacheCapability) -> Self
 impl agentkit_core::types::ChatProvider for agentkit_providers::ChatCompletionsProvider
+pub fn agentkit_providers::ChatCompletionsProvider::cache_capability(&self) -> agentkit_core::cache::CacheCapability
 pub fn agentkit_providers::ChatCompletionsProvider::connection_identity(&self) -> core::option::Option<agentkit_core::provider_identity::ConnectionIdentity>
 pub fn agentkit_providers::ChatCompletionsProvider::id(&self) -> &str
 pub fn agentkit_providers::ChatCompletionsProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
@@ -87,6 +236,7 @@ pub fn agentkit_providers::NativeProviderFactory::available(&self) -> bool
 pub fn agentkit_providers::NativeProviderFactory::resolve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 serde_json::value::Value, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_sessions::error::SessionsResult<alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_providers::NativeProviderFactory::snapshot<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_sessions::error::SessionsResult<core::option::Option<serde_json::value::Value>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_providers::ProviderPreset
+pub agentkit_providers::ProviderPreset::cache: agentkit_core::cache::CacheCapability
 pub agentkit_providers::ProviderPreset::default_base_url: alloc::string::String
 pub agentkit_providers::ProviderPreset::default_model: alloc::string::String
 pub agentkit_providers::ProviderPreset::docs_url: core::option::Option<alloc::string::String>
@@ -98,14 +248,18 @@ pub agentkit_providers::ProviderPreset::requires_api_key: bool
 pub struct agentkit_providers::ResponsesProvider
 impl agentkit_providers::ResponsesProvider
 pub fn agentkit_providers::ResponsesProvider::new(alloc::rcs::arc::Arc<dyn agentkit_providers::TrustedTransport>) -> core::result::Result<Self, agentkit_core::types::CoreError>
+pub fn agentkit_providers::ResponsesProvider::with_cache_capability(self, agentkit_core::cache::CacheCapability) -> Self
 impl agentkit_core::types::ChatProvider for agentkit_providers::ResponsesProvider
 pub fn agentkit_providers::ResponsesProvider::allows_implicit_output_limit(&self) -> bool
+pub fn agentkit_providers::ResponsesProvider::cache_capability(&self) -> agentkit_core::cache::CacheCapability
 pub fn agentkit_providers::ResponsesProvider::connection_identity(&self) -> core::option::Option<agentkit_core::provider_identity::ConnectionIdentity>
 pub fn agentkit_providers::ResponsesProvider::id(&self) -> &str
 pub fn agentkit_providers::ResponsesProvider::list_models<'life0, 'async_trait>(&'life0 self, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<serde_json::value::Value>, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_providers::ResponsesProvider::stream_chat(&self, agentkit_core::types::ChatRequest, tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_core::types::ProviderStream
 pub fn agentkit_providers::ResponsesProvider::supports_usage_cleanup(&self) -> bool
+pub fn agentkit_providers::ResponsesProvider::tool_lane(&self) -> agentkit_core::dialect::ToolLane
 pub fn agentkit_providers::ResponsesProvider::tracks_transport_requests(&self) -> bool
+pub const agentkit_providers::RESPONSES_SCHEMA_KEYS: &[&str]
 pub trait agentkit_providers::ProviderApprover: core::marker::Send + core::marker::Sync
 pub fn agentkit_providers::ProviderApprover::approve<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_connections::execution::NativeConnections, &'life2 agentkit_connections::execution::RequestPlan, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::Approval, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_providers::ProviderApprover::as_any(&self) -> &dyn core::any::Any
@@ -125,8 +279,11 @@ pub fn agentkit_providers::NativeConnectionTransport::check_current(&self) -> co
 pub fn agentkit_providers::NativeConnectionTransport::identity(&self) -> agentkit_core::provider_identity::ConnectionIdentity
 pub fn agentkit_providers::NativeConnectionTransport::request<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::provider_identity::ConnectionIdentity, &'life2 str, core::option::Option<serde_json::value::Value>, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<reqwest::async_impl::response::Response, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_providers::NativeConnectionTransport::request_guarded<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::provider_identity::ConnectionIdentity, &'life2 str, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::dispatch::DispatchGuard>>, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<reqwest::async_impl::response::Response, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_providers::allowed_schema_keys(agentkit_providers::SchemaLane) -> core::option::Option<&'static [&'static str]>
 pub fn agentkit_providers::build_responses_request(&agentkit_core::types::ChatRequest, &agentkit_core::provider_identity::ConnectionIdentity, bool) -> core::result::Result<serde_json::value::Value, agentkit_core::types::CoreError>
+pub fn agentkit_providers::build_responses_request_notes(&agentkit_core::types::ChatRequest, &agentkit_core::provider_identity::ConnectionIdentity, bool) -> core::result::Result<(serde_json::value::Value, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<agentkit_core::model_profile::request::ProfileNote>), agentkit_core::types::CoreError>
 pub fn agentkit_providers::build_responses_request_with_warnings(&agentkit_core::types::ChatRequest, &agentkit_core::provider_identity::ConnectionIdentity, bool) -> core::result::Result<(serde_json::value::Value, alloc::vec::Vec<alloc::string::String>), agentkit_core::types::CoreError>
 pub fn agentkit_providers::disclosed_categories(&serde_json::value::Value) -> alloc::collections::btree::set::BTreeSet<alloc::string::String>
 pub fn agentkit_providers::preset_by_kind(&str) -> core::option::Option<&'static agentkit_providers::ProviderPreset>
 pub fn agentkit_providers::provider_presets() -> &'static [agentkit_providers::ProviderPreset]
+pub fn agentkit_providers::schema_lane_violations(agentkit_providers::SchemaLane, &serde_json::value::Value) -> alloc::vec::Vec<alloc::string::String>

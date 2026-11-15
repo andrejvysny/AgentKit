@@ -353,7 +353,8 @@ impl ResponsesState {
             }
             // A built-in call item waits for its output, so its status is not
             // `completed` (the vendor shows `in_progress`).
-            let awaits_output = ["apply_patch_call", "shell_call"].contains(&string(&item["type"])?);
+            let awaits_output =
+                ["apply_patch_call", "shell_call"].contains(&string(&item["type"])?);
             if !awaits_output
                 && item
                     .get("status")
@@ -506,7 +507,8 @@ fn tool_call(
     let name = string(&item["name"])?;
     let call_id = string(&item["call_id"])?;
     let arguments = string(&item["arguments"])?;
-    if item["namespace"] != "agentkit" || (!name.is_empty() && !tools.iter().any(|tool| tool.name == name))
+    if item["namespace"] != "agentkit"
+        || (!name.is_empty() && !tools.iter().any(|tool| tool.name == name))
     {
         return err("unknown_tool");
     }

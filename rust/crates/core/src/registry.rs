@@ -1,11 +1,11 @@
 use crate::{
     CoreError, Tool, ToolDefinition,
     call_pipeline::{AliasTable, Normalised, normalise},
-    dialect::{Dialect, DialectError, Translated},
     deferred::{
         Catalog, CatalogCell, CatalogEntry, LoadMode, TOOL_CALL, ToolLoading, is_meta_tool,
         namespace_of,
     },
+    dialect::{Dialect, DialectError, Translated},
     toolset::{
         META_TOOLSET, Promotion, PromotionCell, PromotionObserver, Toolset, ToolsetView,
         meta_toolset,
@@ -237,8 +237,10 @@ impl ToolRegistry {
             // The array stays within the visible bound: a toolset that does
             // not fit stays deferred (reported, and reachable via tool_call).
             if !self.promotions.fits(definitions.len()) {
-                self.promotions
-                    .refuse(&toolset, definitions.iter().map(|d| d.name.clone()).collect());
+                self.promotions.refuse(
+                    &toolset,
+                    definitions.iter().map(|d| d.name.clone()).collect(),
+                );
                 continue;
             }
             let revision = match self.observer.get() {
@@ -296,9 +298,13 @@ impl ToolRegistry {
             .get()
             .map(|frozen| frozen.surface.as_slice())
             .unwrap_or_default();
-        let meta_active = surface.iter().any(|definition| definition.name == TOOL_CALL);
-        self.promotions
-            .set_capacity(self.visible_bound.map(|bound| bound.saturating_sub(surface.len())));
+        let meta_active = surface
+            .iter()
+            .any(|definition| definition.name == TOOL_CALL);
+        self.promotions.set_capacity(
+            self.visible_bound
+                .map(|bound| bound.saturating_sub(surface.len())),
+        );
         let offered: Vec<ToolDefinition> = surface.iter().chain(deferred).cloned().collect();
         let view = self.toolset_view(&offered, self.dialect());
         let entry = |definition: &ToolDefinition, deferred: bool| {

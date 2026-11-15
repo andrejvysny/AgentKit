@@ -86,7 +86,10 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
             let patch = input.get("patch").cloned().unwrap_or(Value::Null);
             let target = text(&input, "inputId")?.to_owned();
             // A child wait is resolved only by the host's waker.
-            if let Some(existing) = store.get_input(target.clone()).await.map_err(errors::store)?
+            if let Some(existing) = store
+                .get_input(target.clone())
+                .await
+                .map_err(errors::store)?
                 && claims_child_wait(&existing.input_id, &existing.content)
             {
                 return Err(errors::invalid(

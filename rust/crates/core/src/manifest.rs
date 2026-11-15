@@ -9,9 +9,9 @@
 //! Room for later fields (dialect, toolset) is the prefix's own optional
 //! fields; the hash covers the definitions as stored.
 
+use crate::ToolDefinition;
 use crate::deferred::{Classification, TOOL_CALL, is_meta_tool, toolset_index};
 use crate::toolset::ToolsetView;
-use crate::ToolDefinition;
 use agentkit_contracts::{AiSessionPrefix, AiToolDefinition, JsonDeserialize, Optional};
 use agentkit_kernel::canonical_sha256;
 use serde_json::{Value, json};

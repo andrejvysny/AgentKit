@@ -14,15 +14,17 @@ impl Secret {
         Self(value, forms)
     }
     pub fn scrub(&self, text: &str) -> String {
-        self.1
-            .iter()
-            .fold(text.to_string(), |acc, form| acc.replace(form, "[redacted]"))
+        self.1.iter().fold(text.to_string(), |acc, form| {
+            acc.replace(form, "[redacted]")
+        })
     }
     /// Scrubs every string (and object key) inside a JSON value.
     pub fn scrub_value(&self, value: &Value) -> Value {
         match value {
             Value::String(text) => Value::String(self.scrub(text)),
-            Value::Array(items) => Value::Array(items.iter().map(|v| self.scrub_value(v)).collect()),
+            Value::Array(items) => {
+                Value::Array(items.iter().map(|v| self.scrub_value(v)).collect())
+            }
             Value::Object(map) => Value::Object(
                 map.iter()
                     .map(|(k, v)| (self.scrub(k), self.scrub_value(v)))
@@ -66,11 +68,13 @@ fn percent_encode(text: &str) -> String {
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);

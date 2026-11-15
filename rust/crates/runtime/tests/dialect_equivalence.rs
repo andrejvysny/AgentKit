@@ -101,16 +101,15 @@ fn shown(verdict: ToolGuardVerdict) -> String {
         ToolGuardVerdict::Allowed => "allowed".into(),
         ToolGuardVerdict::Refused(reason) => format!("refused: {reason}"),
         ToolGuardVerdict::AwaitingHuman(ask) => {
-            format!("awaiting: {} / {:?} / {:?}", ask.reason, ask.preview, ask.requested_mode)
+            format!(
+                "awaiting: {} / {:?} / {:?}",
+                ask.reason, ask.preview, ask.requested_mode
+            )
         }
     }
 }
 
-async fn verdict(
-    guard: &CodingPermissionGuard,
-    tool: &ToolDefinition,
-    args: &Value,
-) -> String {
+async fn verdict(guard: &CodingPermissionGuard, tool: &ToolDefinition, args: &Value) -> String {
     let context = ToolGuardContext {
         contribution: contribution(),
         namespace: CODING_NAMESPACE.to_owned(),
@@ -149,7 +148,10 @@ async fn every_coding_tool_is_offered_under_exactly_the_common_names() {
     sorted.sort();
     assert_eq!(sorted, expected);
     for canonical in CODING_TOOL_NAMES {
-        assert!(!common_dialect().wire_names_of(canonical).is_empty(), "{canonical}");
+        assert!(
+            !common_dialect().wire_names_of(canonical).is_empty(),
+            "{canonical}"
+        );
     }
 }
 
@@ -187,7 +189,9 @@ async fn the_translated_call_equals_the_canonical_call_for_every_example() {
             assert_eq!(translated.name, name);
             assert_eq!(&translated.args, example, "{wire_name}");
             assert!(
-                registry.validate_input(&translated.name, &translated.args).is_empty(),
+                registry
+                    .validate_input(&translated.name, &translated.args)
+                    .is_empty(),
                 "{name} {example}"
             );
             checked += 1;
@@ -206,7 +210,9 @@ async fn the_translated_call_gets_the_same_guard_verdict_as_the_direct_call() {
         let definition = tool.definition().clone();
         for example in &definition.examples {
             let (wire_name, wire_args) = dialect.wire_call(&name, example).expect("wire call");
-            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            let translated = registry
+                .translate(&wire_name, wire_args)
+                .expect("translates");
             // What the pipeline hands the guard: the registered tool for the
             // translated name, with the translated arguments.
             let registered = registry
@@ -249,7 +255,10 @@ async fn a_dialect_never_widens_authority() {
     // The read-only supervisor is refused for the same calls either way.
     let supervisor = guard(CodingMode::FullAuto, CodingRole::Supervisor);
     for (wire, args) in [
-        ("edit", json!({"file_path": "a", "old_string": "x", "new_string": "y"})),
+        (
+            "edit",
+            json!({"file_path": "a", "old_string": "x", "new_string": "y"}),
+        ),
         ("run_shell_command", json!({"command": "ls"})),
     ] {
         let translated = registry.translate(wire, args).expect("translates");
@@ -295,24 +304,43 @@ async fn anthropic_offers_the_two_built_in_tools_for_the_coding_pack() {
     let builtin: Vec<(String, String)> = offered
         .iter()
         .filter_map(|definition| {
-            builtin_tool_type(definition)
-                .map(|kind| (kind.to_owned(), definition.name.clone()))
+            builtin_tool_type(definition).map(|kind| (kind.to_owned(), definition.name.clone()))
         })
         .collect();
     assert_eq!(
         builtin,
         [
-            ("text_editor_20250728".to_owned(), "str_replace_based_edit_tool".to_owned()),
+            (
+                "text_editor_20250728".to_owned(),
+                "str_replace_based_edit_tool".to_owned()
+            ),
             ("bash_20250124".to_owned(), "bash".to_owned()),
         ]
     );
     // Search, git and plan tools keep the common shape.
     let names: Vec<&str> = offered.iter().map(|d| d.name.as_str()).collect();
-    for common in ["glob", "grep_search", "git_status", "git_diff", "run_tests", "submit_plan"] {
+    for common in [
+        "glob",
+        "grep_search",
+        "git_status",
+        "git_diff",
+        "run_tests",
+        "submit_plan",
+    ] {
         assert!(names.contains(&common), "{common} in {names:?}");
     }
-    for canonical in ["read_file", "write_file", "edit", "edit_file", "list_directory", "run_command"] {
-        assert!(!names.contains(&canonical), "{canonical} is folded into a built-in");
+    for canonical in [
+        "read_file",
+        "write_file",
+        "edit",
+        "edit_file",
+        "list_directory",
+        "run_command",
+    ] {
+        assert!(
+            !names.contains(&canonical),
+            "{canonical} is folded into a built-in"
+        );
     }
 }
 
@@ -322,7 +350,11 @@ async fn anthropic_translated_call_equals_the_canonical_call_for_every_expressib
     let dialect = anthropic_dialect();
     let (mut through, mut canonical_only) = (0, 0);
     for name in registry.names() {
-        let definition = registry.get(&name).expect("registered").definition().clone();
+        let definition = registry
+            .get(&name)
+            .expect("registered")
+            .definition()
+            .clone();
         for example in &definition.examples {
             let Some((wire_name, wire_args)) = dialect.wire_call(&name, example) else {
                 // The built-in form cannot say it (replace_all, timeout,
@@ -334,11 +366,15 @@ async fn anthropic_translated_call_equals_the_canonical_call_for_every_expressib
                 canonical_only += 1;
                 continue;
             };
-            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            let translated = registry
+                .translate(&wire_name, wire_args)
+                .expect("translates");
             assert_eq!(translated.name, name, "{example}");
             assert_eq!(translated.args, normalised(&name, example), "{wire_name}");
             assert!(
-                registry.validate_input(&translated.name, &translated.args).is_empty(),
+                registry
+                    .validate_input(&translated.name, &translated.args)
+                    .is_empty(),
                 "{name} {example}"
             );
             through += 1;
@@ -354,12 +390,18 @@ async fn anthropic_translated_call_gets_the_same_guard_verdict_as_the_direct_cal
     let dialect = anthropic_dialect();
     let mut compared = 0;
     for name in registry.names() {
-        let definition = registry.get(&name).expect("registered").definition().clone();
+        let definition = registry
+            .get(&name)
+            .expect("registered")
+            .definition()
+            .clone();
         for example in &definition.examples {
             let Some((wire_name, wire_args)) = dialect.wire_call(&name, example) else {
                 continue;
             };
-            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            let translated = registry
+                .translate(&wire_name, wire_args)
+                .expect("translates");
             let registered = registry
                 .get(&translated.name)
                 .expect("translated name is registered");
@@ -408,7 +450,10 @@ async fn anthropic_never_widens_authority() {
     let view = registry
         .translate(editor, json!({"command": "view", "path": "a"}))
         .expect("view");
-    assert_eq!(registry.get(&view.name).unwrap().definition().effect, "read");
+    assert_eq!(
+        registry.get(&view.name).unwrap().definition().effect,
+        "read"
+    );
     // Calls with no canonical equivalent are refused before any guard.
     for args in [
         json!({"command": "insert", "path": "a", "insert_line": 0, "insert_text": "x"}),
@@ -416,5 +461,9 @@ async fn anthropic_never_widens_authority() {
     ] {
         assert!(registry.translate(editor, args).is_err());
     }
-    assert!(registry.translate("bash", json!({"restart": true})).is_err());
+    assert!(
+        registry
+            .translate("bash", json!({"restart": true}))
+            .is_err()
+    );
 }

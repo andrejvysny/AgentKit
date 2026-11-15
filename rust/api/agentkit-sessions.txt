@@ -568,11 +568,13 @@ pub const agentkit_sessions::CONTENT_UNSUPPORTED_MESSAGE: &str
 pub const agentkit_sessions::EXECUTION_METADATA_KEY: &str
 pub const agentkit_sessions::FALLBACK_CONTEXT_WINDOW_TOKENS: i64
 pub const agentkit_sessions::MAX_STANDING_APPROVALS: usize
+pub const agentkit_sessions::MODEL_PROFILE_METADATA_KEY: &str
 pub const agentkit_sessions::PROVIDER_MODELS_NAMESPACE: &str
 pub const agentkit_sessions::REASONING_EFFORTS: [&str; 4]
 pub const agentkit_sessions::RECEIPT_NOT_UNCERTAIN: &str
 pub const agentkit_sessions::RECEIPT_RUN_ACTIVE: &str
 pub const agentkit_sessions::SESSION_METADATA_KEY: &str
+pub const agentkit_sessions::SESSION_PREFIX_METADATA_KEY: &str
 pub const agentkit_sessions::STANDING_APPROVALS_METADATA_KEY: &str
 pub const agentkit_sessions::TURN_CONFIG_KEYS: [&str; 3]
 pub trait agentkit_sessions::ChatProviderFactory: core::marker::Send + core::marker::Sync
@@ -637,7 +639,9 @@ pub fn agentkit_sessions::parse_iso_millis(&str) -> core::option::Option<i64>
 pub fn agentkit_sessions::plan_request_of(&serde_json::value::Value, &[alloc::string::String]) -> core::option::Option<serde_json::value::Value>
 pub fn agentkit_sessions::read_decision(&serde_json::value::Value) -> core::result::Result<agentkit_sessions::Decision, alloc::string::String>
 pub fn agentkit_sessions::read_execution_state(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_sessions::read_model_profile(&serde_json::value::Value) -> core::option::Option<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>
 pub fn agentkit_sessions::read_session_descriptor(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_sessions::read_session_prefix(&serde_json::value::Value) -> core::option::Option<agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix>
 pub fn agentkit_sessions::read_standing_key(&serde_json::value::Value) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub async fn agentkit_sessions::resolve_uncertain_execution<R: agentkit_sessions::SessionRepository>(&R, &str, &str, agentkit_sessions::ResolutionOutcome, core::option::Option<serde_json::value::Value>, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, i64) -> agentkit_sessions::SessionsResult<agentkit_sessions::ExecutionReceiptRecord, agentkit_sessions::SessionFault<R>>
 pub fn agentkit_sessions::run_profile_digest(&serde_json::value::Value) -> alloc::string::String
@@ -651,6 +655,8 @@ pub fn agentkit_sessions::task_profile(&serde_json::value::Value) -> agentkit_se
 pub fn agentkit_sessions::turn_config(&serde_json::value::Value) -> serde_json::map::Map<alloc::string::String, serde_json::value::Value>
 pub fn agentkit_sessions::validate_frozen_run_content(&serde_json::value::Value) -> agentkit_sessions::SessionsResult<agentkit_sessions::FrozenRunContent>
 pub fn agentkit_sessions::with_execution(&serde_json::value::Value, core::option::Option<serde_json::value::Value>) -> serde_json::value::Value
+pub fn agentkit_sessions::with_model_profile(&serde_json::value::Value, &agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> serde_json::value::Value
+pub fn agentkit_sessions::with_session_prefix(&serde_json::value::Value, &agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> serde_json::value::Value
 pub fn agentkit_sessions::with_standing(&serde_json::value::Value, alloc::vec::Vec<serde_json::value::Value>) -> serde_json::value::Value
 pub fn agentkit_sessions::writable_standing_grants(&serde_json::value::Value) -> core::option::Option<alloc::vec::Vec<serde_json::value::Value>>
 pub type agentkit_sessions::SessionFault<R> = <R as agentkit_sessions::SessionRepository>::Error

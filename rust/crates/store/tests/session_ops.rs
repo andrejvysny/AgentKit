@@ -2539,7 +2539,13 @@ async fn a_child_wait_parks_in_waiting_child_and_holds_no_slot() {
     park(
         &store,
         &lease,
-        human_request("childwait:req", "run", child_wait_content(9_000), Some("call-1"), None),
+        human_request(
+            "childwait:req",
+            "run",
+            child_wait_content(9_000),
+            Some("call-1"),
+            None,
+        ),
         2000,
     )
     .await;
@@ -2580,8 +2586,14 @@ async fn a_child_wait_parks_in_waiting_child_and_holds_no_slot() {
         .filter(|record| record.event["type"] == "parent.parked")
         .collect();
     assert_eq!(parked.len(), 1);
-    assert_eq!(parked[0].event["data"]["awaited"], json!(["child-a", "child-b"]));
-    assert!(parked[0].event["data"].get("prompt").is_none(), "ids only, no text");
+    assert_eq!(
+        parked[0].event["data"]["awaited"],
+        json!(["child-a", "child-b"])
+    );
+    assert!(
+        parked[0].event["data"].get("prompt").is_none(),
+        "ids only, no text"
+    );
 }
 
 #[tokio::test]
@@ -2591,11 +2603,18 @@ async fn answering_a_child_wait_requeues_it_with_the_await_result_and_a_woken_ev
     park(
         &store,
         &lease,
-        human_request("childwait:req", "run", child_wait_content(9_000), Some("call-1"), None),
+        human_request(
+            "childwait:req",
+            "run",
+            child_wait_content(9_000),
+            Some("call-1"),
+            None,
+        ),
         2000,
     )
     .await;
-    let response = json!({"wake": "all_settled", "settled": true, "timedOut": false, "results": []});
+    let response =
+        json!({"wake": "all_settled", "settled": true, "timedOut": false, "results": []});
     let outcome = store
         .answer_human_request(answer("childwait:req", "wake:req", response.clone()))
         .await
@@ -2640,7 +2659,13 @@ async fn a_cancelled_child_wait_cannot_be_woken() {
     park(
         &store,
         &lease,
-        human_request("childwait:req", "run", child_wait_content(9_000), Some("call-1"), None),
+        human_request(
+            "childwait:req",
+            "run",
+            child_wait_content(9_000),
+            Some("call-1"),
+            None,
+        ),
         2000,
     )
     .await;
@@ -2650,7 +2675,11 @@ async fn a_cancelled_child_wait_cannot_be_woken() {
         TaskStatus::Cancelled
     );
     let error = store
-        .answer_human_request(answer("childwait:req", "wake:req", json!({"wake": "timeout"})))
+        .answer_human_request(answer(
+            "childwait:req",
+            "wake:req",
+            json!({"wake": "timeout"}),
+        ))
         .await
         .expect_err("a cancelled wait is stale");
     assert!(matches!(error, StoreError::AnswerStale(_)), "{error:?}");
@@ -2666,7 +2695,13 @@ async fn a_parked_child_wait_survives_reopening_the_database() {
         park(
             &store,
             &lease,
-            human_request("childwait:req", "run", child_wait_content(9_000), Some("call-1"), None),
+            human_request(
+                "childwait:req",
+                "run",
+                child_wait_content(9_000),
+                Some("call-1"),
+                None,
+            ),
             2000,
         )
         .await;
@@ -2685,11 +2720,19 @@ async fn a_parked_child_wait_survives_reopening_the_database() {
             .unwrap()
             .is_none()
     );
-    let request = store.get_input("childwait:req".into()).await.unwrap().unwrap();
+    let request = store
+        .get_input("childwait:req".into())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(request.status, AgentInputStatus::Pending);
     assert_eq!(request.content["deadlineMs"], 9_000);
     store
-        .answer_human_request(answer("childwait:req", "wake:req", json!({"wake": "timeout"})))
+        .answer_human_request(answer(
+            "childwait:req",
+            "wake:req",
+            json!({"wake": "timeout"}),
+        ))
         .await
         .unwrap();
     assert_eq!(
@@ -2703,7 +2746,13 @@ async fn park_child_wait_with_child(store: &SqliteStore) {
     park(
         store,
         &lease,
-        human_request("childwait:req", "run", child_wait_content(9_000), Some("call-1"), None),
+        human_request(
+            "childwait:req",
+            "run",
+            child_wait_content(9_000),
+            Some("call-1"),
+            None,
+        ),
         2000,
     )
     .await;
@@ -2718,7 +2767,10 @@ async fn a_forged_child_wait_cannot_be_created_or_parked() {
         ("childwait:req-b", json!({"kind": "question"})),
     ] {
         let error = store
-            .create_input(human_request(id, "run", content, Some("call-1"), None), 1000)
+            .create_input(
+                human_request(id, "run", content, Some("call-1"), None),
+                1000,
+            )
             .await
             .expect_err("a child wait is minted only by park_turn");
         assert!(matches!(error, StoreError::InvalidInput(_)), "{error:?}");
@@ -2804,7 +2856,11 @@ async fn an_expired_child_wait_is_answerable_as_a_timeout() {
     )
     .await;
     store
-        .answer_human_request(answer("childwait:req", "wake:req", json!({"wake": "timeout"})))
+        .answer_human_request(answer(
+            "childwait:req",
+            "wake:req",
+            json!({"wake": "timeout"}),
+        ))
         .await
         .expect("an expiry is the timeout, never stale");
     assert_eq!(
@@ -2831,14 +2887,22 @@ async fn cancelling_a_parked_parent_reaps_its_subagents() {
         })
         .await
         .unwrap();
-    store.submit(task("child-turn", "child-chat")).await.unwrap();
+    store
+        .submit(task("child-turn", "child-chat"))
+        .await
+        .unwrap();
     store.cancel_task("run", 2100).await.unwrap();
     assert_eq!(
         store.get_task("child-turn").await.unwrap().unwrap().status,
         TaskStatus::Cancelled
     );
     assert_eq!(
-        store.get_subagent("child-chat").await.unwrap().unwrap().status,
+        store
+            .get_subagent("child-chat")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "cancelled"
     );
 }

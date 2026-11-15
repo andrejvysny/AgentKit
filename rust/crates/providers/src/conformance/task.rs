@@ -9,15 +9,30 @@ use std::path::Path;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Effect {
     /// Returns the entry named by `key_arg`; a missing entry is a precondition failure.
-    Read { key_arg: String },
-    Write { key_arg: String, value_arg: String },
-    Append { key_arg: String, value_arg: String },
+    Read {
+        key_arg: String,
+    },
+    Write {
+        key_arg: String,
+        value_arg: String,
+    },
+    Append {
+        key_arg: String,
+        value_arg: String,
+    },
     /// Appends `value_arg` and a newline to the fixed entry `key`.
-    Log { key: String, value_arg: String },
+    Log {
+        key: String,
+        value_arg: String,
+    },
     /// A missing entry is a precondition failure.
-    Remove { key_arg: String },
+    Remove {
+        key_arg: String,
+    },
     /// Returns fixed text and changes nothing.
-    Reply { text: String },
+    Reply {
+        text: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

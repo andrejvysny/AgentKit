@@ -75,7 +75,10 @@ const CALENDAR_GUIDE: &str = "---\nversion: 3\n---\n# calendar\nList first with 
 fn calendar_toolset() -> Toolset {
     Toolset::new("calendar", "Calendar", "List and create calendar events.")
         .with_guide(CALENDAR_GUIDE)
-        .with_topic("events", "---\nversion: 1\n---\nEvents have a day and a title.")
+        .with_topic(
+            "events",
+            "---\nversion: 1\n---\nEvents have a day and a title.",
+        )
         .with_tools(&["calendar_list_events", "calendar_create_event"])
 }
 
@@ -94,7 +97,12 @@ fn catalog_tools(ran: &Ran) -> Vec<Arc<Echo>> {
             &["title", "day"],
             ran,
         ),
-        tool("mcp__notes__list", "List notes in the notebook.", &["notebook"], ran),
+        tool(
+            "mcp__notes__list",
+            "List notes in the notebook.",
+            &["notebook"],
+            ran,
+        ),
     ]
 }
 
@@ -233,7 +241,11 @@ fn load(id: &str, toolset: &str) -> ToolCall {
 }
 
 fn via(id: &str, name: &str, arguments: Value) -> ToolCall {
-    call(id, "tool_call", json!({"name": name, "arguments": arguments}))
+    call(
+        id,
+        "tool_call",
+        json!({"name": name, "arguments": arguments}),
+    )
 }
 
 fn model(outcome: &Outcome, index: usize) -> Value {
@@ -248,11 +260,18 @@ fn a_guide_file_has_front_matter_and_placeholders_render() {
     assert!(guide.text.starts_with("# calendar"));
     assert_eq!(
         guide_placeholders(&guide.text),
-        ["calendar_list_events", "calendar_create_event", "nothing_here"]
+        [
+            "calendar_list_events",
+            "calendar_create_event",
+            "nothing_here"
+        ]
     );
     let shown = BTreeMap::from([
         ("calendar_list_events".to_owned(), "cal_list".to_owned()),
-        ("calendar_create_event".to_owned(), "cal_a, cal_b or cal_c".to_owned()),
+        (
+            "calendar_create_event".to_owned(),
+            "cal_a, cal_b or cal_c".to_owned(),
+        ),
     ]);
     let text = render_guide(&guide.text, &shown);
     assert!(text.contains("List first with cal_list, then add with cal_a, cal_b or cal_c."));
@@ -339,7 +358,9 @@ fn a_card_is_one_short_line_and_a_toolset_with_a_guide_is_listed_when_direct() {
     assert!(surface.deferred.is_empty());
     assert!(surface.manifest.contains("toolset_load"));
     let view = registry.toolset_view(surface.manifest.definitions(), None);
-    let index = surface.index_with(&view).expect("guided toolsets are listed");
+    let index = surface
+        .index_with(&view)
+        .expect("guided toolsets are listed");
     assert!(index.contains("- calendar (2): List and create calendar events."));
     assert!(!index.contains("mcp__notes"), "no guide, nothing deferred");
     let card = &calendar_toolset().card;
@@ -358,8 +379,16 @@ async fn toolset_load_returns_the_guide_and_compact_definitions() {
         registry,
         vec![vec![
             load("l1", "calendar"),
-            call("l2", "toolset_load", json!({"toolset": "calendar", "topic": "events"})),
-            call("l3", "toolset_load", json!({"toolset": "calendar", "topic": "nope"})),
+            call(
+                "l2",
+                "toolset_load",
+                json!({"toolset": "calendar", "topic": "events"}),
+            ),
+            call(
+                "l3",
+                "toolset_load",
+                json!({"toolset": "calendar", "topic": "nope"}),
+            ),
             load("l4", "calendr"),
         ]],
     )
@@ -370,7 +399,10 @@ async fn toolset_load_returns_the_guide_and_compact_definitions() {
     assert_eq!(data["mode"], "indirect");
     assert_eq!(data["guide_version"], "3");
     let guide = data["guide"].as_str().unwrap();
-    assert!(guide.contains("List first with calendar_list_events, then add with calendar_create_event."));
+    assert!(
+        guide
+            .contains("List first with calendar_list_events, then add with calendar_create_event.")
+    );
     assert!(!guide.contains("{{"));
     let tools = data["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 2);
@@ -379,13 +411,26 @@ async fn toolset_load_returns_the_guide_and_compact_definitions() {
     assert_eq!(data["topics"], json!(["events"]));
     assert!(first["summary"].as_str().unwrap().contains("tool_call"));
     // A topic returns its own guide.
-    assert_eq!(model(&outcome, 1)["data"]["guide"], "Events have a day and a title.");
+    assert_eq!(
+        model(&outcome, 1)["data"]["guide"],
+        "Events have a day and a title."
+    );
     // An unknown topic and an unknown toolset fail with what to do next.
     let failed = outcome.of("run.tool.failed");
     assert_eq!(failed[0]["errorCode"], "invalid_arguments");
-    assert!(failed[0]["errorMessage"].as_str().unwrap().contains("events"));
+    assert!(
+        failed[0]["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("events")
+    );
     assert_eq!(failed[1]["errorCode"], "tool_not_found");
-    assert!(failed[1]["errorMessage"].as_str().unwrap().contains("calendar"));
+    assert!(
+        failed[1]["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("calendar")
+    );
 }
 
 #[tokio::test]
@@ -400,7 +445,11 @@ async fn indirect_mode_keeps_the_tools_array_and_runs_loaded_tools_through_tool_
         registry,
         vec![
             vec![load("l1", "calendar")],
-            vec![via("c1", "calendar_list_events", json!({"day": "2026-03-02"}))],
+            vec![via(
+                "c1",
+                "calendar_list_events",
+                json!({"day": "2026-03-02"}),
+            )],
         ],
     )
     .await;
@@ -448,7 +497,11 @@ async fn promote_mode_changes_the_array_once_at_a_turn_boundary_and_records_it()
                 load("l1", "calendar"),
                 call("early", "calendar_list_events", json!({"day": "d"})),
             ],
-            vec![call("c1", "calendar_list_events", json!({"day": "2026-03-02"}))],
+            vec![call(
+                "c1",
+                "calendar_list_events",
+                json!({"day": "2026-03-02"}),
+            )],
         ],
     )
     .await;
@@ -504,7 +557,11 @@ async fn promoted_tools_are_direct_for_describe_and_flagged_in_search() {
         vec![
             vec![load("l1", "calendar")],
             vec![
-                call("d1", "tool_describe", json!({"name": "calendar_list_events"})),
+                call(
+                    "d1",
+                    "tool_describe",
+                    json!({"name": "calendar_list_events"}),
+                ),
                 call("s1", "tool_search", json!({"query": "calendar events"})),
             ],
         ],
@@ -514,7 +571,10 @@ async fn promoted_tools_are_direct_for_describe_and_flagged_in_search() {
     let described = model(&outcome, 1);
     assert_eq!(described["data"]["loading"], "direct", "{described}");
     assert!(
-        described["summary"].as_str().unwrap().contains("in your tool list"),
+        described["summary"]
+            .as_str()
+            .unwrap()
+            .contains("in your tool list"),
         "{described}"
     );
     let searched = model(&outcome, 2);
@@ -551,17 +611,16 @@ fn the_profile_sets_direct_tools_the_bound_and_the_load_mode() {
     let plain = Classification::from_profile(&profile, None);
     assert_eq!(plain.load_mode, LoadMode::Promote);
     assert_eq!(plain.max_definitions, 2);
-    assert_eq!(
-        plain.direct,
-        DirectSet::names(["read_file", "git_inspect"])
-    );
+    assert_eq!(plain.direct, DirectSet::names(["read_file", "git_inspect"]));
     // Under the common dialect `git_inspect` is offered as four tools.
     let dialect = common_dialect();
     let wired = Classification::from_profile(&profile, Some(&dialect));
     let DirectSet::Names(names) = &wired.direct else {
         panic!("names");
     };
-    assert!(names.contains("git_status") && names.contains("git_log") && names.contains("read_file"));
+    assert!(
+        names.contains("git_status") && names.contains("git_log") && names.contains("read_file")
+    );
     // The default keeps the meta tools only when something is deferred.
     assert!(!wired.keep_meta);
 }
@@ -620,7 +679,11 @@ async fn promotion_beyond_the_bound_is_refused_with_a_teaching_result() {
         registry,
         vec![
             vec![load("l1", "calendar")],
-            vec![via("c1", "calendar_list_events", json!({"day": "2026-03-02"}))],
+            vec![via(
+                "c1",
+                "calendar_list_events",
+                json!({"day": "2026-03-02"}),
+            )],
         ],
     )
     .await;
@@ -643,18 +706,30 @@ fn coding_definitions() -> Vec<ToolDefinition> {
         "command": {"type": "string"}, "path": {"type": "string"},
         "staged": {"type": "boolean"}, "rev": {"type": "string"}, "limit": {"type": "integer"}
     });
-    ["read_file", "write_file", "edit_file", "list_dir", "find_files", "code_search",
-        "run_command", "git_inspect", "run_tests", "repo_map", "submit_plan", "calendar_list"]
-        .iter()
-        .map(|name| {
-            serde_json::from_value(json!({
-                "name": name, "version": "1", "effect": "read", "capability": "fs.read",
-                "description": format!("{name}."),
-                "inputSchema": {"type": "object", "properties": properties}
-            }))
-            .unwrap()
-        })
-        .collect()
+    [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "find_files",
+        "code_search",
+        "run_command",
+        "git_inspect",
+        "run_tests",
+        "repo_map",
+        "submit_plan",
+        "calendar_list",
+    ]
+    .iter()
+    .map(|name| {
+        serde_json::from_value(json!({
+            "name": name, "version": "1", "effect": "read", "capability": "fs.read",
+            "description": format!("{name}."),
+            "inputSchema": {"type": "object", "properties": properties}
+        }))
+        .unwrap()
+    })
+    .collect()
 }
 
 #[test]
@@ -683,7 +758,10 @@ fn the_qwen_profile_bounds_the_rendered_array_after_dialect_expansion() {
         // the overflow is reported. The git tools go together.
         let demoted: Vec<&str> = surface.demoted.iter().map(String::as_str).collect();
         assert_eq!(demoted.len(), 4, "{demoted:?}");
-        assert!(demoted.iter().all(|name| name.starts_with("git_")), "{demoted:?}");
+        assert!(
+            demoted.iter().all(|name| name.starts_with("git_")),
+            "{demoted:?}"
+        );
         for name in &surface.demoted {
             assert!(surface.deferred.iter().any(|d| &d.name == name), "{name}");
         }

@@ -114,6 +114,42 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiMessageConten
 pub fn agentkit_contracts::AiMessageContent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiMessageContent
 pub fn agentkit_contracts::AiMessageContent::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub enum agentkit_contracts::AiModelEffortChannel
+pub agentkit_contracts::AiModelEffortChannel::EffortField
+pub agentkit_contracts::AiModelEffortChannel::None
+pub agentkit_contracts::AiModelEffortChannel::TemplateOption
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelEffortChannel
+pub fn agentkit_contracts::AiModelEffortChannel::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiModelFamily
+pub agentkit_contracts::AiModelFamily::Anthropic
+pub agentkit_contracts::AiModelFamily::Generic
+pub agentkit_contracts::AiModelFamily::Openai
+pub agentkit_contracts::AiModelFamily::Qwen
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelFamily
+pub fn agentkit_contracts::AiModelFamily::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiModelImagePosition
+pub agentkit_contracts::AiModelImagePosition::ToolResult
+pub agentkit_contracts::AiModelImagePosition::User
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelImagePosition
+pub fn agentkit_contracts::AiModelImagePosition::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiModelLimitSource
+pub agentkit_contracts::AiModelLimitSource::Estimated
+pub agentkit_contracts::AiModelLimitSource::Probe
+pub agentkit_contracts::AiModelLimitSource::Proxy
+pub agentkit_contracts::AiModelLimitSource::Server
+pub agentkit_contracts::AiModelLimitSource::User
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelLimitSource
+pub fn agentkit_contracts::AiModelLimitSource::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiModelLoadMode
+pub agentkit_contracts::AiModelLoadMode::Indirect
+pub agentkit_contracts::AiModelLoadMode::Promote
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelLoadMode
+pub fn agentkit_contracts::AiModelLoadMode::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiModelToolChoicePolicy
+pub agentkit_contracts::AiModelToolChoicePolicy::AutoOnly
+pub agentkit_contracts::AiModelToolChoicePolicy::AutoRequiredNamed
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelToolChoicePolicy
+pub fn agentkit_contracts::AiModelToolChoicePolicy::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 pub enum agentkit_contracts::AiProviderContinuationScopeProtocol
 pub agentkit_contracts::AiProviderContinuationScopeProtocol::Responses
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiProviderContinuationScopeProtocol
@@ -137,6 +173,17 @@ pub enum agentkit_contracts::AiRunContextAdmittedEventType
 pub agentkit_contracts::AiRunContextAdmittedEventType::RunContextAdmitted
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextAdmittedEventType
 pub fn agentkit_contracts::AiRunContextAdmittedEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiRunContextCacheBreakEventDataReason
+pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Compact
+pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Mask
+pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Params
+pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Refreeze
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventDataReason
+pub fn agentkit_contracts::AiRunContextCacheBreakEventDataReason::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiRunContextCacheBreakEventType
+pub agentkit_contracts::AiRunContextCacheBreakEventType::ContextCacheBreak
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventType
+pub fn agentkit_contracts::AiRunContextCacheBreakEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 pub enum agentkit_contracts::AiRunContextCompactedEventDataReason
 pub agentkit_contracts::AiRunContextCompactedEventDataReason::Manual
 pub agentkit_contracts::AiRunContextCompactedEventDataReason::Threshold
@@ -150,6 +197,7 @@ pub enum agentkit_contracts::AiRunEvent
 pub agentkit_contracts::AiRunEvent::Cancelled(agentkit_contracts::AiRunCancelledEvent)
 pub agentkit_contracts::AiRunEvent::Completed(agentkit_contracts::AiRunCompletedEvent)
 pub agentkit_contracts::AiRunEvent::ContextAdmitted(agentkit_contracts::AiRunContextAdmittedEvent)
+pub agentkit_contracts::AiRunEvent::ContextCacheBreak(agentkit_contracts::AiRunContextCacheBreakEvent)
 pub agentkit_contracts::AiRunEvent::ContextCompacted(agentkit_contracts::AiRunContextCompactedEvent)
 pub agentkit_contracts::AiRunEvent::Failed(agentkit_contracts::AiRunFailedEvent)
 pub agentkit_contracts::AiRunEvent::InputApplied(agentkit_contracts::AiRunInputAppliedEvent)
@@ -176,6 +224,7 @@ pub fn agentkit_contracts::AiRunEvent::from_json(serde_json::value::Value) -> co
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunEvent
 pub fn agentkit_contracts::AiRunEvent::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub enum agentkit_contracts::AiRunEventType
+pub agentkit_contracts::AiRunEventType::ContextCacheBreak
 pub agentkit_contracts::AiRunEventType::RunCancelled
 pub agentkit_contracts::AiRunEventType::RunCompleted
 pub agentkit_contracts::AiRunEventType::RunContextAdmitted
@@ -763,6 +812,115 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiImageSourceUr
 pub fn agentkit_contracts::AiImageSourceUrl::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiImageSourceUrl
 pub fn agentkit_contracts::AiImageSourceUrl::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelBodyExtras
+pub agentkit_contracts::AiModelBodyExtras::chat_template_kwargs: agentkit_contracts::Optional<alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>>
+pub agentkit_contracts::AiModelBodyExtras::parallel_tool_calls: agentkit_contracts::Optional<bool>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelBodyExtras
+pub fn agentkit_contracts::AiModelBodyExtras::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelBodyExtras
+pub fn agentkit_contracts::AiModelBodyExtras::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelDialect
+pub agentkit_contracts::AiModelDialect::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelDialect::id: alloc::string::String
+pub agentkit_contracts::AiModelDialect::version: alloc::string::String
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelDialect
+pub fn agentkit_contracts::AiModelDialect::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelDialect
+pub fn agentkit_contracts::AiModelDialect::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelEffortMap
+pub agentkit_contracts::AiModelEffortMap::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelEffortMap::high: agentkit_contracts::Optional<agentkit_contracts::AiModelEffortSetting>
+pub agentkit_contracts::AiModelEffortMap::low: agentkit_contracts::Optional<agentkit_contracts::AiModelEffortSetting>
+pub agentkit_contracts::AiModelEffortMap::medium: agentkit_contracts::Optional<agentkit_contracts::AiModelEffortSetting>
+pub agentkit_contracts::AiModelEffortMap::minimal: agentkit_contracts::Optional<agentkit_contracts::AiModelEffortSetting>
+pub agentkit_contracts::AiModelEffortMap::off: agentkit_contracts::Optional<agentkit_contracts::AiModelEffortSetting>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelEffortMap
+pub fn agentkit_contracts::AiModelEffortMap::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelEffortMap
+pub fn agentkit_contracts::AiModelEffortMap::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelEffortSetting
+pub agentkit_contracts::AiModelEffortSetting::effort: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiModelEffortSetting::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelEffortSetting::thinking: bool
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelEffortSetting
+pub fn agentkit_contracts::AiModelEffortSetting::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelEffortSetting
+pub fn agentkit_contracts::AiModelEffortSetting::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelLimits
+pub agentkit_contracts::AiModelLimits::context_window: f64
+pub agentkit_contracts::AiModelLimits::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelLimits::max_output: f64
+pub agentkit_contracts::AiModelLimits::source: agentkit_contracts::AiModelLimitSource
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelLimits
+pub fn agentkit_contracts::AiModelLimits::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelLimits
+pub fn agentkit_contracts::AiModelLimits::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelMessageRules
+pub agentkit_contracts::AiModelMessageRules::escape_tool_result_tags: bool
+pub agentkit_contracts::AiModelMessageRules::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelMessageRules::image_positions: alloc::vec::Vec<agentkit_contracts::AiModelImagePosition>
+pub agentkit_contracts::AiModelMessageRules::system_first_only: bool
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelMessageRules
+pub fn agentkit_contracts::AiModelMessageRules::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelMessageRules
+pub fn agentkit_contracts::AiModelMessageRules::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelReasoning
+pub agentkit_contracts::AiModelReasoning::effort_channel: agentkit_contracts::AiModelEffortChannel
+pub agentkit_contracts::AiModelReasoning::effort_map: agentkit_contracts::AiModelEffortMap
+pub agentkit_contracts::AiModelReasoning::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelReasoning::send_back: bool
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelReasoning
+pub fn agentkit_contracts::AiModelReasoning::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelReasoning
+pub fn agentkit_contracts::AiModelReasoning::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelRecovery
+pub agentkit_contracts::AiModelRecovery::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelRecovery::nudge: bool
+pub agentkit_contracts::AiModelRecovery::salvage: bool
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelRecovery
+pub fn agentkit_contracts::AiModelRecovery::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelRecovery
+pub fn agentkit_contracts::AiModelRecovery::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelSampling
+pub agentkit_contracts::AiModelSampling::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelSampling::non_thinking: agentkit_contracts::AiModelSamplingSet
+pub agentkit_contracts::AiModelSampling::thinking: agentkit_contracts::AiModelSamplingSet
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelSampling
+pub fn agentkit_contracts::AiModelSampling::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelSampling
+pub fn agentkit_contracts::AiModelSampling::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelSamplingSet
+pub agentkit_contracts::AiModelSamplingSet::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelSamplingSet::min_p: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiModelSamplingSet::presence_penalty: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiModelSamplingSet::repetition_penalty: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiModelSamplingSet::temperature: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiModelSamplingSet::top_k: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiModelSamplingSet::top_p: agentkit_contracts::Optional<f64>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelSamplingSet
+pub fn agentkit_contracts::AiModelSamplingSet::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelSamplingSet
+pub fn agentkit_contracts::AiModelSamplingSet::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiModelToolProfile
+pub agentkit_contracts::AiModelToolProfile::body_extras: agentkit_contracts::AiModelBodyExtras
+pub agentkit_contracts::AiModelToolProfile::dialect: agentkit_contracts::AiModelDialect
+pub agentkit_contracts::AiModelToolProfile::direct_tools: alloc::vec::Vec<alloc::string::String>
+pub agentkit_contracts::AiModelToolProfile::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiModelToolProfile::family: agentkit_contracts::AiModelFamily
+pub agentkit_contracts::AiModelToolProfile::id: alloc::string::String
+pub agentkit_contracts::AiModelToolProfile::limits: agentkit_contracts::AiModelLimits
+pub agentkit_contracts::AiModelToolProfile::load_mode: agentkit_contracts::AiModelLoadMode
+pub agentkit_contracts::AiModelToolProfile::max_visible_tools: f64
+pub agentkit_contracts::AiModelToolProfile::message_rules: agentkit_contracts::AiModelMessageRules
+pub agentkit_contracts::AiModelToolProfile::qualified_toolsets: alloc::vec::Vec<alloc::string::String>
+pub agentkit_contracts::AiModelToolProfile::reasoning: agentkit_contracts::AiModelReasoning
+pub agentkit_contracts::AiModelToolProfile::recovery: agentkit_contracts::AiModelRecovery
+pub agentkit_contracts::AiModelToolProfile::sampling: agentkit_contracts::AiModelSampling
+pub agentkit_contracts::AiModelToolProfile::tool_choice: agentkit_contracts::AiModelToolChoicePolicy
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelToolProfile
+pub fn agentkit_contracts::AiModelToolProfile::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiModelToolProfile
+pub fn agentkit_contracts::AiModelToolProfile::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::AiPromptContextBlock
 pub agentkit_contracts::AiPromptContextBlock::content: alloc::string::String
 pub agentkit_contracts::AiPromptContextBlock::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
@@ -927,6 +1085,29 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextAdm
 pub fn agentkit_contracts::AiRunContextAdmittedEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunContextAdmittedEventData
 pub fn agentkit_contracts::AiRunContextAdmittedEventData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiRunContextCacheBreakEvent
+pub agentkit_contracts::AiRunContextCacheBreakEvent::attempt_id: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunContextCacheBreakEvent::contract_version: alloc::string::String
+pub agentkit_contracts::AiRunContextCacheBreakEvent::data: agentkit_contracts::AiRunContextCacheBreakEventData
+pub agentkit_contracts::AiRunContextCacheBreakEvent::event_id: alloc::string::String
+pub agentkit_contracts::AiRunContextCacheBreakEvent::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiRunContextCacheBreakEvent::run_id: alloc::string::String
+pub agentkit_contracts::AiRunContextCacheBreakEvent::seq: f64
+pub agentkit_contracts::AiRunContextCacheBreakEvent::timestamp: alloc::string::String
+pub agentkit_contracts::AiRunContextCacheBreakEvent::type_: agentkit_contracts::AiRunContextCacheBreakEventType
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEvent
+pub fn agentkit_contracts::AiRunContextCacheBreakEvent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunContextCacheBreakEvent
+pub fn agentkit_contracts::AiRunContextCacheBreakEvent::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiRunContextCacheBreakEventData
+pub agentkit_contracts::AiRunContextCacheBreakEventData::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiRunContextCacheBreakEventData::reason: agentkit_contracts::AiRunContextCacheBreakEventDataReason
+pub agentkit_contracts::AiRunContextCacheBreakEventData::tokens_after: agentkit_contracts::Optional<f64>
+pub agentkit_contracts::AiRunContextCacheBreakEventData::tokens_before: agentkit_contracts::Optional<f64>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventData
+pub fn agentkit_contracts::AiRunContextCacheBreakEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunContextCacheBreakEventData
+pub fn agentkit_contracts::AiRunContextCacheBreakEventData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::AiRunContextCompactedEvent
 pub agentkit_contracts::AiRunContextCompactedEvent::attempt_id: agentkit_contracts::Optional<alloc::string::String>
 pub agentkit_contracts::AiRunContextCompactedEvent::contract_version: alloc::string::String
@@ -1413,6 +1594,26 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunWarningEve
 pub fn agentkit_contracts::AiRunWarningEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunWarningEventData
 pub fn agentkit_contracts::AiRunWarningEventData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiSessionPrefix
+pub agentkit_contracts::AiSessionPrefix::cache_key: alloc::string::String
+pub agentkit_contracts::AiSessionPrefix::deferred_tools: agentkit_contracts::Optional<alloc::vec::Vec<agentkit_contracts::AiToolDefinition>>
+pub agentkit_contracts::AiSessionPrefix::dialect_version: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiSessionPrefix::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiSessionPrefix::frozen_at_task: alloc::string::String
+pub agentkit_contracts::AiSessionPrefix::memory_core_digest: alloc::string::String
+pub agentkit_contracts::AiSessionPrefix::model_profile_digest: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiSessionPrefix::model_profile_id: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiSessionPrefix::params_digest: alloc::string::String
+pub agentkit_contracts::AiSessionPrefix::revision: f64
+pub agentkit_contracts::AiSessionPrefix::rules_digest: alloc::string::String
+pub agentkit_contracts::AiSessionPrefix::system_digest: alloc::string::String
+pub agentkit_contracts::AiSessionPrefix::tool_manifest: agentkit_contracts::Optional<alloc::vec::Vec<agentkit_contracts::AiToolDefinition>>
+pub agentkit_contracts::AiSessionPrefix::tool_manifest_hash: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiSessionPrefix::tools_digest: alloc::string::String
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiSessionPrefix
+pub fn agentkit_contracts::AiSessionPrefix::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiSessionPrefix
+pub fn agentkit_contracts::AiSessionPrefix::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::AiSourceRef
 pub agentkit_contracts::AiSourceRef::excerpt: agentkit_contracts::Optional<alloc::string::String>
 pub agentkit_contracts::AiSourceRef::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
@@ -1498,8 +1699,6 @@ pub agentkit_contracts::AiToolLimits::extra: alloc::collections::btree::map::BTr
 pub agentkit_contracts::AiToolLimits::max_bytes: f64
 pub agentkit_contracts::AiToolLimits::max_items: agentkit_contracts::Optional<f64>
 pub agentkit_contracts::AiToolLimits::profile: agentkit_contracts::AiContextSizePreference
-impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolFailure
-pub fn agentkit_contracts::AiToolFailure::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolLimits
 pub fn agentkit_contracts::AiToolLimits::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiToolLimits
@@ -2297,6 +2496,40 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiJsonPrimitive
 pub fn agentkit_contracts::AiJsonPrimitiveType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiMessageContent
 pub fn agentkit_contracts::AiMessageContent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelBodyExtras
+pub fn agentkit_contracts::AiModelBodyExtras::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelDialect
+pub fn agentkit_contracts::AiModelDialect::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelEffortChannel
+pub fn agentkit_contracts::AiModelEffortChannel::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelEffortMap
+pub fn agentkit_contracts::AiModelEffortMap::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelEffortSetting
+pub fn agentkit_contracts::AiModelEffortSetting::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelFamily
+pub fn agentkit_contracts::AiModelFamily::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelImagePosition
+pub fn agentkit_contracts::AiModelImagePosition::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelLimitSource
+pub fn agentkit_contracts::AiModelLimitSource::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelLimits
+pub fn agentkit_contracts::AiModelLimits::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelLoadMode
+pub fn agentkit_contracts::AiModelLoadMode::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelMessageRules
+pub fn agentkit_contracts::AiModelMessageRules::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelReasoning
+pub fn agentkit_contracts::AiModelReasoning::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelRecovery
+pub fn agentkit_contracts::AiModelRecovery::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelSampling
+pub fn agentkit_contracts::AiModelSampling::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelSamplingSet
+pub fn agentkit_contracts::AiModelSamplingSet::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelToolChoicePolicy
+pub fn agentkit_contracts::AiModelToolChoicePolicy::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiModelToolProfile
+pub fn agentkit_contracts::AiModelToolProfile::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiPromptContextBlock
 pub fn agentkit_contracts::AiPromptContextBlock::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiPromptPreset
@@ -2335,6 +2568,14 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextAdm
 pub fn agentkit_contracts::AiRunContextAdmittedEventDataWindowSource::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextAdmittedEventType
 pub fn agentkit_contracts::AiRunContextAdmittedEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEvent
+pub fn agentkit_contracts::AiRunContextCacheBreakEvent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventData
+pub fn agentkit_contracts::AiRunContextCacheBreakEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventDataReason
+pub fn agentkit_contracts::AiRunContextCacheBreakEventDataReason::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventType
+pub fn agentkit_contracts::AiRunContextCacheBreakEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCompactedEvent
 pub fn agentkit_contracts::AiRunContextCompactedEvent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCompactedEventData
@@ -2467,6 +2708,8 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunWarningEve
 pub fn agentkit_contracts::AiRunWarningEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunWarningEventType
 pub fn agentkit_contracts::AiRunWarningEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiSessionPrefix
+pub fn agentkit_contracts::AiSessionPrefix::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiSourceRef
 pub fn agentkit_contracts::AiSourceRef::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiTextPart
@@ -2487,6 +2730,8 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolErrorData
 pub fn agentkit_contracts::AiToolErrorData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolErrorPhase
 pub fn agentkit_contracts::AiToolErrorPhase::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolFailure
+pub fn agentkit_contracts::AiToolFailure::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolLimits
 pub fn agentkit_contracts::AiToolLimits::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolOutcomeClass

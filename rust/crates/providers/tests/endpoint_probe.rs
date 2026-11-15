@@ -374,7 +374,10 @@ async fn key_in_parsed_values_and_escaped_forms_never_reaches_the_report() {
             ..Default::default()
         })
         .await;
-        let only: Vec<String> = ["P12", "P17", "P18"].iter().map(|s| s.to_string()).collect();
+        let only: Vec<String> = ["P12", "P17", "P18"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let report = run_checks(&Endpoint::new(&url, "m", Secret::new(key)), &only, 1).await;
         let escaped = serde_json::to_string(key).unwrap();
         let escaped = &escaped[1..escaped.len() - 1];

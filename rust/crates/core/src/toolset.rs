@@ -220,7 +220,9 @@ pub type PromotionCell = Arc<Promotions>;
 
 impl Promotions {
     fn state(&self) -> std::sync::MutexGuard<'_, PromotionState> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Ask for `toolset` at the next turn boundary. False when it is already

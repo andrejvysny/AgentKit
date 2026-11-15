@@ -3,9 +3,9 @@ use super::config::{RoleSpec, SubagentConfig};
 use super::guard::WorkspaceLeaseRegistry;
 use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
+use agentkit_core::HumanRequestSpec;
 use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
-use agentkit_core::HumanRequestSpec;
 use agentkit_sessions::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, AgentSendResult, AgentSessionService,
     AnswerHumanRequest, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput, SendInput,
@@ -133,7 +133,9 @@ impl AwaitMode {
     fn satisfied(self, views: &[SubagentView]) -> bool {
         match self {
             Self::All => views.iter().all(|view| is_terminal_status(&view.status)),
-            Self::Any => views.is_empty() || views.iter().any(|view| is_terminal_status(&view.status)),
+            Self::Any => {
+                views.is_empty() || views.iter().any(|view| is_terminal_status(&view.status))
+            }
         }
     }
 }
@@ -1134,7 +1136,10 @@ impl SubagentService {
                 results: views.iter().map(await_result).collect(),
             }));
         }
-        let awaited: Vec<String> = views.iter().map(|view| view.child_chat_id.clone()).collect();
+        let awaited: Vec<String> = views
+            .iter()
+            .map(|view| view.child_chat_id.clone())
+            .collect();
         let deadline_ms = self.now_ms() + timeout as i64;
         let content = json!({
             "kind": CHILD_WAIT_KIND,
@@ -1212,7 +1217,12 @@ impl SubagentService {
     /// else how many parents woke. A cancelled parent never reaches here:
     /// the store reaps its children as it cancels the parked turn.
     async fn sweep_parked(&self) -> AgentsResult<Option<usize>> {
-        if self.store.count_tasks_by_status(TaskStatus::WaitingChild).await? == 0 {
+        if self
+            .store
+            .count_tasks_by_status(TaskStatus::WaitingChild)
+            .await?
+            == 0
+        {
             return Ok(None);
         }
         let parked = self
@@ -1221,7 +1231,10 @@ impl SubagentService {
             .await?;
         let mut woken = 0usize;
         let mut failed = false;
-        for task in parked.iter().filter(|task| task.kind == CHAT_TURN_TASK_KIND) {
+        for task in parked
+            .iter()
+            .filter(|task| task.kind == CHAT_TURN_TASK_KIND)
+        {
             match self.wake_parked(task).await {
                 Ok(true) => woken += 1,
                 Ok(false) => {}

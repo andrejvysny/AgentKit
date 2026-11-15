@@ -61,9 +61,9 @@ impl Sandbox {
                 (self.classifier.judge(name, raw_args, None).class, text)
             }
             Err((class, text)) => {
-                let verdict = self
-                    .classifier
-                    .judge(name, raw_args, Some(CallFailure::Class(class)));
+                let verdict =
+                    self.classifier
+                        .judge(name, raw_args, Some(CallFailure::Class(class)));
                 (verdict.class, text)
             }
         };
@@ -335,8 +335,12 @@ mod tests {
         assert!(expected_calls_met(&[want("write", json!({"path":"a"}))], &calls).is_ok());
         assert!(expected_calls_met(&[want("write", json!({"content":"*"}))], &calls).is_ok());
         assert!(expected_calls_met(&[want("write", json!({"path":"b"}))], &calls).is_err());
-        assert!(expected_calls_met(&[want("write", json!({"content":"contains:x"}))], &calls).is_ok());
-        assert!(expected_calls_met(&[want("write", json!({"content":"contains:y"}))], &calls).is_err());
+        assert!(
+            expected_calls_met(&[want("write", json!({"content":"contains:x"}))], &calls).is_ok()
+        );
+        assert!(
+            expected_calls_met(&[want("write", json!({"content":"contains:y"}))], &calls).is_err()
+        );
         assert!(expected_calls_met(&[want("read", json!({}))], &calls).is_err());
         let twice = [want("write", json!({})), want("write", json!({}))];
         assert!(expected_calls_met(&twice, &calls).is_err());

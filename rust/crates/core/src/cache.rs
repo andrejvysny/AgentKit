@@ -222,7 +222,10 @@ pub fn plan_breakpoints(
     // Candidates by drop-last priority: BP4, BP2, BP1, BP3.
     let mut ranked: Vec<(u8, Breakpoint)> = vec![];
     if let Some(end) = shape.request_end {
-        ranked.push((4, bp(BreakpointAt::AfterMessage(end), CacheTtl::FiveMinutes)));
+        ranked.push((
+            4,
+            bp(BreakpointAt::AfterMessage(end), CacheTtl::FiveMinutes),
+        ));
     }
     if prefix_ok && let Some(segment) = shape.last_system {
         ranked.push((2, bp(BreakpointAt::EndOfSegment(segment), long)));
@@ -233,7 +236,10 @@ pub fn plan_breakpoints(
     if let Some(end) = shape.previous_end
         && shape.request_end != Some(end)
     {
-        ranked.push((3, bp(BreakpointAt::AfterMessage(end), CacheTtl::FiveMinutes)));
+        ranked.push((
+            3,
+            bp(BreakpointAt::AfterMessage(end), CacheTtl::FiveMinutes),
+        ));
     }
     ranked.truncate(usize::from(*max_breakpoints));
     ranked.sort_by_key(|(number, _)| match number {

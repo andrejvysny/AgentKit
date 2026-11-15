@@ -8,7 +8,7 @@ use crate::{
     SessionFault, SessionMutation, SessionsError, SessionsResult, execution_state_for_mode,
     inspect_execution_state, read_execution_state, with_execution,
 };
-use agentkit_store::is_child_wait;
+use agentkit_engine::is_child_wait;
 use serde_json::{Map, Value, json};
 
 use super::{

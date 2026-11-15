@@ -100,7 +100,10 @@ fn registry(received: &Arc<Mutex<Vec<Value>>>, meta: bool) -> ToolRegistry {
                 "file_path":{"type":"string"},"limit":{"type":"integer"},
                 "timeout":{"type":"integer"},"command":{"type":"string"}}}),
         ),
-        ("read_file", json!({"type":"object","properties":{"file_path":{"type":"string"}}})),
+        (
+            "read_file",
+            json!({"type":"object","properties":{"file_path":{"type":"string"}}}),
+        ),
     ] {
         let definition = serde_json::from_value(json!({"name":name,"version":"1","effect":"read",
             "capability":"test","description":"d","inputSchema":schema}))
@@ -195,10 +198,9 @@ async fn a_direct_call_is_stored_as_the_canonical_call_the_receipt_hashes() {
     assert_eq!(stored.tool_calls[0].name, "edit_file");
     assert_eq!(args(&stored.tool_calls[0]), canonical);
     // The emitted call is kept beside it.
-    let wire: Vec<ToolCall> = serde_json::from_value(
-        stored.metadata.as_ref().unwrap()[WIRE_CALLS_METADATA_KEY].clone(),
-    )
-    .unwrap();
+    let wire: Vec<ToolCall> =
+        serde_json::from_value(stored.metadata.as_ref().unwrap()[WIRE_CALLS_METADATA_KEY].clone())
+            .unwrap();
     assert_eq!(wire, vec![emitted.clone()]);
     // The next request shows the model the call it emitted, not the canonical one.
     let shown = outcome.requests[1]
@@ -217,7 +219,10 @@ async fn an_indirect_call_is_stored_with_the_canonical_inner_call() {
         json!({"name":"old_edit","arguments":{"path":"b.txt","limit":"7"}}),
     );
     let outcome = run(registry(&received, true), vec![emitted]).await;
-    assert_eq!(received.lock().unwrap()[0], json!({"file_path":"b.txt","limit":7}));
+    assert_eq!(
+        received.lock().unwrap()[0],
+        json!({"file_path":"b.txt","limit":7})
+    );
     let stored = assistant(&outcome);
     assert_eq!(stored.tool_calls[0].name, "tool_call");
     // Hosts unwrap the stored call to compare it with approvals and receipts.

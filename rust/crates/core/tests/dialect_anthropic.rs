@@ -2,7 +2,7 @@
 //! the recorded request and response (hand-built from the vendor docs'
 //! examples), and calls the canonical tools cannot express.
 use agentkit_core::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!("fixtures/dialect-anthropic-v1.json")).expect("fixture")
@@ -212,12 +212,16 @@ fn history_is_shown_as_built_in_calls_and_inexpressible_calls_stay_canonical() {
             &json!({"file_path": "a", "old_string": "x", "new_string": "y", "replace_all": true})
         )
         .is_none());
-    assert!(dialect
-        .wire_call("run_command", &json!({"command": "ls", "timeout": 5000}))
-        .is_none());
-    assert!(dialect
-        .wire_call("list_dir", &json!({"include_ignored": true}))
-        .is_none());
+    assert!(
+        dialect
+            .wire_call("run_command", &json!({"command": "ls", "timeout": 5000}))
+            .is_none()
+    );
+    assert!(
+        dialect
+            .wire_call("list_dir", &json!({"include_ignored": true}))
+            .is_none()
+    );
     // Ranges and the workspace root.
     let (_, view) = dialect
         .wire_call(

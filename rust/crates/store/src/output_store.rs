@@ -137,7 +137,10 @@ pub struct SqliteOutputStore {
 impl SqliteOutputStore {
     /// The store must carry an output root ([`SqliteStore::with_output_root`])
     /// so that deleting a chat and this adapter agree on where files live.
-    pub fn new(store: SqliteStore, clock: Arc<dyn Runtime>) -> std::result::Result<Self, OutputError> {
+    pub fn new(
+        store: SqliteStore,
+        clock: Arc<dyn Runtime>,
+    ) -> std::result::Result<Self, OutputError> {
         let root = store.output_root.clone().ok_or_else(|| {
             OutputError::Invalid("the store has no output root; call with_output_root".into())
         })?;
@@ -502,7 +505,9 @@ mod tests {
         let dir = session_dir(root.path(), "chat-1");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("out_x"), b"gone").unwrap();
-        stage_removal(root.path(), &["chat-1".into()]).unwrap().finish();
+        stage_removal(root.path(), &["chat-1".into()])
+            .unwrap()
+            .finish();
         assert!(!dir.exists());
         assert!(!dir.with_extension(ASIDE).exists());
     }

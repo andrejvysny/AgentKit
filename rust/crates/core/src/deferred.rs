@@ -471,12 +471,20 @@ pub fn toolset_index(
         direct: Vec<&'a ToolDefinition>,
         deferred: Vec<&'a ToolDefinition>,
     }
-    let mut groups: std::collections::BTreeMap<String, Group> = Default::default();
+    let mut groups: std::collections::BTreeMap<String, Group<'_>> = Default::default();
     for definition in direct.iter().filter(|d| !is_meta_tool(&d.name)) {
-        groups.entry(view.id_of(definition)).or_default().direct.push(definition);
+        groups
+            .entry(view.id_of(definition))
+            .or_default()
+            .direct
+            .push(definition);
     }
     for definition in deferred {
-        groups.entry(view.id_of(definition)).or_default().deferred.push(definition);
+        groups
+            .entry(view.id_of(definition))
+            .or_default()
+            .deferred
+            .push(definition);
     }
     groups.retain(|id, group| {
         !group.deferred.is_empty() || view.toolset(id).is_some_and(|set| set.guide.is_some())
@@ -493,7 +501,10 @@ pub fn toolset_index(
         let purpose = match view.toolset(&id) {
             Some(set) if !set.card.is_empty() => set.card.clone(),
             _ => first_sentence(
-                group.deferred.first().map_or("", |d| d.description.as_str()),
+                group
+                    .deferred
+                    .first()
+                    .map_or("", |d| d.description.as_str()),
                 PURPOSE_CHARS,
             ),
         };

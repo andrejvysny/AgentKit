@@ -139,7 +139,11 @@ async fn alias_and_text_values_reach_the_tool_canonical_and_are_recorded() {
     let received = Arc::new(Mutex::new(vec![]));
     let outcome = run(
         registry(&received),
-        vec![call("c1", "edit_file", r#"{"path":"a.txt","limit":"5","timeout_sec":2}"#)],
+        vec![call(
+            "c1",
+            "edit_file",
+            r#"{"path":"a.txt","limit":"5","timeout_sec":2}"#,
+        )],
     )
     .await;
     assert_eq!(
@@ -248,7 +252,11 @@ async fn results_of_one_turn_are_contiguous_and_in_call_order() {
         .collect();
     assert_eq!(ids, ["c1", "c2", "c3"]);
     assert!(
-        next[at + 2].content.as_str().unwrap().contains("tool_search"),
+        next[at + 2]
+            .content
+            .as_str()
+            .unwrap()
+            .contains("tool_search"),
         "the failing call carries its own failure in place"
     );
 }

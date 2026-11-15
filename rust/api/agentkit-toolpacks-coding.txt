@@ -61,6 +61,9 @@ pub agentkit_toolpacks_coding::context::ToolEffect::Read
 pub agentkit_toolpacks_coding::context::ToolEffect::Write
 impl agentkit_toolpacks_coding::context::ToolEffect
 pub fn agentkit_toolpacks_coding::context::ToolEffect::as_str(&self) -> &'static str
+pub struct agentkit_toolpacks_coding::context::ConstraintSpec
+pub agentkit_toolpacks_coding::context::ConstraintSpec::constraint: agentkit_core::types::ToolConstraint
+pub agentkit_toolpacks_coding::context::ConstraintSpec::violated: fn(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> bool
 pub struct agentkit_toolpacks_coding::context::EnvInit
 pub agentkit_toolpacks_coding::context::EnvInit::allow_git_writes: bool
 pub agentkit_toolpacks_coding::context::EnvInit::allow_sensitive: bool
@@ -104,9 +107,12 @@ pub fn agentkit_toolpacks_coding::context::PackEnv::new(agentkit_toolpacks_codin
 pub async fn agentkit_toolpacks_coding::context::PackEnv::root(&self) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
 pub async fn agentkit_toolpacks_coding::context::PackEnv::scratch(&self) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
 pub struct agentkit_toolpacks_coding::context::ToolSpec
+pub agentkit_toolpacks_coding::context::ToolSpec::aliases: &'static [(&'static str, &'static str)]
 pub agentkit_toolpacks_coding::context::ToolSpec::capability: &'static str
+pub agentkit_toolpacks_coding::context::ToolSpec::constraints: alloc::vec::Vec<agentkit_toolpacks_coding::context::ConstraintSpec>
 pub agentkit_toolpacks_coding::context::ToolSpec::description: alloc::string::String
 pub agentkit_toolpacks_coding::context::ToolSpec::effect: agentkit_toolpacks_coding::context::ToolEffect
+pub agentkit_toolpacks_coding::context::ToolSpec::examples: alloc::vec::Vec<serde_json::value::Value>
 pub agentkit_toolpacks_coding::context::ToolSpec::input_schema: serde_json::value::Value
 pub agentkit_toolpacks_coding::context::ToolSpec::name: &'static str
 pub agentkit_toolpacks_coding::context::ToolSpec::timeout_ms: u64
@@ -245,6 +251,7 @@ pub struct agentkit_toolpacks_coding::edit_engine::SplitBom
 pub agentkit_toolpacks_coding::edit_engine::SplitBom::bom: alloc::string::String
 pub agentkit_toolpacks_coding::edit_engine::SplitBom::text: alloc::string::String
 pub fn agentkit_toolpacks_coding::edit_engine::apply_edits(&str, &[agentkit_toolpacks_coding::edit_engine::Edit], &str) -> core::result::Result<agentkit_toolpacks_coding::edit_engine::AppliedEdits, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::edit_engine::apply_replace_all(&str, &str, &str, &str) -> core::result::Result<agentkit_toolpacks_coding::edit_engine::AppliedEdits, agentkit_toolpacks_coding::errors::CodingError>
 pub fn agentkit_toolpacks_coding::edit_engine::dominant_eol(&str) -> agentkit_toolpacks_coding::edit_engine::Eol
 pub fn agentkit_toolpacks_coding::edit_engine::normalize_for_fuzzy_match(&str) -> alloc::string::String
 pub fn agentkit_toolpacks_coding::edit_engine::normalize_to_lf(&str) -> alloc::string::String
@@ -394,6 +401,7 @@ pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::shutdown(&self)
 impl agentkit_governance::contribution::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::namespace(&self) -> &str
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub const agentkit_toolpacks_coding::pack::CODING_TOOL_NAMES: &[&str]
 pub async fn agentkit_toolpacks_coding::pack::create_coding_tool_pack(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_toolpacks_coding::pack::CodingToolPack>, agentkit_toolpacks_coding::errors::CodingError>
 pub type agentkit_toolpacks_coding::pack::PackCancellation = tokio_util::sync::cancellation_token::CancellationToken
@@ -615,6 +623,12 @@ pub mod agentkit_toolpacks_coding::search_tools
 pub fn agentkit_toolpacks_coding::search_tools::code_search_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
 pub fn agentkit_toolpacks_coding::search_tools::find_files_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
 pub fn agentkit_toolpacks_coding::search_tools::repo_map_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub mod agentkit_toolpacks_coding::toolsets
+pub const agentkit_toolpacks_coding::toolsets::FILES_TOOLSET: &str
+pub const agentkit_toolpacks_coding::toolsets::GIT_TOOLSET: &str
+pub const agentkit_toolpacks_coding::toolsets::PLAN_TOOLSET: &str
+pub const agentkit_toolpacks_coding::toolsets::SHELL_TOOLSET: &str
+pub fn agentkit_toolpacks_coding::toolsets::coding_toolsets() -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub mod agentkit_toolpacks_coding::truncate
 pub enum agentkit_toolpacks_coding::truncate::TruncatedBy
 pub agentkit_toolpacks_coding::truncate::TruncatedBy::Bytes
@@ -833,6 +847,7 @@ pub async fn agentkit_toolpacks_coding::pack::CodingToolPack::shutdown(&self)
 impl agentkit_governance::contribution::ToolContributor for agentkit_toolpacks_coding::pack::CodingToolPack
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_toolpacks_coding::pack::CodingToolPack::namespace(&self) -> &str
+pub fn agentkit_toolpacks_coding::pack::CodingToolPack::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub struct agentkit_toolpacks_coding::CodingToolPackOptions
 pub agentkit_toolpacks_coding::CodingToolPackOptions::allow_git_writes: bool
 pub agentkit_toolpacks_coding::CodingToolPackOptions::allow_sensitive: bool
@@ -993,9 +1008,12 @@ pub const fn agentkit_toolpacks_coding::process::Teardown::clean() -> Self
 pub fn agentkit_toolpacks_coding::process::Teardown::outcome(&self) -> agentkit_toolpacks_coding::process::CleanupOutcome
 pub const fn agentkit_toolpacks_coding::process::Teardown::unknown() -> Self
 pub struct agentkit_toolpacks_coding::ToolSpec
+pub agentkit_toolpacks_coding::ToolSpec::aliases: &'static [(&'static str, &'static str)]
 pub agentkit_toolpacks_coding::ToolSpec::capability: &'static str
+pub agentkit_toolpacks_coding::ToolSpec::constraints: alloc::vec::Vec<agentkit_toolpacks_coding::context::ConstraintSpec>
 pub agentkit_toolpacks_coding::ToolSpec::description: alloc::string::String
 pub agentkit_toolpacks_coding::ToolSpec::effect: agentkit_toolpacks_coding::context::ToolEffect
+pub agentkit_toolpacks_coding::ToolSpec::examples: alloc::vec::Vec<serde_json::value::Value>
 pub agentkit_toolpacks_coding::ToolSpec::input_schema: serde_json::value::Value
 pub agentkit_toolpacks_coding::ToolSpec::name: &'static str
 pub agentkit_toolpacks_coding::ToolSpec::timeout_ms: u64
@@ -1061,6 +1079,7 @@ pub async fn agentkit_toolpacks_coding::canonical_root_key(&str) -> alloc::strin
 pub fn agentkit_toolpacks_coding::classify_shell_command(&str) -> agentkit_toolpacks_coding::command_policy::CommandClass
 pub fn agentkit_toolpacks_coding::clear_version_ledger()
 pub async fn agentkit_toolpacks_coding::coding_standing_approval_key(&str, core::option::Option<&str>, &str, &agentkit_toolpacks_coding::command_policy::ShellArgs, &agentkit_toolpacks_coding::command_policy::StandingApprovalWorkspace) -> core::option::Option<agentkit_toolpacks_coding::command_policy::StandingApprovalKey>
+pub fn agentkit_toolpacks_coding::coding_toolsets() -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub fn agentkit_toolpacks_coding::command_fingerprint(&str, &str, &str, &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<core::option::Option<alloc::string::String>, agentkit_toolpacks_coding::command_fingerprint::FingerprintError>
 pub async fn agentkit_toolpacks_coding::confine(&str, &str, agentkit_toolpacks_coding::paths::ConfineOptions) -> core::result::Result<agentkit_toolpacks_coding::paths::ConfinedPath, agentkit_toolpacks_coding::errors::CodingError>
 pub async fn agentkit_toolpacks_coding::create_coding_tool_pack(agentkit_toolpacks_coding::types::CodingToolPackOptions) -> core::result::Result<alloc::rcs::arc::Arc<agentkit_toolpacks_coding::pack::CodingToolPack>, agentkit_toolpacks_coding::errors::CodingError>

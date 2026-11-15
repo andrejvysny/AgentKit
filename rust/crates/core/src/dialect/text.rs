@@ -50,7 +50,9 @@ pub(super) fn rewrite_schema(schema: &mut Value, names: &BTreeMap<String, String
                 }
             }
         }
-        Value::Array(items) => items.iter_mut().for_each(|item| rewrite_schema(item, names)),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| rewrite_schema(item, names)),
         _ => {}
     }
 }

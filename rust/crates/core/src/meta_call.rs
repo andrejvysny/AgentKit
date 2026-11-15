@@ -8,9 +8,9 @@
 //! That is the governance parity: nothing here decides who may call what.
 //! A refusal at this stage (unknown name, invalid arguments) runs no guard
 //! and no tool.
-use crate::call_pipeline::{closest_names, prepare_resolved, resolve_failure, Prepared};
-use crate::deferred::{is_meta_tool, TOOL_CALL};
-use crate::{envelope, CoreError, ToolCall, ToolRegistry};
+use crate::call_pipeline::{Prepared, closest_names, prepare_resolved, resolve_failure};
+use crate::deferred::{TOOL_CALL, is_meta_tool};
+use crate::{CoreError, ToolCall, ToolRegistry, envelope};
 use serde_json::Value;
 
 const CLOSEST: usize = 3;

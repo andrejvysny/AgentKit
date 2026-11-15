@@ -1,7 +1,5 @@
 //! Command-line driver shared by the AgentKit binary and host bindings (OneMind).
-use super::{
-    LiveConfig, MockMode, MockModel, Model, Thresholds, live_model, load_dir, run_matrix,
-};
+use super::{LiveConfig, MockMode, MockModel, Model, Thresholds, live_model, load_dir, run_matrix};
 use crate::probe::Secret;
 use std::path::PathBuf;
 
@@ -17,7 +15,11 @@ fn models(args: &[String]) -> Result<Vec<Box<dyn Model>>, String> {
     match (live, flag(args, "--base-url"), flag(args, "--model")) {
         (true, Some(base_url), Some(model)) => {
             let key = Secret::new(std::env::var("CONFORMANCE_API_KEY").unwrap_or_default());
-            let config = LiveConfig { base_url, model, key };
+            let config = LiveConfig {
+                base_url,
+                model,
+                key,
+            };
             Ok(vec![Box::new(live_model(config, live)?) as Box<dyn Model>])
         }
         (true, _, _) => Err("--live needs --base-url and --model".to_owned()),
@@ -50,7 +52,9 @@ async fn run(args: &[String], default_tasks: &str) -> Result<String, String> {
     let models = models(args)?;
     let dir = PathBuf::from(flag(args, "--tasks").unwrap_or_else(|| default_tasks.to_owned()));
     let tasks = load_dir(&dir)?;
-    let runs = flag(args, "--runs").and_then(|v| v.parse().ok()).unwrap_or(3);
+    let runs = flag(args, "--runs")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
     let defaults = Thresholds::default();
     let thresholds = Thresholds {
         min_success: flag(args, "--min-success")

@@ -39,8 +39,8 @@ pub use mcp_memory::{
 pub use mem_embedder::{HASH_EMBEDDER_DIMS, HashEmbedder};
 pub use mem_index::InMemoryRetrievalIndex;
 pub use mem_repository::InMemoryMemoryRepository;
-pub use output_memory::{InMemoryOutputStore, ManualClock};
 pub use memory::{InMemoryRepositoryError, InMemorySessionSettle, InMemoryTaskRepository};
+pub use output_memory::{InMemoryOutputStore, ManualClock};
 pub use session_memory::{
     CONTEXT_SUMMARIES_NAMESPACE, InMemorySessionFixture, InMemorySessionRepository,
     InMemorySessionRepositoryError, PROMPT_TEMPLATES_NAMESPACE, PROVIDER_CAPABILITIES_NAMESPACE,

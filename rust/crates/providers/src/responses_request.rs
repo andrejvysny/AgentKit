@@ -219,8 +219,13 @@ fn check_state(
     for item in &state.input_items {
         match item["type"].as_str() {
             Some(
-                "message" | "function_call" | "function_call_output" | "apply_patch_call"
-                | "apply_patch_call_output" | "shell_call" | "shell_call_output",
+                "message"
+                | "function_call"
+                | "function_call_output"
+                | "apply_patch_call"
+                | "apply_patch_call_output"
+                | "shell_call"
+                | "shell_call_output",
             ) => {}
             Some("reasoning") => {
                 if item["encrypted_content"].as_str().is_none_or(str::is_empty) {
@@ -348,7 +353,10 @@ fn map_messages(
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| CoreError::responses("missing_tool_call_id"))?;
             let text = content::text(message, true)?;
-            let built_in = message.name.as_deref().filter(|name| builtins.contains(name));
+            let built_in = message
+                .name
+                .as_deref()
+                .filter(|name| builtins.contains(name));
             items.push(match built_in {
                 Some(name) => builtin_output(name, id, &text),
                 None => json!({"type":"function_call_output","call_id":id,"output":text}),
@@ -790,8 +798,14 @@ mod selected_content_tests {
             model: "model".into(),
             messages: vec![ChatMessage::text("user", "hi")],
             tools: vec![
-                tool("good", json!({"type":"object","properties":{"a":{"type":"string"}}})),
-                tool("bad", json!({"type":"object","properties":{"a":{"type":"string"}},"minProperties":1})),
+                tool(
+                    "good",
+                    json!({"type":"object","properties":{"a":{"type":"string"}}}),
+                ),
+                tool(
+                    "bad",
+                    json!({"type":"object","properties":{"a":{"type":"string"}},"minProperties":1}),
+                ),
             ],
             ..Default::default()
         };
@@ -811,7 +825,13 @@ mod selected_content_tests {
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().any(|v| v.contains("minProperties")));
         assert!(found.iter().any(|v| v.contains("contentEncoding")));
-        assert!(schema_lane_violations(SchemaLane::Responses, &json!({"type":"object","$schema":"x","properties":{}})).is_empty());
+        assert!(
+            schema_lane_violations(
+                SchemaLane::Responses,
+                &json!({"type":"object","$schema":"x","properties":{}})
+            )
+            .is_empty()
+        );
         assert!(schema_lane_violations(SchemaLane::Anthropic, &schema).is_empty());
     }
 }

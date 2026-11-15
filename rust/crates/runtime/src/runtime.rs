@@ -30,7 +30,7 @@ pub struct AgentRuntime {
     pub(crate) memory: Option<Arc<MemoryService>>,
     pub(crate) worker: Option<WorkerHandle>,
     /// Periodic output retention sweep; stops with the runtime.
-    pub(crate) output_sweeper: Option<OutputSweeper>,
+    pub(crate) _output_sweeper: Option<OutputSweeper>,
 }
 
 impl AgentRuntime {

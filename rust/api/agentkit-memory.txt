@@ -1,0 +1,291 @@
+pub mod agentkit_memory
+pub enum agentkit_memory::Actor
+pub agentkit_memory::Actor::Agent
+pub agentkit_memory::Actor::Extractor
+pub agentkit_memory::Actor::Owner
+pub agentkit_memory::Actor::System
+pub enum agentkit_memory::Corpus
+pub agentkit_memory::Corpus::Chat
+pub agentkit_memory::Corpus::Mail
+pub agentkit_memory::Corpus::Memory
+pub agentkit_memory::Corpus::Pages
+pub enum agentkit_memory::EventKind
+pub agentkit_memory::EventKind::Approved
+pub agentkit_memory::EventKind::Captured
+pub agentkit_memory::EventKind::Edited
+pub agentkit_memory::EventKind::Pinned
+pub agentkit_memory::EventKind::Proposed
+pub agentkit_memory::EventKind::Purged
+pub agentkit_memory::EventKind::Rejected
+pub agentkit_memory::EventKind::Retracted
+pub agentkit_memory::EventKind::Superseded
+pub agentkit_memory::EventKind::Unpinned
+pub enum agentkit_memory::Kind
+pub agentkit_memory::Kind::Fact
+pub agentkit_memory::Kind::Lesson
+pub agentkit_memory::Kind::Person
+pub agentkit_memory::Kind::Preference
+pub agentkit_memory::Kind::Routine
+pub agentkit_memory::Kind::SkillRef
+pub enum agentkit_memory::MemoryError
+pub agentkit_memory::MemoryError::Backend(alloc::string::String)
+pub agentkit_memory::MemoryError::Conflict(alloc::string::String)
+pub agentkit_memory::MemoryError::ForeignTransaction
+pub agentkit_memory::MemoryError::InvalidInput(alloc::string::String)
+pub agentkit_memory::MemoryError::InvalidTransition
+pub agentkit_memory::MemoryError::InvalidTransition::from: agentkit_memory::Status
+pub agentkit_memory::MemoryError::InvalidTransition::to: agentkit_memory::Status
+pub agentkit_memory::MemoryError::NotFound(agentkit_memory::RecordId)
+pub agentkit_memory::MemoryError::UnknownModel(agentkit_memory::ModelId)
+pub enum agentkit_memory::ModelState
+pub agentkit_memory::ModelState::Active
+pub agentkit_memory::ModelState::Building
+pub agentkit_memory::ModelState::Retired
+pub enum agentkit_memory::Origin
+pub agentkit_memory::Origin::AgentProposal
+pub agentkit_memory::Origin::ConsolidationProposal
+pub agentkit_memory::Origin::Import
+pub agentkit_memory::Origin::OwnerExplicit
+pub agentkit_memory::Origin::OwnerStatement
+impl agentkit_memory::Origin
+pub fn agentkit_memory::Origin::actor(self) -> agentkit_memory::Actor
+pub fn agentkit_memory::Origin::default_status(self) -> agentkit_memory::Status
+pub enum agentkit_memory::ScopeKind
+pub agentkit_memory::ScopeKind::Agent
+pub agentkit_memory::ScopeKind::Project
+pub agentkit_memory::ScopeKind::User
+pub enum agentkit_memory::Searchability
+pub agentkit_memory::Searchability::Current
+pub agentkit_memory::Searchability::Superseded
+pub enum agentkit_memory::Status
+pub agentkit_memory::Status::Active
+pub agentkit_memory::Status::Proposed
+pub agentkit_memory::Status::Rejected
+pub agentkit_memory::Status::Retracted
+impl agentkit_memory::Status
+pub fn agentkit_memory::Status::can_transition_to(self, agentkit_memory::Status) -> bool
+pub fn agentkit_memory::Status::event_into(agentkit_memory::Status) -> agentkit_memory::EventKind
+pub struct agentkit_memory::Candidate
+pub agentkit_memory::Candidate::corpus: agentkit_memory::Corpus
+pub agentkit_memory::Candidate::id: agentkit_memory::ItemId
+pub agentkit_memory::Candidate::score: f32
+pub agentkit_memory::Candidate::text: alloc::string::String
+pub struct agentkit_memory::Hit
+pub agentkit_memory::Hit::corpus: agentkit_memory::Corpus
+pub agentkit_memory::Hit::id: agentkit_memory::ItemId
+pub agentkit_memory::Hit::score: f32
+pub struct agentkit_memory::IndexFilter
+pub agentkit_memory::IndexFilter::corpora: alloc::vec::Vec<agentkit_memory::Corpus>
+pub agentkit_memory::IndexFilter::include_superseded: bool
+pub agentkit_memory::IndexFilter::scope_keys: alloc::vec::Vec<alloc::string::String>
+pub agentkit_memory::IndexFilter::since: core::option::Option<agentkit_memory::Timestamp>
+pub agentkit_memory::IndexFilter::until: core::option::Option<agentkit_memory::Timestamp>
+pub struct agentkit_memory::IndexItem
+pub agentkit_memory::IndexItem::corpus: agentkit_memory::Corpus
+pub agentkit_memory::IndexItem::id: agentkit_memory::ItemId
+pub agentkit_memory::IndexItem::scope_key: alloc::string::String
+pub agentkit_memory::IndexItem::searchable: agentkit_memory::Searchability
+pub agentkit_memory::IndexItem::text: alloc::string::String
+pub agentkit_memory::IndexItem::text_sha256: [u8; 32]
+pub agentkit_memory::IndexItem::ts: agentkit_memory::Timestamp
+pub agentkit_memory::IndexItem::vector: core::option::Option<(agentkit_memory::ModelId, alloc::vec::Vec<f32>)>
+pub struct agentkit_memory::IndexStats
+pub agentkit_memory::IndexStats::items: u64
+pub agentkit_memory::IndexStats::models: alloc::vec::Vec<agentkit_memory::ModelStats>
+impl agentkit_memory::IndexStats
+pub fn agentkit_memory::IndexStats::active_model(&self) -> core::option::Option<&agentkit_memory::ModelId>
+pub struct agentkit_memory::IndexTx
+impl agentkit_memory::IndexTx
+pub fn agentkit_memory::IndexTx::into_state<T: core::any::Any + core::marker::Send>(self) -> agentkit_memory::MemoryResult<T>
+pub fn agentkit_memory::IndexTx::new<T: core::any::Any + core::marker::Send>(T) -> Self
+pub fn agentkit_memory::IndexTx::state_mut<T: core::any::Any + core::marker::Send>(&mut self) -> agentkit_memory::MemoryResult<&mut T>
+impl core::fmt::Debug for agentkit_memory::IndexTx
+pub fn agentkit_memory::IndexTx::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_memory::ItemId(pub alloc::string::String)
+impl agentkit_memory::ItemId
+pub fn agentkit_memory::ItemId::as_str(&self) -> &str
+pub fn agentkit_memory::ItemId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::convert::From<agentkit_memory::RecordId> for agentkit_memory::ItemId
+pub fn agentkit_memory::ItemId::from(agentkit_memory::RecordId) -> Self
+impl core::fmt::Display for agentkit_memory::ItemId
+pub fn agentkit_memory::ItemId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_memory::LexicalQuery
+pub agentkit_memory::LexicalQuery::prefix_min_chars: u32
+pub agentkit_memory::LexicalQuery::text: alloc::string::String
+impl agentkit_memory::LexicalQuery
+pub fn agentkit_memory::LexicalQuery::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_memory::MemoryEvent
+pub agentkit_memory::MemoryEvent::actor: agentkit_memory::Actor
+pub agentkit_memory::MemoryEvent::at: agentkit_memory::Timestamp
+pub agentkit_memory::MemoryEvent::detail: core::option::Option<serde_json::value::Value>
+pub agentkit_memory::MemoryEvent::kind: agentkit_memory::EventKind
+pub agentkit_memory::MemoryEvent::record_id: agentkit_memory::RecordId
+pub agentkit_memory::MemoryEvent::seq: u64
+pub struct agentkit_memory::MemoryService
+impl agentkit_memory::MemoryService
+pub fn agentkit_memory::MemoryService::embedder(&self) -> core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_memory::Embedder>>
+pub async fn agentkit_memory::MemoryService::get(&self, agentkit_memory::RecordId) -> agentkit_memory::MemoryResult<core::option::Option<agentkit_memory::Record>>
+pub fn agentkit_memory::MemoryService::index(&self) -> &alloc::rcs::arc::Arc<dyn agentkit_memory::RetrievalIndex>
+pub async fn agentkit_memory::MemoryService::insert(&self, agentkit_memory::NewRecord) -> agentkit_memory::MemoryResult<agentkit_memory::RecordId>
+pub fn agentkit_memory::MemoryService::new(alloc::rcs::arc::Arc<dyn agentkit_memory::MemoryRepository>, alloc::rcs::arc::Arc<dyn agentkit_memory::RetrievalIndex>) -> Self
+pub fn agentkit_memory::MemoryService::repository(&self) -> &alloc::rcs::arc::Arc<dyn agentkit_memory::MemoryRepository>
+pub fn agentkit_memory::MemoryService::reranker(&self) -> &alloc::rcs::arc::Arc<dyn agentkit_memory::Reranker>
+pub async fn agentkit_memory::MemoryService::set_status(&self, agentkit_memory::RecordId, agentkit_memory::Status, agentkit_memory::Actor, agentkit_memory::Timestamp) -> agentkit_memory::MemoryResult<()>
+pub async fn agentkit_memory::MemoryService::supersede(&self, agentkit_memory::RecordId, agentkit_memory::NewRecord) -> agentkit_memory::MemoryResult<agentkit_memory::RecordId>
+pub fn agentkit_memory::MemoryService::with_embedder(self, alloc::rcs::arc::Arc<dyn agentkit_memory::Embedder>) -> Self
+pub fn agentkit_memory::MemoryService::with_reranker(self, alloc::rcs::arc::Arc<dyn agentkit_memory::Reranker>) -> Self
+pub struct agentkit_memory::MemoryTx
+impl agentkit_memory::MemoryTx
+pub fn agentkit_memory::MemoryTx::into_state<T: core::any::Any + core::marker::Send>(self) -> agentkit_memory::MemoryResult<T>
+pub fn agentkit_memory::MemoryTx::new<T: core::any::Any + core::marker::Send>(T) -> Self
+pub fn agentkit_memory::MemoryTx::state_mut<T: core::any::Any + core::marker::Send>(&mut self) -> agentkit_memory::MemoryResult<&mut T>
+impl core::fmt::Debug for agentkit_memory::MemoryTx
+pub fn agentkit_memory::MemoryTx::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_memory::ModelId(pub alloc::string::String)
+impl agentkit_memory::ModelId
+pub fn agentkit_memory::ModelId::as_str(&self) -> &str
+pub fn agentkit_memory::ModelId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Display for agentkit_memory::ModelId
+pub fn agentkit_memory::ModelId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_memory::ModelSpec
+pub agentkit_memory::ModelSpec::dims: u32
+pub agentkit_memory::ModelSpec::id: agentkit_memory::ModelId
+pub agentkit_memory::ModelSpec::max_tokens: u32
+pub agentkit_memory::ModelSpec::passage_prefix: alloc::string::String
+pub agentkit_memory::ModelSpec::query_prefix: alloc::string::String
+pub struct agentkit_memory::ModelStats
+pub agentkit_memory::ModelStats::dims: u32
+pub agentkit_memory::ModelStats::id: agentkit_memory::ModelId
+pub agentkit_memory::ModelStats::state: agentkit_memory::ModelState
+pub agentkit_memory::ModelStats::vectors: u64
+pub struct agentkit_memory::NewRecord
+pub agentkit_memory::NewRecord::approved_at: core::option::Option<agentkit_memory::Timestamp>
+pub agentkit_memory::NewRecord::core_order: core::option::Option<i64>
+pub agentkit_memory::NewRecord::created_at: agentkit_memory::Timestamp
+pub agentkit_memory::NewRecord::created_by_task: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::evidence_chat_id: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::evidence_msg_id: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::evidence_quote: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::evidence_sha256: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::is_core: bool
+pub agentkit_memory::NewRecord::kind: agentkit_memory::Kind
+pub agentkit_memory::NewRecord::lang: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::origin: agentkit_memory::Origin
+pub agentkit_memory::NewRecord::scope: agentkit_memory::Scope
+pub agentkit_memory::NewRecord::status: agentkit_memory::Status
+pub agentkit_memory::NewRecord::text: alloc::string::String
+pub agentkit_memory::NewRecord::valid_from: agentkit_memory::Timestamp
+impl agentkit_memory::NewRecord
+pub fn agentkit_memory::NewRecord::into_record(self, agentkit_memory::RecordId) -> agentkit_memory::Record
+pub fn agentkit_memory::NewRecord::new(agentkit_memory::Scope, agentkit_memory::Kind, impl core::convert::Into<alloc::string::String>, agentkit_memory::Origin, agentkit_memory::Timestamp) -> Self
+pub fn agentkit_memory::NewRecord::validate(&self) -> core::result::Result<(), agentkit_memory::MemoryError>
+pub struct agentkit_memory::NoopReranker
+impl agentkit_memory::Reranker for agentkit_memory::NoopReranker
+pub fn agentkit_memory::NoopReranker::rerank<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, alloc::vec::Vec<agentkit_memory::Candidate>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Candidate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_memory::Page
+pub agentkit_memory::Page::limit: u32
+pub agentkit_memory::Page::offset: u32
+impl agentkit_memory::Page
+pub fn agentkit_memory::Page::all() -> Self
+pub fn agentkit_memory::Page::first(u32) -> Self
+pub fn agentkit_memory::Page::new(u32, u32) -> Self
+pub struct agentkit_memory::PurgeReport
+pub agentkit_memory::PurgeReport::neighbour_events_scrubbed: u64
+pub agentkit_memory::PurgeReport::residue: u64
+pub agentkit_memory::PurgeReport::rows_removed: alloc::collections::btree::map::BTreeMap<alloc::string::String, u64>
+impl agentkit_memory::PurgeReport
+pub fn agentkit_memory::PurgeReport::is_clean(&self) -> bool
+pub fn agentkit_memory::PurgeReport::removed(&self, &str) -> u64
+pub struct agentkit_memory::Record
+pub agentkit_memory::Record::approved_at: core::option::Option<agentkit_memory::Timestamp>
+pub agentkit_memory::Record::core_order: core::option::Option<i64>
+pub agentkit_memory::Record::created_at: agentkit_memory::Timestamp
+pub agentkit_memory::Record::created_by_task: core::option::Option<alloc::string::String>
+pub agentkit_memory::Record::evidence_chat_id: core::option::Option<alloc::string::String>
+pub agentkit_memory::Record::evidence_msg_id: core::option::Option<alloc::string::String>
+pub agentkit_memory::Record::evidence_quote: core::option::Option<alloc::string::String>
+pub agentkit_memory::Record::evidence_sha256: core::option::Option<alloc::string::String>
+pub agentkit_memory::Record::id: agentkit_memory::RecordId
+pub agentkit_memory::Record::is_core: bool
+pub agentkit_memory::Record::kind: agentkit_memory::Kind
+pub agentkit_memory::Record::lang: core::option::Option<alloc::string::String>
+pub agentkit_memory::Record::last_used_at: core::option::Option<agentkit_memory::Timestamp>
+pub agentkit_memory::Record::origin: agentkit_memory::Origin
+pub agentkit_memory::Record::scope: agentkit_memory::Scope
+pub agentkit_memory::Record::status: agentkit_memory::Status
+pub agentkit_memory::Record::superseded_by: core::option::Option<agentkit_memory::RecordId>
+pub agentkit_memory::Record::supersedes: core::option::Option<agentkit_memory::RecordId>
+pub agentkit_memory::Record::text: alloc::string::String
+pub agentkit_memory::Record::use_count: u64
+pub agentkit_memory::Record::valid_from: agentkit_memory::Timestamp
+pub agentkit_memory::Record::valid_to: core::option::Option<agentkit_memory::Timestamp>
+pub struct agentkit_memory::RecordFilter
+pub agentkit_memory::RecordFilter::as_of: core::option::Option<agentkit_memory::Timestamp>
+pub agentkit_memory::RecordFilter::include_superseded: bool
+pub agentkit_memory::RecordFilter::is_core: core::option::Option<bool>
+pub agentkit_memory::RecordFilter::kinds: alloc::vec::Vec<agentkit_memory::Kind>
+pub agentkit_memory::RecordFilter::scopes: alloc::vec::Vec<agentkit_memory::Scope>
+pub agentkit_memory::RecordFilter::statuses: alloc::vec::Vec<agentkit_memory::Status>
+impl agentkit_memory::RecordFilter
+pub fn agentkit_memory::RecordFilter::matches(&self, &agentkit_memory::Record) -> bool
+pub struct agentkit_memory::RecordId(_)
+impl agentkit_memory::RecordId
+pub fn agentkit_memory::RecordId::as_uuid(&self) -> uuid::Uuid
+pub fn agentkit_memory::RecordId::from_uuid(uuid::Uuid) -> Self
+pub fn agentkit_memory::RecordId::new() -> Self
+impl core::convert::From<agentkit_memory::RecordId> for agentkit_memory::ItemId
+pub fn agentkit_memory::ItemId::from(agentkit_memory::RecordId) -> Self
+impl core::default::Default for agentkit_memory::RecordId
+pub fn agentkit_memory::RecordId::default() -> Self
+impl core::fmt::Display for agentkit_memory::RecordId
+pub fn agentkit_memory::RecordId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::str::traits::FromStr for agentkit_memory::RecordId
+pub type agentkit_memory::RecordId::Err = agentkit_memory::MemoryError
+pub fn agentkit_memory::RecordId::from_str(&str) -> core::result::Result<Self, Self::Err>
+impl serde_core::ser::Serialize for agentkit_memory::RecordId
+pub fn agentkit_memory::RecordId::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_memory::RecordId
+pub fn agentkit_memory::RecordId::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_memory::Scope
+pub agentkit_memory::Scope::id: alloc::string::String
+pub agentkit_memory::Scope::kind: agentkit_memory::ScopeKind
+impl agentkit_memory::Scope
+pub fn agentkit_memory::Scope::agent(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_memory::Scope::key(&self) -> alloc::string::String
+pub fn agentkit_memory::Scope::new(agentkit_memory::ScopeKind, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_memory::Scope::project(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_memory::Scope::user() -> Self
+pub struct agentkit_memory::Timestamp(pub i64)
+pub const agentkit_memory::MAX_TEXT_CHARS: usize
+pub trait agentkit_memory::Embedder: core::marker::Send + core::marker::Sync
+pub fn agentkit_memory::Embedder::embed_documents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<alloc::vec::Vec<f32>>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::Embedder::embed_query<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<f32>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::Embedder::spec(&self) -> &agentkit_memory::ModelSpec
+pub trait agentkit_memory::MemoryRepository: core::marker::Send + core::marker::Sync
+pub fn agentkit_memory::MemoryRepository::begin<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::MemoryTx>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::MemoryRepository::commit<'life0, 'async_trait>(&'life0 self, agentkit_memory::MemoryTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::MemoryRepository::core_block<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::Scope]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::MemoryRepository::events<'life0, 'async_trait>(&'life0 self, agentkit_memory::RecordId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::MemoryEvent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::MemoryRepository::get<'life0, 'async_trait>(&'life0 self, agentkit_memory::RecordId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<core::option::Option<agentkit_memory::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::MemoryRepository::insert<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::MemoryRepository::list<'life0, 'async_trait>(&'life0 self, agentkit_memory::RecordFilter, agentkit_memory::Page) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::MemoryRepository::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::RecordId], agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::MemoryRepository::set_status<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::Status, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::MemoryRepository::supersede<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_memory::Reranker: core::marker::Send + core::marker::Sync
+pub fn agentkit_memory::Reranker::rerank<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, alloc::vec::Vec<agentkit_memory::Candidate>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Candidate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_memory::Reranker for agentkit_memory::NoopReranker
+pub fn agentkit_memory::NoopReranker::rerank<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, alloc::vec::Vec<agentkit_memory::Candidate>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Candidate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_memory::RetrievalIndex: core::marker::Send + core::marker::Sync
+pub fn agentkit_memory::RetrievalIndex::begin_index<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::IndexTx>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::begin_reembed<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ModelSpec) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::commit_index<'life0, 'async_trait>(&'life0 self, agentkit_memory::IndexTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::commit_reembed<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ModelId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::delete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::IndexTx, &'life2 [agentkit_memory::ItemId]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::drop_model<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ModelId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::knn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ModelId, &'life2 [f32], &'life3 agentkit_memory::IndexFilter, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Hit>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::lexical<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_memory::LexicalQuery, &'life2 agentkit_memory::IndexFilter, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Hit>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::ItemId]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::stats<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::IndexStats>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_memory::RetrievalIndex::upsert<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::IndexTx, &'life2 [agentkit_memory::IndexItem]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub type agentkit_memory::MemoryResult<T> = core::result::Result<T, agentkit_memory::MemoryError>

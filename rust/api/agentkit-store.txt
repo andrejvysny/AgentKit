@@ -16,6 +16,8 @@ pub use agentkit_store::AnswerOutcome
 pub use agentkit_store::AnswerReceipt
 pub use agentkit_store::ArgsHashProvenance
 pub use agentkit_store::AttemptRecord
+pub use agentkit_store::CHILD_WAIT_ID_PREFIX
+pub use agentkit_store::CHILD_WAIT_KIND
 pub use agentkit_store::COMPACT_REQUESTED_METADATA_KEY
 pub use agentkit_store::ChatRecord
 pub use agentkit_store::ClaimInput
@@ -57,9 +59,11 @@ pub use agentkit_store::TaskStatus
 pub use agentkit_store::TaskTransitionPatch
 pub use agentkit_store::TimestampOutOfRange
 pub use agentkit_store::TurnStaging
+pub use agentkit_store::claims_child_wait
 pub use agentkit_store::find_active_standing_grant
 pub use agentkit_store::inspect_execution_state
 pub use agentkit_store::is_approval_request
+pub use agentkit_store::is_child_wait
 pub use agentkit_store::is_hex64
 pub use agentkit_store::parse_answer_expiry
 pub use agentkit_store::parse_iso_millis
@@ -128,6 +132,7 @@ pub agentkit_store::StoreError::ManagedInput
 pub agentkit_store::StoreError::ManagedInput::message: alloc::string::String
 pub agentkit_store::StoreError::ManagedInput::reason: agentkit_store::ManagedInputReason
 pub agentkit_store::StoreError::NotFound(alloc::string::String)
+pub agentkit_store::StoreError::OutputsUnavailable(alloc::string::String)
 pub agentkit_store::StoreError::ReceiptTransition
 pub agentkit_store::StoreError::ReceiptTransition::message: alloc::string::String
 pub agentkit_store::StoreError::ReceiptTransition::reason: agentkit_store::ReceiptTransitionReason
@@ -451,6 +456,18 @@ pub agentkit_store::SetAgentModel::expected_revision: i64
 pub agentkit_store::SetAgentModel::model: core::option::Option<alloc::string::String>
 pub agentkit_store::SetAgentModel::now: i64
 pub agentkit_store::SetAgentModel::reasoning_effort: core::option::Option<alloc::string::String>
+pub struct agentkit_store::SqliteOutputStore
+impl agentkit_store::SqliteOutputStore
+pub fn agentkit_store::SqliteOutputStore::new(agentkit_store::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> core::result::Result<Self, agentkit_core::output::OutputError>
+pub async fn agentkit_store::SqliteOutputStore::purge_expired(&self) -> core::result::Result<agentkit_core::output::PurgeReport, agentkit_core::output::OutputError>
+impl agentkit_core::output::OutputStore for agentkit_store::SqliteOutputStore
+pub fn agentkit_store::SqliteOutputStore::info<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::OutputInfo, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteOutputStore::purge_session<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::PurgeReport, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteOutputStore::put<'life0, 'async_trait>(&'life0 self, agentkit_core::output::OutputMeta, alloc::vec::Vec<u8>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::OutputHandle, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteOutputStore::read<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle, agentkit_core::output::ByteOrLineRange) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::output::OutputSlice, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteOutputStore::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle, &'life2 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::output::Match>, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_core::output::SessionTree for agentkit_store::SqliteOutputStore
+pub fn agentkit_store::SqliteOutputStore::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_store::SqliteStore
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::acquire_lease(&self, &str, &str, &str, i64, i64) -> agentkit_store::Result<agentkit_engine::model::Lease>
@@ -489,6 +506,7 @@ pub fn agentkit_store::SqliteStore::open(impl core::convert::AsRef<std::path::Pa
 pub fn agentkit_store::SqliteStore::same_actor(&self, &Self) -> bool
 pub fn agentkit_store::SqliteStore::with_connector_credential_key(self, impl core::convert::Into<alloc::vec::Vec<u8>>) -> Self
 pub fn agentkit_store::SqliteStore::with_connector_key_required(self, bool) -> Self
+pub fn agentkit_store::SqliteStore::with_output_root(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn agentkit_store::SqliteStore::with_task_aging(self, agentkit_store::TaskAging) -> Self
 pub fn agentkit_store::SqliteStore::with_transaction_gate_timeout(self, core::time::Duration) -> Self
 impl agentkit_store::SqliteStore
@@ -533,8 +551,10 @@ pub async fn agentkit_store::SqliteStore::append_events(&self, agentkit_engine::
 pub async fn agentkit_store::SqliteStore::append_projected(&self, agentkit_engine::model::LeaseFence, alloc::vec::Vec<serde_json::value::Value>, alloc::vec::Vec<agentkit_engine::model::MessageInput>, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
 pub async fn agentkit_store::SqliteStore::claim(&self, agentkit_engine::model::ClaimInput) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::ClaimedTask>>
 pub async fn agentkit_store::SqliteStore::claim_with_concurrency(&self, agentkit_engine::model::ClaimInput, usize) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::ClaimedTask>>
+pub async fn agentkit_store::SqliteStore::count_tasks_by_status(&self, agentkit_engine::model::TaskStatus) -> agentkit_store::Result<i64>
 pub async fn agentkit_store::SqliteStore::get_task(&self, &str) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::TaskRecord>>
 pub async fn agentkit_store::SqliteStore::list_tasks(&self, core::option::Option<alloc::string::String>) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
+pub async fn agentkit_store::SqliteStore::list_tasks_by_status(&self, agentkit_engine::model::TaskStatus) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::TaskRecord>>
 pub async fn agentkit_store::SqliteStore::submit(&self, agentkit_engine::model::SubmitTask) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
 pub async fn agentkit_store::SqliteStore::submit_turn(&self, agentkit_engine::model::SubmitTask, alloc::vec::Vec<agentkit_engine::model::MessageInput>) -> agentkit_store::Result<agentkit_engine::model::TaskRecord>
 pub async fn agentkit_store::SqliteStore::verify_fence(&self, &agentkit_engine::model::LeaseFence, i64) -> agentkit_store::Result<()>
@@ -901,6 +921,7 @@ pub fn agentkit_store::restore_provider_continuity(&std::path::Path, &str, u64, 
 pub fn agentkit_store::revoke_persisted_provider_connection(&std::path::Path, &str) -> agentkit_store::Result<bool>
 pub fn agentkit_store::skill_content_hash(&str) -> alloc::string::String
 pub fn agentkit_store::teammate_scope(&str) -> alloc::string::String
+pub fn agentkit_store::untrusted_subagent_block(&str, &str, &str) -> alloc::string::String
 pub fn agentkit_store::validate_apply_outcome(&agentkit_store::ProposalRecord, &agentkit_store::ApplyOutcome) -> agentkit_store::Result<()>
 pub fn agentkit_store::validate_connection_config(&serde_json::value::Value) -> agentkit_store::Result<alloc::string::String>
 pub fn agentkit_store::validate_create_agent_input(&agentkit_sessions::model::CreateAgentInput) -> agentkit_store::Result<()>

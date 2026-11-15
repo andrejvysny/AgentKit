@@ -100,16 +100,15 @@ fn shown(verdict: ToolGuardVerdict) -> String {
         ToolGuardVerdict::Allowed => "allowed".into(),
         ToolGuardVerdict::Refused(reason) => format!("refused: {reason}"),
         ToolGuardVerdict::AwaitingHuman(ask) => {
-            format!("awaiting: {} / {:?} / {:?}", ask.reason, ask.preview, ask.requested_mode)
+            format!(
+                "awaiting: {} / {:?} / {:?}",
+                ask.reason, ask.preview, ask.requested_mode
+            )
         }
     }
 }
 
-async fn verdict(
-    guard: &CodingPermissionGuard,
-    tool: &ToolDefinition,
-    args: &Value,
-) -> String {
+async fn verdict(guard: &CodingPermissionGuard, tool: &ToolDefinition, args: &Value) -> String {
     let context = ToolGuardContext {
         contribution: contribution(),
         namespace: CODING_NAMESPACE.to_owned(),
@@ -132,10 +131,11 @@ const ROLES: [CodingRole; 3] = [
     CodingRole::Supervisor,
 ];
 
-
 fn vendor_fixture() -> Value {
-    serde_json::from_str(include_str!("../../core/tests/fixtures/dialect-openai-v1.json"))
-        .expect("fixture")
+    serde_json::from_str(include_str!(
+        "../../core/tests/fixtures/dialect-openai-v1.json"
+    ))
+    .expect("fixture")
 }
 
 #[tokio::test]
@@ -143,9 +143,21 @@ async fn the_coding_pack_is_offered_as_patch_shell_and_strict_common_tools() {
     let registry = presented_registry().await;
     let offered = registry.definitions();
     let names: Vec<&str> = offered.iter().map(|d| d.name.as_str()).collect();
-    assert!(names.contains(&"apply_patch") && names.contains(&"shell"), "{names:?}");
-    for gone in ["write_file", "edit", "run_shell_command", "edit_file", "run_command"] {
-        assert!(!names.contains(&gone), "{gone} is offered next to the built-ins");
+    assert!(
+        names.contains(&"apply_patch") && names.contains(&"shell"),
+        "{names:?}"
+    );
+    for gone in [
+        "write_file",
+        "edit",
+        "run_shell_command",
+        "edit_file",
+        "run_command",
+    ] {
+        assert!(
+            !names.contains(&gone),
+            "{gone} is offered next to the built-ins"
+        );
     }
     // Most of the other coding tools have a schema strict mode takes.
     let strict = offered
@@ -167,15 +179,23 @@ async fn every_example_with_a_vendor_form_translates_back_to_itself() {
                 continue;
             };
             // Strict tools show every property; built-ins show the vendor payload.
-            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            let translated = registry
+                .translate(&wire_name, wire_args)
+                .expect("translates");
             assert_eq!(translated.name, name);
             assert_eq!(&translated.args, example, "{name}");
-            assert!(registry.validate_input(&name, &translated.args).is_empty(), "{name} {example}");
+            assert!(
+                registry.validate_input(&name, &translated.args).is_empty(),
+                "{name} {example}"
+            );
             with_form.push(name.clone());
         }
     }
     for expected in ["write_file", "edit_file", "run_command", "read_file"] {
-        assert!(with_form.iter().any(|name| name == expected), "{expected}: {with_form:?}");
+        assert!(
+            with_form.iter().any(|name| name == expected),
+            "{expected}: {with_form:?}"
+        );
     }
 }
 
@@ -194,8 +214,13 @@ async fn a_strict_call_with_null_for_each_optional_argument_equals_the_canonical
             let Some((wire_name, mut wire_args)) = dialect.wire_call(&name, example) else {
                 continue;
             };
-            let shown = offered.iter().find(|d| d.name == wire_name).expect("offered");
-            let properties = shown.input_schema["properties"].as_object().expect("properties");
+            let shown = offered
+                .iter()
+                .find(|d| d.name == wire_name)
+                .expect("offered");
+            let properties = shown.input_schema["properties"]
+                .as_object()
+                .expect("properties");
             for key in properties.keys() {
                 wire_args
                     .as_object_mut()
@@ -203,7 +228,9 @@ async fn a_strict_call_with_null_for_each_optional_argument_equals_the_canonical
                     .entry(key.clone())
                     .or_insert(Value::Null);
             }
-            let translated = registry.translate(&wire_name, wire_args).expect("translates");
+            let translated = registry
+                .translate(&wire_name, wire_args)
+                .expect("translates");
             assert_eq!(translated.name, name);
             assert_eq!(&translated.args, example, "{name}");
             checked += 1;
@@ -216,7 +243,10 @@ async fn a_strict_call_with_null_for_each_optional_argument_equals_the_canonical
 async fn the_vendor_call_gets_the_same_guard_verdict_as_the_direct_call() {
     let registry = presented_registry().await;
     let mut compared = 0;
-    for pair in vendor_fixture()["response"]["calls"].as_array().expect("calls") {
+    for pair in vendor_fixture()["response"]["calls"]
+        .as_array()
+        .expect("calls")
+    {
         let wire = &pair["wire"];
         let translated = registry
             .translate(wire["name"].as_str().unwrap(), wire["arguments"].clone())
@@ -243,8 +273,16 @@ async fn the_vendor_tools_never_widen_authority() {
     let registry = presented_registry().await;
     // The patch and shell tools are write tools whatever they are called.
     for (wire, args, canonical) in [
-        ("apply_patch", json!({"type":"create_file","path":"a","diff":"+x"}), "write_file"),
-        ("apply_patch", json!({"type":"update_file","path":"a","diff":"@@\n-x\n+y\n"}), "edit_file"),
+        (
+            "apply_patch",
+            json!({"type":"create_file","path":"a","diff":"+x"}),
+            "write_file",
+        ),
+        (
+            "apply_patch",
+            json!({"type":"update_file","path":"a","diff":"@@\n-x\n+y\n"}),
+            "edit_file",
+        ),
         ("shell", json!({"commands":["ls"]}), "run_command"),
     ] {
         let translated = registry.translate(wire, args).expect("translates");
@@ -255,8 +293,14 @@ async fn the_vendor_tools_never_widen_authority() {
     // The read-only supervisor is refused for the same calls either way.
     let supervisor = guard(CodingMode::FullAuto, CodingRole::Supervisor);
     for (wire, args) in [
-        ("apply_patch", json!({"type":"update_file","path":"a","diff":"@@\n-x\n+y\n"})),
-        ("apply_patch", json!({"type":"create_file","path":"a","diff":"+x"})),
+        (
+            "apply_patch",
+            json!({"type":"update_file","path":"a","diff":"@@\n-x\n+y\n"}),
+        ),
+        (
+            "apply_patch",
+            json!({"type":"create_file","path":"a","diff":"+x"}),
+        ),
         ("shell", json!({"commands":["ls"]})),
     ] {
         let translated = registry.translate(wire, args).expect("translates");
@@ -265,7 +309,10 @@ async fn the_vendor_tools_never_widen_authority() {
         assert!(verdict.starts_with("refused"), "{wire}: {verdict}");
     }
     // What the canonical tools cannot do is refused before any guard.
-    for case in vendor_fixture()["response"]["refused"].as_array().expect("refused") {
+    for case in vendor_fixture()["response"]["refused"]
+        .as_array()
+        .expect("refused")
+    {
         let wire = &case["wire"];
         assert!(
             registry

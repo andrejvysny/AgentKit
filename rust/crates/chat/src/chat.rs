@@ -349,9 +349,10 @@ impl ChatExecutor {
             }),
             None => base_prompt,
         };
-        let rules = crate::project_instructions::project_rules_block(&options, &context, chat_id)
-            .await?;
-        let layout = agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
+        let rules =
+            crate::project_instructions::project_rules_block(&options, &context, chat_id).await?;
+        let layout =
+            agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
         // The correction pass takes the system text as one string.
         let system_prompt = layout.joined();
         // The session's frozen model profile (T2.2) rides on the request; the
@@ -375,7 +376,8 @@ impl ChatExecutor {
                 params["parallelToolCalls"] =
                     serde_json::to_value(&profile.body_extras.parallel_tool_calls)
                         .unwrap_or_default();
-                params["toolChoice"] = serde_json::to_value(&profile.tool_choice).unwrap_or_default();
+                params["toolChoice"] =
+                    serde_json::to_value(profile.tool_choice).unwrap_or_default();
             }
             let branch = continuation
                 .as_ref()

@@ -100,7 +100,9 @@ fn contribution() -> ToolContributionContext {
 #[tokio::test]
 async fn staged_tools_keep_their_aliases_constraints_and_toolset() {
     let contributors: Vec<Arc<dyn ToolContributor>> = vec![Arc::new(Contributor)];
-    let staged = stage_tools(&contributors, &[], contribution()).await.unwrap();
+    let staged = stage_tools(&contributors, &[], contribution())
+        .await
+        .unwrap();
     for name in ["demo_read", "demo_write"] {
         let normalised = staged.registry.normalise(name, json!({"old_name": "x"}));
         assert_eq!(normalised.args, json!({"new_name": "x"}), "{name}");
@@ -109,10 +111,15 @@ async fn staged_tools_keep_their_aliases_constraints_and_toolset() {
         assert_eq!(tool.toolset(), Some("demo"), "{name}");
         assert_eq!(tool.constraints().len(), 1, "{name}");
         assert_eq!(
-            tool.check_constraints(&json!({"new_name": "a", "other": "b"})).as_deref(),
+            tool.check_constraints(&json!({"new_name": "a", "other": "b"}))
+                .as_deref(),
             Some("never_both"),
             "{name}"
         );
-        assert_eq!(tool.check_constraints(&json!({"new_name": "a"})), None, "{name}");
+        assert_eq!(
+            tool.check_constraints(&json!({"new_name": "a"})),
+            None,
+            "{name}"
+        );
     }
 }

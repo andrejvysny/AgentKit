@@ -2,6 +2,7 @@
 //! retry classification and run subscription. Knows nothing about chats,
 //! sessions or profiles; those contexts plug in through the ports here.
 
+mod child_wait;
 mod context;
 mod dispatch;
 mod error;
@@ -12,6 +13,7 @@ mod retry;
 mod runner;
 mod subscription;
 
+pub use child_wait::{CHILD_WAIT_ID_PREFIX, CHILD_WAIT_KIND, claims_child_wait, is_child_wait};
 pub use context::ExecutionContext;
 pub use error::{ContextClassification, EngineError, EngineResult, NeverFault};
 pub use model::{

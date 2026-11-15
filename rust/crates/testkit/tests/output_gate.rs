@@ -3,16 +3,17 @@
 //! from another session is refused.
 
 use agentkit_core::{
-    ByteOrLineRange, CancellationToken, DEFAULT_INLINE_LIMIT, OutputCall, OutputGate,
-    OutputHandle, OutputStore, SessionTree, Tool, ToolContext, ToolLimits, ToolResult,
-    output_tools,
+    ByteOrLineRange, CancellationToken, DEFAULT_INLINE_LIMIT, OutputCall, OutputGate, OutputHandle,
+    OutputStore, SessionTree, Tool, ToolContext, ToolLimits, ToolResult, output_tools,
 };
 use agentkit_testkit::{InMemoryOutputStore, ManualClock};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 fn setup() -> (Arc<InMemoryOutputStore>, OutputGate) {
-    let store = Arc::new(InMemoryOutputStore::new(ManualClock::new(1_760_000_000_000)));
+    let store = Arc::new(InMemoryOutputStore::new(ManualClock::new(
+        1_760_000_000_000,
+    )));
     let gate = OutputGate::new(store.clone());
     (store, gate)
 }
@@ -87,16 +88,31 @@ async fn one_mebibyte_result_previews_within_the_inline_limit() {
     let (store, gate) = setup();
     let text = one_mebibyte();
     let shaped = gate
-        .shape(call("s1", "run_command"), result(Value::String(text.clone())))
+        .shape(
+            call("s1", "run_command"),
+            result(Value::String(text.clone())),
+        )
         .await;
-    let preview = shaped.data.as_ref().and_then(Value::as_str).expect("preview");
-    assert!(preview.len() <= DEFAULT_INLINE_LIMIT, "{} bytes", preview.len());
+    let preview = shaped
+        .data
+        .as_ref()
+        .and_then(Value::as_str)
+        .expect("preview");
+    assert!(
+        preview.len() <= DEFAULT_INLINE_LIMIT,
+        "{} bytes",
+        preview.len()
+    );
     assert!(!shaped.truncated);
     assert!(preview.starts_with("line 1 of the output\n"));
     assert!(preview.contains(" bytes and "));
     assert!(preview.contains(" lines hidden …]"));
     assert!(preview.contains("[output stored: "));
-    assert!(preview.contains("read_output(handle, start_line, max_lines) · search_output(handle, pattern)]"));
+    assert!(
+        preview.contains(
+            "read_output(handle, start_line, max_lines) · search_output(handle, pattern)]"
+        )
+    );
     // The last line is in the tail, and the head is line aligned.
     let last = text.lines().last().expect("last line");
     assert!(preview.contains(last));
@@ -104,7 +120,13 @@ async fn one_mebibyte_result_previews_within_the_inline_limit() {
     assert!(marker <= 3 * 1024 && preview[..marker].ends_with('\n'));
     // The whole result is behind the handle, byte for byte.
     let stored = store
-        .read(&handle_in(preview), ByteOrLineRange::Lines { start_line: 1, max_lines: 10_000_000 })
+        .read(
+            &handle_in(preview),
+            ByteOrLineRange::Lines {
+                start_line: 1,
+                max_lines: 10_000_000,
+            },
+        )
         .await
         .expect("read");
     assert_eq!(format!("{}\n", stored.text), text);
@@ -115,7 +137,10 @@ async fn small_results_pass_through_untouched() {
     let (store, gate) = setup();
     let small = "short".repeat(10);
     let shaped = gate
-        .shape(call("s1", "run_command"), result(Value::String(small.clone())))
+        .shape(
+            call("s1", "run_command"),
+            result(Value::String(small.clone())),
+        )
         .await;
     assert_eq!(shaped.data, Some(Value::String(small)));
     assert_eq!(store.stored("s1"), 0);
@@ -127,7 +152,11 @@ async fn nonzero_exit_code_favours_the_tail() {
     let body = one_mebibyte();
     let data = json!({"exitCode": 1, "stdout": body});
     let shaped = gate.shape(call("s1", "run_command"), result(data)).await;
-    let preview = shaped.data.as_ref().and_then(Value::as_str).expect("preview");
+    let preview = shaped
+        .data
+        .as_ref()
+        .and_then(Value::as_str)
+        .expect("preview");
     assert!(preview.len() <= DEFAULT_INLINE_LIMIT);
     let marker = preview.find("[… ").expect("marker");
     let footer = preview.find("[output stored: ").expect("footer");
@@ -141,10 +170,20 @@ async fn per_tool_limit_and_credential_keys_apply() {
     let gate = OutputGate::new(store.clone()).with_tool_limit("small_tool", 64);
     let data = json!({"token": "sk-live-123", "body": "x".repeat(200)});
     let shaped = gate.shape(call("s1", "small_tool"), result(data)).await;
-    let preview = shaped.data.as_ref().and_then(Value::as_str).expect("preview");
+    let preview = shaped
+        .data
+        .as_ref()
+        .and_then(Value::as_str)
+        .expect("preview");
     assert!(!preview.contains("sk-live-123"));
     let stored = store
-        .read(&handle_in(preview), ByteOrLineRange::Lines { start_line: 1, max_lines: 100 })
+        .read(
+            &handle_in(preview),
+            ByteOrLineRange::Lines {
+                start_line: 1,
+                max_lines: 100,
+            },
+        )
         .await
         .expect("read");
     assert!(stored.text.contains("token: ***"));
@@ -152,7 +191,10 @@ async fn per_tool_limit_and_credential_keys_apply() {
     // The same size passes through under the default limit.
     let default = OutputGate::new(store.clone());
     let again = default
-        .shape(call("s1", "other"), result(json!({"body": "x".repeat(200)})))
+        .shape(
+            call("s1", "other"),
+            result(json!({"body": "x".repeat(200)})),
+        )
         .await;
     assert!(again.data.expect("data").is_object());
 }
@@ -162,9 +204,18 @@ async fn read_output_returns_exact_line_ranges() {
     let (store, gate) = setup();
     let text = one_mebibyte();
     let shaped = gate
-        .shape(call("s1", "run_command"), result(Value::String(text.clone())))
+        .shape(
+            call("s1", "run_command"),
+            result(Value::String(text.clone())),
+        )
         .await;
-    let handle = handle_in(shaped.data.as_ref().and_then(Value::as_str).expect("preview"));
+    let handle = handle_in(
+        shaped
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .expect("preview"),
+    );
     let reader = tool(&store, "read_output");
     let read = reader
         .execute(
@@ -187,47 +238,102 @@ async fn read_output_returns_exact_line_ranges() {
         .await
         .expect("search");
     assert!(search.ok);
-    assert!(search.data.as_ref().and_then(Value::as_str).expect("text").starts_with("777: line 777 of the output"));
+    assert!(
+        search
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .expect("text")
+            .starts_with("777: line 777 of the output")
+    );
 }
 
 #[tokio::test]
 async fn handle_of_another_session_is_refused() {
     let (store, gate) = setup();
     let shaped = gate
-        .shape(call("s1", "run_command"), result(Value::String(one_mebibyte())))
+        .shape(
+            call("s1", "run_command"),
+            result(Value::String(one_mebibyte())),
+        )
         .await;
-    let handle = handle_in(shaped.data.as_ref().and_then(Value::as_str).expect("preview"));
+    let handle = handle_in(
+        shaped
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .expect("preview"),
+    );
     for name in ["read_output", "search_output"] {
         let input = json!({"handle": handle.as_str(), "pattern": "line"});
         let tool = tool(&store, name);
-        let foreign = tool.execute(context(Some("s2")), input.clone()).await.expect("result");
+        let foreign = tool
+            .execute(context(Some("s2")), input.clone())
+            .await
+            .expect("result");
         assert!(!foreign.ok, "{name} must refuse another session's handle");
-        assert!(foreign.summary.as_deref().unwrap_or_default().contains("No stored output"));
-        let anonymous = tool.execute(context(None), input.clone()).await.expect("result");
+        assert!(
+            foreign
+                .summary
+                .as_deref()
+                .unwrap_or_default()
+                .contains("No stored output")
+        );
+        let anonymous = tool
+            .execute(context(None), input.clone())
+            .await
+            .expect("result");
         assert!(!anonymous.ok);
         // A child session reads neither its parent's output nor a sibling's.
         store.link_child("s1-child", "s1");
         store.link_child("s1-sibling", "s1");
         for other in ["s1-child", "s1-sibling"] {
-            let denied = tool.execute(context(Some(other)), input.clone()).await.expect("result");
-            assert!(!denied.ok, "{name}: {other} must not read its parent's output");
+            let denied = tool
+                .execute(context(Some(other)), input.clone())
+                .await
+                .expect("result");
+            assert!(
+                !denied.ok,
+                "{name}: {other} must not read its parent's output"
+            );
         }
-        let owner = tool.execute(context(Some("s1")), input).await.expect("result");
+        let owner = tool
+            .execute(context(Some("s1")), input)
+            .await
+            .expect("result");
         assert!(owner.ok);
     }
     // The parent reads a descendant's output; a sibling does not.
     let child_out = gate
-        .shape(call("s1-child", "run_command"), result(Value::String(one_mebibyte())))
+        .shape(
+            call("s1-child", "run_command"),
+            result(Value::String(one_mebibyte())),
+        )
         .await;
-    let child_handle = handle_in(child_out.data.as_ref().and_then(Value::as_str).expect("preview"));
+    let child_handle = handle_in(
+        child_out
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .expect("preview"),
+    );
     for name in ["read_output", "search_output"] {
         let input = json!({"handle": child_handle.as_str(), "pattern": "line"});
         let tool = tool(&store, name);
-        let parent = tool.execute(context(Some("s1")), input.clone()).await.expect("result");
+        let parent = tool
+            .execute(context(Some("s1")), input.clone())
+            .await
+            .expect("result");
         assert!(parent.ok, "{name}: {:?}", parent.summary);
-        let own = tool.execute(context(Some("s1-child")), input.clone()).await.expect("result");
+        let own = tool
+            .execute(context(Some("s1-child")), input.clone())
+            .await
+            .expect("result");
         assert!(own.ok);
-        let sibling = tool.execute(context(Some("s1-sibling")), input).await.expect("result");
+        let sibling = tool
+            .execute(context(Some("s1-sibling")), input)
+            .await
+            .expect("result");
         assert!(!sibling.ok, "{name}: a sibling must not read it");
     }
     // A path-shaped handle never reaches storage.
@@ -242,9 +348,20 @@ async fn handle_of_another_session_is_refused() {
 async fn paging_tools_are_not_stored_again() {
     let (store, gate) = setup();
     let shaped = gate
-        .shape(call("s1", "read_output"), result(Value::String(one_mebibyte())))
+        .shape(
+            call("s1", "read_output"),
+            result(Value::String(one_mebibyte())),
+        )
         .await;
-    assert!(shaped.data.as_ref().and_then(Value::as_str).expect("text").len() > DEFAULT_INLINE_LIMIT);
+    assert!(
+        shaped
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .expect("text")
+            .len()
+            > DEFAULT_INLINE_LIMIT
+    );
     assert_eq!(store.stored("s1"), 0);
 }
 
@@ -254,7 +371,11 @@ async fn any_over_limit_result_is_stored_whatever_its_status() {
     let mut failed = result(Value::String(one_mebibyte()));
     failed.ok = false;
     let shaped = gate.shape(call("s1", "run_command"), failed).await;
-    let preview = shaped.data.as_ref().and_then(Value::as_str).expect("preview");
+    let preview = shaped
+        .data
+        .as_ref()
+        .and_then(Value::as_str)
+        .expect("preview");
     assert_eq!(store.stored("s1"), 1);
     // No exit code, but a failure: the budget sits in the tail.
     let marker = preview.find("[… ").expect("marker");
@@ -284,11 +405,21 @@ async fn a_quote_heavy_preview_fits_the_envelope_and_the_limit_is_clamped() {
     let mut small = call("s1", "run_command");
     small.max_bytes = 4096;
     let shaped = gate.shape(small, result(Value::String(text))).await;
-    let preview = shaped.data.as_ref().and_then(Value::as_str).expect("preview");
+    let preview = shaped
+        .data
+        .as_ref()
+        .and_then(Value::as_str)
+        .expect("preview");
     let escaped = serde_json::to_string(preview).unwrap().len();
-    assert!(escaped - 2 <= gate.effective_limit("run_command", 4096), "{escaped} bytes once escaped");
+    assert!(
+        escaped - 2 <= gate.effective_limit("run_command", 4096),
+        "{escaped} bytes once escaped"
+    );
     assert!(preview.ends_with("search_output(handle, pattern)]"));
-    assert_eq!(gate.effective_limit("run_command", 4096), 4096 - (4096 / 8).max(128) * 2 - 256);
+    assert_eq!(
+        gate.effective_limit("run_command", 4096),
+        4096 - (4096 / 8) * 2 - 256
+    );
 }
 
 #[tokio::test]

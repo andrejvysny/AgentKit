@@ -18,11 +18,11 @@ pub use advisor::{
 pub use agents::{AgentDefinitionService, validate_agent_definition};
 pub use errors::{AgentsError, AgentsResult, LeaseHeld, RoleDenial, SnapshotError};
 pub use subagents::{
-    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, BUILTIN_ROLES, EffectiveRole,
-    MessageReceipt, RoleSnapshot, RoleSpec, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SpawnRequest, SpawnedChild,
-    SubagentConfig, SubagentContributor, SubagentRoleGuard, SubagentRoleLimits, SubagentService,
-    SubagentView, WorkspaceLeaseRegistry, child_identity, default_delegation_guidance,
-    default_role_specs, effective_role, subagent_tool_definitions, DELEGATION_TOOLSET,
-    delegation_toolsets,
+    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, BUILTIN_ROLES, DELEGATION_TOOLSET,
+    EffectiveRole, MessageReceipt, RoleSnapshot, RoleSpec, SUBAGENT_ARG_ALIASES,
+    SUBAGENT_TOOL_NAMES, SpawnRequest, SpawnedChild, SubagentConfig, SubagentContributor,
+    SubagentRoleGuard, SubagentRoleLimits, SubagentService, SubagentView, WorkspaceLeaseRegistry,
+    child_identity, default_delegation_guidance, default_role_specs, delegation_toolsets,
+    effective_role, subagent_tool_definitions,
 };
 pub use teammates::{TeammateAdmission, TeammateService};

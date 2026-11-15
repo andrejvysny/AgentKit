@@ -29,7 +29,6 @@ pub struct RecordIdentity {
     pub profile: Option<String>,
 }
 
-
 pub(crate) struct Finished<'a> {
     pub tool_call_id: &'a str,
     pub tool_name: &'a str,
@@ -100,21 +99,34 @@ impl ToolRecords {
 
     /// The shared rules: `failure` is the failure's class and whether it
     /// spends the repair budget, or `None` for a success.
-    fn decide(&mut self, tool: &str, arguments_json: &str, failure: Option<(Class, bool)>) -> Verdict {
+    fn decide(
+        &mut self,
+        tool: &str,
+        arguments_json: &str,
+        failure: Option<(Class, bool)>,
+    ) -> Verdict {
         let tool = tool.to_string();
         let key = (tool.clone(), arguments_json.to_string());
         let prior = self.failures.get(&tool).copied().unwrap_or(0);
         let Some((base, spends)) = failure else {
             self.streaks.remove(&tool);
             return Verdict {
-                class: if prior > 0 { Class::OkAfterRepair } else { Class::Ok },
+                class: if prior > 0 {
+                    Class::OkAfterRepair
+                } else {
+                    Class::Ok
+                },
                 prior,
                 stop_retrying: false,
             };
         };
         // The identical third call is a repeat; the second only fails again.
         let repeats = self.failed_calls.get(&key).copied().unwrap_or(0);
-        let class = if repeats >= 2 { Class::RepeatIdentical } else { base };
+        let class = if repeats >= 2 {
+            Class::RepeatIdentical
+        } else {
+            base
+        };
         *self.failures.entry(tool.clone()).or_default() += 1;
         *self.failed_calls.entry(key).or_default() += 1;
         let length = match self.streaks.get(&tool) {
@@ -122,7 +134,13 @@ impl ToolRecords {
             _ => 1,
         };
         if spends {
-            self.streaks.insert(tool, Streak { class: base, length });
+            self.streaks.insert(
+                tool,
+                Streak {
+                    class: base,
+                    length,
+                },
+            );
         }
         Verdict {
             class,
@@ -250,11 +268,23 @@ mod tests {
     #[test]
     fn second_failure_in_one_class_stops_retrying_and_the_third_stays_stopped() {
         let mut records = ToolRecords::default();
-        let first = records.judge(&Judged::from(&finished(false, Some("schema_invalid"), r#"{"a":1}"#)));
+        let first = records.judge(&Judged::from(&finished(
+            false,
+            Some("schema_invalid"),
+            r#"{"a":1}"#,
+        )));
         assert!(!first.stop_retrying);
-        let second = records.judge(&Judged::from(&finished(false, Some("schema_invalid"), r#"{"a":2}"#)));
+        let second = records.judge(&Judged::from(&finished(
+            false,
+            Some("schema_invalid"),
+            r#"{"a":2}"#,
+        )));
         assert!(second.stop_retrying);
-        let third = records.judge(&Judged::from(&finished(false, Some("schema_invalid"), r#"{"a":3}"#)));
+        let third = records.judge(&Judged::from(&finished(
+            false,
+            Some("schema_invalid"),
+            r#"{"a":3}"#,
+        )));
         assert!(third.stop_retrying);
         assert_eq!(third.class, Class::InvalidStructure);
     }
@@ -262,7 +292,11 @@ mod tests {
     #[test]
     fn a_different_class_a_success_or_a_cancel_does_not_extend_the_streak() {
         let mut records = ToolRecords::default();
-        records.judge(&Judged::from(&finished(false, Some("schema_invalid"), "{}")));
+        records.judge(&Judged::from(&finished(
+            false,
+            Some("schema_invalid"),
+            "{}",
+        )));
         let other = records.judge(&Judged::from(&finished(false, Some("bad_args"), "{}")));
         assert!(!other.stop_retrying, "a new class starts a new streak");
         records.judge(&Judged::from(&finished(true, None, "{}")));
@@ -275,7 +309,11 @@ mod tests {
     #[test]
     fn the_budget_counts_each_tool_on_its_own() {
         let mut records = ToolRecords::default();
-        records.judge(&Judged::from(&finished(false, Some("schema_invalid"), "{}")));
+        records.judge(&Judged::from(&finished(
+            false,
+            Some("schema_invalid"),
+            "{}",
+        )));
         let mut other = finished(false, Some("schema_invalid"), "{}");
         other.tool_name = "read";
         assert!(!records.judge(&Judged::from(&other)).stop_retrying);

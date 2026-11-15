@@ -2597,8 +2597,14 @@ async fn retried_spawn_call_without_any_key_is_idempotent() {
         suspension: None,
     };
     let input = json!({"role": "reviewer", "prompt": "audit"});
-    let first = spawn.execute(context("call-1"), input.clone()).await.unwrap();
-    let retry = spawn.execute(context("call-1"), input.clone()).await.unwrap();
+    let first = spawn
+        .execute(context("call-1"), input.clone())
+        .await
+        .unwrap();
+    let retry = spawn
+        .execute(context("call-1"), input.clone())
+        .await
+        .unwrap();
     assert!(first.ok, "{first:?}");
     assert!(retry.ok, "{retry:?}");
     assert_eq!(

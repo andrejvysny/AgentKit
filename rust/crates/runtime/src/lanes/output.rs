@@ -57,9 +57,11 @@ impl ToolContributor for OutputLaneContributor {
         &self,
         _context: &ToolContributionContext,
     ) -> GovernanceResult<Vec<ContributedTool>> {
-        Ok(output_tools(Arc::clone(&self.store), Arc::clone(&self.tree))
-            .into_iter()
-            .map(ContributedTool::Read)
-            .collect())
+        Ok(
+            output_tools(Arc::clone(&self.store), Arc::clone(&self.tree))
+                .into_iter()
+                .map(ContributedTool::Read)
+                .collect(),
+        )
     }
 }

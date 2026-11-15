@@ -1536,7 +1536,10 @@ async fn legacy_uncertainty_generation_approval_still_recovers() {
     assert_eq!(f.hits.load(Ordering::SeqCst), 1);
 }
 
-fn editor_shape(emit: &'static str, classification: Option<agentkit_core::Classification>) -> Shape {
+fn editor_shape(
+    emit: &'static str,
+    classification: Option<agentkit_core::Classification>,
+) -> Shape {
     Shape {
         schema: json!({"type": "object", "properties": {
             "file_path": {"type": "string"}, "command": {"type": "string"},
@@ -1571,7 +1574,10 @@ async fn approve_and_resume(arguments_json: &'static str, shape: Shape, canonica
     f.host.run_once().await.unwrap();
     assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
     let request = f.pending(&turn).await.into_iter().next().unwrap();
-    assert_eq!(request.content["argsSha256"], json!(args_sha256(&canonical)));
+    assert_eq!(
+        request.content["argsSha256"],
+        json!(args_sha256(&canonical))
+    );
     f.service
         .approve(&request.input_id, "ans-1", None, None)
         .await
@@ -1579,7 +1585,11 @@ async fn approve_and_resume(arguments_json: &'static str, shape: Shape, canonica
     f.set_ask(false);
     f.host.run_once().await.unwrap();
     assert_eq!(f.status(&turn).await, TaskStatus::Completed);
-    assert_eq!(f.hits.load(Ordering::SeqCst), 1, "the approved call ran once");
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        1,
+        "the approved call ran once"
+    );
     assert!(
         f.store
             .messages("s1", true)

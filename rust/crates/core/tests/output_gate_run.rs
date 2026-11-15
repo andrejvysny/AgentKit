@@ -13,7 +13,9 @@ use std::sync::{
 };
 
 fn memory() -> Arc<InMemoryOutputStore> {
-    Arc::new(InMemoryOutputStore::new(ManualClock::new(1_760_000_000_000)))
+    Arc::new(InMemoryOutputStore::new(ManualClock::new(
+        1_760_000_000_000,
+    )))
 }
 
 /// One tool call, then a final answer.
@@ -81,7 +83,12 @@ impl Tool for Big {
 fn registry(saw_flag: Arc<Mutex<Option<Value>>>) -> Arc<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     let definition = serde_json::from_value(json!({"name":"big","version":"1","effect":"read","capability":"test","description":"Big","inputSchema":{"type":"object"}})).unwrap();
-    registry.register(Arc::new(Big { definition, saw_flag })).unwrap();
+    registry
+        .register(Arc::new(Big {
+            definition,
+            saw_flag,
+        }))
+        .unwrap();
     Arc::new(registry)
 }
 
@@ -128,7 +135,11 @@ async fn a_large_result_is_stored_and_the_model_reads_a_preview() {
         .expect("footer handle");
     let info = store.info(&handle).await.expect("stored row");
     assert_eq!(
-        (info.meta.session.as_str(), info.meta.tool.as_str(), info.meta.call_id.as_str()),
+        (
+            info.meta.session.as_str(),
+            info.meta.tool.as_str(),
+            info.meta.call_id.as_str()
+        ),
         ("s1", "big", "call1")
     );
     assert_eq!(info.line_count, 40_000);

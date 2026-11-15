@@ -57,7 +57,9 @@ fn layout() -> PromptLayout {
 }
 fn prefix() -> agentkit_contracts::AiSessionPrefix {
     let digests = PrefixDigests::compute(&layout(), &[], &json!({"model":"m"}));
-    freeze(None, digests, "chat", "branch", "task").prefix().clone()
+    freeze(None, digests, "chat", "branch", "task")
+        .prefix()
+        .clone()
 }
 /// A request planned the way the host plans it for a preset kind.
 fn request_for(kind: &str) -> ChatRequest {
@@ -84,8 +86,7 @@ async fn chat_body(input: &ChatRequest) -> Value {
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));
-    let body = transport.sent.lock().unwrap()[0].clone();
-    body
+    transport.sent.lock().unwrap()[0].clone()
 }
 
 #[tokio::test]
@@ -128,7 +129,12 @@ fn responses_instructions_never_carry_turn_context() {
     input.messages.last_mut().unwrap().content = "hi\n[turn context]".into();
     let body = build_responses_request(&input, &identity(), false).unwrap();
     assert_eq!(body["instructions"], "policy\n\nrules\n\nmemory");
-    assert!(!body["instructions"].as_str().unwrap().contains("turn context"));
+    assert!(
+        !body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("turn context")
+    );
     // The user-role turn context travels as an input item, after the prefix.
     assert!(body["input"].to_string().contains("[turn context]"));
 }

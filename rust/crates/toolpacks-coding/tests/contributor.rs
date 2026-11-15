@@ -173,7 +173,11 @@ async fn effects_capabilities_and_schemas() {
     );
     let mapped = registry.normalise("read_file", json!({ "path": "a.ts", "offset": "3" }));
     assert_eq!(mapped.args, json!({ "file_path": "a.ts", "offset": 3 }));
-    assert!(registry.validate_input("read_file", &mapped.args).is_empty());
+    assert!(
+        registry
+            .validate_input("read_file", &mapped.args)
+            .is_empty()
+    );
     assert!(!registry.validate_input("read_file", &json!({})).is_empty());
     assert!(
         !registry

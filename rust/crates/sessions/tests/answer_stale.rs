@@ -485,14 +485,21 @@ async fn a_child_wait_is_refused_to_humans_and_never_listed_as_waiting() {
     )
     .await;
     let error = service
-        .answer(&answer("childwait:req-cw", "ans-1", json!({"answer": "go"})))
+        .answer(&answer(
+            "childwait:req-cw",
+            "ans-1",
+            json!({"answer": "go"}),
+        ))
         .await
         .unwrap_err();
     assert_eq!(error.failure_event_code(), "invalid_input");
     let turn = store.get_task("turn-cw").await.unwrap().unwrap();
     assert_eq!(turn.status, TaskStatus::WaitingChild);
     let state = service.get_state(SESSION).await.unwrap();
-    assert!(state.waiting.is_none(), "a child wait is not an owner question");
+    assert!(
+        state.waiting.is_none(),
+        "a child wait is not an owner question"
+    );
 }
 
 fn session_message(error: &agentkit_sessions::SessionsError<agentkit_store::StoreError>) -> String {

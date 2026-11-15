@@ -106,9 +106,11 @@ pub async fn agentkit_lsp::ServerProcess::sync_document(&self, &std::path::Path)
 impl core::ops::drop::Drop for agentkit_lsp::ServerProcess
 pub fn agentkit_lsp::ServerProcess::drop(&mut self)
 pub const agentkit_lsp::CANCELLED: &str
+pub const agentkit_lsp::CODE_INTEL_TOOLSET: &str
 pub const agentkit_lsp::INVALID_FILE: &str
 pub const agentkit_lsp::INVALID_INPUT: &str
 pub const agentkit_lsp::LANGUAGES: &[agentkit_lsp::LanguageSpec]
+pub const agentkit_lsp::LSP_ARG_ALIASES: &[(&str, &str)]
 pub const agentkit_lsp::PROTOCOL: &str
 pub const agentkit_lsp::REQUEST_TIMEOUT: &str
 pub const agentkit_lsp::SERVER_CRASHED: &str
@@ -119,7 +121,9 @@ pub const agentkit_lsp::STALE_RESULT: &str
 pub fn agentkit_lsp::detect_language(&std::path::Path) -> core::option::Option<&'static str>
 pub fn agentkit_lsp::language_for_extension(&str) -> core::option::Option<&'static str>
 pub fn agentkit_lsp::language_for_path(&std::path::Path) -> core::option::Option<&'static str>
+pub fn agentkit_lsp::lsp_tool_definitions() -> alloc::vec::Vec<agentkit_core::types::ToolDefinition>
 pub fn agentkit_lsp::lsp_tools(alloc::rcs::arc::Arc<agentkit_lsp::LspPool>, &std::path::Path) -> alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>>
+pub fn agentkit_lsp::lsp_toolsets() -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub fn agentkit_lsp::normalize_diagnostics(&str, &[serde_json::value::Value]) -> alloc::vec::Vec<serde_json::value::Value>
 pub fn agentkit_lsp::normalize_diagnostics_with_text(&str, &[serde_json::value::Value], core::option::Option<alloc::rcs::arc::Arc<str>>) -> alloc::vec::Vec<serde_json::value::Value>
 pub fn agentkit_lsp::path_to_uri(&std::path::Path) -> alloc::string::String

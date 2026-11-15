@@ -67,7 +67,11 @@ fn setup() -> (AgentHost, Arc<Blocking>, mpsc::UnboundedReceiver<String>) {
             executor.clone() as Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>,
         )]),
         Arc::new(SystemRuntime),
-        HostOptions::default(),
+        // These scenarios pin a two-slot pool; the default is four (DEL-07).
+        HostOptions {
+            concurrency: 2,
+            ..HostOptions::default()
+        },
     )
     .unwrap();
     (host, executor, receiver)

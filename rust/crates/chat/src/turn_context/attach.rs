@@ -15,9 +15,11 @@ const MAX_SOURCES: usize = 32;
 
 /// The note a deselected skill leaves behind.
 const SKILL_DEACTIVATED: &str = "This skill is no longer active. Its earlier text stays in the conversation; do not follow it from this turn on.";
-const SKILL_REACTIVATED: &str = "This skill is active again. Follow its earlier text in the conversation.";
+const SKILL_REACTIVATED: &str =
+    "This skill is active again. Follow its earlier text in the conversation.";
 const TEMPLATE_DEACTIVATED: &str = "This template is no longer active. Its earlier text stays in the conversation; do not follow it from this turn on.";
-const TEMPLATE_REACTIVATED: &str = "This template is active again. Follow its earlier text in the conversation.";
+const TEMPLATE_REACTIVATED: &str =
+    "This template is active again. Follow its earlier text in the conversation.";
 
 /// Origins whose text is not the user's own: the item is tagged untrusted.
 fn untrusted_origin(origin: &Value) -> bool {
@@ -230,7 +232,9 @@ fn plan(state: &TurnState, chosen: Chosen, extras: Extras, today: Option<&str>) 
     let mut notes = state.notes.clone();
     for (pin, text) in &chosen.skills {
         let carried = state.skills.get(&pin.id);
-        plan.next.skills.insert(pin.id.clone(), pin.revision.clone());
+        plan.next
+            .skills
+            .insert(pin.id.clone(), pin.revision.clone());
         plan.next.inactive.remove(&pin.id);
         if carried != Some(&pin.revision) {
             let untrusted = chosen.untrusted.contains(&pin.id);
@@ -363,12 +367,10 @@ pub(crate) async fn attach(
     }
     let (sources, omitted_sources) = sources(payload);
     let notes = match &options.turn_context {
-        Some(hook) => {
-            super::recommendation(hook.as_ref(), chat_id, registry, &user.content)
-                .await
-                .into_iter()
-                .collect()
-        }
+        Some(hook) => super::recommendation(hook.as_ref(), chat_id, registry, &user.content)
+            .await
+            .into_iter()
+            .collect(),
         None => vec![],
     };
     let extras = Extras {
@@ -432,7 +434,10 @@ async fn persist(
         TURN_CONTEXT_BUDGET_TOKENS,
         options.turn_oversize.as_deref(),
     );
-    let omitted = rendered.as_ref().map(|r| r.omitted.clone()).unwrap_or_default();
+    let omitted = rendered
+        .as_ref()
+        .map(|r| r.omitted.clone())
+        .unwrap_or_default();
     let text = rendered.map(|r| r.text);
     let next = plan.settled(&omitted);
     if text.is_none() && next == state {
@@ -527,7 +532,11 @@ mod tests {
         assert_eq!(dropped.notes[0].subject.as_deref(), Some("a"));
         assert_eq!(dropped.next.skills["a"], "r1");
         assert!(dropped.next.inactive.contains("a"));
-        let later = plan_of(&dropped.next, chosen_skills(vec![skill("b", "r1", "B")]), None);
+        let later = plan_of(
+            &dropped.next,
+            chosen_skills(vec![skill("b", "r1", "B")]),
+            None,
+        );
         assert!(later.notes.is_empty());
     }
 
@@ -539,12 +548,20 @@ mod tests {
             None,
         );
         let dropped = plan_of(&held.next, chosen_skills(vec![]), None);
-        let back = plan_of(&dropped.next, chosen_skills(vec![skill("a", "r1", "A")]), None);
+        let back = plan_of(
+            &dropped.next,
+            chosen_skills(vec![skill("a", "r1", "A")]),
+            None,
+        );
         assert!(back.items.is_empty());
         assert_eq!(back.notes.len(), 1);
         assert_eq!(back.notes[0].kind, TurnNoteKind::SkillReactivated);
         assert!(back.next.inactive.is_empty());
-        let revised = plan_of(&dropped.next, chosen_skills(vec![skill("a", "r2", "A2")]), None);
+        let revised = plan_of(
+            &dropped.next,
+            chosen_skills(vec![skill("a", "r2", "A2")]),
+            None,
+        );
         assert_eq!(revised.items.len(), 1);
         assert!(revised.notes.is_empty() && revised.next.inactive.is_empty());
     }

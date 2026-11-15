@@ -106,9 +106,19 @@ struct Deny {
 #[async_trait]
 impl RunHooks for Deny {
     fn indexes(&self, name: &str) -> Vec<usize> {
-        if name == "beforeToolCall" { vec![0] } else { vec![] }
+        if name == "beforeToolCall" {
+            vec![0]
+        } else {
+            vec![]
+        }
     }
-    async fn call(&self, _: &str, _: usize, context: Value, _: &CancellationToken) -> Result<Value, CoreError> {
+    async fn call(
+        &self,
+        _: &str,
+        _: usize,
+        context: Value,
+        _: &CancellationToken,
+    ) -> Result<Value, CoreError> {
         self.seen.lock().unwrap().push(context);
         Ok(json!({"value":{"action":"deny","reason":"guard says no"},"defined":true}))
     }
@@ -162,9 +172,17 @@ fn call(name: &str, args: &str) -> ToolCall {
 #[tokio::test]
 async fn mapped_call_runs_as_the_new_tool_with_its_aliases_and_is_recorded() {
     let received = Arc::new(Mutex::new(vec![]));
-    let events = run(registry(&received), vec![call("write_block", r#"{"block":"hi"}"#)], None).await;
+    let events = run(
+        registry(&received),
+        vec![call("write_block", r#"{"block":"hi"}"#)],
+        None,
+    )
+    .await;
     assert_eq!(received.lock().unwrap()[0], json!({"content":"hi"}));
-    assert_eq!(of_type(&events, "run.tool.succeeded")[0]["toolName"], "artifact_edit");
+    assert_eq!(
+        of_type(&events, "run.tool.succeeded")[0]["toolName"],
+        "artifact_edit"
+    );
     let record = of_type(&events, "run.tool.record")[0];
     assert_eq!(record["outcomeClass"], "ok");
     assert_eq!(
@@ -180,12 +198,21 @@ async fn mapped_call_gets_the_same_guard_verdict_as_a_direct_call() {
         let received = Arc::new(Mutex::new(vec![]));
         let seen = Arc::new(Mutex::new(vec![]));
         let hooks: Arc<dyn RunHooks> = Arc::new(Deny { seen: seen.clone() });
-        let events = run(registry(&received), vec![call(name, r#"{"content":"x"}"#)], Some(hooks)).await;
+        let events = run(
+            registry(&received),
+            vec![call(name, r#"{"content":"x"}"#)],
+            Some(hooks),
+        )
+        .await;
         assert!(received.lock().unwrap().is_empty(), "{name} must not run");
         let failed = of_type(&events, "run.tool.failed")[0];
         verdicts.push((failed["errorCode"].clone(), failed["errorMessage"].clone()));
         // The guard saw the canonical new call, never the old name.
-        assert_eq!(seen.lock().unwrap()[0]["toolName"], "artifact_edit", "{name}");
+        assert_eq!(
+            seen.lock().unwrap()[0]["toolName"],
+            "artifact_edit",
+            "{name}"
+        );
     }
     assert_eq!(verdicts[0], verdicts[1]);
     assert_eq!(verdicts[0].0, "tool_hook_denied");
@@ -200,9 +227,15 @@ async fn unmapped_legacy_name_teaches_with_the_replacement_named() {
     assert_eq!(failed["errorCode"], "tool_renamed");
     let message = failed["errorMessage"].as_str().unwrap();
     assert!(message.contains("edit_content was retired"), "{message}");
-    assert!(message.contains("call editor_replace to change text"), "{message}");
+    assert!(
+        message.contains("call editor_replace to change text"),
+        "{message}"
+    );
     assert!(!message.contains("{{"), "{message}");
-    assert_eq!(of_type(&events, "run.tool.record")[0]["outcomeClass"], "precondition");
+    assert_eq!(
+        of_type(&events, "run.tool.record")[0]["outcomeClass"],
+        "precondition"
+    );
 }
 
 #[tokio::test]
@@ -212,7 +245,12 @@ async fn mapping_to_a_tool_that_is_not_offered_teaches_instead() {
     assert!(received.lock().unwrap().is_empty());
     let failed = of_type(&events, "run.tool.failed")[0];
     assert_eq!(failed["errorCode"], "tool_renamed");
-    assert!(failed["errorMessage"].as_str().unwrap().contains("use artifact_edit instead"));
+    assert!(
+        failed["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("use artifact_edit instead")
+    );
 }
 
 #[tokio::test]
@@ -220,9 +258,17 @@ async fn a_withheld_replacement_is_not_offered() {
     let received = Arc::new(Mutex::new(vec![]));
     let mut registry = registry(&received);
     registry.withhold("artifact_edit", "read-only turn");
-    let events = run(registry, vec![call("write_block", r#"{"content":"x"}"#)], None).await;
+    let events = run(
+        registry,
+        vec![call("write_block", r#"{"content":"x"}"#)],
+        None,
+    )
+    .await;
     assert!(received.lock().unwrap().is_empty());
-    assert_eq!(of_type(&events, "run.tool.failed")[0]["errorCode"], "tool_renamed");
+    assert_eq!(
+        of_type(&events, "run.tool.failed")[0]["errorCode"],
+        "tool_renamed"
+    );
 }
 
 #[test]
@@ -242,7 +288,10 @@ fn legacy_names_are_not_listed_anywhere() {
     ];
     for listing in listings {
         for name in old {
-            assert!(!listing.iter().any(|entry| entry == name), "{name} in {listing:?}");
+            assert!(
+                !listing.iter().any(|entry| entry == name),
+                "{name} in {listing:?}"
+            );
         }
     }
     assert!(registry.get("write_block").is_none());

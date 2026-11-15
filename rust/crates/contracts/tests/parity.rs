@@ -69,7 +69,7 @@ fn all_routes_match_typescript() {
 fn all_event_variants_and_golden_traces_roundtrip() {
     let frozen = fixture("run-events.json");
     let variants = frozen["variants"].as_array().unwrap();
-    assert_eq!(variants.len(), 21);
+    assert_eq!(variants.len(), 22);
     for variant in variants {
         let value = example(&variant["schema"]);
         let event: AiRunEvent = deserialize_validated("AiRunEventSchema", value.clone()).unwrap();
@@ -210,7 +210,11 @@ fn content_security_and_closed_discriminators_match_typescript() {
     assert!(validate_schema("AiContentPartSchema", &json!({"type":"turn_context"})).is_err());
     // The host builds turn_context; a submit may not carry one.
     assert!(
-        validate_schema("SubmitMessageRequestSchema", &json!({"content":[turn_context.clone()]})).is_err()
+        validate_schema(
+            "SubmitMessageRequestSchema",
+            &json!({"content":[turn_context.clone()]})
+        )
+        .is_err()
     );
     assert!(
         validate_schema(

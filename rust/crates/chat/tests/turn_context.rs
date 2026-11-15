@@ -94,10 +94,14 @@ async fn the_line_is_a_persisted_note_of_the_user_message_and_nowhere_else() {
     let store = SqliteStore::memory(64).expect("store");
     let seen = Arc::new(Mutex::new(vec![]));
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(Body(definition("notes_read")))).unwrap();
+    registry
+        .register(Arc::new(Body(definition("notes_read"))))
+        .unwrap();
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
         ChatExecutor::new(
-            Arc::new(Capturing { seen: Arc::clone(&seen) }),
+            Arc::new(Capturing {
+                seen: Arc::clone(&seen),
+            }),
             Arc::new(registry),
         )
         .with_options(ChatExecutorOptions {
@@ -138,7 +142,8 @@ async fn the_line_is_a_persisted_note_of_the_user_message_and_nowhere_else() {
         })
         .await
         .unwrap();
-    host.set_session_flush_planner(Arc::new(service.clone())).await;
+    host.set_session_flush_planner(Arc::new(service.clone()))
+        .await;
     let sent = service
         .send(
             "s1",
@@ -178,7 +183,12 @@ async fn the_line_is_a_persisted_note_of_the_user_message_and_nowhere_else() {
         .collect();
     assert_eq!(carrying.len(), 1);
     assert_eq!(carrying[0].role, "user");
-    assert!(carrying[0].content.to_string().contains("toolset_recommendation"));
+    assert!(
+        carrying[0]
+            .content
+            .to_string()
+            .contains("toolset_recommendation")
+    );
 }
 
 fn view_and_tools() -> (agentkit_core::ToolsetView, Vec<ToolDefinition>) {
@@ -205,13 +215,25 @@ async fn the_default_hook_recommends_unloaded_toolsets_from_the_view() {
         view: &view,
     };
     let line = hook.line(&input).await.expect("a line");
-    assert!(line.starts_with("Likely useful toolsets: calendar"), "{line}");
+    assert!(
+        line.starts_with("Likely useful toolsets: calendar"),
+        "{line}"
+    );
     assert!(!line.contains('\n'));
     // A toolset that is already loaded is not suggested again.
-    let loaded = TurnContextInput { request: "run the tests in the shell", ..input };
+    let loaded = TurnContextInput {
+        request: "run the tests in the shell",
+        ..input
+    };
     let line = hook.line(&loaded).await;
-    assert!(line.is_none_or(|l| !l.contains("shell")), "loaded set suggested");
+    assert!(
+        line.is_none_or(|l| !l.contains("shell")),
+        "loaded set suggested"
+    );
     // Nothing relevant, no line.
-    let none = TurnContextInput { request: "zzz qqq", ..loaded };
+    let none = TurnContextInput {
+        request: "zzz qqq",
+        ..loaded
+    };
     assert!(hook.line(&none).await.is_none());
 }

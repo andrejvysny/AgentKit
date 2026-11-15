@@ -158,15 +158,19 @@ pub agentkit_governance::StagedTools::failed: alloc::vec::Vec<agentkit_governanc
 pub agentkit_governance::StagedTools::namespaces: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
 pub agentkit_governance::StagedTools::registry: alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>
 pub agentkit_governance::StagedTools::skipped: alloc::vec::Vec<alloc::string::String>
+pub agentkit_governance::StagedTools::withheld: alloc::vec::Vec<agentkit_governance::WithheldTool>
 pub struct agentkit_governance::StaticToolContributor
 impl agentkit_governance::StaticToolContributor
 pub fn agentkit_governance::StaticToolContributor::new(alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
 pub fn agentkit_governance::StaticToolContributor::proposal_only(alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
 pub fn agentkit_governance::StaticToolContributor::skipped_write_names(&self) -> alloc::vec::Vec<alloc::string::String>
 impl agentkit_governance::ToolContributor for agentkit_governance::StaticToolContributor
+pub fn agentkit_governance::StaticToolContributor::can_join_late(&self) -> bool
 pub fn agentkit_governance::StaticToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::GovernanceResult<alloc::vec::Vec<agentkit_governance::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_governance::StaticToolContributor::legacy_names(&self) -> alloc::vec::Vec<agentkit_core::legacy_name::LegacyName>
 pub fn agentkit_governance::StaticToolContributor::namespace(&self) -> &str
 pub fn agentkit_governance::StaticToolContributor::privileged(&self) -> bool
+pub fn agentkit_governance::StaticToolContributor::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub fn agentkit_governance::StaticToolContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
 pub struct agentkit_governance::ToolContributionContext
 pub agentkit_governance::ToolContributionContext::actor: serde_json::value::Value
@@ -185,6 +189,9 @@ pub agentkit_governance::ToolGuardContext::arguments: core::option::Option<serde
 pub agentkit_governance::ToolGuardContext::contribution: agentkit_governance::ToolContributionContext
 pub agentkit_governance::ToolGuardContext::namespace: alloc::string::String
 pub agentkit_governance::ToolGuardContext::tool: agentkit_core::types::ToolDefinition
+pub struct agentkit_governance::WithheldTool
+pub agentkit_governance::WithheldTool::definition: agentkit_core::types::ToolDefinition
+pub agentkit_governance::WithheldTool::reason: alloc::string::String
 pub struct agentkit_governance::WriteAllowance
 pub agentkit_governance::WriteAllowance::actor_id: core::option::Option<alloc::string::String>
 pub agentkit_governance::WriteAllowance::chat_id: alloc::string::String
@@ -255,14 +262,20 @@ pub fn agentkit_governance::ProposalRevisionSource::current_revision<'life0, 'li
 pub trait agentkit_governance::StandingApprovalPolicy: core::marker::Send + core::marker::Sync
 pub fn agentkit_governance::StandingApprovalPolicy::key_for<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_governance::ToolGuardContext, &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::GovernanceResult<core::option::Option<(alloc::string::String, alloc::string::String)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_governance::ToolContributor: core::marker::Send + core::marker::Sync
+pub fn agentkit_governance::ToolContributor::can_join_late(&self) -> bool
 pub fn agentkit_governance::ToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::GovernanceResult<alloc::vec::Vec<agentkit_governance::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_governance::ToolContributor::legacy_names(&self) -> alloc::vec::Vec<agentkit_core::legacy_name::LegacyName>
 pub fn agentkit_governance::ToolContributor::namespace(&self) -> &str
 pub fn agentkit_governance::ToolContributor::privileged(&self) -> bool
+pub fn agentkit_governance::ToolContributor::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub fn agentkit_governance::ToolContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
 impl agentkit_governance::ToolContributor for agentkit_governance::StaticToolContributor
+pub fn agentkit_governance::StaticToolContributor::can_join_late(&self) -> bool
 pub fn agentkit_governance::StaticToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::GovernanceResult<alloc::vec::Vec<agentkit_governance::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_governance::StaticToolContributor::legacy_names(&self) -> alloc::vec::Vec<agentkit_core::legacy_name::LegacyName>
 pub fn agentkit_governance::StaticToolContributor::namespace(&self) -> &str
 pub fn agentkit_governance::StaticToolContributor::privileged(&self) -> bool
+pub fn agentkit_governance::StaticToolContributor::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
 pub fn agentkit_governance::StaticToolContributor::unbound_tool_names(&self) -> core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
 pub trait agentkit_governance::ToolGuard: core::marker::Send + core::marker::Sync
 pub fn agentkit_governance::ToolGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::GovernanceResult<agentkit_governance::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait

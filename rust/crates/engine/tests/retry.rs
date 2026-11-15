@@ -112,6 +112,8 @@ fn build_host(store: SqliteStore, executor: Arc<Script>, clock: Arc<Clock>) -> A
                 jitter_ratio: 0.0,
                 ..Default::default()
             },
+            // The slot test below needs a two-slot pool; the default is four.
+            concurrency: 2,
             ..Default::default()
         },
     )

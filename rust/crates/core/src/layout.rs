@@ -315,7 +315,10 @@ pub fn fold_selected_content(
     let mut text = String::from(TURN_CONTEXT_OPEN);
     for item in selected {
         let body = escape_turn_context(item.content.as_str().unwrap_or_default());
-        text.push_str(&format!("\n<context role=\"{}\">\n{body}\n</context>", item.role));
+        text.push_str(&format!(
+            "\n<context role=\"{}\">\n{body}\n</context>",
+            item.role
+        ));
     }
     text.push('\n');
     text.push_str(TURN_CONTEXT_CLOSE);

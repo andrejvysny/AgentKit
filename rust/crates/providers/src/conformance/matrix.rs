@@ -66,7 +66,10 @@ pub fn build_matrix(
     for (model, model_outcomes) in outcomes {
         let mut by_toolset: BTreeMap<&str, Vec<&RunOutcome>> = BTreeMap::new();
         for outcome in &model_outcomes {
-            by_toolset.entry(&outcome.toolset).or_default().push(outcome);
+            by_toolset
+                .entry(&outcome.toolset)
+                .or_default()
+                .push(outcome);
         }
         for (toolset, set) in by_toolset {
             let task_runs = u32::try_from(set.len()).unwrap_or(u32::MAX);
@@ -83,7 +86,7 @@ pub fn build_matrix(
             cells.push(Cell {
                 model: model.clone(),
                 toolset: toolset.to_owned(),
-                tasks: if runs == 0 { 0 } else { task_runs / runs },
+                tasks: task_runs.checked_div(runs).unwrap_or(0),
                 runs,
                 successes,
                 success_rate,

@@ -199,9 +199,8 @@ async fn rig(store: SqliteStore, pool: usize, provider: Arc<Scripted>) -> Rig {
         ..Default::default()
     }
     .effective();
-    let profiles = Arc::new(
-        ProfileRegistry::new(&[json!({"id": "coding", "tools": PROFILE_TOOLS})]).unwrap(),
-    );
+    let profiles =
+        Arc::new(ProfileRegistry::new(&[json!({"id": "coding", "tools": PROFILE_TOOLS})]).unwrap());
     let child_session = AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),
         runtime: runtime.clone(),
@@ -555,7 +554,10 @@ async fn a_restart_mid_wait_resumes_the_parked_parent_without_rerunning_it() {
     // The composition root's startup sweep; it also starts the waker.
     second.subagents.reap_orphans().await.unwrap();
     second.wait_completed(&turn).await;
-    assert_eq!(second.wake_reason(&turn).await.as_deref(), Some("all_settled"));
+    assert_eq!(
+        second.wake_reason(&turn).await.as_deref(),
+        Some("all_settled")
+    );
     assert_eq!(
         provider.spawn_turns.load(Ordering::SeqCst),
         0,
@@ -612,7 +614,10 @@ async fn the_park_request_carries_the_reserved_id_and_the_deadline_expiry() {
         .unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].input_id.starts_with("childwait:"));
-    assert!(requests[0].expires_at.is_some(), "the deadline is the expiry");
+    assert!(
+        requests[0].expires_at.is_some(),
+        "the deadline is the expiry"
+    );
     assert_eq!(requests[0].content["awaited"].as_array().unwrap().len(), 3);
     provider.release_all();
 }
@@ -673,7 +678,10 @@ async fn park_ghost_wait(store: &SqliteStore, chat: &str, deadline_ms: i64) -> S
     use agentkit_store::{
         AgentInputKind, ClaimInput, CreateAgentInput, MessageInput, ParkTurn, SubmitTask,
     };
-    store.create_chat(chat, None, json!({}), 1000).await.unwrap();
+    store
+        .create_chat(chat, None, json!({}), 1000)
+        .await
+        .unwrap();
     let task_id = format!("turn-{chat}");
     let message = |id: &str, run: Option<&str>, role: &str| MessageInput {
         id: Some(format!("{task_id}-{id}")),

@@ -173,6 +173,9 @@ const AiMessageContentSchema: TUnion<[TString, TArray<TUnion<[TObject<    {
     type: TLiteral<"audio">;
     data: TString;
     format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>, TObject<    {
+    type: TLiteral<"turn_context">;
+    text: TString;
 }>]>>]>;
 
 // @public (undocumented)
@@ -282,6 +285,9 @@ const AiToolResultSchema: TObject<    {
         type: TLiteral<"audio">;
         data: TString;
         format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+    }>, TObject<    {
+        type: TLiteral<"turn_context">;
+        text: TString;
     }>]>>>;
     ok: TBoolean;
     data: TOptional<TUnknown>;
@@ -2918,6 +2924,7 @@ export interface ToolDefinitionJson {
     description?: string;
     // (undocumented)
     effect?: "read" | "write";
+    examples?: Array<Record<string, unknown>>;
     // (undocumented)
     inputSchema: Record<string, unknown>;
     // (undocumented)

@@ -48,25 +48,33 @@ fn git_forms() -> ToolForm {
                 "git_status",
                 "status",
                 &["path"],
-                format!("Show the working tree status and the current branch (read-only). Use it instead of running git through run_shell_command. path limits the report to one file or directory. {GIT_SAFETY}"),
+                format!(
+                    "Show the working tree status and the current branch (read-only). Use it instead of running git through run_shell_command. path limits the report to one file or directory. {GIT_SAFETY}"
+                ),
             ),
             git(
                 "git_diff",
                 "diff",
                 &["path", "staged", "rev"],
-                format!("Show changes (read-only): the unstaged working tree changes, or the staged changes with staged true; rev compares against a commit, branch, tag or range, and path limits the diff to one file or directory. Use it instead of running git through run_shell_command. {GIT_SAFETY}"),
+                format!(
+                    "Show changes (read-only): the unstaged working tree changes, or the staged changes with staged true; rev compares against a commit, branch, tag or range, and path limits the diff to one file or directory. Use it instead of running git through run_shell_command. {GIT_SAFETY}"
+                ),
             ),
             git(
                 "git_log",
                 "log",
                 &["path", "limit", "rev"],
-                format!("List commits, newest first (read-only). limit sets how many (default 20); rev starts from a commit, branch or tag; path keeps only commits that touch it. Use it instead of running git through run_shell_command. {GIT_SAFETY}"),
+                format!(
+                    "List commits, newest first (read-only). limit sets how many (default 20); rev starts from a commit, branch or tag; path keeps only commits that touch it. Use it instead of running git through run_shell_command. {GIT_SAFETY}"
+                ),
             ),
             git(
                 "git_show",
                 "show",
                 &["path", "rev"],
-                format!("Show one commit with its changes (read-only). rev names the commit, branch or tag (default HEAD), for example HEAD~2; path limits the output to one file or directory. Use it instead of running git through run_shell_command. {GIT_SAFETY}"),
+                format!(
+                    "Show one commit with its changes (read-only). rev names the commit, branch or tag (default HEAD), for example HEAD~2; path limits the output to one file or directory. Use it instead of running git through run_shell_command. {GIT_SAFETY}"
+                ),
             ),
         ],
     }

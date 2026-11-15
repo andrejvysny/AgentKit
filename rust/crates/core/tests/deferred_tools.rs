@@ -204,7 +204,11 @@ fn call(id: &str, name: &str, arguments: Value) -> ToolCall {
 }
 
 fn via(id: &str, name: &str, arguments: Value) -> ToolCall {
-    call(id, "tool_call", json!({"name": name, "arguments": arguments}))
+    call(
+        id,
+        "tool_call",
+        json!({"name": name, "arguments": arguments}),
+    )
 }
 
 fn catalog_tools(ran: &Ran) -> Vec<Arc<Echo>> {
@@ -240,11 +244,7 @@ fn catalog_tools(ran: &Ran) -> Vec<Arc<Echo>> {
 #[test]
 fn a_manifest_within_the_budget_is_all_direct_and_omits_the_meta_tools() {
     let ran = Ran::default();
-    let (_, surface) = session(
-        catalog_tools(&ran),
-        &Classification::default(),
-        None,
-    );
+    let (_, surface) = session(catalog_tools(&ran), &Classification::default(), None);
     assert_eq!(surface.manifest.definitions().len(), 5);
     assert!(surface.deferred.is_empty());
     assert!(!surface.manifest.contains("tool_call"));
@@ -272,9 +272,16 @@ fn a_direct_set_splits_the_manifest_and_the_meta_tools_join_the_array() {
     );
     assert_eq!(
         names(&surface.deferred),
-        ["calendar_create_event", "calendar_list_events", "mcp__notes__list"]
+        [
+            "calendar_create_event",
+            "calendar_list_events",
+            "mcp__notes__list"
+        ]
     );
-    assert_eq!(names(&registry.definitions()), names(surface.manifest.definitions()));
+    assert_eq!(
+        names(&registry.definitions()),
+        names(surface.manifest.definitions())
+    );
     assert!(registry.meta_active());
 }
 
@@ -326,7 +333,10 @@ fn the_catalog_index_is_sorted_compact_and_unchanged_by_a_late_tool() {
     late.push(tool("late_tool", "Arrives late.", &["x"], &ran));
     let (_, next) = session(late, &direct, Some(&stored));
     assert_eq!(next.added, ["late_tool"]);
-    assert_eq!(names(next.manifest.definitions()), names(first.manifest.definitions()));
+    assert_eq!(
+        names(next.manifest.definitions()),
+        names(first.manifest.definitions())
+    );
     assert!(next.deferred_names().contains(&"late_tool".to_owned()));
 }
 
@@ -367,19 +377,25 @@ async fn tool_search_ranks_name_over_parameters_over_description() {
 #[test]
 fn search_limit_namespace_and_ties() {
     let ran = Ran::default();
-    let (registry, _) = session(
-        catalog_tools(&ran),
-        &classification(&[]),
-        None,
-    );
+    let (registry, _) = session(catalog_tools(&ran), &classification(&[]), None);
     // The catalog is what the meta tools read.
-    let (all, total) = registry.catalog().unwrap().search("calendar event", None, 8);
+    let (all, total) = registry
+        .catalog()
+        .unwrap()
+        .search("calendar event", None, 8);
     assert_eq!(total, 2);
-    assert_eq!(names_of(&all), ["calendar_create_event", "calendar_list_events"]);
-    let (one, total) = registry.catalog().unwrap().search("calendar event", None, 1);
+    assert_eq!(
+        names_of(&all),
+        ["calendar_create_event", "calendar_list_events"]
+    );
+    let (one, total) = registry
+        .catalog()
+        .unwrap()
+        .search("calendar event", None, 1);
     assert_eq!((one.len(), total), (1, 2));
     let (scoped, _) = registry
-        .catalog().unwrap()
+        .catalog()
+        .unwrap()
         .search("list", Some("mcp__notes"), 5);
     assert_eq!(names_of(&scoped), ["mcp__notes__list"]);
     let (none, total) = registry.catalog().unwrap().search("zzzz", None, 5);
@@ -397,8 +413,16 @@ async fn tool_describe_returns_the_full_definition_or_the_closest_names() {
     let outcome = run(
         registry,
         vec![
-            call("d1", "tool_describe", json!({"name": "calendar_list_events"})),
-            call("d2", "tool_describe", json!({"name": "calendar_list_event"})),
+            call(
+                "d1",
+                "tool_describe",
+                json!({"name": "calendar_list_events"}),
+            ),
+            call(
+                "d2",
+                "tool_describe",
+                json!({"name": "calendar_list_event"}),
+            ),
         ],
     )
     .await;
@@ -409,7 +433,12 @@ async fn tool_describe_returns_the_full_definition_or_the_closest_names() {
     assert_eq!(model["data"]["input_schema"]["required"], json!(["day"]));
     let failed = &outcome.of("run.tool.failed")[0];
     assert_eq!(failed["errorCode"], "tool_not_found");
-    assert!(failed["errorMessage"].as_str().unwrap().contains("calendar_list_events"));
+    assert!(
+        failed["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("calendar_list_events")
+    );
 }
 
 #[tokio::test]
@@ -418,7 +447,11 @@ async fn tool_call_runs_a_deferred_tool_through_the_pipeline_as_the_inner_tool()
     let (registry, _) = session(catalog_tools(&ran), &classification(&["read_file"]), None);
     let outcome = run(
         registry,
-        vec![via("c1", "calendar_list_events", json!({"day": "2026-03-02"}))],
+        vec![via(
+            "c1",
+            "calendar_list_events",
+            json!({"day": "2026-03-02"}),
+        )],
     )
     .await;
     assert_eq!(
@@ -431,7 +464,10 @@ async fn tool_call_runs_a_deferred_tool_through_the_pipeline_as_the_inner_tool()
     assert_eq!(running[0]["toolCallId"], "c1");
     let records = outcome.of("run.tool.record");
     assert_eq!(records[0]["toolName"], "calendar_list_events");
-    assert_eq!(outcome.of("run.tool.succeeded")[0]["toolName"], "calendar_list_events");
+    assert_eq!(
+        outcome.of("run.tool.succeeded")[0]["toolName"],
+        "calendar_list_events"
+    );
 }
 
 #[tokio::test]
@@ -439,9 +475,16 @@ async fn tool_call_normalises_the_inner_arguments_like_a_direct_call() {
     let ran = Ran::default();
     let (registry, _) = session(catalog_tools(&ran), &classification(&["page_search"]), None);
     // `path` is the standard alias of `file_path`.
-    let outcome = run(registry, vec![via("c1", "read_file", json!({"path": "a.rs"}))]).await;
+    let outcome = run(
+        registry,
+        vec![via("c1", "read_file", json!({"path": "a.rs"}))],
+    )
+    .await;
     assert_eq!(*ran.lock().unwrap(), [r#"read_file:{"file_path":"a.rs"}"#]);
-    assert_eq!(outcome.of("run.tool.record")[0]["aliasesUsed"], json!(["path->file_path"]));
+    assert_eq!(
+        outcome.of("run.tool.record")[0]["aliasesUsed"],
+        json!(["path->file_path"])
+    );
 }
 
 #[tokio::test]
@@ -462,7 +505,10 @@ async fn ce09_invalid_arguments_return_the_schema_and_run_nothing() {
     assert_eq!(failed["errorCode"], "invalid_arguments");
     let message = failed["errorMessage"].as_str().unwrap();
     assert!(message.contains("day"), "{message}");
-    assert!(message.contains("\"required\""), "carries the schema: {message}");
+    assert!(
+        message.contains("\"required\""),
+        "carries the schema: {message}"
+    );
     assert!(message.contains("calendar_create_event"), "{message}");
 }
 
@@ -475,13 +521,21 @@ async fn tool_call_needs_a_name_and_an_arguments_object() {
         vec![
             call("c1", "tool_call", json!({"arguments": {}})),
             call("c2", "tool_call", json!({"name": "calendar_list_events"})),
-            call("c3", "tool_call", json!({"name": "tool_search", "arguments": {}})),
+            call(
+                "c3",
+                "tool_call",
+                json!({"name": "tool_search", "arguments": {}}),
+            ),
         ],
     )
     .await;
     let failures = outcome.of("run.tool.failed");
     assert_eq!(failures.len(), 3);
-    assert!(failures.iter().all(|f| f["errorCode"] == "invalid_arguments"));
+    assert!(
+        failures
+            .iter()
+            .all(|f| f["errorCode"] == "invalid_arguments")
+    );
     assert!(ran.lock().unwrap().is_empty());
 }
 
@@ -497,7 +551,12 @@ async fn a_direct_call_of_a_deferred_tool_is_refused_with_the_way_to_call_it() {
     assert!(ran.lock().unwrap().is_empty());
     let failed = &outcome.of("run.tool.failed")[0];
     assert_eq!(failed["errorCode"], "tool_deferred");
-    assert!(failed["errorMessage"].as_str().unwrap().contains("tool_call"));
+    assert!(
+        failed["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("tool_call")
+    );
 }
 
 #[tokio::test]
@@ -507,7 +566,12 @@ async fn an_unknown_name_is_tool_not_found_with_the_closest_names() {
     let outcome = run(registry, vec![via("c1", "calendar_list_event", json!({}))]).await;
     let failed = &outcome.of("run.tool.failed")[0];
     assert_eq!(failed["errorCode"], "tool_not_found");
-    assert!(failed["errorMessage"].as_str().unwrap().contains("calendar_list_events"));
+    assert!(
+        failed["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("calendar_list_events")
+    );
 }
 
 #[tokio::test]
@@ -530,7 +594,10 @@ async fn a_late_contributor_tool_is_callable_through_tool_call() {
     .await;
     assert_eq!(outcome.offered, names(first.manifest.definitions()));
     assert_eq!(*ran.lock().unwrap(), [r#"late_tool:{"x":"1"}"#]);
-    assert_eq!(outcome.of("run.tool.failed")[0]["errorCode"], "tool_deferred");
+    assert_eq!(
+        outcome.of("run.tool.failed")[0]["errorCode"],
+        "tool_deferred"
+    );
 }
 
 #[tokio::test]
@@ -542,8 +609,15 @@ async fn a_cataloged_tool_nothing_offers_is_tool_unavailable() {
     let mut fewer = catalog_tools(&ran);
     fewer.retain(|tool| tool.definition.name != "page_search");
     let (registry, _) = session(fewer, &direct, Some(&stored));
-    let outcome = run(registry, vec![via("c1", "page_search", json!({"query": "q"}))]).await;
-    assert_eq!(outcome.of("run.tool.failed")[0]["errorCode"], "tool_unavailable");
+    let outcome = run(
+        registry,
+        vec![via("c1", "page_search", json!({"query": "q"}))],
+    )
+    .await;
+    assert_eq!(
+        outcome.of("run.tool.failed")[0]["errorCode"],
+        "tool_unavailable"
+    );
 }
 
 #[tokio::test]
@@ -579,7 +653,12 @@ async fn a_withheld_tool_is_refused_through_tool_call_exactly_as_directly() {
     let failures = outcome.of("run.tool.failed");
     assert_eq!(failures.len(), 2);
     assert_eq!(failures[0]["errorCode"], failures[1]["errorCode"]);
-    assert!(failures[1]["errorMessage"].as_str().unwrap().contains("plan mode"));
+    assert!(
+        failures[1]["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("plan mode")
+    );
 }
 
 #[test]
@@ -589,11 +668,17 @@ fn the_meta_tool_definitions_follow_the_schema_rules() {
     registry.install_meta_tools().unwrap();
     for definition in meta_definitions() {
         let length = definition.description.chars().count();
-        assert!((150..=900).contains(&length), "{}: {length}", definition.name);
+        assert!(
+            (150..=900).contains(&length),
+            "{}: {length}",
+            definition.name
+        );
         assert!(!definition.examples.is_empty(), "{}", definition.name);
         for example in &definition.examples {
             assert!(
-                registry.validate_input(&definition.name, example).is_empty(),
+                registry
+                    .validate_input(&definition.name, example)
+                    .is_empty(),
                 "{}: example does not validate",
                 definition.name
             );
@@ -603,7 +688,11 @@ fn the_meta_tool_definitions_follow_the_schema_rules() {
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema["required"].is_array());
         for key in ["anyOf", "oneOf", "allOf", "not", "enum"] {
-            assert!(schema.get(key).is_none(), "{} root has {key}", definition.name);
+            assert!(
+                schema.get(key).is_none(),
+                "{} root has {key}",
+                definition.name
+            );
         }
         for (name, property) in schema["properties"].as_object().unwrap() {
             assert!(
@@ -644,5 +733,8 @@ fn unwrap_tool_call_builds_the_inner_call_under_the_same_id() {
         "tool_call",
         json!({"name": "page_search", "arguments": "{\"query\":\"q\"}"}),
     );
-    assert_eq!(unwrap_tool_call(&text).unwrap().arguments_json, r#"{"query":"q"}"#);
+    assert_eq!(
+        unwrap_tool_call(&text).unwrap().arguments_json,
+        r#"{"query":"q"}"#
+    );
 }

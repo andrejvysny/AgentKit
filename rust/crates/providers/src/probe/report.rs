@@ -1,5 +1,5 @@
-use serde::Serialize;
 use super::client::Secret;
+use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

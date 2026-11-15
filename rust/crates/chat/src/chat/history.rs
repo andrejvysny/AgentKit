@@ -283,10 +283,7 @@ fn stored_reasoning(record: &MessageRecord) -> Option<serde_json::Map<String, Va
         .get(agentkit_core::WIRE_CALLS_METADATA_KEY)
         .filter(|wire| wire.is_array())
     {
-        metadata.insert(
-            agentkit_core::WIRE_CALLS_METADATA_KEY.into(),
-            wire.clone(),
-        );
+        metadata.insert(agentkit_core::WIRE_CALLS_METADATA_KEY.into(), wire.clone());
     }
     (!metadata.is_empty()).then_some(metadata)
 }
@@ -1018,7 +1015,11 @@ mod tests {
             );
             let tool = messages.iter().rfind(|m| m.role == "tool").unwrap();
             let content = tool.content.as_str().unwrap_or_default();
-            assert!(!content.contains("tool_effect_uncertain"), "{}: {content}", stored.1);
+            assert!(
+                !content.contains("tool_effect_uncertain"),
+                "{}: {content}",
+                stored.1
+            );
             assert!(content.contains("done"), "{}: {content}", stored.1);
         }
     }
@@ -1214,6 +1215,13 @@ mod tests {
         };
         assert_eq!(reasoning("assistant", true), Some("first. ".into()));
         assert_eq!(reasoning("assistant", false), Some("second.".into()));
-        assert!(messages.iter().find(|m| m.role == "user").unwrap().metadata.is_none());
+        assert!(
+            messages
+                .iter()
+                .find(|m| m.role == "user")
+                .unwrap()
+                .metadata
+                .is_none()
+        );
     }
 }

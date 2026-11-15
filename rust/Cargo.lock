@@ -326,6 +326,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "agentkit-napi"
 version = "0.1.0"
 dependencies = [
@@ -353,18 +365,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
- "uuid",
-]
-
-[[package]]
-name = "agentkit-memory"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.18",
  "uuid",
 ]
 

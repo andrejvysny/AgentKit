@@ -356,7 +356,13 @@ mod tests {
     #[test]
     fn notes_past_the_cap_and_sources_past_the_limit_leave_one_marker_each() {
         let notes: Vec<TurnNote> = (0..MAX_TURN_NOTES + 3)
-            .map(|n| TurnNote::new(TurnNoteKind::CoreMemoryChanged, Some(n.to_string().as_str()), "m"))
+            .map(|n| {
+                TurnNote::new(
+                    TurnNoteKind::CoreMemoryChanged,
+                    Some(n.to_string().as_str()),
+                    "m",
+                )
+            })
             .collect();
         let draft = Draft {
             notes: &notes,

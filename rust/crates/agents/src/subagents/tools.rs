@@ -137,7 +137,8 @@ fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefini
                  slot; it resumes when all awaited children settled (mode all, the default) or \
                  the first one did (mode any), on timeout (timedOut true, with partial \
                  results), or when the owner sends a message. A timeout is not a failure: keep \
-                 working or await again. Spawn the children first with subagent_spawn."
+                 working or await again. Returns each awaited child's status and result. \
+                 Spawn the children first with subagent_spawn."
                     .to_owned(),
                 json!({"type":"object","required":[],"additionalProperties":false,
                     "properties":{

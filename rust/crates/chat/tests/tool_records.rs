@@ -7,7 +7,6 @@ use agentkit_core::{
     ToolContext, ToolDefinition, ToolRegistry, ToolResult,
 };
 use agentkit_engine::{SystemRuntime, TaskExecutor};
-use agentkit_sessions::*;
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -81,10 +80,11 @@ async fn records(options: ChatExecutorOptions) -> Vec<Value> {
     let store = SqliteStore::memory(64).unwrap();
     store.create_chat("chat", None, json!({}), 0).await.unwrap();
     let mut tools = ToolRegistry::new();
-    let definition = serde_json::from_value(json!({"name":"edit_file","version":"1","effect":"read",
+    let definition =
+        serde_json::from_value(json!({"name":"edit_file","version":"1","effect":"read",
         "capability":"test","description":"Edit","inputSchema":{"type":"object",
         "required":["file_path"],"properties":{"file_path":{"type":"string"}}}}))
-    .unwrap();
+        .unwrap();
     tools.register(Arc::new(Edit { definition })).unwrap();
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
         ChatExecutor::new(

@@ -31,7 +31,13 @@ fn canonical() -> Vec<ToolDefinition> {
 #[test]
 fn write_edit_and_run_become_the_patch_and_shell_tools() {
     let rendered = openai_dialect().render(&canonical());
-    assert_eq!(names(&rendered), fixture()["request"]["toolNames"].as_array().unwrap().clone());
+    assert_eq!(
+        names(&rendered),
+        fixture()["request"]["toolNames"]
+            .as_array()
+            .unwrap()
+            .clone()
+    );
     assert_eq!(builtin_tool_type(&rendered[0]), Some("apply_patch"));
     assert_eq!(builtin_tool_type(&rendered[1]), Some("shell"));
     assert_eq!(builtin_tool_type(&rendered[2]), None);
@@ -47,12 +53,21 @@ fn write_edit_and_run_become_the_patch_and_shell_tools() {
 fn a_built_in_is_offered_only_for_tools_the_session_has() {
     let all = canonical();
     let only = |keep: &[&str]| -> Vec<ToolDefinition> {
-        all.iter().filter(|d| keep.contains(&d.name.as_str())).cloned().collect()
+        all.iter()
+            .filter(|d| keep.contains(&d.name.as_str()))
+            .cloned()
+            .collect()
     };
     let dialect = openai_dialect();
     assert_eq!(names(&dialect.render(&only(&["run_command"]))), ["shell"]);
-    assert_eq!(names(&dialect.render(&only(&["edit_file"]))), ["apply_patch"]);
-    assert_eq!(names(&dialect.render(&only(&["calendar_list"]))), ["calendar_list"]);
+    assert_eq!(
+        names(&dialect.render(&only(&["edit_file"]))),
+        ["apply_patch"]
+    );
+    assert_eq!(
+        names(&dialect.render(&only(&["calendar_list"]))),
+        ["calendar_list"]
+    );
     assert!(dialect.render(&[]).is_empty());
 }
 
@@ -86,7 +101,9 @@ fn sorted(mut value: Value) -> Value {
                 }
             }
         }
-        Value::Array(items) => items.iter_mut().for_each(|item| *item = sorted(item.take())),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| *item = sorted(item.take())),
         _ => {}
     }
     value
@@ -162,7 +179,10 @@ fn chat_completions_keeps_the_common_shape_with_strict_schemas() {
     let dialect = openai_chat_dialect();
     assert_eq!(dialect.id, "openai-chat");
     let rendered = dialect.render(&canonical());
-    assert_eq!(names(&rendered), ["write_file", "edit", "run_shell_command", "calendar_list"]);
+    assert_eq!(
+        names(&rendered),
+        ["write_file", "edit", "run_shell_command", "calendar_list"]
+    );
     assert!(rendered.iter().all(|d| builtin_tool_type(d).is_none()));
     // write_file's schema is already strict; edit's optional replace_all becomes nullable.
     assert!(is_strict_compliant(&rendered[0].input_schema));
@@ -171,14 +191,27 @@ fn chat_completions_keeps_the_common_shape_with_strict_schemas() {
         rendered[1].input_schema["properties"]["replace_all"]["type"],
         json!(["boolean", "null"])
     );
-    assert!(rendered[1].input_schema["properties"]["old_string"].get("minLength").is_none());
-    assert_eq!(rendered[3].input_schema, fixture()["request"]["calendarList"]["inputSchema"]);
+    assert!(
+        rendered[1].input_schema["properties"]["old_string"]
+            .get("minLength")
+            .is_none()
+    );
+    assert_eq!(
+        rendered[3].input_schema,
+        fixture()["request"]["calendarList"]["inputSchema"]
+    );
 }
 
 #[test]
 fn the_dialect_is_known_by_id_and_version() {
-    assert_eq!(lookup_dialect("openai", "1").map(|d| d.id), Some("openai".to_owned()));
-    assert_eq!(lookup_dialect("openai-chat", "1").map(|d| d.id), Some("openai-chat".to_owned()));
+    assert_eq!(
+        lookup_dialect("openai", "1").map(|d| d.id),
+        Some("openai".to_owned())
+    );
+    assert_eq!(
+        lookup_dialect("openai-chat", "1").map(|d| d.id),
+        Some("openai-chat".to_owned())
+    );
     assert!(lookup_dialect("openai", "2").is_none());
     assert!(openai_dialect().strict() && openai_chat_dialect().strict());
     assert!(!common_dialect().strict());
@@ -203,7 +236,13 @@ fn recorded_vendor_calls_translate_to_the_canonical_calls() {
             &pair["canonical"]["arguments"],
         );
         if pair["roundTrips"] == true {
-            assert_eq!(back, Some((wire["name"].as_str().unwrap().to_owned(), wire["arguments"].clone())));
+            assert_eq!(
+                back,
+                Some((
+                    wire["name"].as_str().unwrap().to_owned(),
+                    wire["arguments"].clone()
+                ))
+            );
         }
     }
 }
@@ -220,14 +259,20 @@ fn recorded_vendor_items_carry_the_payload_the_dialect_reads() {
     let shell = dialect
         .translate("shell", items[1]["action"].clone())
         .expect("shell");
-    assert_eq!((shell.name.as_str(), &shell.args["command"]), ("run_command", &json!("ls -l")));
+    assert_eq!(
+        (shell.name.as_str(), &shell.args["command"]),
+        ("run_command", &json!("ls -l"))
+    );
     assert_eq!(shell.args["timeout"], 120000);
 }
 
 #[test]
 fn calls_the_canonical_tools_cannot_express_are_refused_with_a_reason() {
     let dialect = openai_dialect();
-    for case in fixture()["response"]["refused"].as_array().expect("refused") {
+    for case in fixture()["response"]["refused"]
+        .as_array()
+        .expect("refused")
+    {
         let wire = &case["wire"];
         let error = dialect
             .translate(wire["name"].as_str().unwrap(), wire["arguments"].clone())
@@ -247,15 +292,27 @@ fn bad_vendor_arguments_are_refused_not_guessed() {
         ("apply_patch", json!("not an object")),
         ("apply_patch", json!({"path": "a"})),
         ("apply_patch", json!({"type": "update_file", "path": "a"})),
-        ("apply_patch", json!({"type": "update_file", "path": "a", "diff": "@@\n?x\n"})),
+        (
+            "apply_patch",
+            json!({"type": "update_file", "path": "a", "diff": "@@\n?x\n"}),
+        ),
         ("apply_patch", json!({"type": "rename_file", "path": "a"})),
-        ("apply_patch", json!({"type": "create_file", "path": "", "diff": "+a"})),
-        ("apply_patch", json!({"type": "create_file", "path": "a", "diff": "+a", "extra": 1})),
+        (
+            "apply_patch",
+            json!({"type": "create_file", "path": "", "diff": "+a"}),
+        ),
+        (
+            "apply_patch",
+            json!({"type": "create_file", "path": "a", "diff": "+a", "extra": 1}),
+        ),
         ("shell", json!({"commands": "ls"})),
         ("shell", json!({"commands": [""]})),
         ("shell", json!({"commands": ["ls"], "environment": {}})),
     ] {
-        assert!(dialect.translate(name, args.clone()).is_err(), "{name} {args}");
+        assert!(
+            dialect.translate(name, args.clone()).is_err(),
+            "{name} {args}"
+        );
     }
 }
 
@@ -284,15 +341,27 @@ fn calls_with_no_patch_form_stay_as_stored_in_history() {
     let dialect = openai_dialect();
     // replace_all and an empty replacement have no patch form; a directory
     // for the shell has none either.
-    assert!(dialect
-        .wire_call("edit_file", &json!({"file_path":"a","old_string":"x","new_string":"y","replace_all":true}))
-        .is_none());
-    assert!(dialect
-        .wire_call("edit_file", &json!({"file_path":"a","old_string":"x","new_string":""}))
-        .is_none());
-    assert!(dialect
-        .wire_call("run_command", &json!({"command":"ls","directory":"src"}))
-        .is_none());
+    assert!(
+        dialect
+            .wire_call(
+                "edit_file",
+                &json!({"file_path":"a","old_string":"x","new_string":"y","replace_all":true})
+            )
+            .is_none()
+    );
+    assert!(
+        dialect
+            .wire_call(
+                "edit_file",
+                &json!({"file_path":"a","old_string":"x","new_string":""})
+            )
+            .is_none()
+    );
+    assert!(
+        dialect
+            .wire_call("run_command", &json!({"command":"ls","directory":"src"}))
+            .is_none()
+    );
     // Other tools show as themselves.
     assert_eq!(
         dialect.wire_call("calendar_list", &json!({"day":"d"})),
@@ -360,13 +429,20 @@ fn null_for_an_optional_argument_is_left_out_of_the_canonical_call() {
     let kept = registry
         .translate("calendar_list", json!({"day": "d", "limit": 3}))
         .expect("translates");
-    assert_eq!((kept.args, kept.args_changed), (json!({"day": "d", "limit": 3}), false));
+    assert_eq!(
+        (kept.args, kept.args_changed),
+        (json!({"day": "d", "limit": 3}), false)
+    );
     // A required argument sent as null is not dropped: validation refuses it.
     let required = registry
         .translate("calendar_list", json!({"day": null}))
         .expect("translates");
     assert_eq!(required.args, json!({"day": null}));
-    assert!(!registry.validate_input("calendar_list", &required.args).is_empty());
+    assert!(
+        !registry
+            .validate_input("calendar_list", &required.args)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -405,7 +481,10 @@ fn the_chat_variant_reads_null_arguments_for_common_wire_names() {
         )
         .expect("translates");
     assert_eq!(translated.name, "edit_file");
-    assert_eq!(translated.args, json!({"file_path":"a","old_string":"x","new_string":"y"}));
+    assert_eq!(
+        translated.args,
+        json!({"file_path":"a","old_string":"x","new_string":"y"})
+    );
 }
 
 #[test]

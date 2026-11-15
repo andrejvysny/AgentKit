@@ -24,11 +24,11 @@ pub use anthropic::{
 };
 pub use common::{COMMON_ID, COMMON_VERSION, common};
 pub use history::{WIRE_CALLS_METADATA_KEY, present_history, restore_wire_calls};
-pub use placeholders::render_text;
 pub use openai::{
     OPENAI_CHAT_ID, OPENAI_ID, PATCH_NAME as OPENAI_PATCH_NAME, SHELL_NAME as OPENAI_SHELL_NAME,
     openai, openai_chat, strict_dialect,
 };
+pub use placeholders::render_text;
 pub use strict::{drop_nulls, is_strict_compliant, strict_schema};
 
 use crate::ToolDefinition;
@@ -119,7 +119,8 @@ impl Dialect {
 
     /// The canonical id behind a wire name this dialect offers.
     pub fn canonical_of(&self, wire: &str) -> Option<&str> {
-        self.find_wire(wire).map(|(form, _)| form.canonical.as_str())
+        self.find_wire(wire)
+            .map(|(form, _)| form.canonical.as_str())
     }
 
     /// Every wire name this dialect offers for `canonical` (empty for a tool
@@ -281,7 +282,11 @@ impl Dialect {
                 return Some((wire.name.clone(), args.clone()));
             }
             let object = args.as_object()?;
-            if wire.fixed.iter().all(|(key, value)| object.get(key) == Some(value)) {
+            if wire
+                .fixed
+                .iter()
+                .all(|(key, value)| object.get(key) == Some(value))
+            {
                 let mut object = object.clone();
                 for (key, _) in &wire.fixed {
                     object.remove(key);

@@ -24,9 +24,9 @@
 //! `undo_edit`, bash `restart`) is refused with text that tells the model
 //! what to do instead.
 
-use super::{common, Dialect, DialectError, ToolForm, Translated, WireTool};
+use super::{Dialect, DialectError, Translated, WireTool, common};
 use crate::ToolDefinition;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 pub const ANTHROPIC_ID: &str = "anthropic";
 pub const TEXT_EDITOR_TYPE: &str = "text_editor_20250728";
@@ -84,7 +84,10 @@ impl Dialect {
             return self.clone();
         }
         let has = |name: &str| canonical.iter().any(|definition| definition.name == name);
-        self.effective(EDITOR_REQUIRED.iter().all(|name| has(name)), has(RUN_COMMAND))
+        self.effective(
+            EDITOR_REQUIRED.iter().all(|name| has(name)),
+            has(RUN_COMMAND),
+        )
     }
 
     /// This dialect's table with the built-in forms replaced by the common
@@ -228,7 +231,12 @@ fn translate_editor(args: &Value) -> Result<Translated, DialectError> {
             translate_view(object)
         }
         "str_replace" => {
-            only(tool, "str_replace", object, &["command", "path", "old_str", "new_str"])?;
+            only(
+                tool,
+                "str_replace",
+                object,
+                &["command", "path", "old_str", "new_str"],
+            )?;
             Ok(translated(
                 "edit_file",
                 json!({

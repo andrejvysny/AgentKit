@@ -70,7 +70,6 @@ pub use guard::{CODING_NAMESPACE, CodingPermissionGuard, CodingPermissionGuardOp
 pub use limits::{CodingLimits, CodingLimitsOverride};
 pub use mutation_queue::with_file_mutation_queue;
 pub use pack::{CODING_TOOL_NAMES, CodingToolPack, create_coding_tool_pack};
-pub use toolsets::coding_toolsets;
 pub use paths::{
     ConfineOptions, ConfinedPath, PathAccess, canonical_root, confine, is_git_segment,
     is_sensitive_path, is_sensitive_segment, resolve_inside_root, sensitive_git_excludes,
@@ -85,6 +84,7 @@ pub use sandbox::{
     SANDBOX_EXEC, SandboxEnvironment, SandboxPolicy, sandbox_available, sandbox_profile,
     toolchain_paths,
 };
+pub use toolsets::coding_toolsets;
 pub use truncate::{
     TruncatedBy, Truncation, TruncationLimits, format_size, split_lines, truncate_head,
     truncate_tail,

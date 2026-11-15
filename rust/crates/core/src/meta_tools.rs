@@ -9,8 +9,8 @@ use crate::deferred::{
     Catalog, CatalogCell, CatalogEntry, LoadMode, TOOL_CALL, TOOL_DESCRIBE, TOOL_SEARCH,
     TOOLSET_LOAD, first_sentence, parameter_names, required_names,
 };
-use crate::toolset::{META_TOOLSET, PromotionCell, render_guide};
 use crate::failure_catalog::{failure, failure_result};
+use crate::toolset::{META_TOOLSET, PromotionCell, render_guide};
 use crate::{CoreError, Tool, ToolContext, ToolDefinition, ToolLimits, ToolResult, closest_names};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -215,7 +215,13 @@ fn with_promoted<'a>(catalog: &'a Catalog, promotions: &PromotionCell) -> Cow<'a
 }
 
 fn refusal(code: &str, message: &str, limits: &ToolLimits) -> ToolResult {
-    failure_result(code, &failure(code, message, None), "execution", None, limits)
+    failure_result(
+        code,
+        &failure(code, message, None),
+        "execution",
+        None,
+        limits,
+    )
 }
 
 fn ok(data: Value, summary: String, limits: &ToolLimits) -> ToolResult {
@@ -290,7 +296,11 @@ fn search(
             shown.len()
         )
     };
-    ok(json!({"matches": shown, "total_matched": total}), summary, limits)
+    ok(
+        json!({"matches": shown, "total_matched": total}),
+        summary,
+        limits,
+    )
 }
 
 fn describe(
@@ -337,7 +347,10 @@ fn describe(
             definition.name, definition.name
         )
     } else {
-        format!("{} is in your tool list: call it directly.", definition.name)
+        format!(
+            "{} is in your tool list: call it directly.",
+            definition.name
+        )
     };
     ok(data, summary, limits)
 }
@@ -373,7 +386,10 @@ fn load(
     limits: &ToolLimits,
 ) -> ToolResult {
     let id = input["toolset"].as_str().unwrap_or_default().trim();
-    let topic = input["topic"].as_str().map(str::trim).filter(|t| !t.is_empty());
+    let topic = input["topic"]
+        .as_str()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
     let view = catalog.toolsets();
     let mut members: Vec<CatalogEntry> = catalog
         .entries()
@@ -423,7 +439,11 @@ fn load(
                 let topics: Vec<&str> = set.topics.iter().map(|(name, _)| name.as_str()).collect();
                 let message = format!(
                     "No topic {topic} in toolset {id}. Topics: {}. Call toolset_load again with one of them, or without topic.",
-                    if topics.is_empty() { "none".to_owned() } else { topics.join(", ") }
+                    if topics.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        topics.join(", ")
+                    }
                 );
                 return failure_result(
                     "invalid_arguments",
@@ -437,13 +457,15 @@ fn load(
         (_, set) => set.and_then(|set| set.guide.as_ref()),
     };
     let text = guide.map(|guide| render_guide(&guide.text, &shown_names(catalog)));
-    let promotable = members
-        .iter()
-        .any(|entry| entry.deferred && entry.available && !promotions.is_promoted_name(&entry.definition.name));
+    let promotable = members.iter().any(|entry| {
+        entry.deferred && entry.available && !promotions.is_promoted_name(&entry.definition.name)
+    });
     let promotable_count = members
         .iter()
         .filter(|entry| {
-            entry.deferred && entry.available && !promotions.is_promoted_name(&entry.definition.name)
+            entry.deferred
+                && entry.available
+                && !promotions.is_promoted_name(&entry.definition.name)
         })
         .count();
     // The array has a bound (the profile's visible-tool limit): a toolset that
@@ -457,7 +479,9 @@ fn load(
             members.len(),
             promotions.room().unwrap_or_default()
         ),
-        (false, _) => format!("The tools of {id} are in your tool list: call them directly. Guide below."),
+        (false, _) => {
+            format!("The tools of {id} are in your tool list: call them directly. Guide below.")
+        }
         (true, true) => format!(
             "Loaded {id}: {} tools. They join your tool list on your next turn and are then called by name; until then run them with tool_call.",
             members.len()

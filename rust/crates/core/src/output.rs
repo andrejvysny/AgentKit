@@ -330,11 +330,7 @@ pub fn search_bytes(
     if pattern.is_empty() {
         return Err(OutputError::Invalid("the pattern is empty".into()));
     }
-    let build = |text: &str| {
-        regex::RegexBuilder::new(text)
-            .size_limit(1 << 20)
-            .build()
-    };
+    let build = |text: &str| regex::RegexBuilder::new(text).size_limit(1 << 20).build();
     let expression = build(pattern)
         .or_else(|_| build(&regex::escape(pattern)))
         .map_err(|error| OutputError::Invalid(format!("the pattern is not usable: {error}")))?;
@@ -370,7 +366,7 @@ fn group(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (at, digit) in digits.chars().enumerate() {
-        if at > 0 && (digits.len() - at) % 3 == 0 {
+        if at > 0 && (digits.len() - at).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);
@@ -391,7 +387,10 @@ fn head_boundary(raw: &str, budget: usize) -> (usize, bool) {
     if raw.len() <= budget {
         return (raw.len(), false);
     }
-    match raw.as_bytes()[..budget].iter().rposition(|byte| is_break(*byte)) {
+    match raw.as_bytes()[..budget]
+        .iter()
+        .rposition(|byte| is_break(*byte))
+    {
         Some(at) => (at + 1, false),
         None => {
             let mut end = budget;
@@ -557,7 +556,10 @@ fn raw_text(value: &Value) -> (String, &'static str) {
             if rest.is_empty() {
                 (text, "text/plain")
             } else {
-                (format!("{text}\n\n--- structured ---\n{rest}"), "text/plain")
+                (
+                    format!("{text}\n\n--- structured ---\n{rest}"),
+                    "text/plain",
+                )
             }
         }
         Value::Object(map) => (render_fields(map.iter()), "text/plain"),
@@ -816,7 +818,12 @@ impl OutputGate {
 
     /// Text attachments take the same path as the data: redacted, and stored
     /// with a preview when over the limit.
-    async fn shape_attachments(&self, call: &OutputCall<'_>, result: &mut ToolResult, limit: usize) {
+    async fn shape_attachments(
+        &self,
+        call: &OutputCall<'_>,
+        result: &mut ToolResult,
+        limit: usize,
+    ) {
         let Some(parts) = result.model_content.as_mut() else {
             return;
         };
@@ -871,7 +878,10 @@ mod tests {
                 max_lines: 1,
             },
         );
-        assert_eq!((slice.text.as_str(), slice.total_lines, slice.has_more), ("two", 3, true));
+        assert_eq!(
+            (slice.text.as_str(), slice.total_lines, slice.has_more),
+            ("two", 3, true)
+        );
     }
 
     #[test]
@@ -880,7 +890,11 @@ mod tests {
         let handle = OutputHandle::generate();
         for limit in [1024, 4096, 8192] {
             let preview = render_preview(&raw, &handle, false, limit, None);
-            assert!(escaped_len(&preview) <= limit, "{limit}: {}", escaped_len(&preview));
+            assert!(
+                escaped_len(&preview) <= limit,
+                "{limit}: {}",
+                escaped_len(&preview)
+            );
             assert!(preview.ends_with("search_output(handle, pattern)]"));
             assert!(preview.contains(handle.as_str()));
         }

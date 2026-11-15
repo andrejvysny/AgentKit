@@ -225,27 +225,9 @@ pub(crate) fn last_message_of_run(
 /// awaits subagents. It reuses the human-request record, answer transaction
 /// and resume path (ADR 0019) but parks in `WaitingChild`, which holds no
 /// engine slot, and only the host's waker answers it (never a human).
-pub const CHILD_WAIT_KIND: &str = "child_wait";
-
-/// Reserved request-id prefix of a child-wait park. Only `park_turn` may
-/// mint a record that carries it, so a content `kind` alone never grants
-/// the no-slot park or the waker-only answer path.
-pub const CHILD_WAIT_ID_PREFIX: &str = "childwait:";
-
-/// Whether a request is a genuine child-wait park: the reserved id AND the
-/// kind. `park_turn` rejects every record with only one of the two, and
-/// `create_input` rejects both, so a record that is not minted by
-/// `park_turn` never passes this.
-pub fn is_child_wait(request_id: &str, content: &Value) -> bool {
-    request_id.starts_with(CHILD_WAIT_ID_PREFIX)
-        && content.get("kind").and_then(Value::as_str) == Some(CHILD_WAIT_KIND)
-}
-
-/// Whether either half of the child-wait identity is claimed.
-pub fn claims_child_wait(request_id: &str, content: &Value) -> bool {
-    request_id.starts_with(CHILD_WAIT_ID_PREFIX)
-        || content.get("kind").and_then(Value::as_str) == Some(CHILD_WAIT_KIND)
-}
+pub use agentkit_engine::{
+    CHILD_WAIT_ID_PREFIX, CHILD_WAIT_KIND, claims_child_wait, is_child_wait,
+};
 
 /// `park_turn` guard: a child wait needs the reserved id, the kind and a
 /// non-empty `awaited`; neither half alone is accepted.
@@ -260,7 +242,10 @@ fn check_child_wait_park(request_id: &str, content: &Value) -> Result<()> {
     }
     let awaited = content.get("awaited").and_then(Value::as_array);
     let valid = awaited.is_some_and(|ids| {
-        !ids.is_empty() && ids.iter().all(|id| id.as_str().is_some_and(|id| !id.is_empty()))
+        !ids.is_empty()
+            && ids
+                .iter()
+                .all(|id| id.as_str().is_some_and(|id| !id.is_empty()))
     });
     if !valid {
         return Err(StoreError::InvalidInput(
