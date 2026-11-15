@@ -1,0 +1,33 @@
+[package]
+name = "agentkit-embed-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit local embedder: an ONNX Runtime model run in process behind the memory context's Embedder port"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-memory = { workspace = true }
+async-trait.workspace = true
+sha2.workspace = true
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"], optional = true }
+tokenizers = { version = "=0.23.2", default-features = false, features = ["onig"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+# Off by default and not bundled: the model file is downloaded by the owner
+# and pinned by sha-256 (spec, "Embeddings"). `onnx` enables the in-process
+# ONNX Runtime engine in `src/onnx.rs`. `ort` uses `load-dynamic`: no binary
+# is downloaded at build time; the host supplies libonnxruntime (set
+# `ORT_DYLIB_PATH`). Without the feature `LocalEmbedder::load` fails and
+# memory search stays lexical-only.
+onnx = ["dep:ort", "dep:tokenizers", "dep:tokio"]
+
+[dev-dependencies]
+tempfile.workspace = true

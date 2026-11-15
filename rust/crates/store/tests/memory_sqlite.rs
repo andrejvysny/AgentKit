@@ -2,16 +2,20 @@
 //! conformance suites, supersession committing record and index together,
 //! history with `as_of`, Slovak diacritics in lexical search, and a purge
 //! that leaves neither the text nor the id in the database file (MEM-10,
-//! text half).
+//! text half), and (roadmap 3.5) hybrid search over the brute-force vector
+//! table (MEM-09), search during a re-embed with the grace-period drop
+//! (MEM-11) and vector rows purged with their item (MEM-10, vector half).
 
 use agentkit_memory::{
-    Actor, Corpus, IndexFilter, IndexItem, ItemId, Kind, LexicalQuery, MemoryError,
-    MemoryRepository, MemoryService, ModelId, ModelSpec, NewRecord, Origin, Page,
-    REJECTED_RETENTION_MS, RETRACTED_RETENTION_MS, RecordFilter, RetrievalIndex, Scope,
+    Actor, Corpus, Embedder, IndexFilter, IndexItem, ItemId, ItemVector, Kind, LexicalQuery,
+    MatchKind, MemoryError, MemoryRepository, MemoryService, ModelState, NewRecord, Origin, Page,
+    REJECTED_RETENTION_MS, RETRACTED_RETENTION_MS, RecordFilter, RetrievalIndex, Scope, SearchMode,
     Searchability, Status, Timestamp,
 };
 use agentkit_store::{SqliteMemoryRepository, SqliteRetrievalIndex, SqliteStore};
+use agentkit_testkit::HashEmbedder;
 use agentkit_testkit::conformance::{memory_repository, retrieval_index};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -66,8 +70,8 @@ async fn sqlite_memory_repository_conforms() {
 }
 
 #[tokio::test]
-async fn sqlite_retrieval_index_conforms_without_vectors() {
-    retrieval_index::run_lexical(|| async {
+async fn sqlite_retrieval_index_conforms() {
+    retrieval_index::run(|| async {
         SqliteRetrievalIndex::new(SqliteStore::memory(16).expect("store"))
     })
     .await;
@@ -156,6 +160,8 @@ async fn conflicting_commit_applies_neither_record_nor_index_entry() {
         text_sha256: [0; 32],
         text: "xylophone value".to_owned(),
         vector: None,
+        valid_from: None,
+        valid_to: None,
     };
     index.upsert(&mut index_tx, &[item]).await.expect("upsert");
 
@@ -430,6 +436,8 @@ async fn the_repository_keeps_only_active_records_indexed() {
         text_sha256: [0; 32],
         text: "Quokka proposal".to_owned(),
         vector: None,
+        valid_from: None,
+        valid_to: None,
     };
     index.upsert(&mut index_tx, &[item]).await.expect("stage");
     let refused = repository.commit_with_index(tx, &**index, index_tx).await;
@@ -514,34 +522,353 @@ async fn retracted_records_are_purged_after_thirty_days() {
     assert_eq!(again.removed("memory_records"), 0);
 }
 
+fn user_scope() -> IndexFilter {
+    IndexFilter {
+        scope_keys: vec![Scope::user().key()],
+        ..Default::default()
+    }
+}
+
+fn embedded_service(store: &SqliteStore) -> MemoryService {
+    service(store).with_embedder(Arc::new(HashEmbedder::new()))
+}
+
+async fn search_ids(
+    service: &MemoryService,
+    query: &str,
+) -> (SearchMode, Vec<(String, MatchKind)>) {
+    let found = service
+        .search(query, &user_scope(), 5)
+        .await
+        .expect("search");
+    let hits = found
+        .hits
+        .into_iter()
+        .map(|hit| (hit.text, hit.matched))
+        .collect();
+    (found.mode, hits)
+}
+
 #[tokio::test]
-async fn vectors_are_refused_until_vector_tables_exist() {
+async fn hybrid_search_is_deterministic_and_lexical_only_without_a_model() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = embedded_service(&store);
+    for (n, text) in [
+        "Likes rust programming",
+        "Enjoys hiking in mountains",
+        "Rust backend services",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        service
+            .insert(statement(text, n as i64))
+            .await
+            .expect("insert");
+    }
+
+    // Vectors are filled in the background; until then search is lexical.
+    let (mode, early) = search_ids(&service, "rust services").await;
+    assert_eq!(mode, SearchMode::LexicalOnly);
+    assert_eq!(early[0].0, "Rust backend services");
+
+    assert_eq!(
+        service.index_pending(2, Timestamp(9)).await.expect("index"),
+        3
+    );
+    assert_eq!(
+        service.index_pending(2, Timestamp(9)).await.expect("index"),
+        0
+    );
+    let (mode, first) = search_ids(&service, "rust services").await;
+    assert_eq!(mode, SearchMode::Hybrid);
+    assert_eq!(
+        first[0],
+        ("Rust backend services".to_owned(), MatchKind::Both)
+    );
+    assert_eq!(search_ids(&service, "rust services").await.1, first);
+
+    let bare = self::service(&store);
+    assert_eq!(
+        search_ids(&bare, "rust services").await.0,
+        SearchMode::LexicalOnly
+    );
+}
+
+#[tokio::test]
+async fn search_keeps_working_while_a_model_is_re_embedded() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = embedded_service(&store);
+    service
+        .insert(statement("Rust backend services", 1))
+        .await
+        .expect("insert");
+    service
+        .index_pending(10, Timestamp(9))
+        .await
+        .expect("index");
+    let old = HashEmbedder::new().spec().id.clone();
+    let next = Arc::new(HashEmbedder::with_id("hash-bow@v2"));
+
+    service.begin_reembed(&*next).await.expect("begin");
+    assert_eq!(service.fill_model(&*next, 10).await.expect("fill"), 1);
+    assert_eq!(search_ids(&service, "rust").await.0, SearchMode::Hybrid);
+    let stats = service.index().stats().await.expect("stats");
+    assert_eq!(stats.active_model(), Some(&old));
+
+    service
+        .commit_reembed(next.clone(), Timestamp(50))
+        .await
+        .expect("commit");
+    assert_eq!(search_ids(&service, "rust").await.0, SearchMode::Hybrid);
+    let stats = service.index().stats().await.expect("stats");
+    assert_eq!(stats.active_model(), Some(&next.spec().id));
+    let retired = stats
+        .models
+        .iter()
+        .find(|m| m.id == old)
+        .expect("old model");
+    assert_eq!(retired.state, ModelState::Retired);
+    assert_eq!(retired.retired_at, Some(Timestamp(50)));
+
+    // Inside the grace period the old model stays; after it, it goes.
+    assert!(
+        service
+            .drop_retired(Timestamp(0))
+            .await
+            .expect("early")
+            .is_empty()
+    );
+    let late = Timestamp(i64::MAX / 2);
+    assert_eq!(service.drop_retired(late).await.expect("late"), vec![old]);
+    let stats = service.index().stats().await.expect("stats");
+    assert_eq!(stats.models.len(), 1);
+    assert_eq!(search_ids(&service, "rust").await.0, SearchMode::Hybrid);
+}
+
+fn vector_rows(path: &Path) -> i64 {
+    let raw = rusqlite::Connection::open(path).expect("raw connection");
+    raw.query_row("SELECT count(*) FROM memory_vectors", [], |row| row.get(0))
+        .expect("count")
+}
+
+#[tokio::test]
+async fn purge_removes_the_vector_rows_with_the_record() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (store, path) = file_store(directory.path());
+    let service = embedded_service(&store);
+    let keep = service
+        .insert(statement("Keeps tea", 1))
+        .await
+        .expect("insert");
+    let gone = service
+        .insert(statement("Quokka marmalade zeppelin", 2))
+        .await
+        .expect("insert");
+    service
+        .index_pending(10, Timestamp(9))
+        .await
+        .expect("index");
+    assert_eq!(vector_rows(&path), 2);
+
+    let report = service
+        .purge(&[gone], Actor::Owner, Timestamp(10))
+        .await
+        .expect("purge");
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.removed("index_vectors"), 1);
+    assert_eq!(vector_rows(&path), 1);
+    let raw = rusqlite::Connection::open(&path).expect("raw connection");
+    let left: String = raw
+        .query_row("SELECT item_id FROM memory_vectors", [], |row| row.get(0))
+        .expect("row");
+    assert_eq!(left, keep.to_string());
+    let stats = service.index().stats().await.expect("stats");
+    assert_eq!(stats.models[0].vectors, 1);
+}
+
+#[tokio::test]
+async fn retracting_a_record_removes_its_vector() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = embedded_service(&store);
+    let id = service
+        .insert(statement("Rust backend services", 1))
+        .await
+        .expect("insert");
+    service
+        .index_pending(10, Timestamp(9))
+        .await
+        .expect("index");
+    service
+        .set_status(id, Status::Retracted, Actor::Owner, Timestamp(2))
+        .await
+        .expect("retract");
+    let stats = service.index().stats().await.expect("stats");
+    assert_eq!(stats.models[0].vectors, 0);
+    assert!(search_ids(&service, "rust").await.1.is_empty());
+}
+
+#[tokio::test]
+async fn a_vector_write_never_resurrects_a_purged_or_inactive_record() {
+    let store = SqliteStore::memory(16).expect("store");
+    let (repository, index) = adapters(&store);
+    let service = MemoryService::new(repository.clone(), index.clone())
+        .with_embedder(Arc::new(HashEmbedder::new()));
+    let embedder = HashEmbedder::new();
+    let model = embedder.spec().id.clone();
+    service
+        .index_pending(10, Timestamp(1))
+        .await
+        .expect("activate");
+
+    let purged = service
+        .insert(statement("Quokka marmalade", 1))
+        .await
+        .expect("insert");
+    let retracted = service
+        .insert(statement("Zeppelin harbour", 2))
+        .await
+        .expect("insert");
+    let entry = |id: agentkit_memory::RecordId, text: &str| ItemVector {
+        id: ItemId::from(id),
+        text_sha256: Sha256::digest(text.as_bytes()).into(),
+        vector: vec![0.0; embedder.spec().dims as usize],
+    };
+
+    // The record is purged in the window between reading it and writing
+    // its vector: the vector write must not bring the item back.
+    service
+        .purge(&[purged], Actor::Owner, Timestamp(3))
+        .await
+        .expect("purge");
+    // Another record is retracted at the record store only (the index item
+    // lingers, as in a crash between the two): the status check refuses it.
+    let mut tx = repository.begin().await.expect("begin");
+    repository
+        .set_status(
+            &mut tx,
+            retracted,
+            Status::Retracted,
+            Actor::Owner,
+            Timestamp(4),
+        )
+        .await
+        .expect("retract");
+    repository.commit(tx).await.expect("commit");
+
+    let stored = index
+        .put_vectors(
+            &model,
+            &[
+                entry(purged, "Quokka marmalade"),
+                entry(retracted, "Zeppelin harbour"),
+            ],
+        )
+        .await
+        .expect("put");
+    assert_eq!(stored, 0);
+    assert!(found(&service, "quokka", true).await.is_empty());
+    let stats = index.stats().await.expect("stats");
+    assert_eq!(stats.models[0].vectors, 0);
+}
+
+#[tokio::test]
+async fn indexing_a_memory_item_needs_an_active_record() {
     let store = SqliteStore::memory(16).expect("store");
     let (_, index) = adapters(&store);
-    let spec = ModelSpec {
-        id: ModelId::new("m"),
-        dims: 2,
-        max_tokens: 512,
-        query_prefix: String::new(),
-        passage_prefix: String::new(),
-    };
-    index.begin_reembed(&spec).await.expect("register");
-    index.commit_reembed(&spec.id).await.expect("activate");
     let mut tx = index.begin_index().await.expect("begin");
-    let item = IndexItem {
-        id: ItemId::new("a"),
+    let ghost = IndexItem {
+        id: ItemId::new("no-such-record"),
         corpus: Corpus::Memory,
         scope_key: Scope::user().key(),
         ts: Timestamp(1),
         searchable: Searchability::Current,
         text_sha256: [0; 32],
-        text: "alpha".to_owned(),
-        vector: Some((spec.id.clone(), vec![1.0, 0.0])),
+        text: "ghost".to_owned(),
+        vector: None,
+        valid_from: None,
+        valid_to: None,
     };
-    let stored = index.upsert(&mut tx, &[item]).await;
-    assert!(matches!(stored, Err(MemoryError::Backend(_))), "{stored:?}");
-    let knn = index
-        .knn(&spec.id, &[1.0, 0.0], &IndexFilter::default(), 5)
-        .await;
-    assert!(matches!(knn, Err(MemoryError::Backend(_))), "{knn:?}");
+    index.upsert(&mut tx, &[ghost]).await.expect("stage");
+    let refused = index.commit_index(tx).await;
+    assert!(
+        matches!(refused, Err(MemoryError::InvalidInput(_))),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn search_as_of_and_scope_filters_apply_in_both_legs() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = embedded_service(&store);
+    let old = service
+        .insert(statement("Lives in Bratislava", 100))
+        .await
+        .expect("insert");
+    service
+        .supersede(old, statement("Lives in Kosice", 200))
+        .await
+        .expect("supersede");
+    service
+        .index_pending(10, Timestamp(300))
+        .await
+        .expect("index");
+    let at = |t: i64, scope: &str| IndexFilter {
+        as_of: Some(Timestamp(t)),
+        include_superseded: true,
+        scope_keys: vec![scope.to_owned()],
+        ..Default::default()
+    };
+    let user = Scope::user().key();
+    let texts = |found: agentkit_memory::SearchResults| {
+        found
+            .hits
+            .into_iter()
+            .map(|hit| hit.text)
+            .collect::<Vec<_>>()
+    };
+    let before = service
+        .search("lives", &at(150, &user), 5)
+        .await
+        .expect("search");
+    assert_eq!(before.mode, SearchMode::Hybrid);
+    assert_eq!(texts(before), vec!["Lives in Bratislava"]);
+    let after = service
+        .search("lives", &at(250, &user), 5)
+        .await
+        .expect("search");
+    assert_eq!(texts(after), vec!["Lives in Kosice"]);
+    let elsewhere = service
+        .search("lives", &at(250, "project:other"), 5)
+        .await
+        .expect("search");
+    assert!(elsewhere.hits.is_empty());
+    let unscoped = service.search("lives", &IndexFilter::default(), 5).await;
+    assert!(
+        matches!(unscoped, Err(MemoryError::EmptyScope)),
+        "{unscoped:?}"
+    );
+}
+
+#[test]
+fn a_version_21_database_gains_the_vector_tables_on_open() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (store, path) = file_store(directory.path());
+    drop(store);
+    {
+        let raw = rusqlite::Connection::open(&path).expect("raw connection");
+        raw.execute_batch(
+            "DROP INDEX memory_index_scope_key; DROP TABLE memory_vectors; \
+             ALTER TABLE embedding_models DROP COLUMN retired_at; PRAGMA user_version=21;",
+        )
+        .expect("downgrade");
+    }
+    let store = SqliteStore::open(&path, 16).expect("migrate");
+    drop(store);
+    let raw = rusqlite::Connection::open(&path).expect("raw connection");
+    let version: i64 = raw
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, agentkit_store::SCHEMA_VERSION);
+    assert_eq!(vector_rows(&path), 0);
 }

@@ -14,6 +14,10 @@ pub enum MemoryError {
     InvalidTransition { from: Status, to: Status },
     #[error("invalid memory input: {0}")]
     InvalidInput(String),
+    /// A search must name at least one scope: an empty scope list would
+    /// otherwise mean "every scope", a cross-scope leak.
+    #[error("memory search needs at least one scope key")]
+    EmptyScope,
     #[error("embedding model {0} is unknown to the index")]
     UnknownModel(ModelId),
     /// The transaction's base moved before commit; nothing was applied.

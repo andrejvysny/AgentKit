@@ -20,6 +20,9 @@ mod memory_codec;
 mod memory_index;
 mod memory_purge;
 mod memory_repository;
+#[cfg(feature = "vec")]
+mod memory_vec;
+mod memory_vectors;
 mod native_continuations;
 mod native_exec;
 mod native_repository;

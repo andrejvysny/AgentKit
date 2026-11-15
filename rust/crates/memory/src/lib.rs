@@ -5,13 +5,16 @@
 //! store. Adapters live in layer 4, twins and conformance suites in
 //! `agentkit-testkit`.
 
+mod embedding;
 mod error;
 mod ids;
 mod model;
 mod ports;
 mod retrieval;
+mod search;
 mod service;
 
+pub use embedding::EmbeddingStatus;
 pub use error::{MemoryError, MemoryResult};
 pub use ids::{ItemId, ModelId, RecordId, Timestamp};
 pub use model::{
@@ -22,7 +25,9 @@ pub use ports::{
     Embedder, IndexTx, MemoryRepository, MemoryTx, NoopReranker, Reranker, RetrievalIndex,
 };
 pub use retrieval::{
-    Candidate, Hit, IndexFilter, IndexItem, IndexStats, LexicalQuery, ModelSpec, ModelState,
-    ModelStats, Searchability,
+    Candidate, DEFAULT_SEARCH_LIMIT, Hit, IndexFilter, IndexItem, IndexStats, ItemVector,
+    LEXICAL_TOP_K, LexicalQuery, MAX_SEARCH_LIMIT, MatchKind, ModelSpec, ModelState, ModelStats,
+    REEMBED_GRACE_MS, RERANK_TOP_K, RRF_K, SearchHit, SearchMode, SearchResults, Searchability,
+    VECTOR_TOP_K,
 };
 pub use service::{MemoryService, REJECTED_RETENTION_MS, RETRACTED_RETENTION_MS};

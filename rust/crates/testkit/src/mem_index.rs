@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use agentkit_memory::{
-    Corpus, Hit, IndexFilter, IndexItem, IndexStats, IndexTx, ItemId, LexicalQuery, MemoryError,
-    MemoryResult, ModelId, ModelSpec, ModelState, ModelStats, PurgeReport, RetrievalIndex,
-    Searchability, Timestamp,
+    Corpus, Hit, IndexFilter, IndexItem, IndexStats, IndexTx, ItemId, ItemVector, LexicalQuery,
+    MemoryError, MemoryResult, ModelId, ModelSpec, ModelState, ModelStats, PurgeReport,
+    RetrievalIndex, Searchability, Timestamp,
 };
 use async_trait::async_trait;
 
@@ -19,6 +19,8 @@ struct Item {
     scope_key: String,
     ts: Timestamp,
     searchable: Searchability,
+    valid_from: Option<Timestamp>,
+    valid_to: Option<Timestamp>,
     sha: [u8; 32],
     tokens: Vec<String>,
     vectors: BTreeMap<ModelId, Vec<f32>>,
@@ -31,6 +33,10 @@ impl Item {
             && (filter.include_superseded || self.searchable == Searchability::Current)
             && filter.since.is_none_or(|since| self.ts >= since)
             && filter.until.is_none_or(|until| self.ts <= until)
+            && filter.as_of.is_none_or(|at| {
+                self.valid_from.is_none_or(|from| from <= at)
+                    && self.valid_to.is_none_or(|to| to > at)
+            })
     }
 }
 
@@ -42,6 +48,7 @@ struct State {
     version: u64,
     items: ItemTable,
     models: BTreeMap<ModelId, (ModelSpec, ModelState)>,
+    retired_at: BTreeMap<ModelId, Timestamp>,
 }
 
 struct Staged {
@@ -164,6 +171,8 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
                     scope_key: item.scope_key.clone(),
                     ts: item.ts,
                     searchable: item.searchable,
+                    valid_from: item.valid_from,
+                    valid_to: item.valid_to,
                     sha: item.text_sha256,
                     tokens: tokens(&item.text),
                     vectors,
@@ -274,7 +283,7 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
         Ok(())
     }
 
-    async fn commit_reembed(&self, model: &ModelId) -> MemoryResult<()> {
+    async fn commit_reembed(&self, model: &ModelId, at: Timestamp) -> MemoryResult<()> {
         let mut committed = self.committed();
         match committed.models.get(model) {
             None => return Err(MemoryError::UnknownModel(model.clone())),
@@ -285,10 +294,17 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
             }
             Some(_) => {}
         }
-        for (_, state) in committed.models.values_mut() {
-            if *state == ModelState::Active {
+        let retiring: Vec<ModelId> = committed
+            .models
+            .iter()
+            .filter(|(_, (_, state))| *state == ModelState::Active)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in retiring {
+            if let Some((_, state)) = committed.models.get_mut(&id) {
                 *state = ModelState::Retired;
             }
+            committed.retired_at.insert(id, at);
         }
         if let Some((_, state)) = committed.models.get_mut(model) {
             *state = ModelState::Active;
@@ -309,6 +325,7 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
             Some(_) => {}
         }
         committed.models.remove(model);
+        committed.retired_at.remove(model);
         for item in committed.items.0.values_mut() {
             if item.vectors.contains_key(model) {
                 Arc::make_mut(item).vectors.remove(model);
@@ -316,6 +333,70 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
         }
         committed.version += 1;
         Ok(())
+    }
+
+    async fn unembedded(
+        &self,
+        model: &ModelId,
+        after: Option<&ItemId>,
+        k: u32,
+    ) -> MemoryResult<Vec<ItemId>> {
+        let committed = self.committed();
+        if !committed.models.contains_key(model) {
+            return Err(MemoryError::UnknownModel(model.clone()));
+        }
+        Ok(committed
+            .items
+            .0
+            .iter()
+            .filter(|(id, item)| {
+                after.is_none_or(|after| *id > after) && !item.vectors.contains_key(model)
+            })
+            .map(|(id, _)| id.clone())
+            .take(k as usize)
+            .collect())
+    }
+
+    async fn put_vectors(&self, model: &ModelId, vectors: &[ItemVector]) -> MemoryResult<usize> {
+        let mut committed = self.committed();
+        let dims = committed
+            .models
+            .get(model)
+            .map(|(spec, _)| spec.dims as usize)
+            .ok_or_else(|| MemoryError::UnknownModel(model.clone()))?;
+        if let Some(wrong) = vectors.iter().find(|entry| entry.vector.len() != dims) {
+            return Err(MemoryError::InvalidInput(format!(
+                "vector has {} dims, model {model} has {dims}",
+                wrong.vector.len()
+            )));
+        }
+        let mut stored = 0;
+        for entry in vectors {
+            // The twin has no record store: an item present with the same
+            // text hash is the only evidence of liveness it can check (the
+            // service deletes an item when its record is retracted).
+            if let Some(item) = committed.items.0.get_mut(&entry.id)
+                && item.sha == entry.text_sha256
+            {
+                Arc::make_mut(item)
+                    .vectors
+                    .insert(model.clone(), entry.vector.clone());
+                stored += 1;
+            }
+        }
+        if stored > 0 {
+            committed.version += 1;
+        }
+        Ok(stored)
+    }
+
+    async fn active_model(&self) -> MemoryResult<Option<ModelId>> {
+        Ok(self
+            .committed()
+            .models
+            .iter()
+            .find(|(_, (_, state))| *state == ModelState::Active)
+            .map(|(id, _)| id.clone()))
     }
 
     async fn purge(&self, ids: &[ItemId]) -> MemoryResult<PurgeReport> {
@@ -356,6 +437,7 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
                     .values()
                     .filter(|item| item.vectors.contains_key(id))
                     .count() as u64,
+                retired_at: committed.retired_at.get(id).copied(),
             })
             .collect();
         Ok(IndexStats {

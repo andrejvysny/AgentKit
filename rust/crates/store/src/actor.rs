@@ -131,6 +131,8 @@ impl SqliteStore {
                 "channel capacity must be positive".into(),
             ));
         }
+        #[cfg(feature = "vec")]
+        crate::memory_vec::register();
         let (mut connection, lock) = schema::open(path.as_ref())?;
         // Durability fault plan: unset environment means all-zero and this
         // thread-local bind plus the atomic counter are the whole cost.

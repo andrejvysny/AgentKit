@@ -45,7 +45,7 @@ use crate::lanes::coding::{
     CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver,
 };
 use crate::lanes::lsp::{LspLane, LspLaneContributor};
-use crate::lanes::memory::spawn_memory_sweeper;
+use crate::lanes::memory::{spawn_memory_indexer, spawn_memory_sweeper};
 use crate::lanes::native::NativeLane;
 use crate::lanes::output::{OutputLaneContributor, spawn_sweeper};
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
@@ -431,6 +431,13 @@ impl AgentRuntimeBuilder {
             }
             _ => None,
         };
+        let memory_indexer = match &memory {
+            Some(service) if service.embedder().is_some() => Some(spawn_memory_indexer(
+                Arc::downgrade(service),
+                runtime.clone(),
+            )),
+            _ => None,
+        };
         let has_model_loop = default_provider.is_some();
         let has_native_lane = native_lane.is_some();
         // Every kind the builder itself serves with the turn executor, in a
@@ -714,6 +721,7 @@ impl AgentRuntimeBuilder {
             worker: Some(worker),
             _output_sweeper: output_sweeper,
             _memory_sweeper: memory_sweeper,
+            _memory_indexer: memory_indexer,
         })
     }
 }

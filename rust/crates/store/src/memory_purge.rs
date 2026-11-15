@@ -4,6 +4,7 @@
 //! no earlier segment keeps the removed text, the audit trail keeps only
 //! id, time and actor, and the report carries a residue check.
 use crate::memory_codec::{Work, append_event};
+use crate::memory_vectors;
 use agentkit_memory::{Actor, EventKind, PurgeReport, RecordId, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashSet;
@@ -39,6 +40,8 @@ fn purge_item(
         )
         .optional()?;
     if let Some(entry) = item {
+        let vectors = memory_vectors::delete_item(conn, id)?;
+        bump(report, "index_vectors", vectors);
         let rows = conn.execute("DELETE FROM memory_index_items WHERE item_id=?", [id])?;
         bump(report, "index_items", rows);
         probes.entries.push((id.to_owned(), Some(entry.0), entry.1));
@@ -59,6 +62,7 @@ fn verify(conn: &Connection, probes: &Probes, records: bool, report: &mut PurgeR
             [id],
             |row| row.get::<_, i64>(0),
         )?;
+        residue += memory_vectors::rows_for(conn, id)? as i64;
         if records {
             residue += conn.query_row(
                 "SELECT count(*) FROM memory_records WHERE id=?",

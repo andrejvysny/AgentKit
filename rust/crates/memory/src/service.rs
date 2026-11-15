@@ -1,8 +1,10 @@
-//! The memory service. This skeleton holds the ports and implements
-//! supersession; the write gate, hybrid search and fusion land with later
-//! roadmap packages and live here, never in an adapter.
+//! The memory service. It holds the ports and implements supersession and
+//! purge; hybrid search and fusion (`search.rs`) and background embedding
+//! (`embedding.rs`) are further `impl` blocks. The write gate lands with a
+//! later roadmap package. All of it lives here, never in an adapter.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use sha2::{Digest, Sha256};
 
@@ -13,7 +15,7 @@ use crate::model::{
     Actor, Corpus, EventKind, NewRecord, PurgeReport, Record, RecordFilter, Scope, Status,
 };
 use crate::ports::{Embedder, MemoryRepository, NoopReranker, Reranker, RetrievalIndex};
-use crate::retrieval::{IndexItem, Searchability};
+use crate::retrieval::{IndexItem, REEMBED_GRACE_MS, Searchability};
 
 /// A retracted record is purged for good this long after its retraction
 /// (spec, "Purge": 30 days).
@@ -25,12 +27,13 @@ pub const REJECTED_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
 /// The index entry of a record. Only active records are indexed; the
 /// service is the one place that enforces it.
-fn index_item(
+pub(crate) fn index_item(
     id: RecordId,
     scope: &Scope,
     text: &str,
     ts: Timestamp,
     s: Searchability,
+    valid: (Timestamp, Option<Timestamp>),
 ) -> IndexItem {
     IndexItem {
         id: ItemId::from(id),
@@ -41,14 +44,25 @@ fn index_item(
         text_sha256: Sha256::digest(text.as_bytes()).into(),
         text: text.to_owned(),
         vector: None,
+        valid_from: Some(valid.0),
+        valid_to: valid.1,
     }
 }
 
 pub struct MemoryService {
-    repository: Arc<dyn MemoryRepository>,
-    index: Arc<dyn RetrievalIndex>,
-    embedder: Option<Arc<dyn Embedder>>,
-    reranker: Arc<dyn Reranker>,
+    pub(crate) repository: Arc<dyn MemoryRepository>,
+    pub(crate) index: Arc<dyn RetrievalIndex>,
+    /// Swapped at the end of a re-embed, so a lock guard never crosses an
+    /// await: callers clone the `Arc` out.
+    pub(crate) embedder: RwLock<Option<Arc<dyn Embedder>>>,
+    pub(crate) reranker: Arc<dyn Reranker>,
+    pub(crate) reembed_grace_ms: i64,
+    /// Set when an item may lack a vector; the background indexer takes it.
+    pub(crate) index_hint: AtomicBool,
+    /// Writers hold the read side across their commit; the final pass of a
+    /// re-embed holds the write side, so no write slips between it and the
+    /// model switch.
+    pub(crate) write_gate: tokio::sync::RwLock<()>,
 }
 
 impl MemoryService {
@@ -58,13 +72,24 @@ impl MemoryService {
         Self {
             repository,
             index,
-            embedder: None,
+            embedder: RwLock::new(None),
             reranker: Arc::new(NoopReranker),
+            reembed_grace_ms: REEMBED_GRACE_MS,
+            index_hint: AtomicBool::new(false),
+            write_gate: tokio::sync::RwLock::new(()),
         }
     }
 
-    pub fn with_embedder(mut self, embedder: Arc<dyn Embedder>) -> Self {
-        self.embedder = Some(embedder);
+    pub fn with_embedder(self, embedder: Arc<dyn Embedder>) -> Self {
+        self.set_embedder(embedder);
+        self.index_hint.store(true, Ordering::Release);
+        self
+    }
+
+    /// How long a retired embedding model is kept before [`Self::drop_retired`]
+    /// removes it (default [`REEMBED_GRACE_MS`]).
+    pub fn with_reembed_grace(mut self, grace_ms: i64) -> Self {
+        self.reembed_grace_ms = grace_ms;
         self
     }
 
@@ -81,8 +106,11 @@ impl MemoryService {
         &self.index
     }
 
-    pub fn embedder(&self) -> Option<&Arc<dyn Embedder>> {
-        self.embedder.as_ref()
+    pub fn embedder(&self) -> Option<Arc<dyn Embedder>> {
+        self.embedder
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn reranker(&self) -> &Arc<dyn Reranker> {
@@ -93,18 +121,26 @@ impl MemoryService {
     /// indexed in the same write path; a proposal is not.
     pub async fn insert(&self, rec: NewRecord) -> MemoryResult<RecordId> {
         rec.validate()?;
-        let item = (rec.status == Status::Active)
-            .then(|| (rec.scope.clone(), rec.text.clone(), rec.created_at));
+        let _gate = self.write_gate.read().await;
+        let item = (rec.status == Status::Active).then(|| {
+            (
+                rec.scope.clone(),
+                rec.text.clone(),
+                rec.created_at,
+                (rec.valid_from, None),
+            )
+        });
         let mut tx = self.repository.begin().await?;
         let id = self.repository.insert(&mut tx, rec).await?;
         let mut index_tx = self.index.begin_index().await?;
-        if let Some((scope, text, ts)) = item {
-            let item = index_item(id, &scope, &text, ts, Searchability::Current);
+        if let Some((scope, text, ts, valid)) = item {
+            let item = index_item(id, &scope, &text, ts, Searchability::Current, valid);
             self.index.upsert(&mut index_tx, &[item]).await?;
         }
         self.repository
             .commit_with_index(tx, &*self.index, index_tx)
             .await?;
+        self.index_hint.store(true, Ordering::Release);
         Ok(id)
     }
 
@@ -117,6 +153,7 @@ impl MemoryService {
         actor: Actor,
         at: Timestamp,
     ) -> MemoryResult<()> {
+        let _gate = self.write_gate.read().await;
         let record = self
             .repository
             .get(id)
@@ -134,6 +171,7 @@ impl MemoryService {
                 &record.text,
                 record.created_at,
                 Searchability::Current,
+                (record.valid_from, record.valid_to),
             );
             self.index.upsert(&mut index_tx, &[item]).await?;
         } else {
@@ -144,6 +182,7 @@ impl MemoryService {
         self.repository
             .commit_with_index(tx, &*self.index, index_tx)
             .await?;
+        self.index_hint.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -159,12 +198,18 @@ impl MemoryService {
                 "a replacement record must be active".to_owned(),
             ));
         }
+        let _gate = self.write_gate.read().await;
         let previous = self
             .repository
             .get(old)
             .await?
             .ok_or(MemoryError::NotFound(old))?;
-        let fresh = (new.scope.clone(), new.text.clone(), new.created_at);
+        let fresh = (
+            new.scope.clone(),
+            new.text.clone(),
+            new.created_at,
+            new.valid_from,
+        );
         let mut tx = self.repository.begin().await?;
         let id = self.repository.supersede(&mut tx, old, new).await?;
         let mut index_tx = self.index.begin_index().await?;
@@ -174,13 +219,22 @@ impl MemoryService {
             &previous.text,
             previous.created_at,
             Searchability::Superseded,
+            (previous.valid_from, Some(fresh.3)),
         );
-        let (scope, text, ts) = fresh;
-        let opened = index_item(id, &scope, &text, ts, Searchability::Current);
+        let (scope, text, ts, valid_from) = fresh;
+        let opened = index_item(
+            id,
+            &scope,
+            &text,
+            ts,
+            Searchability::Current,
+            (valid_from, None),
+        );
         self.index.upsert(&mut index_tx, &[closed, opened]).await?;
         self.repository
             .commit_with_index(tx, &*self.index, index_tx)
             .await?;
+        self.index_hint.store(true, Ordering::Release);
         Ok(id)
     }
 

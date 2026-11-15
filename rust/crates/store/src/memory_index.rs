@@ -1,19 +1,17 @@
 //! The SQLite store as the memory context's `RetrievalIndex` (roadmap 3.2,
 //! ADR 0035): lexical search over an FTS5 external-content table, the
-//! embedding-model registry, and purge. Vector storage and kNN arrive with
-//! the embedding package; until then a write that carries a vector, and
-//! `knn`, fail with a "not supported" backend error after the model checks
-//! the port contract asks for.
+//! embedding-model registry, vectors with exact nearest-neighbour search
+//! (see `memory_vectors`), and purge.
 //!
 //! Transactions stage like the repository's (see `memory_repository`):
 //! `commit_index` replays the queued ops in one SQLite transaction, and the
 //! repository's `commit_with_index` replays both queues in one.
 use crate::memory_codec::{Fault, Work, read, unwire, wire, write, write_secure};
-use crate::{SqliteStore, memory_purge};
+use crate::{SqliteStore, memory_purge, memory_vectors};
 use agentkit_memory::{
-    Corpus, Hit, IndexFilter, IndexItem, IndexStats, IndexTx, ItemId, LexicalQuery, MemoryError,
-    MemoryResult, ModelId, ModelSpec, ModelState, ModelStats, PurgeReport, RetrievalIndex,
-    Searchability,
+    Corpus, Hit, IndexFilter, IndexItem, IndexStats, IndexTx, ItemId, ItemVector, LexicalQuery,
+    MemoryError, MemoryResult, ModelId, ModelSpec, ModelState, ModelStats, PurgeReport,
+    RetrievalIndex, Searchability, Timestamp,
 };
 use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as Sql};
@@ -60,12 +58,6 @@ impl std::fmt::Debug for SqliteRetrievalIndex {
     }
 }
 
-fn not_supported(what: &str) -> MemoryError {
-    MemoryError::Backend(format!(
-        "{what} is not supported: the SQLite index has no vector storage yet"
-    ))
-}
-
 fn searchable_wire(searchable: Searchability) -> &'static str {
     match searchable {
         Searchability::Current => "current",
@@ -73,9 +65,10 @@ fn searchable_wire(searchable: Searchability) -> &'static str {
     }
 }
 
-/// An item of the memory corpus whose id is a record that is not active
-/// cannot be indexed (spec: only active records are searchable). Items with
-/// no record row (other corpora, twins' own ids) are not checked.
+/// An item of the memory corpus must be backed by an ACTIVE record (spec:
+/// only active records are searchable); a missing record is refused too.
+/// `commit_with_index` replays the record ops first, so an insert and its
+/// index entry in one transaction pass. Other corpora are not checked.
 fn refuse_inactive(conn: &Connection, item: &IndexItem) -> Work<()> {
     if item.corpus != Corpus::Memory {
         return Ok(());
@@ -88,9 +81,14 @@ fn refuse_inactive(conn: &Connection, item: &IndexItem) -> Work<()> {
         )
         .optional()?;
     match status.as_deref() {
-        Some("active") | None => Ok(()),
+        Some("active") => Ok(()),
         Some(other) => Err(MemoryError::InvalidInput(format!(
             "record {} is {other}: only active records are indexed",
+            item.id.as_str()
+        ))
+        .into()),
+        None => Err(MemoryError::InvalidInput(format!(
+            "record {} does not exist: only active records are indexed",
             item.id.as_str()
         ))
         .into()),
@@ -108,6 +106,18 @@ pub(crate) fn apply_index_ops(conn: &Connection, ops: Vec<IndexOp>) -> Work<()> 
             IndexOp::Upsert(items) => {
                 for item in &items {
                     refuse_inactive(conn, item)?;
+                    // New text invalidates the item's vectors; the same text
+                    // keeps them.
+                    let previous: Option<Vec<u8>> = conn
+                        .query_row(
+                            "SELECT text_sha256 FROM memory_index_items WHERE item_id=?",
+                            [item.id.as_str()],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if previous.is_some_and(|sha| sha != item.text_sha256) {
+                        memory_vectors::delete_item(conn, item.id.as_str())?;
+                    }
                     conn.execute(
                         "INSERT INTO memory_index_items(item_id,corpus,scope_key,ts,searchable,text_sha256,text) \
                          VALUES(?1,?2,?3,?4,?5,?6,?7) \
@@ -124,10 +134,14 @@ pub(crate) fn apply_index_ops(conn: &Connection, ops: Vec<IndexOp>) -> Work<()> 
                             item.text
                         ],
                     )?;
+                    if let Some((model, vector)) = &item.vector {
+                        memory_vectors::put(conn, model.as_str(), item.id.as_str(), vector)?;
+                    }
                 }
             }
             IndexOp::Delete(ids) => {
                 for id in &ids {
+                    memory_vectors::delete_item(conn, id.as_str())?;
                     conn.execute(
                         "DELETE FROM memory_index_items WHERE item_id=?",
                         [id.as_str()],
@@ -189,9 +203,11 @@ fn match_expression(query: &LexicalQuery) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
-fn lexical_sql(expression: String, filter: &IndexFilter, k: u32) -> (String, Vec<Sql>) {
-    let mut args = vec![Sql::Text(expression)];
-    let mut clauses = vec!["memory_fts MATCH ?".to_owned()];
+/// WHERE clauses (on the item table aliased `i`) and their arguments for a
+/// search filter.
+pub(crate) fn filter_clauses(filter: &IndexFilter) -> (Vec<String>, Vec<Sql>) {
+    let mut args = Vec::new();
+    let mut clauses = Vec::new();
     if !filter.corpora.is_empty() {
         clauses.push(format!(
             "i.corpus IN ({})",
@@ -217,6 +233,24 @@ fn lexical_sql(expression: String, filter: &IndexFilter, k: u32) -> (String, Vec
     if !filter.include_superseded {
         clauses.push("i.searchable='current'".to_owned());
     }
+    if let Some(at) = filter.as_of {
+        clauses.push(
+            "(i.corpus<>'memory' OR EXISTS (SELECT 1 FROM memory_records AS r \
+             WHERE r.id=i.item_id AND r.valid_from<=? AND (r.valid_to IS NULL OR r.valid_to>?)))"
+                .to_owned(),
+        );
+        args.push(Sql::Integer(at.0));
+        args.push(Sql::Integer(at.0));
+    }
+    (clauses, args)
+}
+
+fn lexical_sql(expression: String, filter: &IndexFilter, k: u32) -> (String, Vec<Sql>) {
+    let (narrowing, narrowing_args) = filter_clauses(filter);
+    let mut clauses = vec!["memory_fts MATCH ?".to_owned()];
+    clauses.extend(narrowing);
+    let mut args = vec![Sql::Text(expression)];
+    args.extend(narrowing_args);
     args.push(Sql::Integer(i64::from(k)));
     (
         format!(
@@ -270,7 +304,6 @@ impl RetrievalIndex for SqliteRetrievalIndex {
                     )));
                 }
             }
-            return Err(not_supported("storing a vector"));
         }
         staged.ops.push(IndexOp::Upsert(items.to_vec()));
         Ok(())
@@ -306,8 +339,8 @@ impl RetrievalIndex for SqliteRetrievalIndex {
         &self,
         model: &ModelId,
         v: &[f32],
-        _f: &IndexFilter,
-        _k: u32,
+        f: &IndexFilter,
+        k: u32,
     ) -> MemoryResult<Vec<Hit>> {
         let id = model.clone();
         let spec = read(&self.store, move |conn| model_spec(conn, &id)).await?;
@@ -319,7 +352,11 @@ impl RetrievalIndex for SqliteRetrievalIndex {
                 spec.dims
             )));
         }
-        Err(not_supported("nearest-neighbour search"))
+        let (id, query, filter) = (model.clone(), v.to_vec(), f.clone());
+        read(&self.store, move |conn| {
+            memory_vectors::knn(conn, id.as_str(), &query, &filter, k)
+        })
+        .await
     }
 
     async fn begin_reembed(&self, model: &ModelSpec) -> MemoryResult<()> {
@@ -352,7 +389,7 @@ impl RetrievalIndex for SqliteRetrievalIndex {
         .await
     }
 
-    async fn commit_reembed(&self, model: &ModelId) -> MemoryResult<()> {
+    async fn commit_reembed(&self, model: &ModelId, at: Timestamp) -> MemoryResult<()> {
         let id = model.clone();
         write(&self.store, move |conn| {
             match model_spec(conn, &id)? {
@@ -365,8 +402,8 @@ impl RetrievalIndex for SqliteRetrievalIndex {
                 Some(_) => {}
             }
             conn.execute(
-                "UPDATE embedding_models SET state='retired' WHERE state='active'",
-                [],
+                "UPDATE embedding_models SET state='retired', retired_at=? WHERE state='active'",
+                [at.0],
             )?;
             conn.execute(
                 "UPDATE embedding_models SET state='active' WHERE model_id=?",
@@ -390,11 +427,91 @@ impl RetrievalIndex for SqliteRetrievalIndex {
                 }
                 Some(_) => {}
             }
+            memory_vectors::drop_model(conn, id.as_str())?;
             conn.execute(
                 "DELETE FROM embedding_models WHERE model_id=?",
                 [id.as_str()],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    async fn unembedded(
+        &self,
+        model: &ModelId,
+        after: Option<&ItemId>,
+        k: u32,
+    ) -> MemoryResult<Vec<ItemId>> {
+        let (id, after) = (model.clone(), after.cloned());
+        read(&self.store, move |conn| {
+            if model_spec(conn, &id)?.is_none() {
+                return Err(MemoryError::UnknownModel(id).into());
+            }
+            memory_vectors::unembedded(conn, id.as_str(), after.as_ref(), k)
+        })
+        .await
+    }
+
+    async fn put_vectors(&self, model: &ModelId, vectors: &[ItemVector]) -> MemoryResult<usize> {
+        let (id, vectors) = (model.clone(), vectors.to_vec());
+        write(&self.store, move |conn| {
+            let (spec, _) =
+                model_spec(conn, &id)?.ok_or_else(|| MemoryError::UnknownModel(id.clone()))?;
+            let mut stored = 0;
+            for entry in &vectors {
+                if entry.vector.len() != spec.dims as usize {
+                    return Err(MemoryError::InvalidInput(format!(
+                        "vector has {} dims, model {id} has {}",
+                        entry.vector.len(),
+                        spec.dims
+                    ))
+                    .into());
+                }
+                // The item row and, for the memory corpus, an active
+                // record must exist in THIS transaction; otherwise the
+                // vector is skipped (never resurrecting a purged item).
+                let item: Option<(String, Vec<u8>)> = conn
+                    .query_row(
+                        "SELECT corpus,text_sha256 FROM memory_index_items WHERE item_id=?",
+                        [entry.id.as_str()],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((corpus, sha)) = item else { continue };
+                if sha != entry.text_sha256 {
+                    continue;
+                }
+                if corpus == "memory" {
+                    let status: Option<String> = conn
+                        .query_row(
+                            "SELECT status FROM memory_records WHERE id=?",
+                            [entry.id.as_str()],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if status.as_deref() != Some("active") {
+                        continue;
+                    }
+                }
+                memory_vectors::put(conn, id.as_str(), entry.id.as_str(), &entry.vector)?;
+                stored += 1;
+            }
+            Ok(stored)
+        })
+        .await
+    }
+
+    async fn active_model(&self) -> MemoryResult<Option<ModelId>> {
+        read(&self.store, |conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT model_id FROM embedding_models WHERE state='active'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .map(ModelId::new))
         })
         .await
     }
@@ -411,18 +528,23 @@ impl RetrievalIndex for SqliteRetrievalIndex {
         read(&self.store, |conn| {
             let items: i64 =
                 conn.query_row("SELECT count(*) FROM memory_index_items", [], |r| r.get(0))?;
-            let mut statement =
-                conn.prepare("SELECT model_id,dims,state FROM embedding_models ORDER BY model_id")?;
-            let models = statement
+            let mut statement = conn.prepare(
+                "SELECT model_id,dims,state,retired_at FROM embedding_models ORDER BY model_id",
+            )?;
+            let mut models = statement
                 .query_map([], |row| {
                     Ok(ModelStats {
                         id: ModelId::new(row.get::<_, String>(0)?),
                         dims: row.get(1)?,
                         state: unwire(&row.get::<_, String>(2)?)?,
                         vectors: 0,
+                        retired_at: row.get::<_, Option<i64>>(3)?.map(Timestamp),
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            for model in &mut models {
+                model.vectors = memory_vectors::count(conn, model.id.as_str())?;
+            }
             Ok(IndexStats {
                 items: items.max(0) as u64,
                 models,

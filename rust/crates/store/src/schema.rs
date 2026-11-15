@@ -22,7 +22,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
 /// full scans.
-pub const SCHEMA_VERSION: i64 = 21;
+pub const SCHEMA_VERSION: i64 = 22;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -330,6 +330,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 21 {
             migrate_memory(&mut connection)?;
         }
+        if version < 22 {
+            migrate_memory_vectors(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -360,7 +363,19 @@ fn validate_schema(connection: &Connection, version: i64) -> Result<()> {
             })
             .collect()
         };
-    if normalize(schema_signature(connection)?) != normalize(schema_signature(&expected)?) {
+    let (found, wanted) = (
+        normalize(schema_signature(connection)?),
+        normalize(schema_signature(&expected)?),
+    );
+    if found != wanted {
+        // The error type carries no detail (matched across crates), so name
+        // the first differing object on stderr.
+        let object = found
+            .iter()
+            .find(|row| !wanted.contains(row))
+            .or_else(|| wanted.iter().find(|row| !found.contains(row)))
+            .map_or("?", |row| row.1.as_str());
+        eprintln!("agentkit: schema mismatch at {object}");
         return Err(StoreError::ForeignDatabase);
     }
     let counter_ok:bool=connection.query_row(
@@ -455,6 +470,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 21 {
         sql.push_str(MEMORY_SCHEMA);
     }
+    if version >= 22 {
+        sql.push_str(MEMORY_VECTORS_SCHEMA);
+    }
     sql
 }
 
@@ -504,6 +522,28 @@ fn migrate_memory(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(MEMORY_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 21)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Vectors (roadmap 3.5), additive at schema version 22. `memory_vectors` is
+/// the exact brute-force fallback store, one row per (model, item) holding
+/// little-endian f32 bytes, removed with the item or the model by cascade; the
+/// scope-only index on the item table lets a scoped search drive from the
+/// items. `retired_at` (Unix ms) starts the re-embed grace period.
+/// The sqlite-vec build (`vec` feature) keeps its vec0 tables outside this
+/// schema. Not idempotent (ALTER): it runs once, gated on the version.
+const MEMORY_VECTORS_SCHEMA: &str = r#"
+ALTER TABLE embedding_models ADD COLUMN retired_at INTEGER;
+CREATE TABLE IF NOT EXISTS memory_vectors(model_id TEXT NOT NULL REFERENCES embedding_models(model_id) ON DELETE CASCADE, item_id TEXT NOT NULL REFERENCES memory_index_items(item_id) ON DELETE CASCADE, vector BLOB NOT NULL, PRIMARY KEY(model_id, item_id)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS memory_vectors_item ON memory_vectors(item_id);
+CREATE INDEX IF NOT EXISTS memory_index_scope_key ON memory_index_items(scope_key);
+"#;
+
+fn migrate_memory_vectors(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(MEMORY_VECTORS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 22)?;
     transaction.commit()?;
     Ok(())
 }

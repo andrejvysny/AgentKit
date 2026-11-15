@@ -31,6 +31,7 @@ const LAYERS = {
   "agentkit-lsp": 4,
   "agentkit-mcp": 4,
   "agentkit-connections": 4,
+  "agentkit-embed-local": 4,
   "agentkit-sys": 4,
   "agentkit-native-broker": 4,
   "agentkit-claude": 4,

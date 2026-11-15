@@ -16,7 +16,7 @@ use crate::model::{
     Actor, MemoryEvent, NewRecord, Page, PurgeReport, Record, RecordFilter, Scope, Status,
 };
 use crate::retrieval::{
-    Candidate, Hit, IndexFilter, IndexItem, IndexStats, LexicalQuery, ModelSpec,
+    Candidate, Hit, IndexFilter, IndexItem, IndexStats, ItemVector, LexicalQuery, ModelSpec,
 };
 
 macro_rules! opaque_tx {
@@ -172,11 +172,36 @@ pub trait RetrievalIndex: Send + Sync {
     async fn begin_reembed(&self, model: &ModelSpec) -> MemoryResult<()>;
 
     /// Make a building model the active one; the previous active model
-    /// becomes retired.
-    async fn commit_reembed(&self, model: &ModelId) -> MemoryResult<()>;
+    /// becomes retired, its `retired_at` stamped with the caller's `at`.
+    async fn commit_reembed(&self, model: &ModelId, at: Timestamp) -> MemoryResult<()>;
 
     /// Remove a model and its vectors. The active model cannot be dropped.
     async fn drop_model(&self, model: &ModelId) -> MemoryResult<()>;
+
+    /// Up to `k` ids, ascending and strictly after `after`, of items that
+    /// have no vector under `model` (any state). Drives background indexing
+    /// and re-embedding; the cursor lets a caller walk items it cannot
+    /// embed without looping. An unknown model is
+    /// [`MemoryError::UnknownModel`].
+    async fn unembedded(
+        &self,
+        model: &ModelId,
+        after: Option<&ItemId>,
+        k: u32,
+    ) -> MemoryResult<Vec<ItemId>>;
+
+    /// Store vectors for items that are ALREADY indexed, in one atomic
+    /// write, and nothing else: it never creates or changes an item or its
+    /// `searchable` state. An entry is skipped (not an error) when its item
+    /// is absent (deleted or purged meanwhile), its current text hash
+    /// differs from `text_sha256`, or the adapter can see the item's record
+    /// is not active. Returns how many vectors were stored. An unknown
+    /// model is [`MemoryError::UnknownModel`], a wrong dimension
+    /// [`MemoryError::InvalidInput`].
+    async fn put_vectors(&self, model: &ModelId, vectors: &[ItemVector]) -> MemoryResult<usize>;
+
+    /// The active model, if any: a point lookup for the search hot path.
+    async fn active_model(&self) -> MemoryResult<Option<ModelId>>;
 
     /// Remove items and their vectors for good.
     async fn purge(&self, ids: &[ItemId]) -> MemoryResult<PurgeReport>;

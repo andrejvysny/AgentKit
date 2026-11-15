@@ -105,6 +105,47 @@ store must be able to replace the adapter without changing ranking.
   `sweep_retracted` purges records 30 days after their `retracted` event and
   rejected proposals 90 days after `rejected` (`REJECTED_RETENTION_MS`), and
   `AgentRuntimeBuilder::sqlite_memory()` runs it at build and hourly.
-- Vector storage and kNN are not in the SQLite index yet: a write that
-  carries a vector and `knn` fail with a backend error once the model checks
-  pass. The lexical conformance subset is `retrieval_index::run_lexical`.
+- Vectors and hybrid search (roadmap 3.5). Schema 22 (v21 is untouched)
+  adds `embedding_models.retired_at` and `memory_vectors`: ONE BLOB PER
+  (model, item), stored unit-length, removed with the item by cascade and by
+  explicit delete in purge (counted as `index_vectors`, residue-checked).
+  This deviates from the spec's per-model `vec0` table: the BLOB table is
+  the source of truth, is portable, needs no extension, and keeps cascade
+  deletes and "which items lack a vector" as plain SQL. `knn` is an exact
+  scan driven from the filtered items (scope index first) with a bounded
+  top-k heap. With the store's `vec` feature (OFF by default; `sqlite-vec`
+  `=0.1.9`) the same rows are MIRRORED into one `vec0` table per model,
+  partitioned by `scope_key` and keyed by the item's `seq` rowid; it
+  answers `knn` per scope partition and widens its fetch until `k` rows
+  survive the other filters. `retrieval_index::run` is the conformance
+  suite for SQLite and the twin.
+  `MemoryService::search` requires at least one scope key
+  (`MemoryError::EmptyScope`), clamps `limit` to 1..=8 (`0` means 5), fuses
+  lexical and vector top 50 by reciprocal rank (k = 60, equal weights),
+  reranks the top 30 through the `Reranker` port, then re-reads every hit
+  from the record store: only active records are returned (superseded ones
+  only with `include_superseded`), valid at `as_of` when set (the index
+  filters on it too, via the record's validity window). Hits are tagged
+  `lexical | vector | both`, in mode `hybrid` or `lexical_only` (no
+  embedder, no active model for it, or a failed vector side); the active
+  model is a point lookup (`RetrievalIndex::active_model`).
+  Embedding is background work: writes only flag the service, and the
+  runtime's indexer (weak handle, errors logged, exponential backoff to 5
+  min) calls `index_pending`. A fill writes VECTORS ONLY through
+  `RetrievalIndex::put_vectors`, which skips an item that is gone, whose
+  text hash changed, or (SQLite) whose record is not active, inside one
+  transaction: a purge or retraction racing a fill can neither resurrect an
+  item nor reset its `searchable` state. Indexing a memory-corpus item
+  requires an active record (a missing one is refused); `commit_with_index`
+  replays record ops before index ops. A model change is `begin_reembed`,
+  `fill_model`, a final fill under the service write gate, then
+  `commit_reembed(at)`, which stamps `retired_at` from the caller's clock;
+  `drop_retired` removes the retired model `REEMBED_GRACE_MS` (24 h) later.
+  A `building` model left by a crash is resumed by `index_pending` or
+  dropped by `abort_reembed`; a configured model that differs from the
+  active one with no re-embed is reported by `embedding_status`
+  (`Mismatch`). `agentkit-embed-local` holds the ONNX embedder behind its
+  `onnx` feature (OFF; `ort` `=2.0.0-rc.15` with `load-dynamic`, so the host
+  supplies libonnxruntime via `ORT_DYLIB_PATH` and nothing is downloaded at
+  build time; `tokenizers` `=0.23.2`): the model and tokenizer sha-256 are
+  pinned, the bytes are read once, hashed, and loaded from that buffer.

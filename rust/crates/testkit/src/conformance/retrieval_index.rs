@@ -6,11 +6,11 @@
 use std::sync::Arc;
 
 use agentkit_memory::{
-    Corpus, IndexFilter, IndexItem, ItemId, LexicalQuery, MemoryError, ModelId, ModelSpec,
-    ModelState, RetrievalIndex, Searchability, Timestamp,
+    Corpus, IndexFilter, IndexItem, ItemId, ItemVector, LexicalQuery, MemoryError, ModelId,
+    ModelSpec, ModelState, RetrievalIndex, Searchability, Timestamp,
 };
 
-use super::case_support::{Case, CaseFuture, port, run_cases};
+use super::case_support::port;
 
 const SCOPE: &str = "user:owner";
 
@@ -25,16 +25,21 @@ fn digest(text: &str) -> [u8; 32] {
     out
 }
 
+/// Items use the `pages` corpus: the memory corpus is backed by records
+/// (an adapter may require an active record for it), which an index-only
+/// suite has none of.
 fn item(id: &str, ts: i64, text: &str) -> IndexItem {
     IndexItem {
         id: ItemId::new(id),
-        corpus: Corpus::Memory,
+        corpus: Corpus::Pages,
         scope_key: SCOPE.to_owned(),
         ts: Timestamp(ts),
         searchable: Searchability::Current,
         text_sha256: digest(text),
         text: text.to_owned(),
         vector: None,
+        valid_from: None,
+        valid_to: None,
     }
 }
 
@@ -61,7 +66,7 @@ async fn index<T: RetrievalIndex>(idx: &T, items: &[IndexItem]) {
 
 async fn activate<T: RetrievalIndex>(idx: &T, model: &ModelSpec) {
     port(idx.begin_reembed(model).await);
-    port(idx.commit_reembed(&model.id).await);
+    port(idx.commit_reembed(&model.id, Timestamp(1)).await);
 }
 
 async fn words<T: RetrievalIndex>(idx: &T, query: &str) -> Vec<String> {
@@ -92,10 +97,7 @@ async fn lexical_finds_upserted_item<T: RetrievalIndex>(idx: Arc<T>) {
         idx.lexical(&LexicalQuery::new("tea"), &IndexFilter::default(), 5)
             .await,
     );
-    assert_eq!(
-        (hits[0].corpus, hits[0].score > 0.0),
-        (Corpus::Memory, true)
-    );
+    assert_eq!((hits[0].corpus, hits[0].score > 0.0), (Corpus::Pages, true));
 }
 
 async fn lexical_ignores_case_and_diacritics<T: RetrievalIndex>(idx: Arc<T>) {
@@ -382,7 +384,7 @@ async fn reembed_switches_models_without_losing_search<T: RetrievalIndex>(idx: A
         "old vector survives"
     );
     assert_eq!(nearest(&*idx, &new.id, &[0.0, 1.0], 5).await, vec!["a"]);
-    port(idx.commit_reembed(&new.id).await);
+    port(idx.commit_reembed(&new.id, Timestamp(2)).await);
     let switched = port(idx.stats().await);
     assert_eq!(switched.active_model(), Some(&new.id));
     assert_eq!(
@@ -409,7 +411,9 @@ async fn reembed_switches_models_without_losing_search<T: RetrievalIndex>(idx: A
 
 async fn reembed_refusals<T: RetrievalIndex>(idx: Arc<T>) {
     let model = spec("m", 3);
-    let unknown = idx.commit_reembed(&ModelId::new("ghost")).await;
+    let unknown = idx
+        .commit_reembed(&ModelId::new("ghost"), Timestamp(1))
+        .await;
     assert!(
         matches!(unknown, Err(MemoryError::UnknownModel(_))),
         "{unknown:?}"
@@ -425,7 +429,7 @@ async fn reembed_refusals<T: RetrievalIndex>(idx: Arc<T>) {
         matches!(active_drop, Err(MemoryError::InvalidInput(_))),
         "{active_drop:?}"
     );
-    let recommit = idx.commit_reembed(&model.id).await;
+    let recommit = idx.commit_reembed(&model.id, Timestamp(1)).await;
     assert!(
         matches!(recommit, Err(MemoryError::InvalidInput(_))),
         "{recommit:?}"
@@ -534,6 +538,157 @@ async fn superseded_visible_with_include_superseded<T: RetrievalIndex>(idx: Arc<
     assert_eq!(words(&*idx, "bratislava").await, vec!["old"]);
 }
 
+async fn unembedded_walks_items_without_vectors<T: RetrievalIndex>(idx: Arc<T>) {
+    let model = spec("m", 2);
+    let ghost = idx.unembedded(&model.id, None, 5).await;
+    assert!(
+        matches!(ghost, Err(MemoryError::UnknownModel(_))),
+        "{ghost:?}"
+    );
+    activate(&*idx, &model).await;
+    index(
+        &*idx,
+        &[
+            item("a", 1, "a"),
+            with_vector(item("b", 1, "b"), &model.id, &[1.0, 0.0]),
+            item("c", 1, "c"),
+            item("d", 1, "d"),
+        ],
+    )
+    .await;
+    let ids = |hits: Vec<ItemId>| hits.into_iter().map(|id| id.0).collect::<Vec<_>>();
+    let first = ids(port(idx.unembedded(&model.id, None, 2).await));
+    assert_eq!(first, vec!["a", "c"]);
+    let rest = ids(port(
+        idx.unembedded(&model.id, Some(&ItemId::new("c")), 5).await,
+    ));
+    assert_eq!(rest, vec!["d"]);
+    index(
+        &*idx,
+        &[with_vector(item("a", 1, "a"), &model.id, &[0.0, 1.0])],
+    )
+    .await;
+    let all = ids(port(idx.unembedded(&model.id, None, 5).await));
+    assert_eq!(all, vec!["c", "d"]);
+}
+
+async fn purge_leaves_no_vector_rows<T: RetrievalIndex>(idx: Arc<T>) {
+    let (old, new) = (spec("old", 2), spec("new", 2));
+    activate(&*idx, &old).await;
+    port(idx.begin_reembed(&new).await);
+    index(
+        &*idx,
+        &[
+            with_vector(item("x", 1, "secret"), &old.id, &[1.0, 0.0]),
+            with_vector(item("x", 1, "secret"), &new.id, &[0.0, 1.0]),
+        ],
+    )
+    .await;
+    let report = port(idx.purge(&[ItemId::new("x")]).await);
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.removed("index_vectors"), 2);
+    for model in [&old.id, &new.id] {
+        assert!(nearest(&*idx, model, &[1.0, 0.0], 5).await.is_empty());
+    }
+    let stats = port(idx.stats().await);
+    assert!(stats.models.iter().all(|m| m.vectors == 0), "{stats:?}");
+}
+
+fn vector_of(id: &str, text: &str, vector: &[f32]) -> ItemVector {
+    ItemVector {
+        id: ItemId::new(id),
+        text_sha256: digest(text),
+        vector: vector.to_vec(),
+    }
+}
+
+async fn put_vectors_skips_a_purged_item<T: RetrievalIndex>(idx: Arc<T>) {
+    let model = spec("m", 2);
+    activate(&*idx, &model).await;
+    index(&*idx, &[item("gone", 1, "secret words")]).await;
+    port(idx.purge(&[ItemId::new("gone")]).await);
+    let stored = port(
+        idx.put_vectors(&model.id, &[vector_of("gone", "secret words", &[1.0, 0.0])])
+            .await,
+    );
+    assert_eq!(stored, 0, "a vector never resurrects a purged item");
+    assert_eq!(port(idx.stats().await).items, 0);
+    assert!(words(&*idx, "secret").await.is_empty());
+    assert!(nearest(&*idx, &model.id, &[1.0, 0.0], 5).await.is_empty());
+}
+
+async fn put_vectors_keeps_the_superseded_state<T: RetrievalIndex>(idx: Arc<T>) {
+    let model = spec("m", 2);
+    activate(&*idx, &model).await;
+    index(&*idx, &[superseded(item("old", 1, "Lives in Bratislava"))]).await;
+    let stored = port(
+        idx.put_vectors(
+            &model.id,
+            &[vector_of("old", "Lives in Bratislava", &[1.0, 0.0])],
+        )
+        .await,
+    );
+    assert_eq!(stored, 1);
+    assert!(
+        nearest(&*idx, &model.id, &[1.0, 0.0], 5).await.is_empty(),
+        "a vector write does not make a superseded item current"
+    );
+    let all = IndexFilter {
+        include_superseded: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        port(idx.knn(&model.id, &[1.0, 0.0], &all, 5).await).len(),
+        1
+    );
+}
+
+async fn put_vectors_skips_changed_text_and_checks_the_model<T: RetrievalIndex>(idx: Arc<T>) {
+    let model = spec("m", 2);
+    let unknown = idx
+        .put_vectors(&model.id, &[vector_of("a", "first", &[1.0, 0.0])])
+        .await;
+    assert!(
+        matches!(unknown, Err(MemoryError::UnknownModel(_))),
+        "{unknown:?}"
+    );
+    activate(&*idx, &model).await;
+    index(&*idx, &[item("a", 1, "second")]).await;
+    let stale = port(
+        idx.put_vectors(&model.id, &[vector_of("a", "first", &[1.0, 0.0])])
+            .await,
+    );
+    assert_eq!(stale, 0, "a vector for older text is skipped");
+    let wrong = idx
+        .put_vectors(&model.id, &[vector_of("a", "second", &[1.0])])
+        .await;
+    assert!(
+        matches!(wrong, Err(MemoryError::InvalidInput(_))),
+        "{wrong:?}"
+    );
+    let stored = port(
+        idx.put_vectors(&model.id, &[vector_of("a", "second", &[0.0, 1.0])])
+            .await,
+    );
+    assert_eq!(stored, 1);
+    assert_eq!(nearest(&*idx, &model.id, &[0.0, 1.0], 5).await, vec!["a"]);
+}
+
+async fn retired_at_is_the_callers_time<T: RetrievalIndex>(idx: Arc<T>) {
+    let (old, new) = (spec("old", 2), spec("new", 2));
+    activate(&*idx, &old).await;
+    port(idx.begin_reembed(&new).await);
+    port(idx.commit_reembed(&new.id, Timestamp(7_000)).await);
+    let stats = port(idx.stats().await);
+    let retired = stats.models.iter().find(|m| m.id == old.id);
+    assert_eq!(
+        retired.and_then(|m| m.retired_at),
+        Some(Timestamp(7_000)),
+        "{stats:?}"
+    );
+    assert_eq!(port(idx.active_model().await), Some(new.id));
+}
+
 suite!(
     "retrieval index",
     RetrievalIndex,
@@ -557,38 +712,10 @@ suite!(
     superseded_visible_with_include_superseded,
     purge_removes_items_and_vectors,
     stats_count_items_and_vectors,
+    unembedded_walks_items_without_vectors,
+    purge_leaves_no_vector_rows,
+    put_vectors_skips_a_purged_item,
+    put_vectors_keeps_the_superseded_state,
+    put_vectors_skips_changed_text_and_checks_the_model,
+    retired_at_is_the_callers_time,
 );
-
-/// The cases an index without vector storage can pass: lexical search,
-/// transactions, and the model-registry refusals. Names of every case that
-/// needs stored vectors are left out; an adapter runs this until its vector
-/// tables exist and then switches to [`run`].
-pub async fn run_lexical<T, F, Fut>(make: F)
-where
-    T: RetrievalIndex + 'static,
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = T>,
-{
-    macro_rules! cases {
-        ($($name:ident),+ $(,)?) => {
-            vec![$((
-                stringify!($name),
-                (|subject| Box::pin($name(subject))) as fn(Arc<T>) -> CaseFuture,
-            )),+]
-        };
-    }
-    let cases: Vec<Case<T>> = cases!(
-        lexical_finds_upserted_item,
-        lexical_ignores_case_and_diacritics,
-        lexical_ranks_more_matching_terms_first,
-        lexical_respects_k,
-        lexical_prefix_matches_long_terms_only,
-        lexical_filters_by_corpus_scope_and_time,
-        upsert_replaces_item,
-        dropped_transaction_leaves_nothing,
-        knn_refuses_unknown_model_and_wrong_dims,
-        upsert_refuses_vector_for_unknown_model,
-        reembed_refusals,
-    );
-    run_cases("retrieval index (lexical)", cases, make).await;
-}

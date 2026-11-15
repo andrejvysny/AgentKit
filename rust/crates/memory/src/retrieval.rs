@@ -32,6 +32,23 @@ pub struct IndexItem {
     /// no source table (the in-memory twin) must keep it.
     pub text: String,
     pub vector: Option<(ModelId, Vec<f32>)>,
+    /// Validity window of the record behind the item (`None`: unbounded),
+    /// for [`IndexFilter::as_of`]. An adapter that can read the record's
+    /// own row (SQLite) may ignore these; a twin with no record store must
+    /// keep them.
+    pub valid_from: Option<Timestamp>,
+    pub valid_to: Option<Timestamp>,
+}
+
+/// A vector for an item that is already indexed; see
+/// [`crate::RetrievalIndex::put_vectors`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemVector {
+    pub id: ItemId,
+    /// Hash of the text the vector was computed from; the write is skipped
+    /// when the item's current text differs.
+    pub text_sha256: [u8; 32],
+    pub vector: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +87,9 @@ pub struct IndexFilter {
     pub until: Option<Timestamp>,
     /// Also return items marked [`Searchability::Superseded`].
     pub include_superseded: bool,
+    /// Only items valid at this instant: `valid_from <= as_of` and
+    /// (`valid_to` unset or `valid_to > as_of`).
+    pub as_of: Option<Timestamp>,
 }
 
 /// A fused search result handed to the reranker.
@@ -105,6 +125,8 @@ pub struct ModelStats {
     pub dims: u32,
     pub state: ModelState,
     pub vectors: u64,
+    /// When the model stopped being active; starts its grace period.
+    pub retired_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -120,4 +142,52 @@ impl IndexStats {
             .find(|model| model.state == ModelState::Active)
             .map(|model| &model.id)
     }
+}
+
+/// Candidates each retriever contributes to fusion (spec, "Hybrid search").
+pub const LEXICAL_TOP_K: u32 = 50;
+pub const VECTOR_TOP_K: u32 = 50;
+/// Hits a memory search returns by default and at most (spec, "Hybrid search").
+pub const DEFAULT_SEARCH_LIMIT: u32 = 5;
+pub const MAX_SEARCH_LIMIT: u32 = 8;
+/// Reciprocal-rank-fusion constant; both retrievers weigh equally.
+pub const RRF_K: f32 = 60.0;
+/// Fused candidates handed to the reranker.
+pub const RERANK_TOP_K: usize = 30;
+/// A retired embedding model is dropped this long after its retirement
+/// (spec, "Embeddings": 24 hours).
+pub const REEMBED_GRACE_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Which retriever found a result (`match` in the tool result).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchKind {
+    Lexical,
+    Vector,
+    Both,
+}
+
+/// How a search ran: `lexical_only` when there is no embedder, no active
+/// model for it, or the vector side failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMode {
+    Hybrid,
+    LexicalOnly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchHit {
+    pub id: ItemId,
+    pub corpus: Corpus,
+    pub text: String,
+    /// The fused (RRF) score, or the reranker's.
+    pub score: f32,
+    pub matched: MatchKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchResults {
+    pub mode: SearchMode,
+    pub hits: Vec<SearchHit>,
 }

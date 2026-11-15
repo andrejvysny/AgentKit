@@ -157,6 +157,7 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                 // Only active records are indexed: leaving `active` drops the
                 // index row in this same transaction.
                 if from == Status::Active && to != Status::Active {
+                    crate::memory_vectors::delete_item(conn, &id.to_string())?;
                     conn.execute(
                         "DELETE FROM memory_index_items WHERE item_id=?",
                         [id.to_string()],
