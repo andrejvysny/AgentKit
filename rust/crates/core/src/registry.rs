@@ -65,6 +65,9 @@ pub struct ToolRegistry {
     promotions: PromotionCell,
     /// The host's record of a promotion (re-stamps the session manifest).
     observer: OnceLock<Arc<dyn PromotionObserver>>,
+    /// Retired tool names, read only by the call pipeline (T5.2): never part
+    /// of the surface, the catalog or any listing.
+    legacy: BTreeMap<String, crate::LegacyName>,
 }
 impl ToolRegistry {
     pub fn new() -> Self {
@@ -225,6 +228,35 @@ impl ToolRegistry {
             });
         }
         Ok(done)
+    }
+    /// Register a retired tool name. The first registration of a name wins;
+    /// false (nothing recorded) when the name is empty, maps to itself, or
+    /// is a registered tool's own name.
+    pub fn register_legacy_name(&mut self, legacy: crate::LegacyName) -> bool {
+        if legacy.old.is_empty()
+            || legacy.new.as_deref() == Some(legacy.old.as_str())
+            || self.tools.contains_key(&legacy.old)
+            || self.legacy.contains_key(&legacy.old)
+        {
+            return false;
+        }
+        self.legacy.insert(legacy.old.clone(), legacy);
+        true
+    }
+    /// The registered retired names, old-name order (for hosts that copy a
+    /// registry; never a listing for the model).
+    pub fn legacy_names(&self) -> Vec<crate::LegacyName> {
+        self.legacy.values().cloned().collect()
+    }
+    pub(crate) fn legacy_name(&self, name: &str) -> Option<&crate::LegacyName> {
+        self.legacy.get(name)
+    }
+    /// True when canonical tool `name` can run now: registered, not
+    /// withheld, and not deferred unless the call came through `tool_call`.
+    pub(crate) fn is_offered(&self, name: &str, via_meta: bool) -> bool {
+        self.tools.contains_key(name)
+            && !self.withheld.contains_key(name)
+            && (via_meta || !self.is_deferred(name))
     }
     /// Names of registered tools that ask to be deferred.
     pub fn deferred_hints(&self) -> BTreeSet<String> {

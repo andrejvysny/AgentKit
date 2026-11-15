@@ -1000,6 +1000,9 @@ pub fn wrap_static_writes(
     for toolset in registry.toolsets() {
         wrapped.register_toolset(toolset);
     }
+    for legacy in registry.legacy_names() {
+        wrapped.register_legacy_name(legacy);
+    }
     for definition in registry.definitions() {
         let Some(tool) = registry.get(&definition.name) else {
             continue;

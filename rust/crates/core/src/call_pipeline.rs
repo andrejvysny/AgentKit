@@ -448,6 +448,22 @@ pub(crate) fn prepare_resolved(
     if prepared.failure.is_some() {
         return prepared;
     }
+    // A retired name maps to its replacement (or teaches) before the
+    // unknown-tool failure; guards below see the replacement call.
+    let renamed;
+    let call = match crate::legacy_name::resolve(registry, call, via_meta) {
+        None => call,
+        Some(Err(error)) => {
+            prepared.failure = Some(error);
+            return prepared;
+        }
+        Some(Ok((mapped, note))) => {
+            renamed = mapped;
+            prepared.call = renamed.clone();
+            prepared.aliases_used.push(note);
+            &renamed
+        }
+    };
     if call.name == UNNAMED_TOOL
         || registry.get(&call.name).is_none()
         || (!via_meta && registry.is_deferred(&call.name))
@@ -471,7 +487,7 @@ pub(crate) fn prepare_resolved(
     if !normalised.aliases_used.is_empty() || normalised.values_converted > 0 {
         prepared.call.arguments_json = envelope::stringify(&normalised.args);
     }
-    prepared.aliases_used = normalised.aliases_used;
+    prepared.aliases_used.extend(normalised.aliases_used);
     prepared.values_converted = normalised.values_converted;
     prepared
 }

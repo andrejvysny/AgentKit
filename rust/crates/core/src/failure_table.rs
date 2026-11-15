@@ -57,6 +57,13 @@ pub(crate) static CORE: &[Spec] = &[
         "Use another offered tool, or try this one again in a later turn.",
     ),
     s(
+        "tool_renamed",
+        C::Precondition,
+        true,
+        "That tool was renamed or retired.",
+        "Call the replacement tool the message names instead.",
+    ),
+    s(
         "tool_not_found",
         C::UnknownTool,
         true,

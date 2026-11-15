@@ -11,6 +11,7 @@ mod failure_table;
 mod failure_table_agents;
 mod failure_table_files;
 mod layout;
+mod legacy_name;
 mod manifest;
 mod meta_call;
 mod meta_tools;
@@ -63,6 +64,7 @@ pub use dialect::{
     openai as openai_dialect, openai_chat as openai_chat_dialect, strict_dialect, strict_schema,
 };
 pub use dispatch::{DispatchFence, DispatchGuard};
+pub use legacy_name::LegacyName;
 pub use meta_call::unwrap_tool_call;
 pub use meta_tools::{
     meta_definitions, tool_call_definition, tool_describe_definition, tool_search_definition,

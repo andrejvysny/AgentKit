@@ -108,6 +108,10 @@ pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
 /// refuses a direct call.
 fn unknown(registry: &ToolRegistry, name: &str) -> Option<CoreError> {
     let catalog = registry.catalog()?;
+    // A retired name is resolved (or taught) by the pipeline that follows.
+    if registry.get(name).is_none() && registry.legacy_name(name).is_some() {
+        return None;
+    }
     let known = catalog.get(name).is_some() || registry.withheld_reason(name).is_some();
     if registry.get(name).is_some() {
         return None;

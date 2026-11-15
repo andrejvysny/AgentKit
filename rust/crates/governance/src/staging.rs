@@ -78,6 +78,9 @@ impl ToolContributor for StaticToolContributor {
     fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
         self.registry.toolsets()
     }
+    fn legacy_names(&self) -> Vec<agentkit_core::LegacyName> {
+        self.registry.legacy_names()
+    }
     async fn contribute(
         &self,
         _context: &ToolContributionContext,
@@ -184,7 +187,11 @@ pub async fn stage_tools(
         .iter()
         .flat_map(|contributor| contributor.toolsets())
         .collect();
-    register_tools(collected, guards, &context, allowed, failed, toolsets).await
+    let legacy = contributors
+        .iter()
+        .flat_map(|contributor| contributor.legacy_names())
+        .collect();
+    register_tools(collected, guards, &context, allowed, failed, toolsets, legacy).await
 }
 
 async fn contribute(
@@ -235,6 +242,7 @@ async fn register_tools(
     allowed: Option<BTreeSet<String>>,
     failed: Vec<ContributorFailure>,
     toolsets: Vec<agentkit_core::Toolset>,
+    legacy: Vec<agentkit_core::LegacyName>,
 ) -> GovernanceResult<StagedTools> {
     let mut registry = ToolRegistry::new();
     for toolset in toolsets {
@@ -276,6 +284,10 @@ async fn register_tools(
         } else {
             skipped.push(name);
         }
+    }
+    // After the tools, so a name a contributor still registers wins.
+    for name in legacy {
+        registry.register_legacy_name(name);
     }
     Ok(StagedTools {
         registry: Arc::new(registry),

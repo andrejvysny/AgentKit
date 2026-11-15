@@ -53,6 +53,12 @@ pub trait ToolContributor: Send + Sync {
     fn toolsets(&self) -> Vec<agentkit_core::Toolset> {
         vec![]
     }
+    /// Retired names of this contributor's tools (T5.2). A call under one
+    /// maps to its replacement or teaches the model; the names are never
+    /// offered, listed or searchable.
+    fn legacy_names(&self) -> Vec<agentkit_core::LegacyName> {
+        vec![]
+    }
     /// True when this contributor can add tools after a session's tool list
     /// froze (a connected server that connects late). Such a session keeps
     /// the meta tools in its tools array even when every tool is direct.
