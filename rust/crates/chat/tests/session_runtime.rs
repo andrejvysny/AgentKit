@@ -3449,7 +3449,7 @@ async fn compacted_summary_survives_store_reopen() {
 }
 
 #[tokio::test]
-async fn responses_continuation_keeps_history_and_retains_compaction_request() {
+async fn responses_continuation_compacts_and_clears_the_compaction_request() {
     let f = fixture_with(false).await;
     f.responses.store(true, Ordering::SeqCst);
     f.service
@@ -3478,32 +3478,42 @@ async fn responses_continuation_keeps_history_and_retains_compaction_request() {
         panic!("expected turn")
     };
     f.host.run_once().await.unwrap();
+    // CE-15: the continuation lane compacts like any other session.
+    assert_eq!(f.store.list_context_summaries("s1").await.unwrap().len(), 1);
     assert!(
         f.store
-            .list_context_summaries("s1")
+            .get_chat("s1")
             .await
             .unwrap()
-            .is_empty()
+            .unwrap()
+            .metadata
+            .get("agentkit.session.compactRequestedAt")
+            .is_none()
     );
-    assert!(f.store.get_chat("s1").await.unwrap().unwrap().metadata["agentkit.session.compactRequestedAt"].is_string());
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 1000)
+        .await
+        .unwrap();
     assert!(
-        f.store
-            .events_after_number(&turn_id, None, 1000)
-            .await
-            .unwrap()
+        events
             .iter()
-            .any(|event| event.event["type"] == "run.warning"
-                && event.event["data"]["code"] == "compaction_failed")
+            .all(|event| event.event["data"]["code"] != "compaction_failed")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event["type"] == "run.context.compacted"
+                && event.event["data"]["reason"] == "manual")
     );
     let requests = f.requests.lock().unwrap();
-    assert_eq!(requests.len(), 3);
     assert!(
         requests
             .last()
             .unwrap()
             .messages
             .iter()
-            .any(|message| message.content == json!("first"))
+            .any(|message| message.content.to_string().contains("<summary>"))
     );
     assert!(
         requests

@@ -258,6 +258,55 @@ once the history was over budget. Both cost the cache the spec wants to keep
   `compaction_skipped`) while the view has grown by less than 0.20 B since
   the last summary, so a session that cannot shrink does not summarize on
   every turn.
-- Deferred to package 2.5: CE-15 (masking and compaction on the
-  provider-continuation lane, which replays its durable branch untouched
-  and so still only warns).
+- CE-15 (masking and compaction on the provider-continuation lane) was built
+  in package 2.5; see the addendum below.
+
+## Addendum: compaction for all sessions (package 2.5, CE-14, CE-15, F9, F10, F11, F13)
+
+- **Order.** Masking runs first. It signals compaction when its batch frees
+  too little, or leaves E above 0.80 B; compaction otherwise waits for E past
+  B (or a manual request). Verified, unchanged from the 2.4 addendum.
+- **Every session compacts.** `ChatExecutorOptions.auto_compaction` is the host
+  default; the session descriptor's `context.autoCompaction` overrides it
+  either way, so `chat` and any other profile can enable it. The 2.4 skip of
+  the continuation lane is gone.
+- **Continuation lane (CE-15).** A masking batch or a compaction rewrites bytes
+  a durable Responses checkpoint replays. A checkpoint is valid for the rewrite
+  generation it was saved under: the prefix revision, the digest of the applied
+  mask ids and the applied summary id, all derived from persisted records at
+  assembly. Each checkpoint's generation is kept in the chat metadata
+  (`agentkit.session.continuationGenerations`, by anchor message). A turn
+  resumes a checkpoint only when its generation is the current one; otherwise
+  (a retry after a failed attempt, an edit or regenerate, an invalidated or
+  disabled mask, a refreeze) the request replays the history in full and the
+  provider saves a new checkpoint. A batch or trim made in the request itself
+  voids it too.
+- **One break per compaction.** A compaction adopts the project rules waiting
+  since the freeze (`refreeze_project_rules`) and the core-memory changes
+  (`ChatExecutorOptions.core_memory_refreeze`, the S4 hook of package 3.3),
+  rebuilds S3 for the same request, moves the prefix to the next revision with
+  the adopted digests and emits ONE `context.cache_break` of reason `compact`.
+  The summary, a trim after it and the adopted segments no longer emit a break
+  each, and the next turn sees current digests, so no second `refreeze` break
+  follows. A mask batch in the same turn joins that event (`masked: n`) and
+  emits none of its own. The event is also derived from stored state: the masks
+  and the summary that apply form an epoch, the last announced one is kept in
+  `agentkit.session.cacheBreakEpoch`, and an attempt that finds them apart
+  announces the difference (`recovered: true`) unless its task already did.
+- **Calibration.** `E = rho * chars / 4` with `rho` per session and model
+  (`agentkit.session.tokenCalibration` in the chat metadata): `rho_n = 0.7
+  rho_{n-1} + 0.3 P_actual / P_estimated`, start 1, clamp [0.6, 2.0], computed
+  from the stored value inside the fenced write and updated from each report
+  with `finalForCall: true` (`input_uncached + cache_read +
+  cache_write_short + cache_write_long`). It is applied by dividing the message
+  budget B = (W - R - T_tools) by `rho`, which gives every B-relative threshold (trigger, target,
+  minGain, the compaction budget) the calibrated estimate. The admission
+  check and `keepRecentTokens` still use the raw estimate.
+- **Masking switched off.** A session that holds masks and has
+  `context.masking.enabled = false` sends the original bytes; that prefix
+  change is reported once as `context.cache_break` with
+  `reason: "mask_invalidated"` (`cause: "masking_disabled"`), the reported mask
+  ids kept in `agentkit.session.maskDisabledReported`.
+- **Marker data.** `run.context.compacted` also carries `coversThroughMessageId`
+  and `firstKeptMessageId`. Originals are never deleted: the summary is a
+  derived record and the transcript is untouched.

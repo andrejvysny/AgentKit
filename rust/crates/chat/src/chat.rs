@@ -6,6 +6,7 @@ use async_trait::async_trait;
 mod correction;
 mod history;
 pub use correction::CorrectionConfig;
+mod calibration;
 mod compaction;
 mod compaction_prompts;
 mod compaction_request;
@@ -15,7 +16,27 @@ mod hooks;
 mod masking;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
 mod prefix;
+mod rewrite;
+mod session_meta;
 mod session_run;
+
+/// The id of the compaction summary standing in the provider-facing history.
+fn applied_summary(entries: &[compaction::Entry]) -> Option<String> {
+    entries
+        .iter()
+        .find_map(|entry| entry.1.as_deref()?.strip_prefix("summary:"))
+        .map(str::to_owned)
+}
+
+/// Keeps the rewrite generation a continuation checkpoint is saved under.
+pub(crate) async fn record_generation(
+    context: &ExecutionContext,
+    chat_id: &str,
+    anchor: &str,
+    generation: &str,
+) -> ChatResult<()> {
+    rewrite::record_generation(context, chat_id, anchor, generation).await
+}
 
 /// A fixed provider binding or an immutable task snapshot determines the account.
 pub struct ChatExecutor {
@@ -234,7 +255,7 @@ impl ChatExecutor {
             })
             .ok_or_else(|| ChatError::AssistantPlaceholderRequired)?;
         let provider = self.provider(&context).await?;
-        let continuation = history::prepare_continuation(
+        let mut continuation = history::prepare_continuation(
             &context,
             &records,
             provider.as_ref(),
@@ -349,13 +370,20 @@ impl ChatExecutor {
             }),
             None => base_prompt,
         };
-        let rules =
+        let mut rules =
             crate::project_instructions::project_rules_block(&options, &context, chat_id, session)
                 .await?;
-        let layout =
-            agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
+        // S4, the core memory block: not rendered by this executor yet. Both
+        // layout builds take it from here, so its digest is the one recorded
+        // with the prefix and refreshed by a compaction.
+        let memory_core: Option<String> = None;
+        let mut layout = agentkit_core::PromptLayout::of(
+            base_prompt.as_deref(),
+            rules.as_deref(),
+            memory_core.as_deref(),
+        );
         // The correction pass takes the system text as one string.
-        let system_prompt = layout.joined();
+        let mut system_prompt = layout.joined();
         // The session's frozen model profile (T2.2) rides on the request; the
         // transport applies it. A chat without one is sent as the caller built it.
         let model_profile = context
@@ -483,8 +511,8 @@ impl ChatExecutor {
         // Batched masking (ADR 0034): stored masks apply on every assembly;
         // a new batch runs only once the estimate passes the trigger, BEFORE
         // compaction so a summary is written over the bytes the provider
-        // gets. The provider-continuation lane replays its durable branch
-        // untouched, so assembly stays exactly as the continuation recorded.
+        // gets. A rewrite on the provider-continuation lane voids the durable
+        // checkpoint below (CE-15), so every session masks and compacts alike.
         // B counts the frozen S1 manifest's tools, not this turn's registry.
         let tool_definitions = if session {
             prefix::frozen_tools(&context, chat_id, &registry).await?
@@ -492,8 +520,9 @@ impl ChatExecutor {
             registry.definitions()
         };
         let mut compact_forced = false;
-        if session && continuation.is_none() {
-            let masked = masking::apply(
+        let mut masked = masking::Outcome::default();
+        if session {
+            masked = masking::apply(
                 masking::Input {
                     context: &context,
                     chat_id,
@@ -518,23 +547,36 @@ impl ChatExecutor {
             ),
             profile: profile.as_ref().map(|profile| profile.id.clone()),
         };
+        let calibration = session.then(|| {
+            Arc::new(calibration::Tracker::new(
+                context.clone(),
+                chat_id,
+                model,
+                context_budget.as_ref().map_or(1.0, |budget| budget.rho),
+            ))
+        });
         let prepared = Arc::new(hooks::PreparedProvider {
             budget: context_budget.clone(),
             inner: provider,
             options: options.clone(),
             context: context.clone(),
             chat_id: chat_id.into(),
+            calibration: calibration.clone(),
         });
         let compact_requested = session
             && context.store.get_chat(chat_id).await?.is_some_and(|chat| {
                 chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
             });
-        let messages = if session
-            && (options.auto_compaction || compact_requested)
-            && continuation.is_none()
+        // Any session may compact: the executor's switch is the default and
+        // the session's `context.autoCompaction` overrides it either way.
+        let auto_compaction = assembly.auto_compaction.unwrap_or(options.auto_compaction);
+        let mut compacted = None;
+        let summary_id: Option<String>;
+        let mut messages = if session
+            && (auto_compaction || compact_requested)
             && let Some(context_budget) = context_budget.clone()
         {
-            compaction_runner::apply(compaction_runner::Input {
+            let applied = compaction_runner::apply(compaction_runner::Input {
                 context: context.clone(),
                 chat_id: chat_id.into(),
                 model: model.into(),
@@ -549,42 +591,84 @@ impl ChatExecutor {
                 usage_timeout_ms: options.hook_timeouts.usage_ms,
                 force: compact_forced,
             })
-            .await?
-            .into_iter()
-            .map(|(message, _)| message)
-            .collect::<Vec<_>>()
+            .await?;
+            compacted = applied.rewrite;
+            summary_id = applied_summary(&applied.entries);
+            applied
+                .entries
+                .into_iter()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>()
         } else {
-            if session && continuation.is_some() {
-                let manual = context.store.get_chat(chat_id).await?.is_some_and(|chat| {
-                    chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
-                });
-                let over = context_budget.as_ref().is_some_and(|budget| {
-                    let message_tokens: u64 = entries
-                        .iter()
-                        .map(|entry| context_budget::message_tokens(&entry.0))
-                        .sum();
-                    let tools = registry.definitions();
-                    let tool_tokens = if tools.is_empty() {
-                        0
-                    } else {
-                        serde_json::to_string(&tools)
-                            .unwrap_or_default()
-                            .encode_utf16()
-                            .count() as u64
-                    }
-                    .div_ceil(4);
-                    message_tokens.saturating_add(tool_tokens)
-                        > budget.window.saturating_sub(budget.reserve)
-                });
-                if manual || over {
-                    context.emit("run.warning", json!({"code":"compaction_failed","message":"Context compaction is unavailable for provider continuation; the continuation and request remain unchanged."})).await?;
-                }
-            }
+            summary_id = applied_summary(&entries);
             entries
                 .into_iter()
                 .map(|(message, _)| message)
                 .collect::<Vec<_>>()
         };
+        let mut compaction_break = None;
+        if let Some(change) = compacted.as_ref() {
+            // A compaction breaks the cache anyway: adopt what waited for such
+            // a moment and move the prefix to a new revision.
+            let adopted = rewrite::adopt_pending(&options, &context, chat_id).await?;
+            if adopted.rules {
+                rules = crate::project_instructions::project_rules_block(
+                    &options, &context, chat_id, session,
+                )
+                .await?;
+                layout = agentkit_core::PromptLayout::of(
+                    base_prompt.as_deref(),
+                    rules.as_deref(),
+                    memory_core.as_deref(),
+                );
+                system_prompt = layout.joined();
+                let head = messages
+                    .iter()
+                    .take_while(|message| message.role == "system")
+                    .count();
+                messages.splice(..head, layout.to_messages()).for_each(drop);
+            }
+            let branch = continuation
+                .as_ref()
+                .map_or("", |cont| cont.scope.branch_id.as_str());
+            let revision = prefix::bump_for_compaction(&context, chat_id, &layout, branch).await?;
+            compaction_break = Some((change.tokens_before, change.tokens_after, adopted, revision));
+        }
+        // The checkpoint replays the history as it was (CE-15): it is kept only
+        // for the generation it was saved under, and a rewrite made right now
+        // that no stored record carries (a batch, a trim) voids it as well.
+        let generation = rewrite::Generation::new(
+            context
+                .store
+                .get_chat(chat_id)
+                .await?
+                .and_then(|chat| agentkit_sessions::read_session_prefix(&chat.metadata))
+                .map_or(0, |prefix| prefix.revision as u64),
+            &masked.applied,
+            summary_id.as_deref(),
+        );
+        let rewrote_now = masked.rewrote() || compacted.is_some();
+        let checkpoint_reset = continuation
+            .as_mut()
+            .is_some_and(|checkpoint| rewrite::discard_stale(checkpoint, &generation, rewrote_now));
+        if session {
+            // One `context.cache_break` per request (INV-3).
+            rewrite::emit_break(
+                &context,
+                chat_id,
+                &generation,
+                &masked,
+                compaction_break
+                    .as_ref()
+                    .map(|(before, after, adopted, revision)| rewrite::Compaction {
+                        tokens: (*before, *after),
+                        adopted,
+                        revision: *revision,
+                        checkpoint_reset,
+                    }),
+            )
+            .await?;
+        }
         let sink = Arc::new(history::DurableEvents {
             context: context.clone(),
             chat_id: chat_id.into(),
@@ -607,6 +691,7 @@ impl ChatExecutor {
             usage_timeout_ms: options.hook_timeouts.usage_ms,
             reasoning: Default::default(),
             turn_context: options.turn_context.clone(),
+            calibration: calibration.clone(),
         });
         // Message positions for BP3/BP4: this request ends at its last message;
         // the previous one ended just before the last assistant reply.
@@ -635,6 +720,7 @@ impl ChatExecutor {
                 context: context.clone(),
                 chat_id: chat_id.into(),
                 anchor: anchor.clone(),
+                generation: generation.tag(),
             }));
         }
         // Cache directives (CE-07) come from the frozen prefix's key and the

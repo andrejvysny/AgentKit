@@ -134,6 +134,21 @@ pub(super) struct Outcome {
     pub compact: bool,
     pub results_masked: usize,
     pub images_masked: usize,
+    /// Estimated tokens around the new batch.
+    pub tokens: (u64, u64),
+    /// The ids of the masks the provider view carries: stored ones that still
+    /// match the history, and the batch written now.
+    pub applied: Vec<String>,
+    /// A cache break (INV-3) was already reported while applying: masking was
+    /// switched off, or stored masks no longer matched.
+    pub reported_break: bool,
+}
+
+impl Outcome {
+    /// A new batch changed the provider-facing history this turn.
+    pub(super) fn rewrote(&self) -> bool {
+        self.results_masked + self.images_masked > 0
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -569,7 +584,10 @@ async fn handle_for(
 
 pub(super) async fn apply(input: Input<'_>, entries: &mut [Entry]) -> ChatResult<Outcome> {
     if !input.settings.enabled {
-        return Ok(Outcome::default());
+        return Ok(Outcome {
+            reported_break: report_disabled(input.context, input.chat_id).await?,
+            ..Outcome::default()
+        });
     }
     let context = input.context;
     let records = context.store.list_context_masks(input.chat_id).await?;
@@ -578,6 +596,26 @@ pub(super) async fn apply(input: Input<'_>, entries: &mut [Entry]) -> ChatResult
     if !skipped.is_empty() {
         report_invalidated(context, &skipped).await?;
     }
+    let applied: Vec<String> = records
+        .iter()
+        .filter_map(|record| record["maskId"].as_str())
+        .filter(|id| !skipped.iter().any(|skipped| skipped == id))
+        .map(str::to_owned)
+        .collect();
+    let mut outcome = batch(&input, entries, &positions, &mut hashes).await?;
+    outcome.applied.extend(applied);
+    outcome.reported_break = !skipped.is_empty();
+    Ok(outcome)
+}
+
+/// Masks a new batch when the stored ones leave the history over the trigger.
+async fn batch(
+    input: &Input<'_>,
+    entries: &mut [Entry],
+    positions: &Positions,
+    hashes: &mut Hashes,
+) -> ChatResult<Outcome> {
+    let context = input.context;
     let Some(budget) = input
         .budget
         .map(|budget| budget.message_budget(input.tools))
@@ -603,15 +641,45 @@ pub(super) async fn apply(input: Input<'_>, entries: &mut [Entry]) -> ChatResult
             ..Outcome::default()
         });
     }
-    run_batch(
-        &input,
-        entries,
-        &plan.picks,
-        budget,
-        &positions,
-        &mut hashes,
-    )
-    .await
+    run_batch(input, entries, &plan.picks, budget, positions, hashes).await
+}
+
+/// Chat metadata key: the mask ids whose removal was already reported.
+const DISABLED_REPORTED_KEY: &str = "agentkit.session.maskDisabledReported";
+
+/// Masking was switched off on a session that holds masks: the provider view
+/// is now the original bytes, which changes the prefix (INV-3). That is
+/// reported once for the masks it concerns; the metadata keeps the state so a
+/// later turn, or another worker, does not report it again.
+async fn report_disabled(context: &ExecutionContext, chat_id: &str) -> ChatResult<bool> {
+    let records = context.store.list_context_masks(chat_id).await?;
+    if records.is_empty() {
+        return Ok(false);
+    }
+    let ids: Vec<Value> = records
+        .iter()
+        .map(|record| record["maskId"].clone())
+        .collect();
+    let reported = context
+        .store
+        .get_chat(chat_id)
+        .await?
+        .map(|chat| chat.metadata[DISABLED_REPORTED_KEY].clone());
+    if reported == Some(Value::Array(ids.clone())) {
+        return Ok(false);
+    }
+    let count = ids.len();
+    super::session_meta::update(context, chat_id, move |metadata| {
+        metadata[DISABLED_REPORTED_KEY] = Value::Array(ids);
+    })
+    .await?;
+    context
+        .emit(
+            "context.cache_break",
+            json!({"reason":"mask_invalidated","cause":"masking_disabled","records_skipped":count}),
+        )
+        .await?;
+    Ok(true)
 }
 
 /// A stored record that could not apply: the provider view fell back to the
@@ -712,20 +780,21 @@ async fn run_batch(
     record["tokensAfter"] = after.into();
     commit(input, record.clone()).await?;
     entries.clone_from_slice(&masked);
-    let outcome = Outcome {
+    // INV-3: the cached prefix changed at the first masked message. The turn
+    // reports that as one `context.cache_break` once it knows whether a
+    // compaction follows (see `rewrite::emit_break`).
+    Ok(Outcome {
         compact: after > scaled(budget, input.settings.trigger_ratio),
         results_masked: masks_len(&record, "masks"),
         images_masked: masks_len(&record, "images"),
-    };
-    // INV-3: the cached prefix changed at the first masked message.
-    context
-        .emit(
-            "context.cache_break",
-            json!({"reason":"mask","tokens_before":before,"tokens_after":after,
-                "results_masked":outcome.results_masked,"images_masked":outcome.images_masked}),
-        )
-        .await?;
-    Ok(outcome)
+        tokens: (before, after),
+        applied: record["maskId"]
+            .as_str()
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+        reported_break: false,
+    })
 }
 
 fn masks_len(record: &Value, key: &str) -> usize {

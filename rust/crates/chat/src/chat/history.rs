@@ -9,6 +9,8 @@ use std::collections::HashSet;
 pub(super) struct ContinuationSession {
     pub state: Option<Value>,
     pub scope: ContinuationScope,
+    /// The rewrite generation the checkpoint was saved under, when recorded.
+    pub generation: Option<String>,
 }
 pub(super) async fn prepare_continuation(
     context: &ExecutionContext,
@@ -41,9 +43,16 @@ pub(super) async fn prepare_continuation(
                 .collect(),
         )
         .await?;
-    let previous = current
-        .or_else(|| candidates.pop())
-        .map(|record| record.state);
+    // Whether the checkpoint still describes the history is decided once the
+    // turn knows its rewrite generation (`rewrite::discard_stale`).
+    let chosen = current.or_else(|| candidates.pop());
+    let generation = match &chosen {
+        Some(record) => context.store.get_chat(chat_id).await?.and_then(|chat| {
+            super::rewrite::stored_generation(&chat.metadata, &record.anchor_message_id)
+        }),
+        None => None,
+    };
+    let previous = chosen.map(|record| record.state);
     let identity = provider.connection_identity();
     if identity
         .as_ref()
@@ -108,6 +117,7 @@ pub(super) async fn prepare_continuation(
             chat_id: chat_id.into(),
             branch_id: branch.id.clone(),
         },
+        generation,
     }))
 }
 /// What replays for the turns BEFORE the one being answered
@@ -530,6 +540,8 @@ pub(super) struct DurableEvents {
     pub usage_timeout_ms: u64,
     pub reasoning: std::sync::Mutex<ReasoningTrack>,
     pub turn_context: Option<Arc<dyn crate::TurnContextHook>>,
+    /// Session turns: learns the token estimate error from usage reports.
+    pub calibration: Option<Arc<super::calibration::Tracker>>,
 }
 
 /// Public reasoning of the turn in flight (TS `reasoning-projection.ts`).
@@ -710,6 +722,11 @@ impl DurableEvents {
                 "usage.record",
             )
             .await;
+        }
+        if event["type"] == "run.usage"
+            && let Some(tracker) = &self.calibration
+        {
+            tracker.observe(&event["data"]).await;
         }
         Ok(())
     }

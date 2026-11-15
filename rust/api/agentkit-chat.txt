@@ -117,6 +117,7 @@ pub agentkit_chat::ChatExecutorOptions::attachments: core::option::Option<alloc:
 pub agentkit_chat::ChatExecutorOptions::auto_compaction: bool
 pub agentkit_chat::ChatExecutorOptions::content_authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>>
 pub agentkit_chat::ChatExecutorOptions::context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ContextProvider>>
+pub agentkit_chat::ChatExecutorOptions::core_memory_refreeze: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemoryRefreeze>>
 pub agentkit_chat::ChatExecutorOptions::correction: core::option::Option<agentkit_chat::CorrectionConfig>
 pub agentkit_chat::ChatExecutorOptions::default_tool_timeout_ms: core::option::Option<u64>
 pub agentkit_chat::ChatExecutorOptions::delegation_guidance: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::DelegationGuidance>>
@@ -224,6 +225,8 @@ pub fn agentkit_chat::AgentHost::resolves_provider_snapshots(&self) -> bool
 pub fn agentkit_chat::AgentHost::submit_chat<'life0, 'async_trait>(&'life0 self, agentkit_chat::SubmitChat) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<agentkit_chat::RunHandle>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait agentkit_chat::ContextProvider: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::ContextProvider::resolve<'life0, 'async_trait>(&'life0 self, serde_json::value::Value, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<serde_json::value::Value>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_chat::CoreMemoryRefreeze: core::marker::Send + core::marker::Sync
+pub fn agentkit_chat::CoreMemoryRefreeze::refreeze<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_chat::DelegationGuidance: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::DelegationGuidance::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_chat::OversizedItemSink: core::marker::Send + core::marker::Sync

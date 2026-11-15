@@ -8,6 +8,9 @@ pub(crate) struct DurableContinuation {
     pub context: ExecutionContext,
     pub chat_id: String,
     pub anchor: String,
+    /// The rewrite generation the request was built under; kept with the
+    /// checkpoint so a later turn knows whether it still describes the history.
+    pub generation: String,
 }
 
 #[async_trait]
@@ -17,6 +20,14 @@ impl ContinuationStore for DurableContinuation {
             .get("scope")
             .cloned()
             .ok_or_else(|| CoreError::responses("invalid_continuation"))?;
+        crate::chat::record_generation(
+            &self.context,
+            &self.chat_id,
+            &self.anchor,
+            &self.generation,
+        )
+        .await
+        .map_err(|_| CoreError::responses("continuation_persistence_failed"))?;
         let now = self.context.runtime.now_ms();
         self.context
             .store

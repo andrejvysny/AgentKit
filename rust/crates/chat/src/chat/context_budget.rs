@@ -7,6 +7,9 @@ pub(crate) struct ContextBudget {
     pub(super) window: u64,
     source: &'static str,
     pub(super) reserve: u64,
+    /// The session's calibration factor for this model (roadmap 2.5): the
+    /// estimate E is `rho * chars / 4`. 1 until a request has been observed.
+    pub(super) rho: f64,
 }
 
 /// A native connection snapshot binds model metadata independently of live catalogs.
@@ -73,6 +76,9 @@ pub(crate) async fn effective_session_descriptor(
 pub(crate) struct ContextAssembly {
     pub(crate) policy: super::history::HistoryPolicy,
     pub(crate) masking: super::masking::MaskSettings,
+    /// The session's `context.autoCompaction` switch; absent, the executor's
+    /// `auto_compaction` option decides.
+    pub(crate) auto_compaction: Option<bool>,
 }
 
 /// The frozen session defaults (`turn-runner.ts`): the policy defaults to
@@ -101,6 +107,9 @@ pub(crate) async fn resolve_context_assembly(
         masking: super::masking::MaskSettings::resolve(
             options.and_then(|context| context.get("masking")),
         ),
+        auto_compaction: options
+            .and_then(|context| context.get("autoCompaction"))
+            .and_then(Value::as_bool),
     })
 }
 
@@ -142,24 +151,61 @@ impl ContextBudget {
             .filter(|n| *n > 0)
             .unwrap_or(16384)
             .min(window / 2);
+        let rho = context
+            .store
+            .get_chat(chat_id)
+            .await?
+            .map_or(1.0, |chat| super::calibration::read(&chat.metadata, model));
         Ok(Some(Self {
             window,
             source,
             reserve,
+            rho,
         }))
     }
 
     /// B: the window less the reply reserve and the tool definitions, the
-    /// room the messages may fill.
+    /// room the messages may fill, in uncalibrated `chars / 4` tokens.
+    /// The calibrated estimate `E = rho * chars / 4` against that room is the
+    /// same test as `chars / 4` against the room divided by `rho`, so the
+    /// factor is applied here, once, to `W - R - T_tools`, and every threshold
+    /// built on B (masking, compaction) is calibrated with it.
     pub(crate) fn message_budget(&self, tools: &[agentkit_core::ToolDefinition]) -> u64 {
         let tool_tokens = if tools.is_empty() {
             0
         } else {
             chars(&serde_json::to_string(tools).unwrap_or_default()).div_ceil(4)
         };
-        self.window
+        self.room_after(tool_tokens)
+    }
+
+    fn room_after(&self, tool_tokens: u64) -> u64 {
+        let room = self
+            .window
             .saturating_sub(self.reserve)
-            .saturating_sub(tool_tokens)
+            .saturating_sub(tool_tokens);
+        if self.rho == 1.0 {
+            room
+        } else {
+            (room as f64 / self.rho).floor() as u64
+        }
+    }
+
+    /// The raw estimate of a request: its messages and tool definitions at
+    /// `chars / 4`, what calibration compares the provider's count against.
+    pub(crate) fn estimate(input: &ChatRequest) -> u64 {
+        let messages = input
+            .selected_content
+            .iter()
+            .chain(input.messages.iter())
+            .map(message_tokens)
+            .sum::<u64>();
+        let tools = if input.tools.is_empty() {
+            0
+        } else {
+            chars(&serde_json::to_string(&input.tools).unwrap_or_default()).div_ceil(4)
+        };
+        messages.saturating_add(tools)
     }
 
     pub(crate) fn admit(
@@ -492,6 +538,7 @@ mod tests {
             window: 20,
             source: "descriptor",
             reserve: 5,
+            rho: 1.0,
         };
         let mut request = ChatRequest {
             messages: vec![ChatMessage::text("user", &"x".repeat(64))],
@@ -517,6 +564,7 @@ mod tests {
             window: 20,
             source: "fallback",
             reserve: 5,
+            rho: 1.0,
         };
         let mut request = ChatRequest::default();
         let event = budget.admit(&mut request, "one".into(), false).unwrap();
@@ -535,6 +583,7 @@ mod tests {
             window: 36,
             source: "descriptor",
             reserve: 8,
+            rho: 1.0,
         };
         assert!(budget.admit(&mut request, "fit".into(), true).is_ok());
         assert_eq!(request.max_output_tokens, Some(8));
@@ -585,5 +634,22 @@ mod tests {
         );
         assert_eq!(message_tokens(&plain), 1);
         assert_eq!(message_tokens(&with), 101);
+    }
+
+    #[test]
+    fn calibration_scales_the_message_budget_by_one_over_rho() {
+        let budget = |rho| ContextBudget {
+            window: 1000,
+            source: "descriptor",
+            reserve: 200,
+            rho,
+        };
+        assert_eq!(budget(1.0).message_budget(&[]), 800);
+        // chars/4 is low by half: only 400 estimated tokens fit.
+        assert_eq!(budget(2.0).message_budget(&[]), 400);
+        // chars/4 is high by half: 1600 estimated tokens fit.
+        assert_eq!(budget(0.5).message_budget(&[]), 1600);
+        // Tools come off the room before it is scaled: (1000 - 200 - 300) / 2.
+        assert_eq!(budget(2.0).room_after(300), 250);
     }
 }

@@ -21,8 +21,8 @@ pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_too
 pub use error::{ChatError, ChatResult};
 pub use ports::{
     AttachmentResolveContext, AttachmentResolver, Authorization, ContextProvider,
-    DelegationGuidance, MutationIdentity, ProposalApplier, ResolvedAttachment, TurnContextHook,
-    TurnContextInput, UsageAuthorizer, is_mutating_subagent_tool,
+    CoreMemoryRefreeze, DelegationGuidance, MutationIdentity, ProposalApplier, ResolvedAttachment,
+    TurnContextHook, TurnContextInput, UsageAuthorizer, is_mutating_subagent_tool,
 };
 pub use project_instructions::{
     FileProjectInstructions, MAX_INSTRUCTION_BYTES, PROJECT_INSTRUCTION_FILES,

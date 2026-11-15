@@ -23,6 +23,9 @@
 //!   `0 < target < trigger <= 1` and `0 < minGain < 1`) and positive integers
 //!   (`keepRecentTurns`, `imageMaxAgeTurns`); a retired `toolResultElision`
 //!   key is dropped, except `false` reads as `masking.enabled = false`;
+//!   `autoCompaction` is absent or a bool: the session's own switch for
+//!   automatic compaction, which overrides the executor's default (roadmap
+//!   2.5), so any profile can turn it on or off;
 //! - `skills` is absent or an array of records each carrying string `id` AND
 //!   string `revision`;
 //! - `turnKind` is absent, exactly `chat.turn`, or a host kind matching the TS
@@ -239,6 +242,13 @@ fn read_context(raw: Option<&Value>) -> Field<Value> {
                 out.insert(key.into(), number);
             }
         };
+    }
+    match raw.get("autoCompaction") {
+        None => {}
+        Some(Value::Bool(auto)) => {
+            out.insert("autoCompaction".into(), (*auto).into());
+        }
+        Some(_) => return Field::Malformed,
     }
     // `toolResultElision` is retired (ADR 0034 addendum): the key is dropped,
     // except that the legacy opt-out (`false`) still reads as masking off.

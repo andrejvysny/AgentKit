@@ -276,6 +276,22 @@ fn context_grammar() {
 }
 
 #[test]
+fn auto_compaction_is_a_bool_switch() {
+    for auto in [true, false] {
+        assert_eq!(
+            accepted(with(json!({"context": {"autoCompaction": auto}})))["context"],
+            json!({"autoCompaction": auto})
+        );
+    }
+    for bad in [json!("true"), json!(1), Value::Null, json!({})] {
+        rejected(
+            with(json!({"context": {"autoCompaction": bad.clone()}})),
+            &format!("autoCompaction = {bad}"),
+        );
+    }
+}
+
+#[test]
 fn masking_grammar() {
     let descriptor = accepted(with(json!({
         "context": {"masking": {"triggerRatio": 0.8, "targetRatio": 0.5, "minGainRatio": 0.2, "keepRecentTurns": 3, "imageMaxAgeTurns": 6}}

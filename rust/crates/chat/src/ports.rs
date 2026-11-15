@@ -51,6 +51,18 @@ pub trait TurnContextHook: Send + Sync {
     }
 }
 
+/// Core-memory refreeze port (roadmap 2.5, ADR 0028 S4). The session's core
+/// memory block is frozen like the project rules; edits wait until the
+/// history is rewritten anyway. When a compaction does that, the executor
+/// calls this so the implementation can adopt what is pending, exactly as
+/// `refreeze_project_rules` does for S3. It returns whether anything was
+/// adopted. The cache break and the new prefix revision belong to the
+/// compaction, so the implementation emits neither.
+#[async_trait]
+pub trait CoreMemoryRefreeze: Send + Sync {
+    async fn refreeze(&self, chat_id: &str, now_ms: i64) -> ChatResult<bool>;
+}
+
 #[async_trait]
 pub trait ContextProvider: Send + Sync {
     async fn resolve(&self, input: Value, cancel: CancellationToken) -> ChatResult<Value>;

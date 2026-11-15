@@ -8,7 +8,7 @@ use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
     Classification, CoreError, Dialect, Freeze, PrefixDigests, PromotionObserver, PromptLayout,
-    ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze,
+    Segment, ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze,
     tools_digest,
 };
 use serde_json::{Value, json};
@@ -237,6 +237,41 @@ pub(super) async fn frozen_tools(
             || registry.definitions(),
             |manifest| manifest.definitions().to_vec(),
         ))
+}
+
+/// A compaction rewrites the history, so the session's prefix moves to a new
+/// revision (a new provider cache key) and records the S3/S4 text the
+/// compaction adopted. The compaction owns the cache break event, so none is
+/// emitted here, and the next turn finds the recorded digests current
+/// instead of reporting a second break. Returns the new revision, or `None`
+/// for a session with no prefix yet.
+pub(super) async fn bump_for_compaction(
+    context: &ExecutionContext,
+    chat_id: &str,
+    layout: &PromptLayout,
+    branch_id: &str,
+) -> ChatResult<Option<u64>> {
+    let chat = context
+        .store
+        .get_chat(chat_id)
+        .await?
+        .ok_or(ChatError::SessionDisappeared)?;
+    let Some(prior) = agentkit_sessions::read_session_prefix(&chat.metadata) else {
+        return Ok(None);
+    };
+    let revision = prior.revision as u64 + 1;
+    let mut next = prior;
+    next.revision = revision as f64;
+    next.rules_digest = layout.digest(Segment::Rules);
+    next.memory_core_digest = layout.digest(Segment::Memory);
+    next.cache_key = cache_key(chat_id, branch_id, revision);
+    next.frozen_at_task = context.task.task_id.clone();
+    let decision = Freeze::Refrozen {
+        prefix: next,
+        changed: vec!["compact"],
+    };
+    persist(context, chat_id, &decision).await?;
+    Ok(Some(revision))
 }
 
 /// Record or compare the prefix of this turn. `branch_id` feeds the cache

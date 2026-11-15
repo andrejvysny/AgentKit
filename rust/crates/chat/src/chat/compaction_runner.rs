@@ -27,6 +27,20 @@ pub(super) struct Input {
     pub force: bool,
 }
 
+/// What `apply` hands back: the provider-facing entries and, when it changed
+/// them for good (a summary written or the oldest turns dropped), the token
+/// counts around the rewrite. The caller owns what a rewrite carries with it:
+/// the refreeze, the voided continuation checkpoint and the one cache break.
+pub(super) struct Applied {
+    pub entries: Vec<Entry>,
+    pub rewrite: Option<Rewrite>,
+}
+
+pub(super) struct Rewrite {
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+}
+
 struct Snapshot {
     marker: Option<Value>,
     descriptor: Option<Value>,
@@ -137,20 +151,24 @@ fn make_plan(input: &Input, snapshot: &Snapshot) -> Plan {
 fn message_budget(input: &Input) -> u64 {
     input.context_budget.message_budget(&input.tools)
 }
-pub(super) async fn apply(input: Input) -> ChatResult<Vec<Entry>> {
+pub(super) async fn apply(input: Input) -> ChatResult<Applied> {
     let snapshot = Snapshot::capture(&input).await?;
     let plan = make_plan(&input, &snapshot);
     if plan.force_skipped {
         input.context.emit("run.warning", json!({"code":"compaction_skipped","message":"Masking found too little to free, but the last compaction is recent: less than 0.20 of the budget was added since, so no new summary was written."})).await?;
     }
+    let before = entries_tokens(&plan.working);
     if !plan.triggered {
-        return Ok(plan.working);
+        return Ok(Applied {
+            entries: plan.working,
+            rewrite: None,
+        });
     }
     if plan.cut <= plan.from {
         if snapshot.manual() {
             commit(&input, &snapshot, None).await?;
         }
-        return trim_and_report(&input.context, plan.working, plan.budget).await;
+        return trim_and_report(&input.context, plan.working, plan.budget, before, false).await;
     }
     let body = &input.entries[plan.body_start..];
     let id = format!(
@@ -166,15 +184,18 @@ pub(super) async fn apply(input: Input) -> ChatResult<Vec<Entry>> {
     )
     .await;
     emit_usage(&input, usage).await?;
-    let working = match result {
-        Ok(text) => save_summary(&input, &snapshot, &plan, &id, &text).await?,
+    let (working, saved) = match result {
+        Ok(text) => (
+            save_summary(&input, &snapshot, &plan, &id, &text).await?,
+            true,
+        ),
         Err(reason) => {
             input.context.check_cancelled()?;
             input.context.emit("run.warning", json!({"code":"compaction_failed","message":format!("Context compaction failed ({reason}); the history was trimmed instead.")})).await?;
-            plan.working.clone()
+            (plan.working.clone(), false)
         }
     };
-    trim_and_report(&input.context, working, plan.budget).await
+    trim_and_report(&input.context, working, plan.budget, before, saved).await
 }
 async fn save_summary(
     input: &Input,
@@ -189,12 +210,10 @@ async fn save_summary(
     let summary = compaction_request::add_details(text, &details, &commands);
     let record = record(input, body, plan.cut, id, &summary, details)?;
     commit(input, snapshot, Some(record.clone())).await?;
-    input.context.emit("run.context.compacted", json!({"summaryId":id,"tokensBefore":record["tokensBefore"],"tokensAfter":record["tokensAfter"],"coveredMessages":plan.cut,"reason":if snapshot.manual() {"manual"} else {"threshold"}})).await?;
-    let working =
-        compaction::apply_summary(&input.entries, &record).unwrap_or_else(|| plan.working.clone());
-    // INV-3: a new summary rewrites the cached prefix.
-    input.context.emit("context.cache_break", json!({"reason":"compact","tokens_before":entries_tokens(&plan.working),"tokens_after":entries_tokens(&working)})).await?;
-    Ok(working)
+    // The range lets a host draw a marker where the summary stands; the
+    // originals stay in the transcript, only the provider view is replaced.
+    input.context.emit("run.context.compacted", json!({"summaryId":id,"tokensBefore":record["tokensBefore"],"tokensAfter":record["tokensAfter"],"coveredMessages":plan.cut,"coversThroughMessageId":record["coversThroughMessageId"],"firstKeptMessageId":record["firstKeptMessageId"],"reason":if snapshot.manual() {"manual"} else {"threshold"}})).await?;
+    Ok(compaction::apply_summary(&input.entries, &record).unwrap_or_else(|| plan.working.clone()))
 }
 async fn emit_usage(input: &Input, usage: Vec<Value>) -> ChatResult<()> {
     account_all(usage, |item| account_one(input, item)).await
@@ -457,28 +476,31 @@ async fn validate_snapshot(
 
 /// Last resort: a history still over budget after masking and compaction is
 /// cut in ONE step down to half the budget (0.50B), so the next turns do not
-/// trim again one turn at a time.
+/// trim again one turn at a time. `saved` says a summary was written first;
+/// either way a change reports the token counts of the whole rewrite, and the
+/// caller emits the single cache break (INV-3).
 async fn trim_and_report(
     context: &ExecutionContext,
     entries: Vec<Entry>,
     budget: u64,
-) -> ChatResult<Vec<Entry>> {
-    let before = entries_tokens(&entries);
-    if before <= budget {
-        return Ok(entries);
-    }
-    let (entries, dropped) = trim_entries(entries, budget / 2);
+    before: u64,
+    saved: bool,
+) -> ChatResult<Applied> {
+    let current = entries_tokens(&entries);
+    let (entries, dropped) = if current > budget {
+        trim_entries(entries, budget / 2)
+    } else {
+        (entries, 0)
+    };
+    let remaining = entries_tokens(&entries);
     if dropped > 0 {
-        let remaining = entries_tokens(&entries);
         context.emit("run.warning", json!({"code":"context_trimmed","message":format!("Dropped the {dropped} oldest turn(s) to fit the context window; about {remaining} of {budget} budgeted tokens remain in use.")})).await?;
-        context
-            .emit(
-                "context.cache_break",
-                json!({"reason":"compact","tokens_before":before,"tokens_after":remaining}),
-            )
-            .await?;
     }
-    Ok(entries)
+    let rewrite = (saved || dropped > 0).then_some(Rewrite {
+        tokens_before: before,
+        tokens_after: remaining,
+    });
+    Ok(Applied { entries, rewrite })
 }
 
 fn entries_tokens(entries: &[Entry]) -> u64 {

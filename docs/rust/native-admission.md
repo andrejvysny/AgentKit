@@ -47,8 +47,26 @@ fail with `context_overflow` before provider dispatch.
 
 `windowSource` retains the shared event vocabulary: `descriptor` includes a frozen per-turn window override as well as a session descriptor; `model` includes frozen native model metadata and the stored model catalog. These labels do not change admission precedence.
 
-Automatic compaction requires `ChatExecutorOptions.auto_compaction = true`.
-An explicit session compact request remains supported. Tool-result elision is retired ([ADR 0034](../adr/0034-output-store-and-masking.md)):
+Automatic compaction is on when `ChatExecutorOptions.auto_compaction` is true
+(the host default, false) unless the session's `context.autoCompaction` says
+otherwise: a bool that overrides the host default either way, so any profile
+(chat included) can turn it on or off per session. An explicit session compact
+request remains supported. Every session compacts alike, the provider
+continuation lane included: a masking batch or a compaction voids the durable
+checkpoint, the request replays the rewritten history in full and the provider
+saves a new checkpoint from it. A compaction also adopts the project-rule
+changes still waiting (`refreeze_project_rules`) and, through
+`ChatExecutorOptions.core_memory_refreeze`, pending core-memory changes, moves
+the session prefix to a new revision, and emits ONE `context.cache_break`
+(`reason: "compact"`). The `run.context.compacted` event carries
+`summaryId`, `coversThroughMessageId` and `firstKeptMessageId` so a host can
+draw a marker; the covered messages are never deleted.
+
+The estimate behind every threshold is `E = rho * chars / 4`. `rho` starts at 1
+per session and model, moves `rho = 0.7 rho + 0.3 (P_actual / P_estimated)`
+after each request from the provider's reported prompt tokens
+(`input_uncached + cache_read + cache_write_*`), is clamped to [0.6, 2.0] and
+is kept in the chat metadata (`agentkit.session.tokenCalibration`). Tool-result elision is retired ([ADR 0034](../adr/0034-output-store-and-masking.md)):
 a legacy `context.toolResultElision` key is read as absent. Batched masking replaces it and is on by default; it acts only past 80% of the message
 budget. `context.masking` overrides its thresholds (`triggerRatio`, `targetRatio`, `minGainRatio`, `keepRecentTurns`, `imageMaxAgeTurns`).
 

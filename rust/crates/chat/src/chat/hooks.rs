@@ -62,6 +62,10 @@ pub struct ChatExecutorOptions {
     pub history_limit: usize,
     /// Permit session summarization when context fills. Default false.
     pub auto_compaction: bool,
+    /// Adopts pending core-memory changes into the session's frozen S4 when a
+    /// compaction rewrites the history (roadmap 2.5, S4). Absent, nothing is
+    /// adopted there.
+    pub core_memory_refreeze: Option<Arc<dyn crate::CoreMemoryRefreeze>>,
     pub execution_budgets: BudgetLimits,
     pub max_tool_iterations: u32,
     pub max_output_tokens: Option<u64>,
@@ -107,6 +111,7 @@ impl Default for ChatExecutorOptions {
             attachment_budgets: AttachmentBudgets::default(),
             history_limit: usize::MAX,
             auto_compaction: false,
+            core_memory_refreeze: None,
             execution_budgets: BudgetLimits::default(),
             max_tool_iterations: 4,
             max_output_tokens: None,
@@ -224,6 +229,8 @@ pub(crate) struct PreparedProvider {
     pub context: ExecutionContext,
     pub chat_id: String,
     pub budget: Option<super::context_budget::ContextBudget>,
+    /// Session turns only: learns the estimate error from usage reports.
+    pub calibration: Option<Arc<super::calibration::Tracker>>,
 }
 #[async_trait]
 impl ChatProvider for PreparedProvider {
@@ -263,6 +270,9 @@ impl ChatProvider for PreparedProvider {
             // budget clamp is the final word on the output cap: the
             // admitted request is the transmitted request (P1-F).
             provider.inner.apply_request_defaults(&mut input);
+            if let Some(tracker) = &provider.calibration {
+                tracker.note_estimate(super::context_budget::ContextBudget::estimate(&input));
+            }
             let admission = provider.budget.as_ref().map(|budget| budget.admit(&mut input, provider.context.runtime.id(), provider.inner.allows_implicit_output_limit())).transpose()?;
             if let Some(usage)=&provider.options.usage {
                 let estimate=input.selected_content.iter().chain(input.messages.iter()).map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);
