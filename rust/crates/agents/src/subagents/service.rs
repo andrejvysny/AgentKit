@@ -1,3 +1,7 @@
+use super::authority::{
+    ParentAuthority, ParentTool, UNBOUNDED, child_mode, effective_tools, is_writer,
+    mode_is_read_only,
+};
 use super::brief::{
     Brief, BudgetLines, ContextRef, RefKind, RenderedRef, cap_message_text, confine_to_workspace,
     render_brief,
@@ -14,14 +18,15 @@ use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
 use agentkit_core::{
     HumanRequestSpec, OutputHandle, OutputMeta, OutputStore, SUBAGENT_METADATA_KEY, SessionTree,
-    untrusted_subagent_block,
+    recorded_tools, untrusted_subagent_block,
 };
 use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
 use agentkit_sessions::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, AgentSendResult, AgentSessionService,
     AnswerActor, AnswerHumanRequest, AnswerInput, AnswerReceipt, CHAT_TURN_TASK_KIND,
-    CreateSessionInput, FollowUpInput, SendInput, SteerInput, WhenBusy, read_session_descriptor,
+    CreateSessionInput, FollowUpInput, SESSION_PREFIX_METADATA_KEY, SendInput, SteerInput,
+    WhenBusy, read_session_descriptor, read_session_prefix,
 };
 use agentkit_store::{
     CHILD_WAIT_ID_PREFIX, CHILD_WAIT_KIND, ConversationTimestamp, RegisterSubagent,
@@ -212,6 +217,10 @@ pub struct SubagentService {
     runtime: SharedRuntime,
     config: Arc<Mutex<SubagentConfig>>,
     leases: WorkspaceLeaseRegistry,
+    /// The contributor namespace each session's tools were staged under, as
+    /// the role guard saw them. The recorded manifest carries names only;
+    /// spawn pairs them with these to freeze `namespace:name` identities.
+    tool_namespaces: ToolNamespaces,
     /// Serializes the spawn check→insert critical section (see `spawn`).
     spawn_gate: Arc<tokio::sync::Mutex<()>>,
     /// Provider ids this service's executor can route to; `None` = unknown
@@ -226,6 +235,10 @@ pub struct SubagentService {
     /// loop holds only a `Weak` to it, so it never pins the store.
     owner: Option<Arc<ServiceOwner>>,
 }
+
+/// Session id -> (tool name -> contributor namespace).
+type ToolNamespaces =
+    Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, String>>>>;
 
 /// The shared core the waker upgrades per tick. Dropping the last handle
 /// drops it, which stops the waker and releases the store.
@@ -331,6 +344,7 @@ impl SubagentService {
             runtime,
             config: Arc::new(Mutex::new(config.effective())),
             leases: WorkspaceLeaseRegistry::default(),
+            tool_namespaces: ToolNamespaces::default(),
             spawn_gate: Arc::new(tokio::sync::Mutex::new(())),
             routable_providers: None,
             memory_refs: None,
@@ -426,6 +440,27 @@ impl SubagentService {
             })
     }
 
+    /// Record that `chat_id` offers tool `name` under contributor
+    /// `namespace`. Called by the role guard while a session stages its
+    /// tools; a later stage of the same name overwrites.
+    pub fn note_tool_namespace(&self, chat_id: &str, namespace: &str, name: &str) {
+        self.tool_namespaces
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(chat_id.to_owned())
+            .or_default()
+            .insert(name.to_owned(), namespace.to_owned());
+    }
+
+    fn tool_namespaces_of(&self, chat_id: &str) -> std::collections::HashMap<String, String> {
+        self.tool_namespaces
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(chat_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn leases(&self) -> &WorkspaceLeaseRegistry {
         &self.leases
     }
@@ -491,6 +526,7 @@ impl SubagentService {
                 limits.max_depth
             )));
         }
+        let mut parent_effective: Option<EffectiveRole> = None;
         if let Some(row) = parent_row.as_ref() {
             // Only roles allowed to nest may themselves delegate; the
             // parent's spawn-time snapshot caps what a later config edit
@@ -502,6 +538,7 @@ impl SubagentService {
             if !parent_role.can_spawn {
                 return Err(AgentsError::RoleCannotSpawn(parent_role.id.clone()));
             }
+            parent_effective = Some(parent_role);
         }
         let parent_chat = self
             .store
@@ -531,24 +568,88 @@ impl SubagentService {
             .or_else(|| role.model.clone())
             .or_else(|| parent_model.map(str::to_owned));
         self.validate_child_provider(&role, request, provider_id.as_deref(), parent_provider)?;
-        if !role.read_only && workspace.is_none() {
+        // Authority intersection (4.4): the child's tools are the role
+        // allowlist intersected with what the parent recorded at its first
+        // turn, in the mode the child will run in. Execution-mode
+        // inheritance: never more permissive than the parent's durable mode;
+        // read-only roles and workspace-less parents pin `read_only`.
+        let parent_mode = self
+            .session
+            .get_execution(&request.parent_chat_id)
+            .await
+            .map_err(session_error)?
+            .and_then(|state| state.get("mode").and_then(Value::as_str).map(str::to_owned));
+        let execution_mode =
+            child_mode(parent_mode.as_deref(), role.read_only, workspace.is_some());
+        // A parent with a recorded session prefix must have a valid
+        // manifest: absent, malformed or hash-mismatched means the parent's
+        // authority is unknowable, so nothing is delegated. Only a parent
+        // with no prefix at all (a non-session chat) takes the legacy
+        // path, where the role alone bounds the child.
+        let unavailable = || {
+            AgentsError::ParentManifestUnavailable(format!(
+                "parent_manifest_unavailable: the parent session's tool manifest is missing \
+                 or invalid, so the authority to delegate cannot be determined for role {}",
+                role.id
+            ))
+        };
+        let recorded = match read_session_prefix(&parent_chat.metadata) {
+            Some(prefix) => Some(recorded_tools(&prefix).ok_or_else(unavailable)?),
+            // A prefix record that exists but cannot be read is invalid,
+            // not absent.
+            None if parent_chat
+                .metadata
+                .get(SESSION_PREFIX_METADATA_KEY)
+                .is_some() =>
+            {
+                return Err(unavailable());
+            }
+            None => None,
+        };
+        let namespaces = self.tool_namespaces_of(&request.parent_chat_id);
+        // A tool whose namespace was never seen is left out: its identity
+        // is unknown, so the child cannot be granted it.
+        let parent_tools: Option<Vec<ParentTool>> = recorded.map(|tools| {
+            tools
+                .into_iter()
+                .filter_map(|definition| {
+                    let namespace = namespaces.get(&definition.name)?.clone();
+                    Some(ParentTool {
+                        namespace,
+                        definition,
+                    })
+                })
+                .collect()
+        });
+        let parent_authority = match parent_effective.as_ref() {
+            Some(parent) => ParentAuthority::Child(parent),
+            None => ParentAuthority::Root,
+        };
+        // Every new spawn records an effective set. A non-session parent
+        // has no manifest to intersect with; it records the explicit
+        // unbounded marker and the role allowlist alone applies.
+        let effective: Vec<String> = match parent_tools.as_deref() {
+            Some(tools) => effective_tools(
+                &role,
+                tools,
+                &parent_authority,
+                mode_is_read_only(execution_mode.as_deref()),
+            ),
+            None => vec![UNBOUNDED.to_owned()],
+        };
+        // Writer = the effective set can write or run commands. Without a
+        // manifest the role's own read-only flag decides (never the
+        // request's flag), for the workspace check and the lease alike.
+        let writer = match parent_tools.as_deref() {
+            Some(tools) => is_writer(tools, &effective),
+            None => !role.read_only,
+        };
+        if writer && workspace.is_none() {
             return Err(AgentsError::WorkspaceRequired(format!(
                 "workspace_required: role {} writes, but the parent session has no workspace",
                 role.id
             )));
         }
-        // Execution-mode inheritance: read-only roles are pinned to
-        // `read_only`; writing roles inherit the parent's durable mode so a
-        // child never exceeds what the human granted the parent.
-        let execution_mode = if role.read_only {
-            Some("read_only".to_owned())
-        } else {
-            self.session
-                .get_execution(&request.parent_chat_id)
-                .await
-                .map_err(session_error)?
-                .and_then(|state| state.get("mode").and_then(Value::as_str).map(str::to_owned))
-        };
 
         let child_chat_id = child_identity(
             &request.parent_chat_id,
@@ -558,7 +659,9 @@ impl SubagentService {
         // Durable per-child exclusivity: recorded at spawn so `resume`
         // re-admits the lease instead of letting a restarted writer run
         // unleased beside a fresh exclusive sibling.
-        let exclusive = request.exclusive_workspace && !role.read_only;
+        // A writer ALWAYS takes the exclusive lease (the request flag is no
+        // longer its choice); a non-writer never does.
+        let exclusive = writer;
 
         // Replay path FIRST — before the caps: re-admitting a spawn the
         // store already holds is not a new admission, so a replay must not
@@ -751,7 +854,7 @@ impl SubagentService {
                 json!(tokens.clamp(1, SUBAGENT_TOKENS_CEILING)),
             );
         }
-        let role_snapshot = RoleSnapshot::from_role(&role);
+        let role_snapshot = RoleSnapshot::from_role(&role).with_effective_tools(Some(effective));
         let brief_digest = request.brief.digest();
         let subagent_metadata = json!({
             "agentkit.subagent": {

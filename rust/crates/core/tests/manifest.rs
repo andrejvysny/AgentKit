@@ -134,15 +134,45 @@ fn a_late_contributor_joins_the_deferred_catalog_and_never_the_array() {
 }
 
 #[test]
-fn a_manifest_whose_hash_does_not_match_is_not_trusted() {
+fn a_manifest_whose_hash_does_not_match_fails_closed_without_a_refreeze() {
     let mut recorded = frozen_prefix(&[definition("a", "read")]);
+    let before = recorded.clone();
     recorded.tool_manifest_hash = Optional::Present(digest('0'));
     let surface = ToolSurface::reconcile(
         Some(&recorded),
         &[definition("a", "read"), definition("z", "read")],
     );
-    assert!(surface.frozen_now);
-    assert_eq!(names(surface.manifest.definitions()), ["a", "z"]);
+    assert!(!surface.frozen_now);
+    assert!(surface.manifest.definitions().is_empty());
+    assert_eq!(surface.unavailable, ["a", "z"]);
+    // The invalid record is left as found, not overwritten by a fresh one.
+    let mut stamped = recorded.clone();
+    surface.stamp(&mut stamped);
+    assert_eq!(stamped, recorded);
+    assert_ne!(stamped, before);
+    // A prefix with no manifest at all is still a first turn.
+    let first = ToolSurface::reconcile(Some(&prefix()), &[definition("a", "read")]);
+    assert!(first.frozen_now);
+}
+
+#[test]
+fn the_manifest_round_trips_timeouts_and_examples_with_the_same_hash() {
+    let mut rich = definition("spawn", "read");
+    rich.timeout_ms = Some(30_000);
+    rich.examples = vec![json!({"role": "general", "prompt": "go", "n": 2})];
+    rich.output_schema = Some(json!({"type": "object"}));
+    let stored = frozen_prefix(&[rich.clone(), definition("plain", "read")]);
+    let read_back = ToolManifest::from_prefix(&stored).expect("hash survives the round trip");
+    let again = ToolManifest::build(read_back.definitions());
+    assert_eq!(again.hash(), read_back.hash());
+    let got = read_back
+        .definitions()
+        .iter()
+        .find(|d| d.name == "spawn")
+        .unwrap();
+    assert_eq!(got.timeout_ms, Some(30_000));
+    assert_eq!(got.examples, rich.examples);
+    assert_eq!(got.output_schema, rich.output_schema);
 }
 
 struct Script {
@@ -347,4 +377,45 @@ async fn a_deferred_tool_is_not_callable_and_not_offered() {
     assert_eq!(offered, ["a_tool"]);
     assert!(ran.lock().unwrap().is_empty());
     assert_eq!(failures[0]["errorCode"], "tool_unavailable");
+}
+
+#[test]
+fn recorded_tools_lists_direct_tools_and_leaves_late_ones_out() {
+    let first = [definition("read_file", "read"), definition("edit", "write")];
+    let stored = frozen_prefix(&first);
+    let later = [
+        definition("read_file", "read"),
+        definition("edit", "write"),
+        definition("late_tool", "read"),
+    ];
+    let surface = ToolSurface::reconcile(Some(&stored), &later);
+    let mut restamped = stored.clone();
+    surface.stamp(&mut restamped);
+    let restamped = AiSessionPrefix::from_json(serde_json::to_value(&restamped).unwrap()).unwrap();
+    let recorded = recorded_tools(&restamped).expect("a valid manifest");
+    assert_eq!(
+        names(&recorded),
+        ["edit", "read_file"],
+        "a tool that joined after the freeze is not part of the parent's authority"
+    );
+    assert!(recorded_tools(&prefix()).is_none(), "no manifest, no tools");
+    let mut broken = restamped.clone();
+    broken.tool_manifest_hash = Optional::Present(digest('0'));
+    assert!(
+        recorded_tools(&broken).is_none(),
+        "a hash mismatch is no record"
+    );
+}
+
+#[test]
+fn recorded_tools_keeps_tools_deferred_at_the_freeze() {
+    let mut frozen = prefix();
+    let kept = ToolManifest::build(&[definition("read_file", "read")]);
+    let mut surface = ToolSurface::reconcile(None, &[definition("read_file", "read")]);
+    surface.deferred = vec![definition("calendar", "read")];
+    surface.stamp(&mut frozen);
+    assert_eq!(kept.hash(), surface.manifest.hash());
+    let frozen = AiSessionPrefix::from_json(serde_json::to_value(&frozen).unwrap()).unwrap();
+    let recorded = recorded_tools(&frozen).expect("a valid manifest");
+    assert_eq!(names(&recorded), ["calendar", "read_file"]);
 }

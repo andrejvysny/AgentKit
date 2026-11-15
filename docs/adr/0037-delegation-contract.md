@@ -101,3 +101,23 @@ and the other trust rules were open.
   `is_child_derived_message`.
 - A child that fails or is cancelled has no final message; its `summary` is the
   error text (still inside the untrusted block).
+
+## Authority and the role snapshot (4.4)
+
+- A child's tools are `namespace:name` identities: the role allowlist
+  intersected with what the parent session recorded, frozen in the role
+  snapshot's `effectiveTools`. A bare name is never an identity. The recorded
+  manifest holds names only, so spawn pairs each name with the namespace the
+  role guard saw while the parent staged its tools; a tool whose namespace was
+  never seen is not delegated.
+- A parent that has a session prefix must have a valid manifest, or spawn is
+  refused with `parent_manifest_unavailable`. A parent with no prefix at all
+  (a non-session chat) records the explicit `*` marker: the role allowlist
+  alone bounds the child, and it is a writer when the role is not read-only.
+- Snapshot version 2 always carries `effectiveTools`; one without is refused
+  (deny all). Version 1 snapshots (children spawned before 4.4) still verify
+  and may use read tools only. A `roleDigest` without a `roleSnapshot` is
+  refused.
+- The digest is an unkeyed hash: a tamper check against accidental or partial
+  edits, not a MAC. Integrity rests on 4.1's host-only `agentkit.*` metadata
+  guard: no caller or agent path writes those keys. There is no MAC.

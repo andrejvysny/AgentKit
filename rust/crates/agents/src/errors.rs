@@ -117,6 +117,8 @@ pub enum AgentsError {
     #[error("{0}")]
     WorkspaceRequired(String),
     #[error("{0}")]
+    ParentManifestUnavailable(String),
+    #[error("{0}")]
     RoleDenied(#[source] RoleDenial),
     #[error("invalid_budget: {0}")]
     AdvisorInvalidBudget(#[source] agentkit_core::CoreError),
@@ -254,6 +256,7 @@ impl AgentsError {
             Self::SpawnKeyConflict(_) => "spawn_key_conflict".into(),
             Self::WorkspaceBusy(_) => "workspace_busy".into(),
             Self::WorkspaceRequired(_) => "workspace_required".into(),
+            Self::ParentManifestUnavailable(_) => "parent_manifest_unavailable".into(),
             Self::InvalidAgent(_) => "invalid_agent".into(),
             Self::InvalidAdmission(_) => "invalid_admission".into(),
             Self::RoleCannotSpawn(id) => id_code("role ", id, " may not spawn children"),

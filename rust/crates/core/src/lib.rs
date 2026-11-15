@@ -83,7 +83,7 @@ pub use layout::{
     tools_digest, turn_context_part,
 };
 pub use legacy_name::LegacyName;
-pub use manifest::{ToolManifest, ToolSurface, manifest_hash};
+pub use manifest::{ToolManifest, ToolSurface, manifest_hash, recorded_tools};
 pub use meta_call::unwrap_tool_call;
 pub use meta_tools::{
     meta_definitions, tool_call_definition, tool_describe_definition, tool_search_definition,

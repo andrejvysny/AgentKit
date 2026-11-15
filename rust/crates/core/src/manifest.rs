@@ -20,11 +20,19 @@ use std::collections::BTreeSet;
 /// Bumped when the hashed shape of a manifest changes.
 const MANIFEST_FORMAT: u32 = 1;
 
+/// Prefix `extra` key: the deferred tools that existed when the session
+/// froze. A tool that joined the catalog later is not among them, so
+/// delegation never counts it as part of the parent's authority.
+const DEFERRED_AT_FREEZE_KEY: &str = "deferredAtFreeze";
+
 /// The definitions a session was frozen with, sorted by name.
 #[derive(Clone, Debug)]
 pub struct ToolManifest {
     definitions: Vec<ToolDefinition>,
     hash: String,
+    /// Stands in for a recorded manifest that failed validation: it holds
+    /// no tool, and a stamp never overwrites the record it stands for.
+    invalid: bool,
 }
 
 impl ToolManifest {
@@ -36,8 +44,22 @@ impl ToolManifest {
     }
 
     fn from_sorted(definitions: Vec<ToolDefinition>) -> Self {
+        // Hash the contract form: that is what a prefix stores and what
+        // `from_prefix` reads back, so both sides hash the same value.
+        let definitions = normalized(definitions);
         let hash = manifest_hash(&definitions);
-        Self { definitions, hash }
+        Self {
+            definitions,
+            hash,
+            invalid: false,
+        }
+    }
+
+    fn invalid() -> Self {
+        Self {
+            invalid: true,
+            ..Self::from_sorted(vec![])
+        }
     }
 
     /// The manifest recorded in `prefix`, if it has one that still matches
@@ -113,6 +135,11 @@ impl ToolSurface {
         classification: Option<&Classification>,
     ) -> Self {
         let Some(manifest) = prior.and_then(ToolManifest::from_prefix) else {
+            // A record that exists but does not validate is never replaced
+            // by a fresh freeze: the session gets no tools instead.
+            if prior.is_some_and(records_manifest) {
+                return Self::invalid(candidates);
+            }
             return Self::first(candidates, classification);
         };
         let mut deferred = prior.and_then(recorded_deferred).unwrap_or_default();
@@ -138,6 +165,24 @@ impl ToolSurface {
             manifest,
             deferred,
             added,
+            unavailable,
+            demoted: vec![],
+            frozen_now: false,
+        }
+    }
+
+    /// The surface of a session whose recorded manifest is invalid: no tool
+    /// is callable and every offered tool is reported unavailable.
+    fn invalid(candidates: &[ToolDefinition]) -> Self {
+        let unavailable = sorted_unique(candidates)
+            .into_iter()
+            .filter(|d| !is_meta_tool(&d.name))
+            .map(|d| d.name)
+            .collect();
+        Self {
+            manifest: ToolManifest::invalid(),
+            deferred: vec![],
+            added: vec![],
             unavailable,
             demoted: vec![],
             frozen_now: false,
@@ -190,6 +235,15 @@ impl ToolSurface {
 
     /// Write the manifest, its hash and the catalog into `prefix`.
     pub fn stamp(&self, prefix: &mut AiSessionPrefix) {
+        if self.manifest.invalid {
+            return;
+        }
+        if self.frozen_now {
+            let names: Vec<Value> = self.deferred.iter().map(|d| json!(d.name)).collect();
+            prefix
+                .extra
+                .insert(DEFERRED_AT_FREEZE_KEY.to_owned(), Value::Array(names));
+        }
         prefix.tool_manifest_hash = Optional::Present(self.manifest.hash.clone());
         prefix.tool_manifest = Optional::Present(to_contract(self.manifest.definitions()));
         prefix.deferred_tools = if self.deferred.is_empty() {
@@ -198,6 +252,44 @@ impl ToolSurface {
             Optional::Present(to_contract(&self.deferred))
         };
     }
+}
+
+/// True when `prefix` carries any manifest record, valid or not.
+fn records_manifest(prefix: &AiSessionPrefix) -> bool {
+    matches!(prefix.tool_manifest, Optional::Present(_))
+        || matches!(prefix.tool_manifest_hash, Optional::Present(_))
+}
+
+/// Every tool a session's prefix records, direct and deferred, meta tools
+/// left out, sorted by name. `None` when the prefix holds no valid manifest
+/// (missing, malformed or hash mismatch: delegation fails closed on all
+/// three). Deferred tools count only when they were in the catalog at the
+/// freeze; a late-added tool never widens a child's ceiling. Delegation
+/// intersects a child's authority with this set at spawn.
+pub fn recorded_tools(prefix: &AiSessionPrefix) -> Option<Vec<ToolDefinition>> {
+    let manifest = ToolManifest::from_prefix(prefix)?;
+    let mut tools: Vec<ToolDefinition> = manifest
+        .definitions()
+        .iter()
+        .filter(|definition| !is_meta_tool(&definition.name))
+        .cloned()
+        .collect();
+    let deferred = match &prefix.deferred_tools {
+        Optional::Present(entries) => from_contract(entries)?,
+        Optional::Absent => vec![],
+    };
+    let at_freeze: BTreeSet<&str> = prefix
+        .extra
+        .get(DEFERRED_AT_FREEZE_KEY)
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    tools.extend(
+        deferred
+            .into_iter()
+            .filter(|definition| at_freeze.contains(definition.name.as_str())),
+    );
+    Some(sorted_unique(&tools))
 }
 
 fn recorded_deferred(prefix: &AiSessionPrefix) -> Option<Vec<ToolDefinition>> {
@@ -226,6 +318,12 @@ fn as_contract(definition: &ToolDefinition) -> Option<AiToolDefinition> {
 
 fn to_contract(definitions: &[ToolDefinition]) -> Vec<AiToolDefinition> {
     definitions.iter().filter_map(as_contract).collect()
+}
+
+/// The definitions as the contract stores them. A definition the contract
+/// cannot hold is dropped, as `build` already does.
+fn normalized(definitions: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
+    from_contract(&to_contract(&definitions)).unwrap_or(definitions)
 }
 
 fn from_contract(entries: &[AiToolDefinition]) -> Option<Vec<ToolDefinition>> {

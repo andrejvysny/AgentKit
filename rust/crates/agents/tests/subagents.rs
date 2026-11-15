@@ -195,7 +195,7 @@ impl Harness {
                 context: None,
                 skills: None,
                 turn_kind: None,
-                execution_mode: Some("read_write".into()),
+                execution_mode: Some("ask".into()),
                 metadata: None,
             })
             .await
@@ -1320,7 +1320,7 @@ async fn permission_inheritance_pins_read_only_and_copies_parent_mode() {
         .await
         .unwrap()
         .and_then(|state| state.get("mode").and_then(Value::as_str).map(str::to_owned));
-    assert_eq!(mode.as_deref(), Some("read_write"));
+    assert_eq!(mode.as_deref(), Some("ask"));
     h.await_all().await;
 }
 
@@ -3722,4 +3722,737 @@ async fn a_child_cannot_answer_a_request_and_its_own_reach_the_owner_labelled() 
     h.hold(false);
     h.release();
     h.await_all().await;
+}
+
+// ── Authority intersection and writer policy (roadmap 4.4) ─────────────────
+
+fn authority_tools() -> Vec<ToolDefinition> {
+    [
+        ("read_file", "read"),
+        ("write_file", "write"),
+        ("memory_search", "read"),
+        ("memory_get", "read"),
+        ("memory_propose", "write"),
+        ("memory_forget", "write"),
+    ]
+    .into_iter()
+    .map(|(name, effect)| ToolDefinition {
+        description: format!("{name} tool"),
+        ..tool_definition(name, effect)
+    })
+    .collect()
+}
+
+/// The contributor namespace the harness stages a tool under; `ghost_*`
+/// tools never reach the guard, so their namespace stays unknown.
+fn namespace_for(name: &str) -> Option<&'static str> {
+    if name.starts_with("ghost_") {
+        None
+    } else if name.starts_with("memory_") {
+        Some("memory")
+    } else {
+        Some("coding")
+    }
+}
+
+/// Chat metadata carrying the first-turn prefix a parent session records:
+/// the manifest spawn intersects the child's authority with.
+fn manifest_metadata(tools: &[ToolDefinition]) -> Value {
+    let manifest = agentkit_core::ToolManifest::build(tools);
+    let digest = |seed: char| seed.to_string().repeat(64);
+    json!({"agentkit.session.prefix": {
+        "revision": 1, "toolsDigest": digest('a'), "systemDigest": digest('b'),
+        "rulesDigest": digest('c'), "memoryCoreDigest": digest('d'),
+        "paramsDigest": digest('e'), "frozenAtTask": "t", "cacheKey": "k",
+        "toolManifestHash": manifest.hash(),
+        "toolManifest": serde_json::to_value(manifest.definitions()).unwrap(),
+    }})
+}
+
+impl Harness {
+    /// A second parent with a recorded manifest, a durable mode and a live
+    /// turn; `workspace` false makes it a workspace-less chat session.
+    async fn add_parent(
+        &self,
+        id: &str,
+        mode: &str,
+        tools: &[ToolDefinition],
+        workspace: bool,
+        extra: Option<(&str, Value)>,
+    ) {
+        let mut metadata = manifest_metadata(tools);
+        if let Some((key, value)) = extra {
+            metadata[key] = value;
+        }
+        // What the role guard learns while the parent stages its tools.
+        for definition in tools {
+            if let Some(namespace) = namespace_for(&definition.name) {
+                self.subagents
+                    .note_tool_namespace(id, namespace, &definition.name);
+            }
+        }
+        self.service
+            .create_session_with_host_metadata(&CreateSessionInput {
+                session_id: Some(id.into()),
+                title: None,
+                profile_id: "coding".into(),
+                profile_digest: None,
+                reasoning_effort: None,
+                content_selection: None,
+                provider_id: None,
+                model: Some("model".into()),
+                workspace: workspace.then(|| json!({"root": self.workspace, "trusted": true})),
+                context: None,
+                skills: None,
+                turn_kind: None,
+                execution_mode: Some(mode.into()),
+                metadata: Some(metadata),
+            })
+            .await
+            .unwrap();
+        self.store
+            .submit(SubmitTask {
+                task_id: format!("{id}-turn"),
+                kind: "parent.hold".into(),
+                scope_id: id.into(),
+                payload: json!({}),
+                priority: 0,
+                now: 0,
+                available_at: None,
+                depends_on: vec![],
+                parent_task_id: None,
+                exclusive_scope: false,
+            })
+            .await
+            .unwrap();
+    }
+
+    fn request_from(&self, parent: &str, key: &str, role: &str) -> SpawnRequest {
+        SpawnRequest {
+            parent_chat_id: parent.into(),
+            parent_task_id: format!("{parent}-turn"),
+            ..self.spawn_request(key, role, "authority work")
+        }
+    }
+
+    async fn child_metadata(&self, child: &str) -> Value {
+        self.store.get_chat(child).await.unwrap().unwrap().metadata
+    }
+
+    async fn effective_of(&self, child: &str) -> Vec<String> {
+        self.child_metadata(child).await["agentkit.subagent"]["roleSnapshot"]["effectiveTools"]
+            .as_array()
+            .expect("the snapshot carries the effective set")
+            .iter()
+            .map(|name| name.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    async fn await_parent(&self, parent: &str) {
+        self.subagents
+            .await_children(parent, None, Some(10_000), &CancellationToken::new())
+            .await
+            .expect("await");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn general_child_of_a_read_only_parent_has_no_write_tools() {
+    let h = Harness::start().await;
+    h.add_parent("p-ro", "read_only", &authority_tools(), true, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-ro", "k", "general"))
+        .await
+        .expect("spawn");
+    // `*` expanded to what the parent can use: reads only, no memory writes.
+    assert_eq!(
+        h.effective_of(&child.child_chat_id).await,
+        [
+            "coding:read_file",
+            "memory:memory_get",
+            "memory:memory_search"
+        ]
+    );
+    let mode = h
+        .service
+        .get_execution(&child.child_chat_id)
+        .await
+        .unwrap()
+        .and_then(|state| state.get("mode").and_then(Value::as_str).map(str::to_owned));
+    assert_eq!(mode.as_deref(), Some("read_only"));
+
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(allowed(&guard, &child.child_chat_id, "coding", "read_file", "read").await);
+    let write = guard_context(child.child_chat_id.clone(), "coding", "write_file", "write");
+    assert!(!guard.is_visible(&write).await.unwrap());
+    match guard.can_execute(&write).await.unwrap() {
+        ToolGuardVerdict::Refused(reason) => assert!(reason.contains("tool_not_effective")),
+        _ => panic!("a tool outside the effective set must be refused"),
+    }
+    // Not a writer: no lease, and `exclusive` is recorded false.
+    assert!(
+        h.subagents
+            .leases()
+            .holder(&h.workspace, h.subagents.now_ms())
+            .is_none()
+    );
+    let meta = h.child_metadata(&child.child_chat_id).await;
+    assert_eq!(meta["agentkit.subagent"]["exclusive"], json!(false));
+    h.await_parent("p-ro").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tampered_effective_set_denies_every_tool() {
+    let h = Harness::start().await;
+    let role = h.subagents.config().role("general").cloned().unwrap();
+    let snapshot =
+        RoleSnapshot::from_role(&role).with_effective_tools(Some(vec!["coding:read_file".into()]));
+    let mut widened = serde_json::to_value(&snapshot).unwrap();
+    widened["effectiveTools"] = json!(["coding:read_file", "coding:write_file"]);
+    for (id, raw) in [
+        ("tampered", widened),
+        ("honest", serde_json::to_value(&snapshot).unwrap()),
+    ] {
+        h.service
+            .create_session_with_host_metadata(&CreateSessionInput {
+                session_id: Some(id.into()),
+                title: None,
+                profile_id: "coding".into(),
+                profile_digest: None,
+                reasoning_effort: None,
+                content_selection: None,
+                provider_id: None,
+                model: Some("model".into()),
+                workspace: None,
+                context: None,
+                skills: None,
+                turn_kind: None,
+                execution_mode: None,
+                metadata: Some(json!({"agentkit.subagent": {
+                    "role": "general", "roleSnapshot": raw, "roleDigest": snapshot.digest(),
+                }})),
+            })
+            .await
+            .unwrap();
+        h.store
+            .register_subagent_if_under(
+                RegisterSubagent {
+                    child_chat_id: id.into(),
+                    parent_chat_id: "parent".into(),
+                    parent_task_id: Some("parent-turn".into()),
+                    role: "general".into(),
+                    depth: 1,
+                    prompt: "p".into(),
+                    model: None,
+                    turn_task_id: None,
+                    now: 0,
+                },
+                8,
+                8,
+            )
+            .await
+            .unwrap();
+    }
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(allowed(&guard, "honest", "coding", "read_file", "read").await);
+    assert!(!allowed(&guard, "honest", "coding", "write_file", "write").await);
+    for tool in [("read_file", "read"), ("write_file", "write")] {
+        assert!(
+            !allowed(&guard, "tampered", "coding", tool.0, tool.1).await,
+            "a snapshot whose digest does not match denies {}",
+            tool.0
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn children_never_get_memory_propose_or_forget() {
+    let h = Harness::start().await;
+    h.add_parent("p-mem", "ask", &authority_tools(), true, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-mem", "k", "general"))
+        .await
+        .expect("spawn");
+    let effective = h.effective_of(&child.child_chat_id).await;
+    assert!(effective.contains(&"memory:memory_search".to_owned()));
+    assert!(effective.contains(&"memory:memory_get".to_owned()));
+    for denied in ["memory_propose", "memory_forget"] {
+        assert!(!effective.contains(&format!("memory:{denied}")));
+    }
+    // The same denial holds for a legacy child with no recorded set.
+    let legacy = h.spawn("legacy", "general", "no manifest").await;
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    for name in ["memory_propose", "memory_forget"] {
+        for chat in [&child.child_chat_id, &legacy.child_chat_id] {
+            assert!(
+                !allowed(&guard, chat, "memory", name, "write").await,
+                "{name} must be refused for {chat}"
+            );
+        }
+    }
+    assert!(
+        allowed(
+            &guard,
+            &legacy.child_chat_id,
+            "memory",
+            "memory_search",
+            "read"
+        )
+        .await
+    );
+    h.await_parent("p-mem").await;
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_writer_child_always_takes_the_lease_and_a_second_writer_is_busy() {
+    let h = Harness::start().await;
+    h.add_parent("p-rw", "ask", &authority_tools(), true, None)
+        .await;
+    h.hold(true);
+    let first = h
+        .subagents
+        .spawn(&h.request_from("p-rw", "w1", "implementer")) // flag false
+        .await
+        .expect("writer spawn");
+    assert_eq!(
+        h.child_metadata(&first.child_chat_id).await["agentkit.subagent"]["exclusive"],
+        json!(true),
+        "a writer is exclusive whatever the request said"
+    );
+    wait_until(
+        || async {
+            h.subagents
+                .leases()
+                .holder(&h.workspace, h.subagents.now_ms())
+                .as_deref()
+                == Some(first.child_chat_id.as_str())
+        },
+        "writer lease registered",
+    )
+    .await;
+    let error = h
+        .subagents
+        .spawn(&h.request_from("p-rw", "w2", "implementer"))
+        .await
+        .expect_err("a second writer cannot get the lease");
+    assert!(error.to_string().contains("workspace_busy"), "{error}");
+
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    // The gate follows the tool's effect, not a list of coding tool names.
+    for chat in ["p-rw", "parent"] {
+        for (namespace, tool) in [("coding", "write_file"), ("mcp", "remote_patch")] {
+            match guard
+                .can_execute(&guard_context(chat.into(), namespace, tool, "write"))
+                .await
+                .unwrap()
+            {
+                ToolGuardVerdict::Refused(reason) => {
+                    assert!(
+                        reason.contains("workspace_locked_by_subagent"),
+                        "{chat} {namespace}:{tool}: {reason}"
+                    );
+                }
+                _ => panic!("{chat} must be refused {tool} while the writer holds the lease"),
+            }
+        }
+    }
+    // Reads and memory writes never touch the lease.
+    assert!(allowed(&guard, "p-rw", "coding", "read_file", "read").await);
+    let memory = ToolGuardContext {
+        tool: ToolDefinition {
+            capability: "memory.write".into(),
+            ..tool_definition("memory_propose", "write")
+        },
+        ..guard_context("p-rw".into(), "memory", "memory_propose", "write")
+    };
+    assert!(matches!(
+        guard.can_execute(&memory).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+    assert!(
+        allowed(
+            &guard,
+            &first.child_chat_id,
+            "coding",
+            "write_file",
+            "write"
+        )
+        .await,
+        "the holder keeps its own writes"
+    );
+    h.subagents.cancel(&first.child_chat_id).await.unwrap();
+    h.hold(false);
+    h.release();
+    h.await_parent("p-rw").await;
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workspaceless_chat_parent_gets_read_only_children() {
+    let h = Harness::start().await;
+    h.add_parent("p-chat", "ask", &authority_tools(), false, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-chat", "k", "general"))
+        .await
+        .expect("a chat child is read-only, not refused");
+    assert_eq!(
+        h.effective_of(&child.child_chat_id).await,
+        [
+            "coding:read_file",
+            "memory:memory_get",
+            "memory:memory_search"
+        ]
+    );
+    let meta = h.child_metadata(&child.child_chat_id).await;
+    assert_eq!(meta["agentkit.subagent"]["exclusive"], json!(false));
+    let mode = h
+        .service
+        .get_execution(&child.child_chat_id)
+        .await
+        .unwrap()
+        .and_then(|state| state.get("mode").and_then(Value::as_str).map(str::to_owned));
+    assert_eq!(mode.as_deref(), Some("read_only"));
+    h.await_parent("p-chat").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standing_approvals_stay_with_the_parent_session() {
+    let h = Harness::start().await;
+    let digest = "a".repeat(64);
+    let standing = json!({"version": 1, "grants": [{
+        "grantId": "g1", "label": "write a.txt", "toolName": "write_file",
+        "sourceRequestId": "req", "answerId": "ans", "grantedAt": "2026-01-01T00:00:00.000Z",
+        "digest": digest,
+    }]});
+    h.add_parent(
+        "p-grant",
+        "ask",
+        &authority_tools(),
+        true,
+        Some((STANDING_APPROVALS_METADATA_KEY, standing)),
+    )
+    .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-grant", "k", "implementer"))
+        .await
+        .expect("spawn");
+    let parent_meta = h.child_metadata("p-grant").await;
+    assert!(find_active_standing_grant(&parent_meta, &digest).is_some());
+    let child_meta = h.child_metadata(&child.child_chat_id).await;
+    assert!(
+        standing_grants(&child_meta).is_empty(),
+        "grants are read from the running session's own chat, so a child starts with none"
+    );
+    assert!(find_active_standing_grant(&child_meta, &digest).is_none());
+    h.subagents.cancel(&child.child_chat_id).await.unwrap();
+    h.await_parent("p-grant").await;
+}
+
+// ── Fail-closed authority review fixes (roadmap 4.4) ──────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_same_named_tool_from_another_namespace_is_not_inherited() {
+    let h = Harness::start().await;
+    h.add_parent("p-ns", "read_only", &authority_tools(), true, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-ns", "k", "general"))
+        .await
+        .expect("spawn");
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    let chat = &child.child_chat_id;
+    assert!(allowed(&guard, chat, "coding", "read_file", "read").await);
+    for (namespace, tool, effect) in [
+        ("mcp", "read_file", "read"),
+        ("mcp", "write_file", "write"),
+        ("other", "read_file", "read"),
+    ] {
+        match guard
+            .can_execute(&guard_context(chat.clone(), namespace, tool, effect))
+            .await
+            .unwrap()
+        {
+            ToolGuardVerdict::Refused(reason) => assert!(
+                reason.contains("tool_not_effective"),
+                "{namespace}:{tool}: {reason}"
+            ),
+            _ => panic!("{namespace}:{tool} is not the parent's tool and must be refused"),
+        }
+    }
+    h.await_parent("p-ns").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_researcher_child_cannot_use_another_namespaces_read_file() {
+    let h = Harness::start().await;
+    h.add_parent("p-res", "ask", &authority_tools(), true, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-res", "k", "researcher"))
+        .await
+        .expect("spawn");
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(allowed(&guard, &child.child_chat_id, "coding", "read_file", "read").await);
+    assert!(!allowed(&guard, &child.child_chat_id, "mcp", "read_file", "read").await);
+    h.await_parent("p-res").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_implementer_child_cannot_use_another_namespaces_write_file() {
+    let h = Harness::start().await;
+    h.add_parent("p-imp", "ask", &authority_tools(), true, None)
+        .await;
+    h.hold(true);
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-imp", "k", "implementer"))
+        .await
+        .expect("spawn");
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(
+        allowed(
+            &guard,
+            &child.child_chat_id,
+            "coding",
+            "write_file",
+            "write"
+        )
+        .await
+    );
+    assert!(!allowed(&guard, &child.child_chat_id, "mcp", "write_file", "write").await);
+    h.subagents.cancel(&child.child_chat_id).await.unwrap();
+    h.hold(false);
+    h.release();
+    h.await_parent("p-imp").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tool_with_no_known_namespace_is_not_delegated() {
+    let h = Harness::start().await;
+    let mut tools = authority_tools();
+    tools.push(tool_definition("ghost_read", "read"));
+    h.add_parent("p-ghost", "read_only", &tools, true, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-ghost", "k", "general"))
+        .await
+        .expect("spawn");
+    let effective = h.effective_of(&child.child_chat_id).await;
+    assert!(effective.contains(&"coding:read_file".to_owned()));
+    assert!(!effective.iter().any(|key| key.ends_with("ghost_read")));
+    h.await_parent("p-ghost").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_is_refused_when_the_parent_manifest_is_unavailable() {
+    let h = Harness::start().await;
+    let good = manifest_metadata(&authority_tools());
+    let prefix = &good["agentkit.session.prefix"];
+    let mut mismatched = prefix.clone();
+    mismatched["toolManifestHash"] = json!("0".repeat(64));
+    let mut absent = prefix.clone();
+    absent.as_object_mut().unwrap().remove("toolManifest");
+    absent.as_object_mut().unwrap().remove("toolManifestHash");
+    let mut malformed = prefix.clone();
+    malformed["toolManifest"] = json!([{"name": 7}]);
+    for (id, broken) in [
+        ("p-hash", mismatched),
+        ("p-none", absent),
+        ("p-bad", malformed),
+    ] {
+        h.add_parent(
+            id,
+            "ask",
+            &authority_tools(),
+            true,
+            Some(("agentkit.session.prefix", broken)),
+        )
+        .await;
+        let error = h
+            .subagents
+            .spawn(&h.request_from(id, "k", "general"))
+            .await
+            .expect_err("no manifest, no delegation");
+        assert!(
+            error.to_string().contains("parent_manifest_unavailable"),
+            "{id}: {error}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_session_parent_writer_is_decided_by_the_role_alone() {
+    let h = Harness::start().await;
+    h.hold(true);
+    // No prefix on "parent": the request's flag is not the writer's choice.
+    let writer = h.spawn("w", "implementer", "change the code").await;
+    let meta = h.child_metadata(&writer.child_chat_id).await;
+    assert_eq!(meta["agentkit.subagent"]["exclusive"], json!(true));
+    assert_eq!(h.effective_of(&writer.child_chat_id).await, ["*"]);
+    wait_until(
+        || async {
+            h.subagents
+                .leases()
+                .holder(&h.workspace, h.subagents.now_ms())
+                .as_deref()
+                == Some(writer.child_chat_id.as_str())
+        },
+        "legacy writer lease registered",
+    )
+    .await;
+    h.subagents.cancel(&writer.child_chat_id).await.unwrap();
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn report_findings_is_exempt_only_for_the_subagent_namespace() {
+    let h = Harness::start().await;
+    let child = h.spawn("rf", "reviewer", "review").await;
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    let chat = &child.child_chat_id;
+    assert!(allowed(&guard, chat, "subagent", "report_findings", "read").await);
+    assert!(!allowed(&guard, chat, "coding", "report_findings", "read").await);
+    assert!(!allowed(&guard, chat, "mcp", "report_findings", "read").await);
+    assert!(!allowed(&guard, "parent", "subagent", "report_findings", "read").await);
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_real_meta_tools_skip_the_frozen_set() {
+    let h = Harness::start().await;
+    h.add_parent("p-meta", "read_only", &authority_tools(), true, None)
+        .await;
+    let child = h
+        .subagents
+        .spawn(&h.request_from("p-meta", "k", "general"))
+        .await
+        .expect("spawn");
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    let chat = &child.child_chat_id;
+    assert!(allowed(&guard, chat, "meta", "tool_call", "read").await);
+    assert!(!allowed(&guard, chat, "coding", "tool_call", "read").await);
+    assert!(!allowed(&guard, chat, "mcp", "tool_search", "read").await);
+    h.await_parent("p-meta").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deferred_call_to_a_denied_inner_tool_is_refused() {
+    // `tool_call` unwraps in the call pipeline before any guard runs, so the
+    // guard judges the INNER tool: the memory write is refused, and so is
+    // any other tool carrying the memory write capability or effect.
+    let h = Harness::start().await;
+    let child = h.spawn("inner", "general", "deferred work").await;
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    let chat = &child.child_chat_id;
+    assert!(!allowed(&guard, chat, "memory", "memory_propose", "write").await);
+    for (namespace, name, capability, effect) in [
+        ("custom", "remember", "memory.write", "read"),
+        ("memory", "note", "memory.admin", "write"),
+    ] {
+        let context = ToolGuardContext {
+            tool: ToolDefinition {
+                capability: capability.into(),
+                ..tool_definition(name, effect)
+            },
+            ..guard_context(chat.clone(), namespace, name, effect)
+        };
+        match guard.can_execute(&context).await.unwrap() {
+            ToolGuardVerdict::Refused(reason) => {
+                assert!(reason.contains("role_denied"), "{reason}")
+            }
+            _ => panic!("{namespace}:{name} writes memory and must be refused"),
+        }
+    }
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pre_authority_child_may_only_read() {
+    let h = Harness::start().await;
+    let role = h.subagents.config().role("general").cloned().unwrap();
+    let mut old = RoleSnapshot::from_role(&role);
+    let mut raw = serde_json::to_value(&old).unwrap();
+    raw["version"] = json!(1);
+    old = serde_json::from_value(raw.clone()).unwrap();
+    h.service
+        .create_session_with_host_metadata(&CreateSessionInput {
+            session_id: Some("pre44".into()),
+            title: None,
+            profile_id: "coding".into(),
+            profile_digest: None,
+            reasoning_effort: None,
+            content_selection: None,
+            provider_id: None,
+            model: Some("model".into()),
+            workspace: None,
+            context: None,
+            skills: None,
+            turn_kind: None,
+            execution_mode: None,
+            metadata: Some(json!({"agentkit.subagent": {
+                "role": "general", "roleSnapshot": raw, "roleDigest": old.digest(),
+            }})),
+        })
+        .await
+        .unwrap();
+    h.store
+        .register_subagent_if_under(
+            RegisterSubagent {
+                child_chat_id: "pre44".into(),
+                parent_chat_id: "parent".into(),
+                parent_task_id: Some("parent-turn".into()),
+                role: "general".into(),
+                depth: 1,
+                prompt: "p".into(),
+                model: None,
+                turn_task_id: None,
+                now: 0,
+            },
+            8,
+            8,
+        )
+        .await
+        .unwrap();
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(allowed(&guard, "pre44", "coding", "read_file", "read").await);
+    assert!(!allowed(&guard, "pre44", "coding", "write_file", "write").await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standing_approvals_are_keyed_per_chat() {
+    let h = Harness::start().await;
+    let digest = "b".repeat(64);
+    let standing = json!({"version": 1, "grants": [{
+        "grantId": "g2", "label": "run tests", "toolName": "run_tests",
+        "sourceRequestId": "req", "answerId": "ans", "grantedAt": "2026-01-01T00:00:00.000Z",
+        "digest": digest,
+    }]});
+    h.add_parent(
+        "p-a",
+        "ask",
+        &authority_tools(),
+        true,
+        Some((STANDING_APPROVALS_METADATA_KEY, standing)),
+    )
+    .await;
+    h.add_parent("p-b", "ask", &authority_tools(), true, None)
+        .await;
+    assert!(find_active_standing_grant(&h.child_metadata("p-a").await, &digest).is_some());
+    assert!(
+        find_active_standing_grant(&h.child_metadata("p-b").await, &digest).is_none(),
+        "a grant belongs to the chat that recorded it, never to a sibling chat"
+    );
 }

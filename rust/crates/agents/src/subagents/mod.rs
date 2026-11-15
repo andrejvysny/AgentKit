@@ -20,6 +20,7 @@
 //!   attempt's logical tool call, so an executor retry re-admits the same
 //!   child instead of forking a duplicate execution.
 
+mod authority;
 mod brief;
 mod budget;
 mod config;

@@ -1,6 +1,11 @@
+use super::authority::{
+    SUBAGENT_NAMESPACE, UNBOUNDED, entry_admits, is_child_denied, is_read_tool, mutates_workspace,
+    tool_key,
+};
 use super::service::SubagentService;
-use super::tools::REPORT_FINDINGS_TOOL;
+use super::tools::{REPORT_FINDINGS_TOOL, SUBAGENT_TOOL_NAMES};
 use crate::{AgentsResult, LeaseHeld};
+use agentkit_core::{META_TOOLSET, is_meta_tool};
 use agentkit_governance::{GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use agentkit_sessions::read_session_descriptor;
 use async_trait::async_trait;
@@ -137,28 +142,6 @@ impl WorkspaceLeaseRegistry {
     }
 }
 
-/// The tools a writing child may execute while its own lease is live —
-/// everything else in the workspace stays with the lease holder. Mutating
-/// coding tools by name; the namespace check keeps this off other packs.
-const MUTATING_CODING_TOOLS: [&str; 4] = ["edit_file", "write_file", "run_command", "run_tests"];
-
-/// Whether one allow-list admits the call. A bare entry names a NAME, not a
-/// namespace, so it must never admit a same-named tool contributed by
-/// another pack (a rogue `lsp_diagnostics` that shells out would else
-/// inherit a read-only role's grant from the name alone). Bare entries
-/// therefore admit read-effect tools only; anything effect-bearing must be
-/// granted by its qualified name.
-fn tool_set_admits(allowed: &[String], context: &ToolGuardContext) -> bool {
-    if allowed.iter().any(|entry| entry == "*") {
-        return true;
-    }
-    let qualified = format!("{}:{}", context.namespace, context.tool.name);
-    if allowed.iter().any(|entry| entry == &qualified) {
-        return true;
-    }
-    context.tool.effect == "read" && allowed.iter().any(|entry| entry == &context.tool.name)
-}
-
 /// Enforces role ceilings on child sessions and workspace write
 /// coordination between a parent and its exclusive children. On non-subagent
 /// sessions with no lease activity it is a pass-through.
@@ -182,6 +165,11 @@ impl SubagentRoleGuard {
         // role ceiling. Returning "allow" here when disabled would let a
         // hot-disable silently widen every live child to the full tool
         // set — fail-open on the second, independent guard.
+        // Only the delegation contributor's own `report_findings` is exempt
+        // from the role checks; a same-named tool from any other namespace
+        // is judged like every other tool.
+        let is_report =
+            context.namespace == SUBAGENT_NAMESPACE && context.tool.name == REPORT_FINDINGS_TOOL;
         let Some(row) = self.service.store().get_subagent(child_chat_id).await? else {
             // report_findings belongs to children: anyone else neither sees
             // nor runs it, whatever contributed it.
@@ -201,25 +189,61 @@ impl SubagentRoleGuard {
         };
         // Only after the role resolved: a child with a gone or malformed
         // role is denied `report_findings` too (fail closed).
-        if context.tool.name == REPORT_FINDINGS_TOOL {
+        if is_report {
             return Ok(None);
         }
-        if role
-            .tool_sets
-            .iter()
-            .all(|set| tool_set_admits(set, context))
-        {
-            return Ok(None);
+        // A child reads memory but never proposes or forgets it, whatever
+        // its role (or a legacy snapshot) would otherwise admit.
+        if is_child_denied(&context.namespace, &context.tool) {
+            return Ok(Some(format!(
+                "role_denied: subagents may not use {}; memory writes belong to the parent session",
+                context.tool.name
+            )));
         }
         // The spawn tools remain available to children whose role may nest
         // (subject to the service's own depth checks at execution time).
-        if context.namespace == "subagent" && role.can_spawn {
-            return Ok(None);
+        let spawn_tool = role.can_spawn
+            && context.namespace == SUBAGENT_NAMESPACE
+            && SUBAGENT_TOOL_NAMES.contains(&context.tool.name.as_str());
+        let admitted = role
+            .tool_sets
+            .iter()
+            .all(|set| entry_admits(set, &context.namespace, &context.tool))
+            || spawn_tool;
+        if !admitted {
+            return Ok(Some(format!(
+                "role_read_only: role {} may not use tool {}",
+                role.id, context.tool.name
+            )));
         }
-        Ok(Some(format!(
-            "role_read_only: role {} may not use tool {}",
-            role.id, context.tool.name
-        )))
+        // A pre-4.4 child has no frozen set: reads only.
+        if role.read_tools_only && !is_read_tool(&context.tool) {
+            return Ok(Some(format!(
+                "tool_not_effective: role {} was spawned before authority intersection and may \
+                 only use read tools; {} is not one",
+                role.id, context.tool.name
+            )));
+        }
+        // Spawn-time intersection with the parent's authority (4.4): the
+        // frozen effective set is a second, independent ceiling, keyed by
+        // namespace AND name. Only the real meta tools are exempt.
+        let meta = context.namespace == META_TOOLSET && is_meta_tool(&context.tool.name);
+        if let Some(effective) = &role.effective_tools
+            && !meta
+        {
+            let key = tool_key(&context.namespace, &context.tool.name);
+            if !effective
+                .iter()
+                .any(|entry| entry == UNBOUNDED || entry == &key)
+            {
+                return Ok(Some(format!(
+                    "tool_not_effective: role {} may not use tool {}; it is outside the authority \
+                     the parent could delegate at spawn",
+                    role.id, key
+                )));
+            }
+        }
+        Ok(None)
     }
 
     /// The workspace root of the session under judgment, from its own
@@ -241,9 +265,7 @@ impl SubagentRoleGuard {
     }
 
     async fn lease_verdict(&self, context: &ToolGuardContext) -> AgentsResult<Option<String>> {
-        if context.namespace != "coding"
-            || !MUTATING_CODING_TOOLS.contains(&context.tool.name.as_str())
-        {
+        if !mutates_workspace(&context.namespace, &context.tool) {
             return Ok(None);
         }
         let Some(chat_id) = context.contribution.chat_id.as_deref() else {
@@ -268,6 +290,12 @@ impl SubagentRoleGuard {
 #[async_trait]
 impl ToolGuard for SubagentRoleGuard {
     async fn is_visible(&self, context: &ToolGuardContext) -> GovernanceResult<bool> {
+        // Staging asks about every tool a session offers, so this is where
+        // the namespace each tool is contributed under becomes known.
+        if let Some(chat_id) = context.contribution.chat_id.as_deref() {
+            self.service
+                .note_tool_namespace(chat_id, &context.namespace, &context.tool.name);
+        }
         if let Some(chat_id) = context.contribution.chat_id.as_deref()
             && let Some(reason) = self.role_allows(context, chat_id).await?
         {
