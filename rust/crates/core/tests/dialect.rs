@@ -214,10 +214,10 @@ fn a_new_session_uses_common_and_the_profile_selects() {
         let profile = builtin_profile(id).expect(id);
         let chosen = session_dialect(None, Some(&profile)).unwrap();
         assert_eq!(chosen.id, expected, "{id}");
-        if expected == "anthropic" {
-            continue; // T3.2: own forms, see tests/dialect_anthropic.rs
+        if expected == "anthropic" || expected == "openai" {
+            continue; // T3.2, T3.3: own forms, see tests/dialect_anthropic.rs and dialect_openai.rs
         }
-        // The stubs present the common forms until T3.2 and T3.3.
+        // The generic profile presents the common forms.
         assert_eq!(chosen.wire_names(), common_dialect().wire_names());
     }
     let mut unknown = builtin_profile("generic").unwrap();

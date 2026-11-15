@@ -1,5 +1,8 @@
 use crate::{responses_request::bounded, transport::classify};
-use agentkit_core::{CoreError, ProviderEvent, ToolCall, ToolDefinition};
+use agentkit_core::{
+    CoreError, OPENAI_PATCH_NAME, OPENAI_SHELL_NAME, ProviderEvent, ToolCall, ToolDefinition,
+    builtin_tool_type,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 struct Item {
@@ -107,7 +110,7 @@ impl ResponsesState {
             "response.output_item.added" => self.add(&event)?,
             "response.output_item.done" => {
                 let mut lookup = event.clone();
-                lookup["item_id"] = event["item"]["id"].clone();
+                lookup["item_id"] = item_key(&event["item"]);
                 let item = self.lookup_mut(&lookup)?;
                 if item.done || item.item["type"] != event["item"]["type"] {
                     return err("output_item_mismatch");
@@ -168,8 +171,17 @@ impl ResponsesState {
     fn add(&mut self, event: &Value) -> Result<(), CoreError> {
         let item = event["item"].clone();
         let index = index(&event["output_index"])?;
-        let id = nonempty(&item["id"])?;
-        if !["message", "function_call", "reasoning"].contains(&string(&item["type"])?) {
+        let key = item_key(&item);
+        let id = nonempty(&key)?;
+        if ![
+            "message",
+            "function_call",
+            "reasoning",
+            "apply_patch_call",
+            "shell_call",
+        ]
+        .contains(&string(&item["type"])?)
+        {
             return err("unsupported_output");
         }
         if self.items.contains_key(&index)
@@ -324,7 +336,8 @@ impl ResponsesState {
         let mut repairs = vec![];
         let mut content = String::new();
         for (index, item) in output.iter().enumerate() {
-            let id = nonempty(&item["id"])?;
+            let key = item_key(item);
+            let id = nonempty(&key)?;
             if !ids.insert(id.to_owned()) {
                 return err("duplicate_output_item");
             }
@@ -338,9 +351,13 @@ impl ResponsesState {
             {
                 return err("output_item_mismatch");
             }
-            if item
-                .get("status")
-                .is_some_and(|status| status != "completed")
+            // A built-in call item waits for its output, so its status is not
+            // `completed` (the vendor shows `in_progress`).
+            let awaits_output = ["apply_patch_call", "shell_call"].contains(&string(&item["type"])?);
+            if !awaits_output
+                && item
+                    .get("status")
+                    .is_some_and(|status| status != "completed")
             {
                 return err("response_incomplete");
             }
@@ -348,6 +365,13 @@ impl ResponsesState {
                 "message" => content.push_str(&message_text(item)?),
                 "function_call" => {
                     let call = tool_call(item, index, tools, &mut repairs)?;
+                    if !call_ids.insert(call.id.clone()) {
+                        return err("duplicate_tool_call_id");
+                    }
+                    calls.push(call);
+                }
+                "apply_patch_call" | "shell_call" => {
+                    let call = builtin_call(item, index, tools, &mut repairs)?;
                     if !call_ids.insert(call.id.clone()) {
                         return err("duplicate_tool_call_id");
                     }
@@ -414,7 +438,7 @@ impl ResponsesState {
     }
 }
 fn compare(state: &Item, final_item: &Value) -> Result<(), CoreError> {
-    if state.id != final_item["id"] || state.item["type"] != final_item["type"] {
+    if state.id != item_key(final_item) || state.item["type"] != final_item["type"] {
         return err("output_item_mismatch");
     }
     if final_item["type"] == "function_call" {
@@ -503,6 +527,54 @@ fn tool_call(
         id,
         name: name.into(),
         arguments_json: arguments.into(),
+    })
+}
+/// The id of an output item. Call items of the built-in tools may carry only
+/// their `call_id`.
+fn item_key(item: &Value) -> Value {
+    match item["id"].as_str() {
+        Some(id) if !id.is_empty() => item["id"].clone(),
+        _ if ["apply_patch_call", "shell_call"].contains(&item["type"].as_str().unwrap_or("")) => {
+            item["call_id"].clone()
+        }
+        _ => item["id"].clone(),
+    }
+}
+/// A call to a built-in tool becomes a call whose arguments are the vendor's
+/// payload (`operation` of a patch call, `action` of a shell call); the
+/// dialect translates it. The tool must be one the request offered.
+fn builtin_call(
+    item: &Value,
+    slot: usize,
+    tools: &[ToolDefinition],
+    repairs: &mut Vec<String>,
+) -> Result<ToolCall, CoreError> {
+    let (name, payload) = if item["type"] == "apply_patch_call" {
+        (OPENAI_PATCH_NAME, &item["operation"])
+    } else {
+        (OPENAI_SHELL_NAME, &item["action"])
+    };
+    if !tools
+        .iter()
+        .any(|tool| tool.name == name && builtin_tool_type(tool) == Some(name))
+        || !payload.is_object()
+    {
+        return err("unknown_tool");
+    }
+    let call_id = string(&item["call_id"])?;
+    let id = if call_id.is_empty() {
+        let synthetic = format!("call_{slot}");
+        repairs.push(format!("empty id -> {synthetic}"));
+        synthetic
+    } else {
+        call_id.to_owned()
+    };
+    let arguments_json = agentkit_contracts::stringify_javascript_value(payload)
+        .map_err(|_| CoreError::responses("malformed_response"))?;
+    Ok(ToolCall {
+        id,
+        name: name.into(),
+        arguments_json,
     })
 }
 fn index(value: &Value) -> Result<usize, CoreError> {

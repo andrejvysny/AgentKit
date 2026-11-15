@@ -54,6 +54,12 @@ pub use dialect::{
     TEXT_EDITOR_NAME as ANTHROPIC_TEXT_EDITOR_NAME, TEXT_EDITOR_TYPE as ANTHROPIC_TEXT_EDITOR_TYPE,
     anthropic as anthropic_dialect, builtin_tool_type,
 };
+// T3.3: the OpenAI dialect (patch and shell tools) and strict schemas.
+pub use dialect::{
+    OPENAI_CHAT_ID as OPENAI_CHAT_DIALECT_ID, OPENAI_ID as OPENAI_DIALECT_ID,
+    OPENAI_PATCH_NAME, OPENAI_SHELL_NAME, drop_nulls as drop_null_arguments, is_strict_compliant,
+    openai as openai_dialect, openai_chat as openai_chat_dialect, strict_dialect, strict_schema,
+};
 pub use dispatch::{DispatchFence, DispatchGuard};
 pub use meta_call::unwrap_tool_call;
 pub use meta_tools::{

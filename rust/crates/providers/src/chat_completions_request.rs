@@ -144,11 +144,17 @@ pub(crate) fn build_body(
         body["max_tokens"] = value.into();
     }
     if tools_present {
+        // A strict dialect (T3.3) asks for strict calls on the tools whose
+        // schema is strict; other tools stay non-strict.
+        let strict = input
+            .profile
+            .as_ref()
+            .is_some_and(|profile| agentkit_core::strict_dialect(&profile.dialect.id));
         body["tools"] = input
             .tools
             .iter()
             .map(|tool| {
-                json!({
+                let mut wire = json!({
                     "type": "function",
                     "function": {
                         "name": tool.name,
@@ -158,7 +164,11 @@ pub(crate) fn build_body(
                         ),
                         "parameters": tool.input_schema,
                     },
-                })
+                });
+                if strict && agentkit_core::is_strict_compliant(&tool.input_schema) {
+                    wire["function"]["strict"] = true.into();
+                }
+                wire
             })
             .collect();
     }

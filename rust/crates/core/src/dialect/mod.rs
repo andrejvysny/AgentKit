@@ -13,6 +13,8 @@
 mod anthropic;
 mod common;
 mod history;
+mod openai;
+mod strict;
 mod text;
 
 pub use anthropic::{
@@ -21,6 +23,11 @@ pub use anthropic::{
 };
 pub use common::{COMMON_ID, COMMON_VERSION, common};
 pub use history::present_history;
+pub use openai::{
+    OPENAI_CHAT_ID, OPENAI_ID, PATCH_NAME as OPENAI_PATCH_NAME, SHELL_NAME as OPENAI_SHELL_NAME,
+    openai, openai_chat, strict_dialect,
+};
+pub use strict::{drop_nulls, is_strict_compliant, strict_schema};
 
 use crate::ToolDefinition;
 use agentkit_contracts::{AiModelToolProfile, AiSessionPrefix, Optional};
@@ -142,6 +149,12 @@ impl Dialect {
         if self.id == ANTHROPIC_ID {
             return anthropic::render(self, canonical);
         }
+        if self.id == OPENAI_ID {
+            return openai::render(self, canonical);
+        }
+        if self.id == OPENAI_CHAT_ID {
+            return openai::render_chat(self, canonical);
+        }
         self.render_forms(canonical)
     }
 
@@ -181,6 +194,11 @@ impl Dialect {
     pub fn translate(&self, name: &str, args: Value) -> Result<Translated, DialectError> {
         if self.id == ANTHROPIC_ID
             && let Some(result) = anthropic::translate(name, &args)
+        {
+            return result;
+        }
+        if self.id == OPENAI_ID
+            && let Some(result) = openai::translate(name, &args)
         {
             return result;
         }
@@ -231,6 +249,11 @@ impl Dialect {
     pub fn wire_call(&self, canonical: &str, args: &Value) -> Option<(String, Value)> {
         if self.id == ANTHROPIC_ID
             && let Some(shown) = anthropic::wire_call(canonical, args)
+        {
+            return shown;
+        }
+        if self.id == OPENAI_ID
+            && let Some(shown) = openai::wire_call(canonical, args)
         {
             return shown;
         }
@@ -324,8 +347,9 @@ fn wire_examples(examples: &[Value], wire: &WireTool, kept: &BTreeSet<String>) -
 ///
 /// `anthropic` carries the vendor built-in tools (T3.2; whether they beat the
 /// common shape is experiment X3, not yet run).
-/// TODO(T3.3): `openai` has no forms of its own yet; it maps to the common
-/// forms under its own id until then.
+/// `openai` carries the vendor patch and shell tools and strict schemas
+/// (T3.3); `openai-chat` is its Chat Completions variant (common shape,
+/// strict schemas).
 pub fn lookup(id: &str, version: &str) -> Option<Dialect> {
     if version != COMMON_VERSION {
         return None;
@@ -333,7 +357,8 @@ pub fn lookup(id: &str, version: &str) -> Option<Dialect> {
     match id {
         COMMON_ID => Some(common()),
         ANTHROPIC_ID => Some(anthropic()),
-        "openai" => Some(common().with_id(id)),
+        OPENAI_ID => Some(openai()),
+        OPENAI_CHAT_ID => Some(openai_chat()),
         _ => None,
     }
 }

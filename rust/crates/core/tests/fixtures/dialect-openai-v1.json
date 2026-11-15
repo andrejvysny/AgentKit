@@ -1,0 +1,395 @@
+{
+  "dialect": "openai",
+  "version": "1",
+  "fetched": "2026-11-15",
+  "canonical": [
+    {
+      "name": "write_file",
+      "version": "1",
+      "effect": "write",
+      "capability": "fs.write",
+      "description": "Create a file or replace its content. For part of a file use edit_file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "file_path": "docs/notes.md",
+          "content": "# Notes\n"
+        }
+      ]
+    },
+    {
+      "name": "edit_file",
+      "version": "1",
+      "effect": "write",
+      "capability": "fs.write",
+      "description": "Replace text in a file. Read it first with read_file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string"
+          },
+          "old_string": {
+            "type": "string",
+            "minLength": 1
+          },
+          "new_string": {
+            "type": "string"
+          },
+          "replace_all": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "file_path": "src/a.rs",
+          "old_string": "x",
+          "new_string": "y"
+        }
+      ]
+    },
+    {
+      "name": "run_command",
+      "version": "1",
+      "effect": "write",
+      "capability": "process.exec",
+      "description": "Run a shell command. Use run_tests for the test suite.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1000
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "command": "cargo build"
+        }
+      ]
+    },
+    {
+      "name": "calendar_list",
+      "version": "1",
+      "effect": "read",
+      "capability": "calendar.read",
+      "description": "List events of a day.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "day"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "day": "d"
+        }
+      ]
+    }
+  ],
+  "request": {
+    "toolNames": [
+      "apply_patch",
+      "shell",
+      "calendar_list"
+    ],
+    "calendarList": {
+      "name": "calendar_list",
+      "version": "1",
+      "effect": "read",
+      "capability": "calendar.read",
+      "description": "List events of a day.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "required": [
+          "day",
+          "limit"
+        ],
+        "additionalProperties": false
+      },
+      "examples": [
+        {
+          "day": "d",
+          "limit": null
+        }
+      ]
+    },
+    "responsesTools": [
+      {
+        "type": "apply_patch"
+      },
+      {
+        "type": "shell",
+        "environment": {
+          "type": "local"
+        }
+      }
+    ]
+  },
+  "response": {
+    "calls": [
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "update_file",
+            "path": "src/a.rs",
+            "diff": "@@\n-let n = 1;\n+let n = 2;\n"
+          }
+        },
+        "canonical": {
+          "name": "edit_file",
+          "arguments": {
+            "file_path": "src/a.rs",
+            "old_string": "let n = 1;",
+            "new_string": "let n = 2;"
+          }
+        },
+        "roundTrips": true
+      },
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "update_file",
+            "path": "src/a.rs",
+            "diff": "@@ fn main\n fn main() {\n-    let n = 1;\n+    let n = 2;\n }\n"
+          }
+        },
+        "canonical": {
+          "name": "edit_file",
+          "arguments": {
+            "file_path": "src/a.rs",
+            "old_string": "fn main() {\n    let n = 1;\n}",
+            "new_string": "fn main() {\n    let n = 2;\n}"
+          }
+        },
+        "roundTrips": false
+      },
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "create_file",
+            "path": "docs/notes.md",
+            "diff": "+# Notes\n+\n+First line.\n"
+          }
+        },
+        "canonical": {
+          "name": "write_file",
+          "arguments": {
+            "file_path": "docs/notes.md",
+            "content": "# Notes\n\nFirst line.\n"
+          }
+        },
+        "roundTrips": true
+      },
+      {
+        "wire": {
+          "name": "shell",
+          "arguments": {
+            "commands": [
+              "cargo build"
+            ],
+            "timeout_ms": 120000,
+            "max_output_length": 4096
+          }
+        },
+        "canonical": {
+          "name": "run_command",
+          "arguments": {
+            "command": "cargo build",
+            "timeout": 120000
+          }
+        },
+        "roundTrips": false
+      },
+      {
+        "wire": {
+          "name": "shell",
+          "arguments": {
+            "commands": [
+              "ls -l"
+            ]
+          }
+        },
+        "canonical": {
+          "name": "run_command",
+          "arguments": {
+            "command": "ls -l"
+          }
+        },
+        "roundTrips": true
+      }
+    ],
+    "refused": [
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "delete_file",
+            "path": "a.rs"
+          }
+        },
+        "mentions": "delete_file"
+      },
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "update_file",
+            "path": "a.rs",
+            "diff": "@@\n-a\n+b\n@@\n-c\n+d\n"
+          }
+        },
+        "mentions": "one hunk per call"
+      },
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "update_file",
+            "path": "a.rs",
+            "diff": "@@\n+b\n"
+          }
+        },
+        "mentions": "context line"
+      },
+      {
+        "wire": {
+          "name": "apply_patch",
+          "arguments": {
+            "type": "create_file",
+            "path": "a.rs",
+            "diff": "fn main() {}\n"
+          }
+        },
+        "mentions": "behind +"
+      },
+      {
+        "wire": {
+          "name": "shell",
+          "arguments": {
+            "commands": [
+              "ls",
+              "pwd"
+            ]
+          }
+        },
+        "mentions": "one command per call"
+      },
+      {
+        "wire": {
+          "name": "shell",
+          "arguments": {
+            "commands": []
+          }
+        },
+        "mentions": "one command per call"
+      }
+    ],
+    "items": [
+      {
+        "id": "apc_08f3d96c87a585390069118b594f7481a088b16cda7d9415fe",
+        "type": "apply_patch_call",
+        "status": "completed",
+        "call_id": "call_Rjsqzz96C5xzPb0jUWJFRTNW",
+        "operation": {
+          "type": "update_file",
+          "path": "lib/fib.py",
+          "diff": "@@\n-def fib(n):\n+def fibonacci(n):\n"
+        }
+      },
+      {
+        "type": "shell_call",
+        "call_id": "call_9d14ac6f2b73485e91c0f4da6e1b27c8",
+        "action": {
+          "commands": [
+            "ls -l"
+          ],
+          "timeout_ms": 120000,
+          "max_output_length": 4096
+        },
+        "status": "in_progress"
+      }
+    ],
+    "outputs": [
+      {
+        "type": "apply_patch_call_output",
+        "call_id": "call_cNWm41dB3RyQcLNOVTIPBWZU",
+        "status": "failed",
+        "output": "Could not apply patch to lib/foo.py — file not found on disk"
+      },
+      {
+        "type": "shell_call_output",
+        "call_id": "call_3ef1b8c79a4d6520f9e3ab7d41c68f25",
+        "output": [
+          {
+            "stdout": "total 0",
+            "stderr": "",
+            "outcome": {
+              "type": "exit",
+              "exit_code": 0
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

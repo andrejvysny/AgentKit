@@ -339,7 +339,21 @@ impl ToolRegistry {
     /// inner call of `tool_call`) goes through it.
     pub fn translate(&self, name: &str, args: Value) -> Result<Translated, DialectError> {
         match self.dialect() {
-            Some(dialect) => dialect.translate(name, args),
+            Some(dialect) => {
+                let mut translated = dialect.translate(name, args)?;
+                // Strict schemas make the model send null for an optional
+                // argument; the canonical call leaves it out (T3.3).
+                if dialect.strict()
+                    && let Some(tool) = self.tools.get(&translated.name)
+                    && crate::dialect::drop_nulls(
+                        &mut translated.args,
+                        &tool.tool.definition().input_schema,
+                    )
+                {
+                    translated.args_changed = true;
+                }
+                Ok(translated)
+            }
             None => Ok(Translated {
                 name: name.to_owned(),
                 args,

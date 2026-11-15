@@ -76,3 +76,50 @@ not change what guards, approvals, receipts and stored data see.
 - Constraint teaching errors still use canonical parameter wording (for
   example `git_staged_needs_diff` says `command "diff"`); with flat git tools
   the model rarely reaches them.
+
+## Addendum T3.3: the OpenAI dialect (TU-26)
+
+Vendor formats read 2026-11-15 (details in `docs/evidence/tool-use/T3.3`).
+
+1. **Two built-ins, typed.** `apply_patch` (`{"type":"apply_patch"}`) stands for
+   the canonical `write_file` and `edit_file`; `shell`
+   (`{"type":"shell","environment":{"type":"local"}}`) for `run_command`. Both
+   are `ToolDefinition`s carrying the `x-builtin-tool` marker (as in the
+   Anthropic dialect); the Responses request builder sends them as typed
+   tools outside the `agentkit` namespace. The patch tool is offered when
+   either canonical tool is registered, the shell tool when `run_command` is.
+2. **One canonical call per vendor call.** An `apply_patch_call` names one
+   file, so the "several files" case does not occur. A V4A `update_file` with
+   more than one hunk is refused with a message to send one hunk per call: an
+   adapter tool that runs several canonical calls under one result would need
+   the same guard verdict per hunk and one receipt per mutation (R-CNT-15),
+   which this package does not prove. `create_file` -> `write_file`,
+   one-hunk `update_file` -> `edit_file` (old = context + removed lines, new =
+   context + added lines, header text after `@@` is a locator and dropped).
+   `delete_file` is refused (no canonical delete). A shell call with several
+   commands is refused for the same reason; `max_output_length` is dropped,
+   `timeout_ms` -> `timeout`.
+3. **Results in the vendor shape.** The call arrives as the vendor item's
+   payload (`operation`, `action`) and the result is returned as
+   `apply_patch_call_output` (`status` completed or failed, `output` the
+   envelope summary) or `shell_call_output` (one entry; `run_command` merges
+   both streams, so stderr is empty; a call without an exit code is exit 1
+   with the failure text as stderr). A refused built-in call keeps its wire
+   name in history so call and output pair.
+4. **Strict schemas.** Every non-built-in tool is rendered strict where its
+   schema allows: all properties required, optional ones nullable
+   (`type` gains `null`, `enum` gains `null`), `additionalProperties:false`;
+   `default`, `minLength`, `maxLength`, `uniqueItems`, `title`, `format` are
+   left out of the model's view (the canonical tool still enforces them).
+   A schema strict mode cannot take (open object, `oneOf`, unknown keyword)
+   is offered as it is, non-strict. The request builder sets `strict` only
+   under a strict dialect profile and only where the schema is strict.
+5. **Null is absent.** For a strict dialect the registry removes a `null`
+   argument from the canonical call when the canonical schema does not
+   require it or accept null; the call is recorded as changed. A required
+   argument sent as null is left for validation to refuse.
+6. **Lanes.** `openai` is the Responses variant. `openai-chat` (common shape,
+   strict schemas, no built-ins) is the Chat Completions variant; the host
+   picks it for that lane. Wiring the lane into `session_dialect` is open.
+7. **X3 not run.** Whether the vendor tools beat the common shape for GPT is
+   the experiment that needs go-ahead; v1 is data, so the result can swap it.

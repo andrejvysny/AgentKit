@@ -1,6 +1,7 @@
 use crate::content;
 use agentkit_core::{
-    ChatMessage, ChatRequest, ConnectionIdentity, CoreError, ReasoningSummary, ToolCall,
+    ChatMessage, ChatRequest, ConnectionIdentity, CoreError, OPENAI_PATCH_NAME, OPENAI_SHELL_NAME,
+    ReasoningSummary, ToolCall, builtin_tool_type, is_strict_compliant,
 };
 use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
@@ -77,8 +78,9 @@ pub fn build_responses_request_with_warnings(
         return Err(CoreError::responses("continuation_required"));
     }
     // Managed content is request-local; never checkpoint it as transcript.
-    let selected_items = map_messages(&input.selected_content)?;
-    items.extend(map_messages(&input.messages[offset..])?);
+    let builtins = builtin_names(input);
+    let selected_items = map_messages(&input.selected_content, &builtins)?;
+    items.extend(map_messages(&input.messages[offset..], &builtins)?);
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
@@ -173,7 +175,10 @@ fn check_state(
     }
     for item in &state.input_items {
         match item["type"].as_str() {
-            Some("message" | "function_call" | "function_call_output") => {}
+            Some(
+                "message" | "function_call" | "function_call_output" | "apply_patch_call"
+                | "apply_patch_call_output" | "shell_call" | "shell_call_output",
+            ) => {}
             Some("reasoning") => {
                 if item["encrypted_content"].as_str().is_none_or(str::is_empty) {
                     return Err(CoreError::responses("continuation_required"));
@@ -208,7 +213,8 @@ pub(crate) fn make_continuation(
         .ok_or_else(|| CoreError::responses("invalid_request"))?;
     // Strip request-local content before persisting provider continuation.
     let selected_count =
-        segment_items(&input.messages)?.len() + map_messages(&input.selected_content)?.len();
+        segment_items(&input.messages)?.len()
+            + map_messages(&input.selected_content, &builtin_names(input))?.len();
     if selected_count > items.len() {
         return Err(CoreError::responses("invalid_request"));
     }
@@ -292,7 +298,19 @@ fn segment_items(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
         })
         .collect()
 }
-fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
+/// The vendor built-in tools this request offers, by the name a call carries.
+fn builtin_names(input: &ChatRequest) -> Vec<&'static str> {
+    [OPENAI_PATCH_NAME, OPENAI_SHELL_NAME]
+        .into_iter()
+        .filter(|name| {
+            input
+                .tools
+                .iter()
+                .any(|tool| tool.name == *name && builtin_tool_type(tool) == Some(*name))
+        })
+        .collect()
+}
+fn map_messages(messages: &[ChatMessage], builtins: &[&str]) -> Result<Vec<Value>, CoreError> {
     let mut items = vec![];
     for message in messages {
         if message.role == "system" {
@@ -305,7 +323,12 @@ fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
                 .as_ref()
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| CoreError::responses("missing_tool_call_id"))?;
-            items.push(json!({"type":"function_call_output","call_id":id,"output":content::text(message,true)?}));
+            let text = content::text(message, true)?;
+            let built_in = message.name.as_deref().filter(|name| builtins.contains(name));
+            items.push(match built_in {
+                Some(name) => builtin_output(name, id, &text),
+                None => json!({"type":"function_call_output","call_id":id,"output":text}),
+            });
             continue;
         }
         if !["user", "assistant"].contains(&message.role.as_str()) {
@@ -319,6 +342,10 @@ fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
             if message.role != "assistant" || call.id.is_empty() || call.name.is_empty() {
                 return Err(CoreError::responses("invalid_tool_history"));
             }
+            if builtins.contains(&call.name.as_str()) {
+                items.push(builtin_call(call)?);
+                continue;
+            }
             items.push(json!({"type":"function_call","call_id":call.id,"namespace":"agentkit","name":call.name,"arguments":call.arguments_json}));
         }
     }
@@ -327,8 +354,27 @@ fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
 fn tools(input: &ChatRequest) -> Result<(Vec<Value>, Vec<String>), CoreError> {
     let mut seen = std::collections::HashSet::new();
     let mut functions = vec![];
+    let mut built_in = vec![];
     let mut warnings = vec![];
+    let strict = input
+        .profile
+        .as_ref()
+        .is_some_and(|profile| agentkit_core::strict_dialect(&profile.dialect.id));
     for tool in &input.tools {
+        if let Some(kind) = builtin_tool_type(tool) {
+            // The vendor's own typed tool; it has no schema to check here.
+            if kind != tool.name || !seen.insert(&tool.name) {
+                return Err(CoreError::responses("unsupported_tool"));
+            }
+            built_in.push(match kind {
+                k if k == OPENAI_PATCH_NAME => json!({"type":"apply_patch"}),
+                k if k == OPENAI_SHELL_NAME => {
+                    json!({"type":"shell","environment":{"type":"local"}})
+                }
+                _ => return Err(CoreError::responses("unsupported_tool")),
+            });
+            continue;
+        }
         if tool.name.is_empty()
             || tool.name.len() > 64
             || !tool
@@ -349,15 +395,14 @@ fn tools(input: &ChatRequest) -> Result<(Vec<Value>, Vec<String>), CoreError> {
             ));
             continue;
         };
-        functions.push(json!({"type":"function","name":tool.name,"description":agentkit_core::presented_description(tool, agentkit_core::ExampleLane::Responses),"parameters":agentkit_contracts::javascript_json_value(&schema),"strict":false}));
+        functions.push(json!({"type":"function","name":tool.name,"description":agentkit_core::presented_description(tool, agentkit_core::ExampleLane::Responses),"parameters":agentkit_contracts::javascript_json_value(&schema),"strict":strict && is_strict_compliant(&schema)}));
     }
-    let tools = if functions.is_empty() {
-        vec![]
-    } else {
-        vec![
+    let mut tools = built_in;
+    if !functions.is_empty() {
+        tools.push(
             json!({"type":"namespace","name":"agentkit","description":"Tools supplied by the application.","tools":functions}),
-        ]
-    };
+        );
+    }
     Ok((tools, warnings))
 }
 /// Lanes whose schema acceptance can be linted at build time.
@@ -545,6 +590,61 @@ pub(crate) fn bounded(value: &Value) -> Result<String, CoreError> {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
     Ok(encoded)
+}
+
+/// A built-in call the model made, shown back as the vendor's call item. The
+/// stored arguments are the vendor's own item payload (`operation`, `action`).
+fn builtin_call(call: &ToolCall) -> Result<Value, CoreError> {
+    let payload = agentkit_contracts::parse_javascript_json(&call.arguments_json)
+        .map_err(|_| CoreError::responses("invalid_tool_history"))?;
+    Ok(if call.name == OPENAI_PATCH_NAME {
+        json!({"type":"apply_patch_call","call_id":call.id,"status":"completed","operation":payload})
+    } else {
+        json!({"type":"shell_call","call_id":call.id,"status":"completed","action":payload})
+    })
+}
+/// The vendor's output item for the result envelope of a built-in call.
+/// `ok` and `summary` come from the envelope; a text that is not an envelope
+/// is the output as it stands.
+fn builtin_output(name: &str, call_id: &str, content: &str) -> Value {
+    let envelope: Option<Value> = serde_json::from_str(content).ok();
+    let ok = envelope
+        .as_ref()
+        .and_then(|value| value["ok"].as_bool())
+        .unwrap_or(true);
+    let summary = envelope
+        .as_ref()
+        .and_then(|value| value["summary"].as_str())
+        .unwrap_or(content);
+    if name == OPENAI_PATCH_NAME {
+        return json!({
+            "type":"apply_patch_call_output",
+            "call_id":call_id,
+            "status": if ok { "completed" } else { "failed" },
+            "output": summary,
+        });
+    }
+    // `run_command` merges both streams into its text; a call that never
+    // reached an exit code (refused, failed to start) reports exit 1 with the
+    // failure text as stderr.
+    let text = envelope
+        .as_ref()
+        .and_then(|value| value["data"].as_str())
+        .unwrap_or("");
+    let timed_out = summary.starts_with("timed out");
+    let exit_code = summary
+        .strip_prefix("exit code ")
+        .and_then(|code| code.trim().parse::<i64>().ok());
+    let (stdout, stderr, outcome) = match (timed_out, exit_code) {
+        (true, _) => (text, "", json!({"type":"timeout"})),
+        (_, Some(code)) => (text, "", json!({"type":"exit","exit_code":code})),
+        _ => ("", summary, json!({"type":"exit","exit_code":1})),
+    };
+    json!({
+        "type":"shell_call_output",
+        "call_id":call_id,
+        "output":[{"stdout":stdout,"stderr":stderr,"outcome":outcome}],
+    })
 }
 
 #[cfg(test)]

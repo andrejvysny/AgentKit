@@ -391,18 +391,33 @@ pub(crate) fn translate_call(
     let Some(dialect) = registry.dialect() else {
         return (call.clone(), None);
     };
-    if call.name == UNNAMED_TOOL || !dialect.knows_wire(&call.name) {
+    // A strict dialect (T3.3) also reads the arguments of tools it does not
+    // rename: optional arguments arrive as null.
+    if call.name == UNNAMED_TOOL || !(dialect.knows_wire(&call.name) || dialect.strict()) {
         return (call.clone(), None);
     }
     let mut out = call.clone();
-    if let Some(canonical) = dialect.canonical_of(&call.name) {
+    // A built-in tool that is refused stays under its own name: its history
+    // entry and its result must pair as the vendor's call and output items.
+    let built_in = dialect.built_in(&call.name);
+    if !built_in && let Some(canonical) = dialect.canonical_of(&call.name) {
         out.name = canonical.to_owned();
     }
-    let Ok(args) = agentkit_contracts::parse_javascript_json(&call.arguments_json) else {
-        return (out, None);
+    let args = match agentkit_contracts::parse_javascript_json(&call.arguments_json) {
+        Ok(args) => args,
+        Err(error) if built_in => {
+            let message = format!(
+                "Invalid arguments JSON: {error}. Send the arguments as one JSON object."
+            );
+            return (out, Some(CoreError::new("bad_args", &message)));
+        }
+        Err(_) => return (out, None),
     };
     match registry.translate(&call.name, args) {
         Ok(translated) => {
+            // A built-in tool (T3.3) reaches more than one canonical tool; the
+            // translation names the one this call means.
+            out.name = translated.name.clone();
             if translated.args_changed {
                 out.arguments_json = envelope::stringify(&translated.args);
             }
