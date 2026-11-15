@@ -349,7 +349,7 @@ fn tools(input: &ChatRequest) -> Result<(Vec<Value>, Vec<String>), CoreError> {
             ));
             continue;
         };
-        functions.push(json!({"type":"function","name":tool.name,"description":tool.description,"parameters":agentkit_contracts::javascript_json_value(&schema),"strict":false}));
+        functions.push(json!({"type":"function","name":tool.name,"description":agentkit_core::presented_description(tool, agentkit_core::ExampleLane::Responses),"parameters":agentkit_contracts::javascript_json_value(&schema),"strict":false}));
     }
     let tools = if functions.is_empty() {
         vec![]

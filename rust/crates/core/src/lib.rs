@@ -3,6 +3,7 @@ mod budget;
 mod call_pipeline;
 mod dispatch;
 mod envelope;
+mod examples_render;
 pub mod failure_catalog;
 mod failure_table;
 mod failure_table_agents;
@@ -26,6 +27,7 @@ pub use budget::{BudgetCheckpoint, BudgetLimits, BudgetSnapshot, ExecutionBudget
 pub use agentkit_contracts::AiRunEvent;
 pub use agentkit_kernel::{Runtime, SystemRuntime};
 pub use dispatch::{DispatchFence, DispatchGuard};
+pub use examples_render::{ExampleLane, RenderedExamples, presented_description, render_examples};
 pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
     cache_key, freeze, segment_of, tools_digest,

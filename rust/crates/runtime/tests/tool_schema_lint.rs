@@ -15,8 +15,10 @@ use agentkit_agents::{
     subagent_tool_definitions,
 };
 use agentkit_core::{
-    AuthKind, CancellationToken, ChatProvider, ChatRequest, ConnectionIdentity, CoreError, Tool,
+    AuthKind, CancellationToken, ChatProvider, ChatRequest, ConnectionIdentity, CoreError,
+    ExampleLane, Tool,
     ToolConstraint, ToolContext, ToolDefinition, ToolLimits, ToolRegistry, ToolResult,
+    presented_description,
 };
 use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
 use agentkit_lsp::{LSP_ARG_ALIASES, lsp_tool_definitions};
@@ -961,6 +963,128 @@ async fn runtime_owned_parameters_are_not_in_any_schema() {
         assert!(
             !registry.validate_input(tool, &call).is_empty(),
             "{tool} accepted {call}"
+        );
+    }
+}
+
+// ---- description standard (T1.8, TU-13) -----------------------------------
+
+/// The standard asks for four parts: what it does, when to use it, when not
+/// (and which tool instead), what it returns. Wording rewrites wait for the
+/// comparison (X4, T4.3), so the check is loose and report-only: it names
+/// the parts a description lacks. It enforces nothing except that the tools
+/// listed in `STRUCTURE_COMPLIANT` keep their parts.
+fn description_gaps(def: &ToolDefinition, tool_names: &BTreeSet<String>) -> Vec<&'static str> {
+    let text = def.description.to_lowercase();
+    let mut gaps = Vec::new();
+    if !(text.contains("use ") || text.contains("when ")) {
+        gaps.push("when to use");
+    }
+    let names_another_tool = text
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|token| token != def.name && tool_names.contains(token));
+    if !(names_another_tool
+        || ["instead", "do not", "don't", "not for"]
+            .iter()
+            .any(|marker| text.contains(marker)))
+    {
+        gaps.push("when not / which tool instead");
+    }
+    if !(text.contains("returns") || text.contains("result is")) {
+        gaps.push("what it returns");
+    }
+    gaps
+}
+
+/// Tools whose descriptions already carry all three marked parts. They may
+/// not regress; the rest are the input list for T4.3.
+const STRUCTURE_COMPLIANT: [&str; 13] = [
+    "read_file",
+    "write_file",
+    "find_files",
+    "run_tests",
+    "subagent_message",
+    "subagent_await",
+    "advisor_review",
+    "lsp_definition",
+    "lsp_references",
+    "lsp_hover",
+    "lsp_symbols",
+    "lsp_implementation",
+    "lsp_diagnostics",
+];
+
+#[tokio::test]
+async fn description_structure_is_reported_and_compliant_tools_keep_it() {
+    let tools = all_tools().await;
+    let names: BTreeSet<String> = tools
+        .iter()
+        .map(|tool| tool.definition().name.clone())
+        .collect();
+    let mut regressions = Vec::new();
+    for tool in &tools {
+        let def = tool.definition();
+        let gaps = description_gaps(def, &names);
+        if !gaps.is_empty() {
+            // Report only: the list for T4.3 (run with --nocapture).
+            eprintln!("T1.8 structure gap: {} lacks {gaps:?}", def.name);
+        }
+        if STRUCTURE_COMPLIANT.contains(&def.name.as_str()) && !gaps.is_empty() {
+            regressions.push(format!("{} lacks {gaps:?}", def.name));
+        }
+    }
+    assert!(regressions.is_empty(), "{regressions:#?}");
+}
+
+#[test]
+fn the_structure_check_flags_a_missing_part() {
+    let names: BTreeSet<String> = ["alpha".to_owned(), "beta".to_owned()].into();
+    let mut def = ToolDefinition {
+        name: "alpha".into(),
+        version: "1".into(),
+        effect: "read".into(),
+        capability: "test".into(),
+        description: "Does a thing.".into(),
+        input_schema: json!({"type": "object"}),
+        output_schema: None,
+        timeout_ms: None,
+        examples: vec![],
+    };
+    assert_eq!(description_gaps(&def, &names).len(), 3);
+    def.description = "Does a thing. Use it first; for more use beta. Returns text.".into();
+    assert!(description_gaps(&def, &names).is_empty());
+}
+
+/// Examples reach the model through the description on lanes with no field
+/// for them; the schema is never touched (L10). The rendered length is
+/// printed per tool; the 900-character limit applies to the authored text.
+#[tokio::test]
+async fn presented_examples_leave_the_schema_and_authored_text_intact() {
+    let tools = all_tools().await;
+    for tool in &tools {
+        let def = tool.definition();
+        for lane in [
+            ExampleLane::Anthropic,
+            ExampleLane::ChatCompletions,
+            ExampleLane::Responses,
+        ] {
+            let shown = presented_description(def, lane);
+            assert!(shown.starts_with(&def.description), "{}", def.name);
+            for example in &def.examples {
+                assert!(
+                    shown.contains(&format!("Example: {}({example})", def.name)),
+                    "{} {lane:?} lost an example",
+                    def.name
+                );
+            }
+        }
+        eprintln!(
+            "T1.8 rendered length: {} authored {} rendered {}",
+            def.name,
+            def.description.chars().count(),
+            presented_description(def, ExampleLane::ChatCompletions)
+                .chars()
+                .count()
         );
     }
 }

@@ -398,7 +398,10 @@ fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
                     "type": "function",
                     "function": {
                         "name": tool.name,
-                        "description": tool.description,
+                        "description": agentkit_core::presented_description(
+                            tool,
+                            agentkit_core::ExampleLane::ChatCompletions,
+                        ),
                         "parameters": tool.input_schema,
                     },
                 })
