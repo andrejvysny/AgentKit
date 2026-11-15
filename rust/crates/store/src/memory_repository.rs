@@ -18,9 +18,9 @@ use crate::memory_codec::{
 use crate::memory_index::{self, IndexOp, apply_index_ops};
 use crate::{SqliteStore, memory_purge};
 use agentkit_memory::{
-    Actor, EventKind, IndexTx, MemoryError, MemoryEvent, MemoryRepository, MemoryResult, MemoryTx,
-    NewRecord, Page, PurgeReport, Record, RecordFilter, RecordId, RetrievalIndex, Scope, Status,
-    Timestamp,
+    Actor, CorePin, EventKind, IndexTx, MemoryError, MemoryEvent, MemoryRepository, MemoryResult,
+    MemoryTx, NewRecord, Page, PurgeReport, Record, RecordFilter, RecordId, RetrievalIndex, Scope,
+    Status, Timestamp, core_tokens,
 };
 use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as Sql};
@@ -45,6 +45,16 @@ enum Op {
         id: RecordId,
         from: Status,
         to: Status,
+        actor: Actor,
+        at: Timestamp,
+    },
+    /// Pin or unpin a current active record.
+    Core {
+        id: RecordId,
+        core: bool,
+        order: Option<i64>,
+        /// Ceiling on the block's tokens, re-checked in the commit.
+        max_tokens: Option<usize>,
         actor: Actor,
         at: Timestamp,
     },
@@ -103,6 +113,31 @@ fn fetch(conn: &Connection, id: RecordId) -> Work<Option<Record>> {
 
 fn conflict(what: &str, id: RecordId) -> MemoryError {
     MemoryError::Conflict(format!("record {id} {what} since the transaction began"))
+}
+
+/// The block of the owner's scope and `id`'s scope, with `id` pinned, must
+/// fit `max` tokens; read in the commit's own transaction so a concurrent
+/// pin cannot slip past a check made earlier.
+fn check_core_budget(conn: &Connection, id: RecordId, max: usize) -> Work<()> {
+    let Some(record) = fetch(conn, id)? else {
+        return Err(MemoryError::NotFound(id).into());
+    };
+    let mut scopes = vec![Scope::user()];
+    if record.scope != Scope::user() {
+        scopes.push(record.scope);
+    }
+    let (sql, args) = core_sql(&scopes);
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(args), record_from)?;
+    let pinned = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let used = core_tokens(&pinned);
+    if used > max {
+        return Err(MemoryError::InvalidInput(format!(
+            "pinning would use {used} of the {max} core-block tokens; unpin or shorten an entry first"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
@@ -165,6 +200,32 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                 }
                 append_event(conn, id, Status::event_into(to), actor, None, at)?;
             }
+            Op::Core {
+                id,
+                core,
+                order,
+                max_tokens,
+                actor,
+                at,
+            } => {
+                let rows = conn.execute(
+                    "UPDATE memory_records SET is_core=?1, core_order=?2 \
+                     WHERE id=?3 AND status='active' AND valid_to IS NULL",
+                    params![i64::from(core), order, id.to_string()],
+                )?;
+                if rows == 0 {
+                    return Err(conflict("stopped being current and active", id).into());
+                }
+                if let (true, Some(max)) = (core, max_tokens) {
+                    check_core_budget(conn, id, max)?;
+                }
+                let kind = if core {
+                    EventKind::Pinned
+                } else {
+                    EventKind::Unpinned
+                };
+                append_event(conn, id, kind, actor, None, at)?;
+            }
         }
     }
     Ok(())
@@ -208,7 +269,14 @@ fn insert_row(
     } else {
         EventKind::Proposed
     };
-    let detail = supersedes.map(|old| json!({ "supersedes": old.to_string() }));
+    let mut detail = serde_json::Map::new();
+    if let Some(old) = supersedes {
+        detail.insert("supersedes".to_owned(), json!(old.to_string()));
+    }
+    if let Some(why) = &rec.rationale {
+        detail.insert("rationale".to_owned(), json!(why));
+    }
+    let detail = (!detail.is_empty()).then(|| serde_json::Value::Object(detail));
     append_event(
         conn,
         id,
@@ -252,6 +320,18 @@ fn scope_clause(scopes: &[Scope], args: &mut Vec<Sql>) -> String {
         "(scope_kind=? AND scope_id=?)"
     });
     format!("({})", each.collect::<Vec<_>>().join(" OR "))
+}
+
+fn core_sql(scopes: &[Scope]) -> (String, Vec<Sql>) {
+    let mut args = Vec::new();
+    let clause = scope_clause(scopes, &mut args);
+    let sql = format!(
+        "SELECT {RECORD_COLUMNS} FROM memory_records \
+         WHERE is_core=1 AND status='active' AND valid_to IS NULL AND {clause} \
+         ORDER BY CASE scope_kind WHEN 'user' THEN 0 WHEN 'project' THEN 1 ELSE 2 END, \
+         core_order IS NULL, core_order, id"
+    );
+    (sql, args)
 }
 
 fn list_sql(filter: &RecordFilter, page: Page) -> (String, Vec<Sql>) {
@@ -418,6 +498,59 @@ impl MemoryRepository for SqliteMemoryRepository {
         Ok(())
     }
 
+    async fn set_core(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        pin: Option<CorePin>,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
+        let (core, order, max_tokens) = match pin {
+            Some(pin) => (true, pin.order, Some(pin.max_tokens)),
+            None => (false, None, None),
+        };
+        let staged = staged(tx)?;
+        let mut record = self
+            .visible(staged, id)
+            .await?
+            .ok_or(MemoryError::NotFound(id))?;
+        if record.status != Status::Active || record.valid_to.is_some() {
+            return Err(MemoryError::InvalidInput(
+                "only a current active record can be pinned or unpinned".to_owned(),
+            ));
+        }
+        record.is_core = core;
+        record.core_order = order;
+        staged.overlay.insert(id, record);
+        staged.ops.push(Op::Core {
+            id,
+            core,
+            order,
+            max_tokens,
+            actor,
+            at,
+        });
+        Ok(())
+    }
+
+    async fn record_use(&self, ids: &[RecordId], at: Timestamp) -> MemoryResult<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
+        write(&self.store, move |conn| {
+            for id in &ids {
+                conn.execute(
+                    "UPDATE memory_records SET last_used_at=?1, use_count=use_count+1 WHERE id=?2",
+                    params![at.0, id],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
     async fn get(&self, id: RecordId) -> MemoryResult<Option<Record>> {
         self.committed(id).await
     }
@@ -436,14 +569,7 @@ impl MemoryRepository for SqliteMemoryRepository {
         if scopes.is_empty() {
             return Ok(Vec::new());
         }
-        let mut args = Vec::new();
-        let clause = scope_clause(scopes, &mut args);
-        let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM memory_records \
-             WHERE is_core=1 AND status='active' AND valid_to IS NULL AND {clause} \
-             ORDER BY CASE scope_kind WHEN 'user' THEN 0 WHEN 'project' THEN 1 ELSE 2 END, \
-             core_order IS NULL, core_order, id"
-        );
+        let (sql, args) = core_sql(scopes);
         read(&self.store, move |conn| {
             let mut statement = conn.prepare(&sql)?;
             let rows = statement.query_map(params_from_iter(args), record_from)?;

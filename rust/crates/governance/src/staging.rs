@@ -15,6 +15,15 @@ use std::{
 
 mod execution_recheck;
 
+/// Tool namespaces no standing grant may cover: each call asks the owner
+/// again (`memory_forget` deletes the owner's own notes; a remembered yes
+/// must never become blanket authority to forget).
+const NO_STANDING_NAMESPACES: [&str; 1] = ["memory"];
+
+fn standing_eligible(context: &ToolGuardContext) -> bool {
+    !NO_STANDING_NAMESPACES.contains(&context.namespace.as_str())
+}
+
 fn check_contribution(
     tool: &ContributedTool,
     context: &ToolContributionContext,
@@ -613,6 +622,7 @@ impl GuardedTool {
         });
         if uncertainty.is_none()
             && !is_duplicate
+            && standing_eligible(&self.snapshot)
             && let Some(durable) = &durable
             && let Some(policy) = durable.standing_policy()
         {
@@ -797,4 +807,48 @@ fn validate_namespace(contributor: &dyn ToolContributor) -> GovernanceResult<()>
 
 fn deadline(context: &ToolContributionContext) -> Duration {
     Duration::from_millis(context.timeout_ms.max(1))
+}
+
+#[cfg(test)]
+mod standing_tests {
+    use super::*;
+    use agentkit_core::{CancellationToken, ToolLimits};
+    use serde_json::json;
+
+    fn context(namespace: &str, tool: &str) -> ToolGuardContext {
+        ToolGuardContext {
+            contribution: ToolContributionContext {
+                chat_id: Some("chat".into()),
+                run_id: "run".into(),
+                scope_id: None,
+                actor: Value::Null,
+                actor_id: None,
+                bindings: vec![],
+                limits: ToolLimits::default(),
+                cancellation: CancellationToken::new(),
+                has_primary_binding: true,
+                timeout_ms: 1_000,
+                durable: None,
+            },
+            namespace: namespace.into(),
+            tool: ToolDefinition {
+                name: tool.into(),
+                version: "1".into(),
+                effect: "write".into(),
+                capability: "memory.write".into(),
+                description: String::new(),
+                input_schema: json!({"type": "object"}),
+                output_schema: None,
+                timeout_ms: None,
+                examples: vec![],
+            },
+            arguments: None,
+        }
+    }
+
+    #[test]
+    fn no_standing_grant_covers_the_memory_namespace() {
+        assert!(!standing_eligible(&context("memory", "memory_forget")));
+        assert!(standing_eligible(&context("coding", "run_command")));
+    }
 }

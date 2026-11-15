@@ -45,7 +45,9 @@ use crate::lanes::coding::{
     CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver,
 };
 use crate::lanes::lsp::{LspLane, LspLaneContributor};
-use crate::lanes::memory::{spawn_memory_indexer, spawn_memory_sweeper};
+use crate::lanes::memory::{
+    MemoryLane, spawn_memory_indexer, spawn_memory_sweeper, spawn_usage_flusher,
+};
 use crate::lanes::native::NativeLane;
 use crate::lanes::output::{OutputLaneContributor, spawn_sweeper};
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
@@ -438,6 +440,15 @@ impl AgentRuntimeBuilder {
             )),
             _ => None,
         };
+        // The memory tools, the forget approval and the core block (roadmap
+        // 3.3) exist exactly when the runtime has a memory service; the
+        // usage flush writes what search and get noted, off the request path.
+        let memory_lane = memory
+            .as_ref()
+            .map(|service| MemoryLane::new(service.clone(), store.clone(), runtime.clone()));
+        let memory_flusher = memory
+            .as_ref()
+            .map(|service| spawn_usage_flusher(service.clone()));
         let has_model_loop = default_provider.is_some();
         let has_native_lane = native_lane.is_some();
         // Every kind the builder itself serves with the turn executor, in a
@@ -507,6 +518,7 @@ impl AgentRuntimeBuilder {
         })?);
         let mut tool_contributors = extra_contributors;
         tool_contributors.extend(output_lane);
+        tool_contributors.extend(memory_lane.as_ref().map(|lane| lane.contributor.clone()));
         tool_contributors.extend([
             // The Rust coding toolpack, once registered, joins the SAME
             // lane: same snapshot, same durable execution, same receipts.
@@ -524,6 +536,7 @@ impl AgentRuntimeBuilder {
         if let Some(guard) = external_guard {
             tool_guards.push(Arc::new(guard));
         }
+        tool_guards.extend(memory_lane.as_ref().map(|lane| lane.guard.clone()));
         tool_guards.extend([
             // Both coding-namespace guards of the crate's own chain: the
             // permission matrix and the high-risk fresh-approval guard.
@@ -575,6 +588,8 @@ impl AgentRuntimeBuilder {
                         Arc::clone(&subagent_lane) as Arc<dyn agentkit_chat::UsageAuthorizer>
                     ),
                     output: output_gate,
+                    core_memory: memory_lane.as_ref().map(|lane| lane.core.clone()),
+                    core_memory_refreeze: memory_lane.as_ref().map(|lane| lane.refreeze.clone()),
                     ..Default::default()
                 },
             )
@@ -727,6 +742,7 @@ impl AgentRuntimeBuilder {
             _output_sweeper: output_sweeper,
             _memory_sweeper: memory_sweeper,
             _memory_indexer: memory_indexer,
+            _memory_flusher: memory_flusher,
         })
     }
 }

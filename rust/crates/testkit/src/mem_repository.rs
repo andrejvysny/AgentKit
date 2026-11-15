@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use agentkit_memory::{
-    Actor, EventKind, MemoryError, MemoryEvent, MemoryRepository, MemoryResult, MemoryTx,
+    Actor, CorePin, EventKind, MemoryError, MemoryEvent, MemoryRepository, MemoryResult, MemoryTx,
     NewRecord, Page, PurgeReport, Record, RecordFilter, RecordId, Scope, Status, Timestamp,
+    core_tokens,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -50,7 +51,14 @@ impl State {
             EventKind::Proposed
         };
         let (actor, at) = (rec.origin.actor(), rec.created_at);
-        let detail = supersedes.map(|old| json!({ "supersedes": old.to_string() }));
+        let mut detail = serde_json::Map::new();
+        if let Some(old) = supersedes {
+            detail.insert("supersedes".to_owned(), json!(old.to_string()));
+        }
+        if let Some(why) = &rec.rationale {
+            detail.insert("rationale".to_owned(), json!(why));
+        }
+        let detail = (!detail.is_empty()).then(|| serde_json::Value::Object(detail));
         let mut record = rec.into_record(id);
         record.supersedes = supersedes;
         self.records.insert(id, record);
@@ -177,6 +185,70 @@ impl MemoryRepository for InMemoryMemoryRepository {
             _ => {}
         }
         state.push_event(id, Status::event_into(to), actor, None, at);
+        Ok(())
+    }
+
+    async fn set_core(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        pin: Option<CorePin>,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
+        let core = pin.is_some();
+        let state = &mut staged(tx)?.state;
+        let record = state
+            .records
+            .get_mut(&id)
+            .ok_or(MemoryError::NotFound(id))?;
+        if record.status != Status::Active || record.valid_to.is_some() {
+            return Err(MemoryError::InvalidInput(
+                "only a current active record can be pinned or unpinned".to_owned(),
+            ));
+        }
+        record.is_core = core;
+        record.core_order = pin.and_then(|pin| pin.order);
+        if let Some(pin) = pin {
+            // The staged state is a copy of the base the commit compares, so
+            // this is the check a concurrent pin loses with a conflict.
+            let scope = state.records[&id].scope.clone();
+            let pinned: Vec<Record> = state
+                .records
+                .values()
+                .filter(|r| {
+                    r.is_core
+                        && r.status == Status::Active
+                        && r.valid_to.is_none()
+                        && (r.scope == Scope::user() || r.scope == scope)
+                })
+                .cloned()
+                .collect();
+            let used = core_tokens(&pinned);
+            if used > pin.max_tokens {
+                return Err(MemoryError::InvalidInput(format!(
+                    "pinning would use {used} of the {} core-block tokens; unpin or shorten an entry first",
+                    pin.max_tokens
+                )));
+            }
+        }
+        let kind = if core {
+            EventKind::Pinned
+        } else {
+            EventKind::Unpinned
+        };
+        state.push_event(id, kind, actor, None, at);
+        Ok(())
+    }
+
+    async fn record_use(&self, ids: &[RecordId], at: Timestamp) -> MemoryResult<()> {
+        let mut committed = self.committed();
+        for id in ids {
+            if let Some(record) = committed.records.get_mut(id) {
+                record.last_used_at = Some(at);
+                record.use_count += 1;
+            }
+        }
         Ok(())
     }
 

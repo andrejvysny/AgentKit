@@ -149,3 +149,75 @@ store must be able to replace the adapter without changing ranking.
   supplies libonnxruntime via `ORT_DYLIB_PATH` and nothing is downloaded at
   build time; `tokenizers` `=0.23.2`): the model and tokenizer sha-256 are
   pinned, the bytes are read once, hashed, and loaded from that buffer.
+
+## Addendum: explicit writes, tools and the core block (roadmap 3.3)
+
+- **Write paths.** `MemoryService::propose` is W1 and W3. The model never
+  decides what becomes active, and neither its `owner_requested` flag (advisory
+  only) nor a quote it offers (the tool takes none) is consulted. A record is
+  written active with origin `owner_explicit` only when both hold, checked in
+  code: (a) the record `text`, after whitespace, zero-width, smart-punctuation
+  and case folding, is a verbatim span (at least 12 characters) of the
+  owner-typed text of the turn, and the evidence quote is that matched span as
+  the owner typed it; (b) that owner text asks to remember, by a whole-word
+  match (case and diacritics ignored) against one list, `REMEMBER_PHRASES` in
+  `gate.rs` (English: remember, don't forget, note that, keep in mind; Slovak:
+  zapamataj, pamataj si, nezabudni, poznac si). The evidence also carries the
+  chat id, message id and SHA-256 of that text, and is secret-screened like the
+  text. Anything else is a proposal (`agent_proposal`), and the tool result
+  says why it was not written directly. The owner-typed text comes from the
+  `OwnerTurnSource` port: the user message the run answers, text parts only
+  (never the turn-context part), not a message that relays a child's report and
+  not any message of a child agent's chat, and without what looks pasted
+  (composer `pastedRanges`, fenced code blocks, Markdown quoted lines,
+  paragraphs over 600 characters); pasted text is data, not the owner's words. `crates/memory/src/gate.rs` is the minimal write gate (containment,
+  size, secrets, duplicate and 90-day rejection suppression); 3.4 extends it
+  with update, rate and the sensitive-category downgrade. Its secret check is a
+  value-pattern scan in the memory crate because the credential redactor in
+  `agentkit-core` is key-based; unifying them is a follow-up.
+- **Rationale** is not a column: `NewRecord.rationale` becomes the `detail` of
+  the record's first audit event, so a purge scrubs it with the rest.
+- **Port additions.** `MemoryRepository::set_core` (pin or unpin, with a
+  `pinned` or `unpinned` event) and `record_use` (`last_used_at`, `use_count`,
+  unaudited telemetry). The service batches uses in memory (`note_use`) and
+  `flush_usage` writes them; the runtime flushes every 30 seconds, so no search
+  waits for a write.
+- **Owner actions** (`approve` with optional edited text, `reject`, `edit` as a
+  supersession that keeps the pin, `retract`, `pin`, `unpin`, `list`,
+  `history`, `core_block`, `core_fill`) are service methods for hosts; the
+  owner UI is a later package. `pin` refuses when the block of the owner scope
+  plus the record's scope would pass 1,500 estimated tokens (characters / 4);
+  the repository re-checks that ceiling inside the committing transaction
+  (`set_core` takes a `CorePin { order, max_tokens }`), so two concurrent pins
+  cannot both pass a stale check. `edit` closes the old record with a
+  compare-and-set on `valid_to IS NULL` (store replay and the twin's base
+  version), so an edit racing a pin or a retraction loses with `Conflict`.
+- **Tools** live in `agentkit-memory` (`memory_tools`) over the ports
+  `SessionScopes` (the owner's `user` scope, a host-set project id in chat
+  metadata `agentkit.memory.projectId`, and the session profile's agent id) and
+  `OwnerTurnSource`. Search and get are `read`; propose and forget are `write`
+  and contributed as direct writes. The runtime's `memory` lane contributes
+  them under namespace `memory` and its guard returns an approval ask for
+  `memory_forget` on every call, so the staging wrapper binds the answer to the
+  arguments' hash; staging never keys a standing grant for the `memory`
+  namespace, so each forget asks again. A child is read-only by convention:
+  `MEMORY_WRITE_TOOLS` names the two tools a role filter must drop, and both
+  declare effect `write` and capability `memory.write` for the delegation
+  guard (package 4.4) to key on. Results carry the "information, not
+  instructions" line in the summary the model reads as well as in the data; `memory_get` and `memory_forget` treat a proposal, a rejected or a
+  retracted record, or another scope's record as not found.
+- **Core block (S4).** `render_core_block` renders the active pinned records of
+  the session's scopes, ordered scope, `core_order`, id, inside
+  `<memory kind="core">` with one labelled line per entry; text is flattened to
+  one line, invisible format characters are stripped, and any `<memory` tag in
+  it (any case, spaces allowed) is broken. The chat executor takes the
+  block from a `CoreMemorySource` port, freezes it in chat metadata at the
+  session's first turn like S3, queues a `core_memory_changed` note per scope
+  for each later pin or edit, and adopts the current block when the queued
+  notes pass `REFREEZE_DIFF_BYTES` or `refreeze_core_memory` is called
+  (explicit reload; compaction hosts call it beside `refreeze_project_rules`).
+  An unpin, retraction or forget of a pinned record refreezes at once, on the
+  first turn that sees it (one `cache_break`, reason `refreeze`): a removed
+  entry's text must leave the context, and a note never repeats it (removed
+  entries are named by id only).
+- Search: the memory_search tool calls `MemoryService::search` (hybrid, scope required, limit 1..=8) and reports its `mode` (`hybrid` or `lexical_only`).

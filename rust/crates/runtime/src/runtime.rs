@@ -13,7 +13,7 @@ use crate::builder::AgentRuntimeBuilder;
 use crate::lanes::advisor::AdvisorLane;
 use crate::lanes::coding::CodingLane;
 use crate::lanes::lsp::LspLane;
-use crate::lanes::memory::{MemoryIndexer, MemorySweeper};
+use crate::lanes::memory::{MemoryIndexer, MemorySweeper, MemoryUsageFlusher};
 use crate::lanes::output::OutputSweeper;
 use crate::lanes::subagent::SubagentLane;
 
@@ -36,6 +36,8 @@ pub struct AgentRuntime {
     pub(crate) _memory_sweeper: Option<MemorySweeper>,
     /// Background embedding of memory items; stops with the runtime.
     pub(crate) _memory_indexer: Option<MemoryIndexer>,
+    /// Periodic write of noted memory uses; stops with the runtime.
+    pub(crate) _memory_flusher: Option<MemoryUsageFlusher>,
 }
 
 impl AgentRuntime {

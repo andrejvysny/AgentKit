@@ -5,24 +5,36 @@
 //! store. Adapters live in layer 4, twins and conformance suites in
 //! `agentkit-testkit`.
 
+mod core_block;
 mod embedding;
 mod error;
+mod gate;
 mod ids;
 mod model;
 mod ports;
 mod retrieval;
 mod search;
 mod service;
+mod tools;
+mod write;
 
+pub use core_block::{
+    CORE_BUDGET_TOKENS, CoreBlock, CoreEntry, civil_date, core_tokens, entry_tokens,
+    estimate_tokens, parse_date, render_core_block, scope_label, short_id, single_line,
+};
 pub use embedding::EmbeddingStatus;
 pub use error::{MemoryError, MemoryResult};
+pub use gate::{
+    GateRefusal, MIN_QUOTE_CHARS, QuoteCheck, REMEMBER_PHRASES, contains_secret,
+    has_remember_request, normalize, normalized_key, owner_span, screen_text, strip_invisible,
+};
 pub use ids::{ItemId, ModelId, RecordId, Timestamp};
 pub use model::{
     Actor, Corpus, EventKind, Kind, MAX_TEXT_CHARS, MemoryEvent, NewRecord, Origin, Page,
     PurgeReport, Record, RecordFilter, Scope, ScopeKind, Status,
 };
 pub use ports::{
-    Embedder, IndexTx, MemoryRepository, MemoryTx, NoopReranker, Reranker, RetrievalIndex,
+    CorePin, Embedder, IndexTx, MemoryRepository, MemoryTx, NoopReranker, Reranker, RetrievalIndex,
 };
 pub use retrieval::{
     Candidate, DEFAULT_SEARCH_LIMIT, Hit, IndexFilter, IndexItem, IndexStats, ItemVector,
@@ -31,3 +43,9 @@ pub use retrieval::{
     VECTOR_TOP_K,
 };
 pub use service::{MemoryService, REJECTED_RETENTION_MS, RETRACTED_RETENTION_MS};
+pub use tools::{
+    MEMORY_FORGET, MEMORY_GET, MEMORY_GUIDANCE, MEMORY_NOTICE, MEMORY_PROPOSE, MEMORY_SEARCH,
+    MEMORY_TOOL_NAMES, MEMORY_WRITE_CAPABILITY, MEMORY_WRITE_TOOLS, MemoryToolEnv, OwnerTurnSource,
+    SessionScopes, is_memory_write_tool, memory_tool_definitions, memory_tools,
+};
+pub use write::{Downgrade, MAX_RATIONALE_CHARS, OwnerMessage, Proposal, ProposeOutcome};

@@ -216,6 +216,9 @@ pub struct NewRecord {
     pub core_order: Option<i64>,
     pub created_at: Timestamp,
     pub created_by_task: Option<String>,
+    /// Why the agent proposes it. Not a column: the adapter writes it to the
+    /// `detail` of the record's first audit event, so a purge scrubs it.
+    pub rationale: Option<String>,
 }
 
 impl NewRecord {
@@ -244,6 +247,7 @@ impl NewRecord {
             core_order: None,
             created_at: at,
             created_by_task: None,
+            rationale: None,
         }
     }
 

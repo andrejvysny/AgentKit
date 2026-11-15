@@ -343,6 +343,7 @@ dependencies = [
 name = "agentkit-memory"
 version = "0.1.0"
 dependencies = [
+ "agentkit-core",
  "async-trait",
  "serde",
  "serde_json",

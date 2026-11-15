@@ -19,6 +19,15 @@ use crate::retrieval::{
     Candidate, Hit, IndexFilter, IndexItem, IndexStats, ItemVector, LexicalQuery, ModelSpec,
 };
 
+/// How a record is pinned to the core block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CorePin {
+    /// Rank within the scope; unset sorts last.
+    pub order: Option<i64>,
+    /// Estimated tokens the block may not pass once this record is in it.
+    pub max_tokens: usize,
+}
+
 macro_rules! opaque_tx {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -99,6 +108,27 @@ pub trait MemoryRepository: Send + Sync {
         actor: Actor,
         at: Timestamp,
     ) -> MemoryResult<()>;
+
+    /// Pin (`Some`) or unpin (`None`) an active, current record. A pin's
+    /// `order` ranks the entry within its scope (unset sorts last) and is
+    /// cleared on unpin; its `max_tokens` is re-checked against the block of
+    /// the owner's scope and the record's scope inside the committing
+    /// transaction, so two concurrent pins cannot both pass a stale check
+    /// ([`MemoryError::InvalidInput`] when it would be over). Appends a
+    /// `pinned` or `unpinned` event.
+    async fn set_core(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        pin: Option<CorePin>,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()>;
+
+    /// Count one use of each record that still exists: `last_used_at = at`,
+    /// `use_count + 1`. Not part of a transaction and not audited; it is
+    /// usage telemetry the service records off the request path.
+    async fn record_use(&self, ids: &[RecordId], at: Timestamp) -> MemoryResult<()>;
 
     /// Commit `tx` together with the index transaction `index_tx` of
     /// `index`. The default commits the records first and the index second,

@@ -38,6 +38,9 @@ pub struct ChatExecutorOptions {
     /// channel for BOTH Chat and Coding profiles. Consulted per turn so
     /// `configure_subagents` takes effect without rebuilding the executor.
     pub delegation_guidance: Option<Arc<dyn crate::DelegationGuidance>>,
+    /// Where a session's core memory block (segment S4) comes from. Absent,
+    /// the session has no S4 (roadmap 3.3).
+    pub core_memory: Option<Arc<dyn crate::CoreMemorySource>>,
     /// Per-turn, user-side context line (T4.4 recommendations). Appended to
     /// the turn's user message only; absent, nothing is added.
     pub turn_context: Option<Arc<dyn crate::TurnContextHook>>,
@@ -99,6 +102,7 @@ impl Default for ChatExecutorOptions {
             tool_guards: vec![],
             project_instructions: None,
             delegation_guidance: None,
+            core_memory: None,
             turn_context: None,
             turn_context_date: false,
             turn_oversize: None,

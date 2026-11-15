@@ -373,10 +373,12 @@ impl ChatExecutor {
         let mut rules =
             crate::project_instructions::project_rules_block(&options, &context, chat_id, session)
                 .await?;
-        // S4, the core memory block: not rendered by this executor yet. Both
-        // layout builds take it from here, so its digest is the one recorded
-        // with the prefix and refreshed by a compaction.
-        let memory_core: Option<String> = None;
+        // Core memory (roadmap 3.3, ADR 0028 S4): frozen at the session's
+        // first turn like S3; later pins reach the model as turn-context
+        // notes. Both layout builds take it from here, so its digest is the
+        // one recorded with the prefix and refreshed by a compaction.
+        let mut memory_core: Option<String> =
+            crate::core_memory::core_memory_block(&options, &context, chat_id, session).await?;
         let mut layout = agentkit_core::PromptLayout::of(
             base_prompt.as_deref(),
             rules.as_deref(),
@@ -617,11 +619,18 @@ impl ChatExecutor {
             // A compaction breaks the cache anyway: adopt what waited for such
             // a moment and move the prefix to a new revision.
             let adopted = rewrite::adopt_pending(&options, &context, chat_id).await?;
-            if adopted.rules {
-                rules = crate::project_instructions::project_rules_block(
-                    &options, &context, chat_id, session,
-                )
-                .await?;
+            if adopted.rules || adopted.memory {
+                if adopted.rules {
+                    rules = crate::project_instructions::project_rules_block(
+                        &options, &context, chat_id, session,
+                    )
+                    .await?;
+                }
+                if adopted.memory {
+                    memory_core =
+                        crate::core_memory::core_memory_block(&options, &context, chat_id, session)
+                            .await?;
+                }
                 layout = agentkit_core::PromptLayout::of(
                     base_prompt.as_deref(),
                     rules.as_deref(),

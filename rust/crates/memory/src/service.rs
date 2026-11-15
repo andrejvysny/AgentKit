@@ -4,7 +4,7 @@
 //! later roadmap package. All of it lives here, never in an adapter.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use sha2::{Digest, Sha256};
 
@@ -14,7 +14,7 @@ use crate::model::Page;
 use crate::model::{
     Actor, Corpus, EventKind, NewRecord, PurgeReport, Record, RecordFilter, Scope, Status,
 };
-use crate::ports::{Embedder, MemoryRepository, NoopReranker, Reranker, RetrievalIndex};
+use crate::ports::{CorePin, Embedder, MemoryRepository, NoopReranker, Reranker, RetrievalIndex};
 use crate::retrieval::{IndexItem, REEMBED_GRACE_MS, Searchability};
 
 /// A retracted record is purged for good this long after its retraction
@@ -63,6 +63,9 @@ pub struct MemoryService {
     /// re-embed holds the write side, so no write slips between it and the
     /// model switch.
     pub(crate) write_gate: tokio::sync::RwLock<()>,
+    /// Uses noted by search and get, written by [`Self::flush_usage`] off
+    /// the request path.
+    usage: Mutex<Vec<(RecordId, Timestamp)>>,
 }
 
 impl MemoryService {
@@ -77,7 +80,29 @@ impl MemoryService {
             reembed_grace_ms: REEMBED_GRACE_MS,
             index_hint: AtomicBool::new(false),
             write_gate: tokio::sync::RwLock::new(()),
+            usage: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Note that `ids` were returned to the model at `at`. Memory only: the
+    /// request path never waits for a write.
+    pub fn note_use(&self, ids: &[RecordId], at: Timestamp) {
+        let mut pending = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
+        pending.extend(ids.iter().map(|id| (*id, at)));
+    }
+
+    /// Write the noted uses (`last_used_at`, `use_count`) in one call and
+    /// return how many were written. A failed write drops them: usage is
+    /// telemetry, not a record.
+    pub async fn flush_usage(&self) -> MemoryResult<usize> {
+        let pending =
+            std::mem::take(&mut *self.usage.lock().unwrap_or_else(PoisonError::into_inner));
+        let Some(at) = pending.iter().map(|(_, at)| *at).max() else {
+            return Ok(0);
+        };
+        let ids: Vec<RecordId> = pending.iter().map(|(id, _)| *id).collect();
+        self.repository.record_use(&ids, at).await?;
+        Ok(ids.len())
     }
 
     pub fn with_embedder(self, embedder: Arc<dyn Embedder>) -> Self {
@@ -192,6 +217,18 @@ impl MemoryService {
     /// from default search) and the new one is indexed. A replacement that
     /// is not active, or is otherwise invalid, leaves everything untouched.
     pub async fn supersede(&self, old: RecordId, new: NewRecord) -> MemoryResult<RecordId> {
+        self.supersede_pinned(old, new, None).await
+    }
+
+    /// [`Self::supersede`], pinning the replacement in the same transaction
+    /// when `pin` is set, so the repository re-checks the core budget against
+    /// the block as the commit sees it (the old record already closed).
+    pub(crate) async fn supersede_pinned(
+        &self,
+        old: RecordId,
+        new: NewRecord,
+        pin: Option<CorePin>,
+    ) -> MemoryResult<RecordId> {
         new.validate()?;
         if new.status != Status::Active {
             return Err(MemoryError::InvalidInput(
@@ -212,6 +249,11 @@ impl MemoryService {
         );
         let mut tx = self.repository.begin().await?;
         let id = self.repository.supersede(&mut tx, old, new).await?;
+        if pin.is_some() {
+            self.repository
+                .set_core(&mut tx, id, pin, Actor::Owner, fresh.3)
+                .await?;
+        }
         let mut index_tx = self.index.begin_index().await?;
         let closed = index_item(
             old,

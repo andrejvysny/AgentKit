@@ -21,6 +21,7 @@ use agentkit_core::{
 };
 use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
 use agentkit_lsp::{LSP_ARG_ALIASES, lsp_tool_definitions};
+use agentkit_memory::{MEMORY_TOOL_NAMES, memory_tool_definitions};
 use agentkit_providers::{
     ChatCompletionsProvider, SchemaLane, TrustedTransport, build_responses_request_with_warnings,
     schema_lane_violations,
@@ -141,6 +142,9 @@ async fn all_tools() -> Vec<Arc<dyn Tool>> {
     tools.push(definition_only(advisor_tool_definition(), &[]));
     for definition in lsp_tool_definitions() {
         tools.push(definition_only(definition, LSP_ARG_ALIASES));
+    }
+    for definition in memory_tool_definitions() {
+        tools.push(definition_only(definition, &[]));
     }
     tools
 }
@@ -661,6 +665,7 @@ async fn every_static_tool_is_linted() {
         .chain(SUBAGENT_TOOL_NAMES.iter())
         .chain([REPORT_FINDINGS_TOOL].iter())
         .chain(LSP_TOOL_NAMES.iter())
+        .chain(MEMORY_TOOL_NAMES.iter())
         .chain([ADVISOR_TOOL].iter())
         .map(|name| (*name).to_owned())
         .collect();
@@ -668,7 +673,7 @@ async fn every_static_tool_is_linted() {
         names, expected,
         "a tool was added or removed without the lint"
     );
-    assert_eq!(tools.len(), 26);
+    assert_eq!(tools.len(), 30);
 }
 
 #[tokio::test]
@@ -1050,7 +1055,11 @@ fn description_gaps(def: &ToolDefinition, tool_names: &BTreeSet<String>) -> Vec<
 
 /// Tools whose descriptions already carry all three marked parts. They may
 /// not regress; the rest are the input list for T4.3.
-const STRUCTURE_COMPLIANT: [&str; 13] = [
+const STRUCTURE_COMPLIANT: [&str; 17] = [
+    "memory_search",
+    "memory_get",
+    "memory_propose",
+    "memory_forget",
     "read_file",
     "write_file",
     "find_files",

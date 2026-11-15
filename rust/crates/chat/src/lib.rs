@@ -3,6 +3,7 @@
 mod budget;
 mod chat;
 mod continuation;
+mod core_memory;
 mod emulated_tool_call;
 mod error;
 mod ports;
@@ -16,6 +17,10 @@ pub use budget::{
 pub use chat::{
     AttachmentBudgets, ChatExecutor, ChatExecutorOptions, ChatHookTimeouts, ChatHostExt,
     CorrectionConfig, SubmitChat,
+};
+pub use core_memory::{
+    CORE_MEMORY_METADATA_KEY, CoreMemoryBlock, CoreMemoryEntry, CoreMemorySource,
+    refreeze_core_memory,
 };
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
 pub use error::{ChatError, ChatResult};
