@@ -299,6 +299,7 @@ impl ChatExecutor {
                 chat_id,
                 options.tool_classification.as_ref(),
                 late,
+                provider.tool_lane(),
             )
             .await?
         } else {
@@ -310,6 +311,7 @@ impl ChatExecutor {
             chat_id,
             &registry,
             classification.as_ref(),
+            provider.tool_lane(),
         )
         .await?;
         let base_prompt = profile
@@ -366,6 +368,7 @@ impl ChatExecutor {
                 prefix::Deferral {
                     classification: classification.as_ref(),
                     index: deferred_index.as_deref(),
+                    lane: provider.tool_lane(),
                 },
             )
             .await?;

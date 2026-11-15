@@ -311,6 +311,9 @@ impl ChatProvider for ConfiguredProvider {
     fn tracks_transport_requests(&self) -> bool {
         self.inner.tracks_transport_requests()
     }
+    fn tool_lane(&self) -> agentkit_core::ToolLane {
+        self.inner.tool_lane()
+    }
     fn id(&self) -> &str {
         self.inner.id()
     }

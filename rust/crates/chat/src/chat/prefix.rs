@@ -8,7 +8,7 @@ use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
     Classification, CoreError, Dialect, Freeze, PrefixDigests, PromotionObserver, PromptLayout,
-    ToolDefinition, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze, tools_digest,
+    ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze, tools_digest,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -23,6 +23,8 @@ pub(super) struct Deferral<'a> {
     pub classification: Option<&'a Classification>,
     /// The index text already placed in S2 this turn.
     pub index: Option<&'a str>,
+    /// The provider's wire protocol, which picks the profile's dialect.
+    pub lane: ToolLane,
 }
 
 /// The session's dialect and the registry's offered definitions as it
@@ -33,9 +35,10 @@ fn presented(
     metadata: &Value,
     prior: Option<&AiSessionPrefix>,
     registry: &ToolRegistry,
+    lane: ToolLane,
 ) -> (Option<Dialect>, Vec<ToolDefinition>) {
     let profile = agentkit_sessions::read_model_profile(metadata);
-    let dialect = agentkit_core::session_dialect(prior, profile.as_ref());
+    let dialect = agentkit_core::session_dialect(prior, profile.as_ref(), lane);
     let canonical = registry.definitions();
     let offered = match &dialect {
         Some(dialect) => dialect.render(&canonical),
@@ -54,6 +57,7 @@ pub(super) async fn classification_for(
     chat_id: &str,
     host: Option<&Classification>,
     late: bool,
+    lane: ToolLane,
 ) -> ChatResult<Option<Classification>> {
     let chat = context
         .store
@@ -62,7 +66,7 @@ pub(super) async fn classification_for(
         .ok_or(ChatError::SessionDisappeared)?;
     let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
     let from_profile = agentkit_sessions::read_model_profile(&chat.metadata).map(|profile| {
-        let dialect = agentkit_core::session_dialect(prior.as_ref(), Some(&profile));
+        let dialect = agentkit_core::session_dialect(prior.as_ref(), Some(&profile), lane);
         Classification::from_profile(&profile, dialect.as_ref())
     });
     let mut classification = host
@@ -106,6 +110,7 @@ pub(super) async fn deferred_index(
     chat_id: &str,
     registry: &ToolRegistry,
     classification: Option<&Classification>,
+    lane: ToolLane,
 ) -> ChatResult<Option<String>> {
     let Some(classification) = classification else {
         return Ok(None);
@@ -123,7 +128,7 @@ pub(super) async fn deferred_index(
     {
         return Ok(Some(text.to_owned()));
     }
-    let (dialect, offered) = presented(&chat.metadata, prior.as_ref(), registry);
+    let (dialect, offered) = presented(&chat.metadata, prior.as_ref(), registry, lane);
     let surface = ToolSurface::reconcile_with(prior.as_ref(), &offered, Some(classification));
     let view = registry.toolset_view(&offered, dialect.as_ref());
     Ok(surface.index_with(&view))
@@ -222,7 +227,7 @@ pub(super) async fn record(
         .await?
         .ok_or(ChatError::SessionDisappeared)?;
     let prior = agentkit_sessions::read_session_prefix(&chat.metadata);
-    let (dialect, offered) = presented(&chat.metadata, prior.as_ref(), registry);
+    let (dialect, offered) = presented(&chat.metadata, prior.as_ref(), registry, deferral.lane);
     let surface = ToolSurface::reconcile_with(prior.as_ref(), &offered, deferral.classification);
     let frozen = surface.manifest.definitions().to_vec();
     match &dialect {

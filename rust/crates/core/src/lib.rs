@@ -45,7 +45,7 @@ pub use toolset::{
 // T3.1: the presentation layer; canonical ids stay, dialects render and translate.
 pub use dialect::{
     COMMON_ID as COMMON_DIALECT_ID, COMMON_VERSION as COMMON_DIALECT_VERSION, Dialect,
-    DialectError, ToolForm, Translated, WireTool, common as common_dialect,
+    DialectError, ToolForm, ToolLane, Translated, WireTool, common as common_dialect,
     lookup as lookup_dialect, present_history, session_dialect,
 };
 // T3.2: the Anthropic dialect and its built-in tool markers.

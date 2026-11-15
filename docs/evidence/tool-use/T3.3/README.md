@@ -50,4 +50,4 @@ Strict function schemas:
 
 - `canonical_of("apply_patch")` returns `write_file` (first form); only availability checks use it.
 - `update_file` that removes the last line of a file with no final newline fails to match (the removed line's line end is part of what is replaced); the model gets edit_file's no-match teaching text.
-- Lane choice (`openai` vs `openai-chat`) is the host's; `session_dialect` has no lane input.
+- Lane choice: `session_dialect(prior, profile, lane)` takes a `ToolLane` (`ChatProvider::tool_lane`, Responses for `ResponsesProvider`, Chat Completions by default), so the `openai` profile yields `openai` on Responses and `openai-chat` on Chat Completions. Test `core/tests/dialect.rs::the_openai_profile_follows_the_provider_lane` (written, NOT run).

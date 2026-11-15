@@ -437,6 +437,11 @@ pub trait ChatProvider: Send + Sync {
     fn tracks_transport_requests(&self) -> bool {
         false
     }
+    /// The wire protocol this provider speaks; it picks the tool dialect of
+    /// a profile that has one per lane. Chat Completions unless overridden.
+    fn tool_lane(&self) -> crate::ToolLane {
+        crate::ToolLane::ChatCompletions
+    }
     fn id(&self) -> &str;
     fn stream_chat(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream;
     async fn list_models(&self, _cancellation: CancellationToken) -> Result<Vec<Value>, CoreError> {

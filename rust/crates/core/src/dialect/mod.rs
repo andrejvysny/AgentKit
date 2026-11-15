@@ -363,15 +363,28 @@ pub fn lookup(id: &str, version: &str) -> Option<Dialect> {
     }
 }
 
+/// The wire protocol a provider speaks, which decides between dialects that
+/// share a profile (the `openai` profile: vendor built-ins on Responses,
+/// the common shape on Chat Completions).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolLane {
+    Responses,
+    #[default]
+    ChatCompletions,
+}
+
 /// The dialect a session is offered tools in, or `None` for a session whose
 /// frozen tool list predates dialects (its manifest holds canonical names and
 /// stays as it is, so old sessions replay).
 ///
 /// A new session uses the profile's dialect, `common` without a profile. A
 /// profile naming an unknown dialect or version falls back to `common`.
+/// The OpenAI dialect follows the lane: `openai` (vendor built-ins) only on
+/// Responses, `openai-chat` on Chat Completions, whichever the profile names.
 pub fn session_dialect(
     prior: Option<&AiSessionPrefix>,
     profile: Option<&AiModelToolProfile>,
+    lane: ToolLane,
 ) -> Option<Dialect> {
     let legacy = prior.is_some_and(|prefix| {
         matches!(prefix.tool_manifest, Optional::Present(_))
@@ -381,5 +394,12 @@ pub fn session_dialect(
         return None;
     }
     let chosen = profile.and_then(|profile| lookup(&profile.dialect.id, &profile.dialect.version));
+    let chosen = match (chosen, lane) {
+        (Some(dialect), ToolLane::ChatCompletions) if dialect.id == OPENAI_ID => {
+            Some(openai_chat())
+        }
+        (Some(dialect), ToolLane::Responses) if dialect.id == OPENAI_CHAT_ID => Some(openai()),
+        (chosen, _) => chosen,
+    };
     Some(chosen.unwrap_or_else(common))
 }

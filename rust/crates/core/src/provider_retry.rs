@@ -81,6 +81,9 @@ impl ChatProvider for RetryProvider {
     fn tracks_transport_requests(&self) -> bool {
         self.provider.tracks_transport_requests()
     }
+    fn tool_lane(&self) -> crate::ToolLane {
+        self.provider.tool_lane()
+    }
     fn stream_chat(&self, request: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         retry_stream(
             self.provider.clone(),

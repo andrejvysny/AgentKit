@@ -344,6 +344,9 @@ impl ChatProvider for ResponsesProvider {
     fn connection_identity(&self) -> Option<ConnectionIdentity> {
         Some(self.identity.clone())
     }
+    fn tool_lane(&self) -> agentkit_core::ToolLane {
+        agentkit_core::ToolLane::Responses
+    }
     fn id(&self) -> &str {
         &self.identity.provider_id
     }

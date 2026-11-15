@@ -208,11 +208,11 @@ fn prefix(manifest: bool, dialect_version: Option<&str>) -> AiSessionPrefix {
 
 #[test]
 fn a_new_session_uses_common_and_the_profile_selects() {
-    assert_eq!(session_dialect(None, None).unwrap().id, "common");
-    assert_eq!(session_dialect(Some(&prefix(false, None)), None).unwrap().id, "common");
+    assert_eq!(session_dialect(None, None, ToolLane::Responses).unwrap().id, "common");
+    assert_eq!(session_dialect(Some(&prefix(false, None)), None, ToolLane::Responses).unwrap().id, "common");
     for (id, expected) in [("generic", "common"), ("anthropic", "anthropic"), ("openai", "openai")] {
         let profile = builtin_profile(id).expect(id);
-        let chosen = session_dialect(None, Some(&profile)).unwrap();
+        let chosen = session_dialect(None, Some(&profile), ToolLane::Responses).unwrap();
         assert_eq!(chosen.id, expected, "{id}");
         if expected == "anthropic" || expected == "openai" {
             continue; // T3.2, T3.3: own forms, see tests/dialect_anthropic.rs and dialect_openai.rs
@@ -222,13 +222,30 @@ fn a_new_session_uses_common_and_the_profile_selects() {
     }
     let mut unknown = builtin_profile("generic").unwrap();
     unknown.dialect.version = "99".into();
-    assert_eq!(session_dialect(None, Some(&unknown)).unwrap().id, "common");
+    assert_eq!(session_dialect(None, Some(&unknown), ToolLane::Responses).unwrap().id, "common");
+}
+
+#[test]
+fn the_openai_profile_follows_the_provider_lane() {
+    let profile = builtin_profile("openai").expect("openai");
+    let on = |lane| session_dialect(None, Some(&profile), lane).unwrap().id;
+    assert_eq!(on(ToolLane::Responses), "openai");
+    assert_eq!(on(ToolLane::ChatCompletions), "openai-chat");
+    // Other profiles do not change with the lane.
+    let anthropic = builtin_profile("anthropic").expect("anthropic");
+    for lane in [ToolLane::Responses, ToolLane::ChatCompletions] {
+        assert_eq!(session_dialect(None, Some(&anthropic), lane).unwrap().id, "anthropic");
+    }
+    // The Chat Completions lane offers the common coding names, no built-ins.
+    let chat = session_dialect(None, Some(&profile), ToolLane::ChatCompletions).unwrap();
+    assert_eq!(chat.wire_names(), common_dialect().wire_names());
+    assert_eq!(ToolLane::default(), ToolLane::ChatCompletions);
 }
 
 #[test]
 fn a_session_frozen_before_dialects_keeps_canonical_names() {
-    assert!(session_dialect(Some(&prefix(true, None)), None).is_none());
-    assert!(session_dialect(Some(&prefix(true, Some("1"))), None).is_some());
+    assert!(session_dialect(Some(&prefix(true, None)), None, ToolLane::Responses).is_none());
+    assert!(session_dialect(Some(&prefix(true, Some("1"))), None, ToolLane::Responses).is_some());
 }
 
 // ---- history shown to the model -------------------------------------------
