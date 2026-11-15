@@ -30,6 +30,8 @@ pub enum AiRunEventType {
     RunContextCompacted,
     #[serde(rename = "run.context.admitted")]
     RunContextAdmitted,
+    #[serde(rename = "context.cache_break")]
+    ContextCacheBreak,
     #[serde(rename = "run.verification")]
     RunVerification,
     #[serde(rename = "run.progress")]

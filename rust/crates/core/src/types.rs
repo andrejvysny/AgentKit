@@ -368,6 +368,9 @@ pub struct ChatRequest {
     pub reasoning_off: bool,
     /// What the caller wants `tool_choice` to be; the profile may downgrade it.
     pub tool_choice: crate::ToolChoice,
+    /// What the provider's cache strategy planned for this request (CE-07).
+    /// `None` sends no cache field; a transport applies it verbatim.
+    pub cache: Option<crate::CacheDirectives>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -441,6 +444,11 @@ pub trait ChatProvider: Send + Sync {
     /// a profile that has one per lane. Chat Completions unless overridden.
     fn tool_lane(&self) -> crate::ToolLane {
         crate::ToolLane::ChatCompletions
+    }
+    /// How this provider caches prompts; the host plans [`ChatRequest::cache`]
+    /// from it. Unknown providers get no cache fields.
+    fn cache_capability(&self) -> crate::CacheCapability {
+        crate::CacheCapability::None
     }
     fn id(&self) -> &str;
     fn stream_chat(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream;

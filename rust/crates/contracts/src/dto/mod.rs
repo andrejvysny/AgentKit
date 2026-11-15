@@ -37,6 +37,7 @@ mod ai_provider_model;
 mod ai_run_cancelled_event;
 mod ai_run_completed_event;
 mod ai_run_context_admitted_event;
+mod ai_run_context_cache_break_event;
 mod ai_run_context_compacted_event;
 mod ai_run_event;
 mod ai_run_event_base;
@@ -188,6 +189,10 @@ pub use ai_run_completed_event::{
 pub use ai_run_context_admitted_event::{
     AiRunContextAdmittedEvent, AiRunContextAdmittedEventData,
     AiRunContextAdmittedEventDataWindowSource, AiRunContextAdmittedEventType,
+};
+pub use ai_run_context_cache_break_event::{
+    AiRunContextCacheBreakEvent, AiRunContextCacheBreakEventData,
+    AiRunContextCacheBreakEventDataReason, AiRunContextCacheBreakEventType,
 };
 pub use ai_run_context_compacted_event::{
     AiRunContextCompactedEvent, AiRunContextCompactedEventData,

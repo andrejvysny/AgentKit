@@ -22,9 +22,10 @@ resulting breaks.
 2. **System blocks stay separate to the wire.** The chat executor builds one
    `system` message per block, tagged `metadata["agentkit.segment"]`.
    - Chat Completions sends each as its own `system` message, in order.
-   - Responses carries S2 in `instructions` (the lane's single string) and
-     S3/S4 as leading system-role `input` items. They are request-local like
-     selected content and are never checkpointed into continuation state.
+   - Responses joins S2-S4 in segment order into `instructions` (the lane's
+     single string, so the frozen head is one stable prefix). Turn context
+     rides the user side as an input item and is never hoisted there
+     (CE-07). Nothing of S2-S4 is checkpointed into continuation state.
    - Block-structured transports (Anthropic) read the tagged messages, or
      `PromptLayout::text_blocks`, so S2-S4 become three text blocks and a cache
      breakpoint sits on a real block boundary. The Anthropic request builder

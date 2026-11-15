@@ -1,3 +1,4 @@
+use agentkit_core::CacheCapability;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -16,6 +17,13 @@ pub struct ProviderPreset {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_base_urls: Option<Vec<String>>,
+    /// Prompt-cache behavior of this provider (CE-07). Absent means none.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub cache: CacheCapability,
+}
+
+fn is_none(capability: &CacheCapability) -> bool {
+    *capability == CacheCapability::None
 }
 
 pub fn provider_presets() -> &'static [ProviderPreset] {
@@ -38,6 +46,28 @@ mod tests {
         assert_eq!(preset_by_kind("omlx").unwrap().default_base_url, "");
         assert_eq!(preset_by_kind("ollama").unwrap().default_model, "llama3.2");
         assert!(preset_by_kind("custom-host-adapter").is_none());
+        assert_eq!(
+            preset_by_kind("openai").unwrap().cache,
+            CacheCapability::ImplicitPrefix {
+                hint: Some(agentkit_core::CacheHint::PromptCacheKey)
+            }
+        );
+        assert_eq!(
+            preset_by_kind("openrouter").unwrap().cache,
+            CacheCapability::ImplicitPrefix {
+                hint: Some(agentkit_core::CacheHint::SessionIdField)
+            }
+        );
+        for local in ["lmstudio", "omlx", "ollama"] {
+            assert!(matches!(
+                preset_by_kind(local).unwrap().cache,
+                CacheCapability::LocalSlot { .. }
+            ));
+        }
+        assert_eq!(
+            preset_by_kind("openai-compatible").unwrap().cache,
+            CacheCapability::None
+        );
         let frozen: serde_json::Value = serde_json::from_str(include_str!("presets.json")).unwrap();
         assert_eq!(serde_json::to_value(provider_presets()).unwrap(), frozen);
     }

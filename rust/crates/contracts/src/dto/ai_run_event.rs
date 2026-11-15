@@ -1,5 +1,6 @@
 use crate::{
     AiRunCancelledEvent, AiRunCompletedEvent, AiRunContextAdmittedEvent,
+    AiRunContextCacheBreakEvent,
     AiRunContextCompactedEvent, AiRunFailedEvent, AiRunInputAppliedEvent,
     AiRunMessageCompletedEvent, AiRunMessageDeltaEvent, AiRunMessageReasoningDeltaEvent,
     AiRunProgressEvent, AiRunStartedEvent, AiRunToolFailedEvent, AiRunToolPreparingEvent,
@@ -26,6 +27,7 @@ pub enum AiRunEvent {
     Usage(AiRunUsageEvent),
     ContextCompacted(AiRunContextCompactedEvent),
     ContextAdmitted(AiRunContextAdmittedEvent),
+    ContextCacheBreak(AiRunContextCacheBreakEvent),
     Verification(AiRunVerificationEvent),
     Progress(AiRunProgressEvent),
     InputApplied(AiRunInputAppliedEvent),
@@ -92,6 +94,11 @@ crate::impl_json_deserialize!(AiRunEvent, |value: Value| {
         <AiRunContextAdmittedEvent as crate::JsonDeserialize>::from_json(value.clone())
     {
         return Ok(Self::ContextAdmitted(member));
+    }
+    if let Ok(member) =
+        <AiRunContextCacheBreakEvent as crate::JsonDeserialize>::from_json(value.clone())
+    {
+        return Ok(Self::ContextCacheBreak(member));
     }
     if let Ok(member) = <AiRunVerificationEvent as crate::JsonDeserialize>::from_json(value.clone())
     {

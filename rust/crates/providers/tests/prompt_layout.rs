@@ -123,19 +123,14 @@ async fn chat_completions_sends_each_segment_as_its_own_system_message_in_order(
 }
 
 #[test]
-fn responses_puts_s2_in_instructions_and_later_segments_in_leading_system_items() {
+fn responses_joins_s2_to_s4_into_instructions_in_segment_order() {
     let identity = Transport::new("responses", vec![]).identity.clone();
     let body = build_responses_request(&request(), &identity, false).unwrap();
-    assert_eq!(body["instructions"], "policy");
+    assert_eq!(body["instructions"], "policy\n\nrules\n\nmemory");
     let input = body["input"].as_array().unwrap();
-    let roles: Vec<_> = input
-        .iter()
-        .map(|item| item["role"].as_str().unwrap())
-        .collect();
-    assert_eq!(roles, ["system", "system", "user"]);
-    assert_eq!(input[0]["content"][0]["text"], "rules");
-    assert_eq!(input[1]["content"][0]["text"], "memory");
-    assert_eq!(input[2]["content"][0]["text"], "hi");
+    assert_eq!(input.len(), 1);
+    assert_eq!(input[0]["role"], "user");
+    assert_eq!(input[0]["content"][0]["text"], "hi");
     // Wire key order is the layout order: tools, then instructions, then input.
     let keys: Vec<_> = body
         .as_object()

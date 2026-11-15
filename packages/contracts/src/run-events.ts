@@ -17,6 +17,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.usage"),
   Type.Literal("run.context.compacted"),
   Type.Literal("run.context.admitted"),
+  Type.Literal("context.cache_break"),
   Type.Literal("run.verification"),
   Type.Literal("run.progress"),
   Type.Literal("run.input.applied"),
@@ -645,6 +646,34 @@ export type AiRunContextAdmittedEvent = Static<
 >;
 
 /**
+ * The cached prompt prefix was rewritten, so provider caches restart (INV-3).
+ * `reason` is `"params"` (frozen request parameters changed), `"mask"`,
+ * `"compact"` or `"refreeze"` (the frozen head S1-S4 changed). Token fields
+ * are host estimates and absent when unknown.
+ */
+export const AiRunContextCacheBreakEventSchema = Type.Object({
+  type: Type.Literal("context.cache_break"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    reason: Type.Union([
+      Type.Literal("params"),
+      Type.Literal("mask"),
+      Type.Literal("compact"),
+      Type.Literal("refreeze"),
+    ]),
+    tokens_before: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+    tokens_after: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    ),
+  }),
+});
+export type AiRunContextCacheBreakEvent = Static<
+  typeof AiRunContextCacheBreakEventSchema
+>;
+
+/**
  * The outcome of ONE verification of this run — "did the work actually land?"
  * as answered after a pass, not as narrated by the model.
  *
@@ -847,6 +876,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunUsageEventSchema,
   AiRunContextCompactedEventSchema,
   AiRunContextAdmittedEventSchema,
+  AiRunContextCacheBreakEventSchema,
   AiRunVerificationEventSchema,
   AiRunProgressEventSchema,
   AiRunInputAppliedEventSchema,
@@ -877,6 +907,7 @@ export type AiRunEvent =
   | AiRunUsageEvent
   | AiRunContextCompactedEvent
   | AiRunContextAdmittedEvent
+  | AiRunContextCacheBreakEvent
   | AiRunVerificationEvent
   | AiRunProgressEvent
   | AiRunInputAppliedEvent

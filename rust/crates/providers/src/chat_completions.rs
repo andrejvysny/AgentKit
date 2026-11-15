@@ -18,8 +18,14 @@ use tokio_util::sync::CancellationToken;
 pub struct ChatCompletionsProvider {
     transport: Arc<dyn TrustedTransport>,
     identity: ConnectionIdentity,
+    cache: agentkit_core::CacheCapability,
 }
 impl ChatCompletionsProvider {
+    /// Declare the cache behavior of the connection's preset (CE-07).
+    pub fn with_cache_capability(mut self, cache: agentkit_core::CacheCapability) -> Self {
+        self.cache = cache;
+        self
+    }
     pub fn new(transport: Arc<dyn TrustedTransport>) -> Result<Self, CoreError> {
         let identity = transport.identity();
         if identity.provider_id.is_empty() || identity.connection_id.is_empty() {
@@ -31,6 +37,7 @@ impl ChatCompletionsProvider {
         Ok(Self {
             transport,
             identity,
+            cache: Default::default(),
         })
     }
     async fn send(
@@ -335,6 +342,9 @@ impl ChatProvider for ChatCompletionsProvider {
     }
     fn connection_identity(&self) -> Option<ConnectionIdentity> {
         Some(self.identity.clone())
+    }
+    fn cache_capability(&self) -> agentkit_core::CacheCapability {
+        self.cache.clone()
     }
     fn id(&self) -> &str {
         &self.identity.provider_id

@@ -84,6 +84,9 @@ impl ChatProvider for RetryProvider {
     fn tool_lane(&self) -> crate::ToolLane {
         self.provider.tool_lane()
     }
+    fn cache_capability(&self) -> crate::CacheCapability {
+        self.provider.cache_capability()
+    }
     fn stream_chat(&self, request: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         retry_stream(
             self.provider.clone(),

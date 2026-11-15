@@ -59,6 +59,7 @@ impl AiRunEvent {
             Self::Usage(_) => "run.usage",
             Self::ContextCompacted(_) => "run.context.compacted",
             Self::ContextAdmitted(_) => "run.context.admitted",
+            Self::ContextCacheBreak(_) => "context.cache_break",
             Self::Verification(_) => "run.verification",
             Self::Progress(_) => "run.progress",
             Self::InputApplied(_) => "run.input.applied",

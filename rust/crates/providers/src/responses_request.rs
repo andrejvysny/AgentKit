@@ -98,23 +98,30 @@ pub fn build_responses_request_notes(
     if items.len() > 1024 {
         return Err(CoreError::responses("state_limit_exceeded"));
     }
+    // S2-S4 are joined in segment order into `instructions`; turn context
+    // rides the user side and is never hoisted here (CE-07).
     let instructions = input
         .selected_content
         .iter()
         .chain(input.messages.iter())
-        .filter(|message| message.role == "system" && !is_segment_item(message))
+        .filter(|message| message.role == "system")
         .map(|message| content::text(message, true))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
     let (tools, warnings) = tools(input)?;
-    // Segment order on the wire: tools, instructions (S2), then the S3/S4
-    // system blocks, request-local selected content, and history.
-    let mut wire_items = segment_items(&input.messages)?;
-    wire_items.extend(selected_items);
+    // Segment order on the wire: tools, instructions (S2-S4), then
+    // request-local selected content and history.
+    let mut wire_items = selected_items;
     wire_items.extend(items);
     let mut body = json!({"model":input.model,"input":wire_items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
     if !instructions.is_empty() {
         body["instructions"] = instructions.into();
+    }
+    if let Some(cache) = &input.cache
+        && cache.key_field == Some(agentkit_core::CacheHint::PromptCacheKey)
+        && let Some(key) = &cache.cache_key
+    {
+        body["prompt_cache_key"] = key.clone().into();
     }
     let mut notes: Vec<ProfileNote> = sanitized_note(&replaced).into_iter().collect();
     if !tools.is_empty() {
@@ -247,8 +254,7 @@ pub(crate) fn make_continuation(
         .ok_or_else(|| CoreError::responses("invalid_request"))?;
     // Strip request-local content before persisting provider continuation.
     let selected_count =
-        segment_items(&input.messages)?.len()
-            + map_messages(&input.selected_content, &builtin_names(input), &mut vec![])?.len();
+        map_messages(&input.selected_content, &builtin_names(input), &mut vec![])?.len();
     if selected_count > items.len() {
         return Err(CoreError::responses("invalid_request"));
     }
@@ -313,24 +319,6 @@ fn message_digest(messages: &[ChatMessage]) -> Result<String, CoreError> {
         .collect();
     let bytes = bounded(&Value::Array(stable))?;
     Ok(sha256_hex(bytes.as_bytes()))
-}
-/// S3 and S4 are system blocks that the single `instructions` string cannot
-/// carry apart from S2; they travel as system-role input items instead.
-fn is_segment_item(message: &ChatMessage) -> bool {
-    matches!(
-        agentkit_core::segment_of(message),
-        Some(agentkit_core::Segment::Rules | agentkit_core::Segment::Memory)
-    )
-}
-fn segment_items(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
-    messages
-        .iter()
-        .filter(|message| is_segment_item(message))
-        .map(|message| {
-            let text = content::text(message, true)?;
-            Ok(json!({"type":"message","role":"system","content":[{"type":"input_text","text":text}]}))
-        })
-        .collect()
 }
 /// The vendor built-in tools this request offers, by the name a call carries.
 fn builtin_names(input: &ChatRequest) -> Vec<&'static str> {

@@ -226,6 +226,9 @@ impl ChatProvider for PreparedProvider {
     fn tool_lane(&self) -> agentkit_core::ToolLane {
         self.inner.tool_lane()
     }
+    fn cache_capability(&self) -> agentkit_core::CacheCapability {
+        self.inner.cache_capability()
+    }
     fn stream_chat(
         &self,
         mut input: ChatRequest,

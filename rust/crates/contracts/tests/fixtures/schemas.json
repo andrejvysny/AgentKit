@@ -2592,6 +2592,85 @@
     ],
     "type": "object"
   },
+  "AiRunContextCacheBreakEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "const": "params",
+                "type": "string"
+              },
+              {
+                "const": "mask",
+                "type": "string"
+              },
+              {
+                "const": "compact",
+                "type": "string"
+              },
+              {
+                "const": "refreeze",
+                "type": "string"
+              }
+            ]
+          },
+          "tokens_after": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tokens_before": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "context.cache_break",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
   "AiRunContextCompactedEventSchema": {
     "properties": {
       "attemptId": {
@@ -4035,6 +4114,85 @@
           },
           "data": {
             "properties": {
+              "reason": {
+                "anyOf": [
+                  {
+                    "const": "params",
+                    "type": "string"
+                  },
+                  {
+                    "const": "mask",
+                    "type": "string"
+                  },
+                  {
+                    "const": "compact",
+                    "type": "string"
+                  },
+                  {
+                    "const": "refreeze",
+                    "type": "string"
+                  }
+                ]
+              },
+              "tokens_after": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tokens_before": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "context.cache_break",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "deficiencies": {
                 "items": {
                   "type": "string"
@@ -4574,6 +4732,10 @@
       },
       {
         "const": "run.context.admitted",
+        "type": "string"
+      },
+      {
+        "const": "context.cache_break",
         "type": "string"
       },
       {

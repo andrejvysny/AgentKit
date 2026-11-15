@@ -4,7 +4,7 @@
 
 use crate::content;
 use agentkit_core::{
-    ChatMessage, ChatRequest, CoreError, ProfileNote, REASONING_HISTORY_FIELD,
+    CacheHint, ChatMessage, ChatRequest, CoreError, ProfileNote, REASONING_HISTORY_FIELD,
     REASONING_METADATA_KEY, ToolCall, apply_message_rules, resolve_request_settings,
     wire_tool_choice,
 };
@@ -175,6 +175,15 @@ pub(crate) fn build_body(
                 wire
             })
             .collect();
+    }
+    if let Some(cache) = &input.cache
+        && let (Some(key), Some(field)) = (&cache.cache_key, cache.key_field)
+    {
+        match field {
+            CacheHint::PromptCacheKey => body["prompt_cache_key"] = key.clone().into(),
+            CacheHint::SessionIdField => body["session_id"] = key.clone().into(),
+            CacheHint::ConversationHeader => {}
+        }
     }
     Ok((body, roles, notes))
 }

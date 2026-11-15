@@ -354,8 +354,29 @@ impl ChatExecutor {
         let layout = agentkit_core::PromptLayout::of(base_prompt.as_deref(), rules.as_deref(), None);
         // The correction pass takes the system text as one string.
         let system_prompt = layout.joined();
+        // The session's frozen model profile (T2.2) rides on the request; the
+        // transport applies it. A chat without one is sent as the caller built it.
+        let model_profile = context
+            .store
+            .get_chat(chat_id)
+            .await?
+            .and_then(|chat| agentkit_sessions::read_model_profile(&chat.metadata))
+            .map(Arc::new);
+        // The provider's cache capability is read before `provider` moves into
+        // the prepared wrapper below.
+        let cache_capability = provider.cache_capability();
         if session {
-            let params = json!({"model": model, "reasoningEffort": reasoning_effort});
+            // INV-5: the frozen parameters. The profile holds the thinking
+            // budget (effort map), the parallel-tool setting and the tool
+            // choice policy; a session without one keeps the older digest.
+            let mut params = json!({"model": model, "reasoningEffort": reasoning_effort});
+            if let Some(profile) = &model_profile {
+                params["thinking"] = serde_json::to_value(&profile.reasoning).unwrap_or_default();
+                params["parallelToolCalls"] =
+                    serde_json::to_value(&profile.body_extras.parallel_tool_calls)
+                        .unwrap_or_default();
+                params["toolChoice"] = serde_json::to_value(&profile.tool_choice).unwrap_or_default();
+            }
             let branch = continuation
                 .as_ref()
                 .map_or("", |cont| cont.scope.branch_id.as_str());
@@ -560,18 +581,17 @@ impl ChatExecutor {
             reasoning: Default::default(),
             turn_context: options.turn_context.clone(),
         });
-        // The session's frozen model profile (T2.2) rides on the request; the
-        // transport applies it. A chat without one is sent as the caller built it.
-        let model_profile = context
-            .store
-            .get_chat(chat_id)
-            .await?
-            .and_then(|chat| agentkit_sessions::read_model_profile(&chat.metadata))
-            .map(Arc::new);
+        // Message positions for BP3/BP4: this request ends at its last message;
+        // the previous one ended just before the last assistant reply.
+        let request_end = messages.len().checked_sub(1);
+        let previous_end = messages
+            .iter()
+            .rposition(|message| message.role == "assistant")
+            .and_then(|index| index.checked_sub(1));
         let mut request = ChatRequest {
             model: model.into(),
             messages,
-            profile: model_profile,
+            profile: model_profile.clone(),
             selected_content,
             content_binding_digest: context.task.payload["contentSnapshot"]["digest"]
                 .as_str()
@@ -590,6 +610,38 @@ impl ChatExecutor {
                 chat_id: chat_id.into(),
                 anchor: anchor.clone(),
             }));
+        }
+        // Cache directives (CE-07) come from the frozen prefix's key and the
+        // provider's declared capability; an unknown provider gets none.
+        if session
+            && let Some(prefix) = context
+                .store
+                .get_chat(chat_id)
+                .await?
+                .and_then(|chat| agentkit_sessions::read_session_prefix(&chat.metadata))
+        {
+            let tools = registry.definitions();
+            // The profile's `cacheTtl` ("5m" | "1h") sets BP1/BP2; 1h by default.
+            let long_ttl = match model_profile
+                .as_ref()
+                .and_then(|profile| profile.extra.get("cacheTtl"))
+                .and_then(Value::as_str)
+            {
+                Some("5m") => agentkit_core::CacheTtl::FiveMinutes,
+                _ => agentkit_core::CacheTtl::OneHour,
+            };
+            let directives = agentkit_core::CacheStrategy::plan_request(
+                &cache_capability,
+                &agentkit_core::CacheRequest {
+                    layout: &layout,
+                    prefix: &prefix,
+                    tools: Some(&tools),
+                    previous_end,
+                    request_end,
+                    long_ttl,
+                },
+            );
+            request.cache = (!directives.is_empty()).then_some(directives);
         }
         let run_options = RunOptions {
             request,

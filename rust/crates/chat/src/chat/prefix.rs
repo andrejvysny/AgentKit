@@ -287,6 +287,15 @@ pub(super) async fn record(
                 }),
             )
             .await?;
+        // INV-3: every break of the cached prefix is a durable event of its own.
+        let reason = if changed.as_slice() == ["params"] {
+            "params"
+        } else {
+            "refreeze"
+        };
+        context
+            .emit("context.cache_break", json!({ "reason": reason }))
+            .await?;
     }
     Ok(())
 }

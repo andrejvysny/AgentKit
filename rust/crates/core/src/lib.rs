@@ -1,5 +1,6 @@
 //! Provider-neutral asynchronous chat execution. Secrets and connection policy belong to hosts.
 mod budget;
+mod cache;
 mod call_pipeline;
 mod deferred;
 mod dialect;
@@ -72,6 +73,10 @@ pub use meta_tools::{
     toolset_load_definition,
 };
 pub use examples_render::{ExampleLane, RenderedExamples, presented_description, render_examples};
+pub use cache::{
+    Breakpoint, BreakpointAt, BreakpointShape, CacheCapability, CacheDirectives, CacheHint,
+    CacheRequest, CacheStrategy, CacheTtl, plan_breakpoints,
+};
 pub use layout::{
     Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
     cache_key, freeze, segment_of, tools_digest,

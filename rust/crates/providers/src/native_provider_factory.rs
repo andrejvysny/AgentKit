@@ -202,6 +202,9 @@ impl agentkit_sessions::ChatProviderFactory for NativeProviderFactory {
             Capability::Chat
         };
         validate_selection(&selected, model, &capability)?;
+        let cache = crate::preset_by_kind(&selected.config.provider_kind)
+            .map(|preset| preset.cache.clone())
+            .unwrap_or_default();
         let transport: Arc<dyn TrustedTransport> = Arc::new(ApprovingTransport {
             identity: ConnectionIdentity {
                 provider_id: selected.id.as_str().into(),
@@ -217,9 +220,11 @@ impl agentkit_sessions::ChatProviderFactory for NativeProviderFactory {
         });
         if protocol == "responses" {
             ResponsesProvider::new(transport)
+                .map(|provider| provider.with_cache_capability(cache))
                 .map(|provider| Arc::new(provider) as Arc<dyn ChatProvider>)
         } else {
             ChatCompletionsProvider::new(transport)
+                .map(|provider| provider.with_cache_capability(cache))
                 .map(|provider| Arc::new(provider) as Arc<dyn ChatProvider>)
         }
         .map_err(agentkit_sessions::SessionsError::ProviderCore)

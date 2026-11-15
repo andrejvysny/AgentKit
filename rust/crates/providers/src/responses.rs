@@ -22,8 +22,14 @@ use tokio_util::sync::CancellationToken;
 pub struct ResponsesProvider {
     transport: Arc<dyn TrustedTransport>,
     identity: ConnectionIdentity,
+    cache: agentkit_core::CacheCapability,
 }
 impl ResponsesProvider {
+    /// Declare the cache behavior of the connection's preset (CE-07).
+    pub fn with_cache_capability(mut self, cache: agentkit_core::CacheCapability) -> Self {
+        self.cache = cache;
+        self
+    }
     pub fn new(transport: Arc<dyn TrustedTransport>) -> Result<Self, CoreError> {
         let identity = transport.identity();
         if identity.provider_id.is_empty()
@@ -35,6 +41,7 @@ impl ResponsesProvider {
         Ok(Self {
             transport,
             identity,
+            cache: Default::default(),
         })
     }
     fn events(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
@@ -350,6 +357,9 @@ impl ChatProvider for ResponsesProvider {
     }
     fn tool_lane(&self) -> agentkit_core::ToolLane {
         agentkit_core::ToolLane::Responses
+    }
+    fn cache_capability(&self) -> agentkit_core::CacheCapability {
+        self.cache.clone()
     }
     fn id(&self) -> &str {
         &self.identity.provider_id
