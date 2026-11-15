@@ -301,6 +301,12 @@ impl SqliteStore {
         input: CreateAgentInput,
         now: i64,
     ) -> Result<(AgentInputRecord, bool)> {
+        // Child-wait requests are minted only by `park_turn`.
+        if crate::session_ops::claims_child_wait(&input.input_id, &input.content) {
+            return Err(StoreError::InvalidInput(
+                "child_wait requests are minted only by park_turn.".into(),
+            ));
+        }
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             let now_text = crate::ConversationTimestamp::from_epoch_millis(now)?

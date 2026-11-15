@@ -39,6 +39,30 @@ pub(crate) fn append(
     Ok(records)
 }
 
+/// Store-authored event for a task that holds no lease (a parked turn
+/// being woken): the store owns `seq` and `eventId`, exactly as `append`
+/// requires of any emitter. `data` must carry ids and reasons only.
+pub(crate) fn append_system_event(
+    db: &Connection,
+    task_id: &str,
+    kind: &str,
+    data: Value,
+    now: i64,
+) -> Result<()> {
+    let sequence = last(db, task_id)? + 1.0;
+    let timestamp = agentkit_kernel::ConversationTimestamp::from_epoch_millis(now)?
+        .wire_text()?
+        .into_owned();
+    let event = serde_json::json!({
+        "type": kind, "data": data, "runId": task_id,
+        "seq": sequence as u64, "eventId": format!("{task_id}:{kind}:{}", sequence as u64),
+        "timestamp": timestamp,
+        "contractVersion": agentkit_contracts::CONTRACT_VERSION,
+    });
+    append(db, task_id, vec![event], now)?;
+    Ok(())
+}
+
 /// AGENTKIT-90: stamp the durable identity of an agent-bound task into
 /// every event at the ONE append choke-point, so the identifiers are
 /// HOST facts no emitter can omit or forge — the same reasoning that

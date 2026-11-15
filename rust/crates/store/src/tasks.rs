@@ -62,7 +62,7 @@ mod lifecycle;
 mod ports;
 mod retry;
 mod runtime_state;
-pub(crate) use events::append;
+pub(crate) use events::{append, append_system_event};
 pub use events::{
     MAX_TOOL_TEXT_BYTES, TaskProjection, TaskProjectionApproval, TaskProjectionUsage,
     derive_task_projection, redact_event,
@@ -286,6 +286,33 @@ impl SqliteStore {
                 [&scope],
             ),
             None => all::<TaskRecord>(db, "tasks"),
+        })
+        .await
+    }
+
+    /// Tasks currently parked in `status`, insertion-ordered. Only the
+    /// parked states are indexed by callers (the child-wait waker).
+    pub async fn list_tasks_by_status(&self, status: TaskStatus) -> Result<Vec<TaskRecord>> {
+        self.call(move |db| {
+            let wire = serde_json::to_value(status)?;
+            select(
+                db,
+                "SELECT record FROM tasks WHERE status=? ORDER BY rowid",
+                [wire.as_str().unwrap_or_default()],
+            )
+        })
+        .await
+    }
+
+    /// How many tasks are parked in `status` (a cheap probe; no records).
+    pub async fn count_tasks_by_status(&self, status: TaskStatus) -> Result<i64> {
+        self.call(move |db| {
+            let wire = serde_json::to_value(status)?;
+            Ok(db.query_row(
+                "SELECT COUNT(*) FROM tasks WHERE status=?",
+                [wire.as_str().unwrap_or_default()],
+                |row| row.get(0),
+            )?)
         })
         .await
     }

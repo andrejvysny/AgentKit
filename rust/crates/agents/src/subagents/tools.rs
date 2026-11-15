@@ -1,7 +1,7 @@
 use super::config::{BUILTIN_ROLES, SubagentConfig};
 use super::service::{
-    SUBAGENT_ITERATIONS_CEILING, SUBAGENT_OVERALL_MS_CEILING, SUBAGENT_PROVIDER_REQUESTS_CEILING,
-    SpawnRequest, SubagentService,
+    AwaitDecision, AwaitMode, SUBAGENT_ITERATIONS_CEILING, SUBAGENT_OVERALL_MS_CEILING,
+    SUBAGENT_PROVIDER_REQUESTS_CEILING, SpawnRequest, SubagentService,
 };
 use agentkit_core::{
     AliasTable, CoreError, Tool, ToolContext, ToolDefinition, ToolResult, failure_catalog,
@@ -133,15 +133,17 @@ fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefini
             ),
             "subagent_await" => (
                 "Wait for your children to settle and collect their results. Leave child_ids out \
-                 to await every active child. Returns at the first settled moment, on timeout \
-                 (timedOut true, with partial results) or when the turn is cancelled. A timeout \
-                 is not a failure: keep working or await again. Spawn the children first with \
-                 subagent_spawn."
+                 to await every active child. Your turn parks while you wait and frees its \
+                 slot; it resumes when all awaited children settled (mode all, the default) or \
+                 the first one did (mode any), on timeout (timedOut true, with partial \
+                 results), or when the owner sends a message. A timeout is not a failure: keep \
+                 working or await again. Spawn the children first with subagent_spawn."
                     .to_owned(),
                 json!({"type":"object","required":[],"additionalProperties":false,
                     "properties":{
                     "child_ids":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"maxItems":MAX_CHILD_IDS,"description":"Children to await. Default: every active child."},
-                    "timeout":{"type":"integer","minimum":0,"maximum":max_await_ms,"description":"How long to wait, in milliseconds."}
+                    "timeout":{"type":"integer","minimum":0,"maximum":max_await_ms,"description":"How long to wait, in milliseconds."},
+                    "mode":{"type":"string","enum":["all","any"],"description":"all (default) wakes when every awaited child settled; any wakes on the first."}
                 }}),
                 660_000,
                 vec![
@@ -500,7 +502,7 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                 definition_for("subagent_await", &roles, max_await_ms),
                 |service, context, input| {
                     Box::pin(async move {
-                        let (parent_chat_id, _) =
+                        let (parent_chat_id, parent_task_id) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
                         let ids: Option<Vec<String>> = input["child_ids"].as_array().map(|items| {
                             items
@@ -509,11 +511,42 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                                 .map(str::to_owned)
                                 .collect()
                         });
+                        let mode = AwaitMode::from_arg(input["mode"].as_str())
+                            .map_err(|error| error.to_string())?;
+                        let timeout = input["timeout"].as_u64();
+                        // A durable turn parks (freeing its engine slot);
+                        // a host that cannot park, or a call with no
+                        // identity, keeps the in-turn poll.
+                        if context.suspension.is_some() && context.tool_call_id.is_some() {
+                            let decision = service
+                                .plan_await(
+                                    &parent_chat_id,
+                                    &parent_task_id,
+                                    &context.waiting_request_id(),
+                                    ids.as_deref(),
+                                    timeout,
+                                    mode,
+                                )
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            match decision {
+                                AwaitDecision::Ready(outcome) => {
+                                    return serde_json::to_value(outcome)
+                                        .map_err(|error| error.to_string());
+                                }
+                                AwaitDecision::Park(spec) => {
+                                    if context.request_human(spec) {
+                                        return Ok(json!({"parked": true}));
+                                    }
+                                }
+                            }
+                        }
                         let outcome = service
-                            .await_children(
+                            .await_children_mode(
                                 &parent_chat_id,
                                 ids.as_deref(),
-                                input["timeout"].as_u64(),
+                                timeout,
+                                mode,
                                 &context.cancellation,
                             )
                             .await

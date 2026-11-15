@@ -74,7 +74,7 @@ impl<R: TaskRepository> Default for HostOptions<R> {
             verification: None,
             verification_timeout_ms: 30_000,
             retry_backoff: RetryBackoff::default(),
-            concurrency: 2,
+            concurrency: 4,
             poll_interval_ms: 100,
             recovery_sweep_interval_ms: 30_000,
             settled_observers: vec![],

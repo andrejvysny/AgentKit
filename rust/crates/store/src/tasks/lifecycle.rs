@@ -200,36 +200,7 @@ impl SqliteStore {
         let task_id = task_id.to_owned();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
-            let mut task: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
-            if !task.status.is_terminal() {
-                task.cancel_requested = true;
-                if matches!(
-                    task.status,
-                    TaskStatus::Queued
-                        | TaskStatus::Interrupted
-                        | TaskStatus::WaitingApproval
-                        | TaskStatus::WaitingChild
-                ) || task.retry_pending
-                {
-                    // Nothing is running to notice: a queued, interrupted,
-                    // backoff-parked, approval-parked, or child-parked turn
-                    // cancels now. A parked turn holds no lease, and the
-                    // approver (or a stranded child) may never answer, so
-                    // waiting for one would strand it.
-                    task.status = TaskStatus::Cancelled;
-                    task.finished_at = Some(now);
-                    task.retry_pending = false;
-                    task.interrupt_requested = false;
-                    crate::session_ops::cancel_turn_requests(
-                        &transaction,
-                        &task.scope_id,
-                        &task.task_id,
-                        now,
-                    )?;
-                }
-                save(&transaction, &task)?;
-                lifecycle_event(&transaction, &task, "task.cancel_requested", now)?;
-            }
+            let task = cancel_task_in(&transaction, &task_id, now)?;
             transaction.commit()?;
             Ok(task)
         })
@@ -412,4 +383,95 @@ fn recover_task(
     }
     save(db, task)?;
     lifecycle_event(db, task, "task.recovered", now)
+}
+
+/// The cancel transition inside the caller's transaction. A turn that is
+/// parked or queued settles `Cancelled` here and its still-active
+/// subagents are reaped in the same transaction: nothing runs that would
+/// settle the parent and trigger the settle observer.
+fn cancel_task_in(db: &Connection, task_id: &str, now: i64) -> Result<TaskRecord> {
+    let mut task: TaskRecord = required(db, "tasks", "id", task_id)?;
+    if !task.status.is_terminal() {
+        task.cancel_requested = true;
+        if matches!(
+            task.status,
+            TaskStatus::Queued
+                | TaskStatus::Interrupted
+                | TaskStatus::WaitingApproval
+                | TaskStatus::WaitingChild
+        ) || task.retry_pending
+        {
+            // Nothing is running to notice: a queued, interrupted,
+            // backoff-parked, approval-parked, or child-parked turn
+            // cancels now. A parked turn holds no lease, and the
+            // approver (or a stranded child) may never answer, so
+            // waiting for one would strand it.
+            task.status = TaskStatus::Cancelled;
+            task.finished_at = Some(now);
+            task.retry_pending = false;
+            task.interrupt_requested = false;
+            crate::session_ops::cancel_turn_requests(db, &task.scope_id, &task.task_id, now)?;
+            reap_subagents(db, &task.task_id, now)?;
+        }
+        save(db, &task)?;
+        lifecycle_event(db, &task, "task.cancel_requested", now)?;
+    }
+    Ok(task)
+}
+
+/// Cancel the live turns of the subagents spawned under `parent_task_id`,
+/// drop their queued inputs (a promoted turn would resurrect the child) and
+/// project the rows `cancelled`. Cooperative for a running child turn: its
+/// durable cancel flag is what the worker honors.
+fn reap_subagents(db: &Connection, parent_task_id: &str, now: i64) -> Result<()> {
+    use rusqlite::OptionalExtension;
+    let mut statement = db.prepare(
+        "SELECT child_chat_id, turn_task_id FROM subagents \
+         WHERE parent_task_id=? AND status IN ('queued','running')",
+    )?;
+    let children: Vec<(String, Option<String>)> = statement
+        .query_map([parent_task_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    drop(statement);
+    let now_text = crate::ConversationTimestamp::from_epoch_millis(now)?
+        .wire_text()?
+        .into_owned();
+    for (child_chat_id, turn_task_id) in children {
+        for record in crate::agent_inputs::list_inputs(
+            db,
+            &crate::AgentInputQuery {
+                session_id: child_chat_id.clone(),
+                kinds: Some(vec![
+                    crate::AgentInputKind::FollowUp,
+                    crate::AgentInputKind::Steer,
+                ]),
+                statuses: Some(vec![crate::AgentInputStatus::Pending]),
+                target_task_id: None,
+            },
+        )? {
+            // A concurrent flush won this input: it is no longer queued.
+            let _ = crate::agent_inputs::transition_input(
+                db,
+                &record.input_id,
+                &[crate::AgentInputStatus::Pending],
+                crate::AgentInputStatus::Cancelled,
+                &crate::AgentInputPatch::default(),
+                &now_text,
+            );
+        }
+        if let Some(turn_task_id) = turn_task_id
+            && db
+                .query_row("SELECT 1 FROM tasks WHERE id=?", [&turn_task_id], |_| Ok(()))
+                .optional()?
+                .is_some()
+        {
+            cancel_task_in(db, &turn_task_id, now)?;
+        }
+        db.execute(
+            "UPDATE subagents SET status='cancelled', error=COALESCE(error, 'parent cancelled'), \
+             updated_at=? WHERE child_chat_id=? AND status IN ('queued','running')",
+            params![now, child_chat_id],
+        )?;
+    }
+    Ok(())
 }

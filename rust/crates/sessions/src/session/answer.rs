@@ -8,6 +8,7 @@ use crate::{
 };
 use agentkit_engine::TaskStatus;
 use agentkit_kernel::sha256_hex;
+use agentkit_store::is_child_wait;
 use serde_json::{Map, Value};
 
 use super::{
@@ -35,6 +36,12 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 ))
             })?;
         self.require_session(&request.session_id).await?;
+        // A child wait is the host waker's to resolve, never a human's.
+        if is_child_wait(&request.input_id, &request.content) {
+            return Err(SessionsError::invalid_input(
+                "A child wait is resolved by the host when its subagents settle; it cannot be answered.",
+            ));
+        }
         let response_hash = sha256_hex(
             &serde_json::to_string(&input.response)
                 .map_err(|error| SessionsError::invalid_input(error.to_string()))?,

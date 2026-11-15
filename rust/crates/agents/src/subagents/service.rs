@@ -5,15 +5,19 @@ use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
 use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
+use agentkit_core::HumanRequestSpec;
 use agentkit_sessions::{
-    AgentSendResult, AgentSessionService, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput,
-    SendInput, SteerInput, WhenBusy, read_session_descriptor,
+    AgentInputKind, AgentInputQuery, AgentInputStatus, AgentSendResult, AgentSessionService,
+    AnswerHumanRequest, CHAT_TURN_TASK_KIND, CreateSessionInput, FollowUpInput, SendInput,
+    SteerInput, WhenBusy, read_session_descriptor,
 };
 use agentkit_store::{
-    RegisterSubagent, SqliteStore, StoreError, SubagentRecord, TaskRecord, TaskStatus,
+    CHILD_WAIT_ID_PREFIX, CHILD_WAIT_KIND, ConversationTimestamp, RegisterSubagent, SqliteStore,
+    StoreError, SubagentRecord, TaskRecord, TaskStatus, is_child_wait,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio_util::sync::CancellationToken;
 
@@ -83,6 +87,7 @@ pub struct SubagentView {
 #[serde(rename_all = "camelCase")]
 pub struct AwaitResult {
     pub child_chat_id: String,
+    pub role: String,
     pub status: String,
     pub result: Option<String>,
     pub error: Option<String>,
@@ -94,6 +99,74 @@ pub struct AwaitOutcome {
     pub settled: bool,
     pub timed_out: bool,
     pub results: Vec<AwaitResult>,
+}
+
+/// When a parked `subagent_await` wakes on its children.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AwaitMode {
+    /// Every awaited child is terminal.
+    #[default]
+    All,
+    /// The first awaited child to settle.
+    Any,
+}
+
+impl AwaitMode {
+    /// The tool argument: absent means `all`.
+    pub fn from_arg(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("all") => Ok(Self::All),
+            Some("any") => Ok(Self::Any),
+            Some(other) => Err(format!(
+                "invalid_mode: mode must be \"all\" or \"any\", got \"{other}\""
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Any => "any",
+        }
+    }
+
+    fn satisfied(self, views: &[SubagentView]) -> bool {
+        match self {
+            Self::All => views.iter().all(|view| is_terminal_status(&view.status)),
+            Self::Any => views.is_empty() || views.iter().any(|view| is_terminal_status(&view.status)),
+        }
+    }
+}
+
+/// What `subagent_await` does for a durable turn: answer now, or park.
+#[derive(Debug)]
+pub enum AwaitDecision {
+    /// The wait is already satisfied (or non-blocking): no park needed.
+    Ready(AwaitOutcome),
+    /// Park the turn on this request; the waker resolves it.
+    Park(HumanRequestSpec),
+}
+
+/// Shared by every clone: the background waker's lifecycle and health.
+#[derive(Default)]
+struct WakerState {
+    started: AtomicBool,
+    /// Prompt re-evaluation after a park or a child settle, so the idle
+    /// backoff never delays a wake the process itself caused.
+    nudge: tokio::sync::Notify,
+    /// Failed evaluations since the service started.
+    failures: AtomicU64,
+    /// A failure streak is reported once, not once per tick.
+    warned: AtomicBool,
+}
+
+impl WakerState {
+    fn note_failure(&self, what: &str, error: &dyn std::fmt::Display) {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+        if !self.warned.swap(true, Ordering::Relaxed) {
+            eprintln!("agentkit: parked-parent waker: {what} failed: {error}");
+        }
+    }
 }
 
 /// What a `subagent_message` did: joined a live turn or started a new one.
@@ -120,6 +193,8 @@ pub struct SubagentService {
     /// Provider ids this service's executor can route to; `None` = unknown
     /// (host-only users), which skips spawn-time validation.
     routable_providers: Option<Arc<std::collections::BTreeSet<String>>>,
+    /// Parked-parent waker lifecycle (see `ensure_waker`).
+    waker: Arc<WakerState>,
 }
 
 /// Releases a lease taken during `resume` unless disarmed with `keep`, so
@@ -199,6 +274,7 @@ impl SubagentService {
             leases: WorkspaceLeaseRegistry::default(),
             spawn_gate: Arc::new(tokio::sync::Mutex::new(())),
             routable_providers: None,
+            waker: Arc::new(WakerState::default()),
         }
     }
 
@@ -916,13 +992,24 @@ impl SubagentService {
         timeout_ms: Option<u64>,
         cancellation: &CancellationToken,
     ) -> AgentsResult<AwaitOutcome> {
-        let config = self.config();
-        let poll = config.limits.await_poll_ms;
-        let timeout = timeout_ms
-            .unwrap_or(config.limits.max_await_ms)
-            .min(config.limits.max_await_ms);
-        let deadline = self.now_ms() + timeout as i64;
-        let mut rows: Vec<SubagentRecord> = match ids {
+        self.await_children_mode(
+            parent_chat_id,
+            ids,
+            timeout_ms,
+            AwaitMode::All,
+            cancellation,
+        )
+        .await
+    }
+
+    /// The awaited rows: the named children (all must be this parent's) or
+    /// every still-active child.
+    async fn await_rows(
+        &self,
+        parent_chat_id: &str,
+        ids: Option<&[String]>,
+    ) -> AgentsResult<Vec<SubagentRecord>> {
+        Ok(match ids {
             Some(ids) if !ids.is_empty() => {
                 let mut rows = Vec::with_capacity(ids.len());
                 for id in ids {
@@ -940,7 +1027,26 @@ impl SubagentService {
                 .into_iter()
                 .filter(|row| !is_terminal_status(&row.status))
                 .collect(),
-        };
+        })
+    }
+
+    /// [`Self::await_children`] with an explicit wake mode: `Any` returns
+    /// at the first settled child.
+    pub async fn await_children_mode(
+        &self,
+        parent_chat_id: &str,
+        ids: Option<&[String]>,
+        timeout_ms: Option<u64>,
+        mode: AwaitMode,
+        cancellation: &CancellationToken,
+    ) -> AgentsResult<AwaitOutcome> {
+        let config = self.config();
+        let poll = config.limits.await_poll_ms;
+        let timeout = timeout_ms
+            .unwrap_or(config.limits.max_await_ms)
+            .min(config.limits.max_await_ms);
+        let deadline = self.now_ms() + timeout as i64;
+        let mut rows = self.await_rows(parent_chat_id, ids).await?;
         let mut views: Vec<SubagentView> = Vec::with_capacity(rows.len());
         loop {
             if cancellation.is_cancelled() {
@@ -978,7 +1084,7 @@ impl SubagentService {
             }
             rows = fresh_rows;
             views = fresh_views;
-            if views.iter().all(|view| is_terminal_status(&view.status)) {
+            if mode.satisfied(&views) {
                 return Ok(AwaitOutcome {
                     settled: true,
                     timed_out: false,
@@ -998,6 +1104,244 @@ impl SubagentService {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(poll)) => {}
             }
         }
+    }
+
+    /// Decide how a durable parent turn awaits: answer now when the wait is
+    /// already satisfied (or `timeout` is 0), otherwise build the request the
+    /// turn parks on. The parked turn holds no engine slot; the waker
+    /// resolves it (`wake_parked_parents`).
+    pub async fn plan_await(
+        &self,
+        parent_chat_id: &str,
+        parent_task_id: &str,
+        request_id: &str,
+        ids: Option<&[String]>,
+        timeout_ms: Option<u64>,
+        mode: AwaitMode,
+    ) -> AgentsResult<AwaitDecision> {
+        let max_await_ms = self.config().limits.max_await_ms;
+        let timeout = timeout_ms.unwrap_or(max_await_ms).min(max_await_ms);
+        let rows = self.await_rows(parent_chat_id, ids).await?;
+        let mut views = Vec::with_capacity(rows.len());
+        for row in &rows {
+            views.push(self.refresh(row).await?);
+        }
+        let satisfied = mode.satisfied(&views);
+        if satisfied || timeout == 0 {
+            return Ok(AwaitDecision::Ready(AwaitOutcome {
+                settled: satisfied,
+                timed_out: !satisfied,
+                results: views.iter().map(await_result).collect(),
+            }));
+        }
+        let awaited: Vec<String> = views.iter().map(|view| view.child_chat_id.clone()).collect();
+        let deadline_ms = self.now_ms() + timeout as i64;
+        let content = json!({
+            "kind": CHILD_WAIT_KIND,
+            "toolName": "subagent_await",
+            "prompt": format!("Waiting for {} subagent(s).", awaited.len()),
+            "awaited": awaited,
+            "mode": mode.as_str(),
+            // Durable: a restart re-evaluates against this absolute time.
+            "deadlineMs": deadline_ms,
+            "parentTaskId": parent_task_id,
+        });
+        let content_hash = sha256_hex(content.to_string());
+        self.ensure_waker();
+        self.waker.nudge.notify_one();
+        // The expiry is the deadline: the store treats it as the timeout,
+        // never as a stale request, so a parent cannot park forever.
+        let expires_at = ConversationTimestamp::from_epoch_millis(deadline_ms)
+            .ok()
+            .and_then(|stamp| stamp.wire_text().ok().map(|text| text.into_owned()));
+        Ok(AwaitDecision::Park(HumanRequestSpec {
+            request_id: format!("{CHILD_WAIT_ID_PREFIX}{request_id}"),
+            content,
+            content_hash,
+            expires_at,
+        }))
+    }
+
+    /// Start the background waker once per service family. It re-evaluates
+    /// every parked parent each poll tick (children settling, the durable
+    /// deadline, an owner message), so a wake never depends on an in-process
+    /// event and a restarted process resumes the same waits. While nothing
+    /// is parked it backs off (a park or a settle nudges it awake) and does
+    /// not scan. It ends when every other clone of the service is gone.
+    pub fn ensure_waker(&self) {
+        if self.waker.started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let service = self.clone();
+        tokio::spawn(async move {
+            let mut idle: u32 = 0;
+            loop {
+                let poll = service.config().limits.await_poll_ms.max(10);
+                let delay = std::time::Duration::from_millis(poll << idle.min(3));
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = service.waker.nudge.notified() => idle = 0,
+                }
+                if Arc::strong_count(&service.waker) <= 1 {
+                    break;
+                }
+                match service.sweep_parked().await {
+                    Ok(Some(_)) => idle = 0,
+                    Ok(None) => idle = idle.saturating_add(1),
+                    Err(error) => service.waker.note_failure("sweep", &error),
+                }
+            }
+        });
+    }
+
+    /// Wake sweeps that failed since the service started (health counter).
+    #[must_use]
+    pub fn waker_failures(&self) -> u64 {
+        self.waker.failures.load(Ordering::Relaxed)
+    }
+
+    /// Evaluate every parked parent against its wake conditions and resume
+    /// the ones whose condition holds. Idempotent: the answer transaction
+    /// resolves a wait once, and a parent that is cancelled or already
+    /// resumed is skipped. Returns how many parents were woken.
+    pub async fn wake_parked_parents(&self) -> AgentsResult<usize> {
+        Ok(self.sweep_parked().await?.unwrap_or(0))
+    }
+
+    /// One waker tick: `None` when no turn is parked (nothing was scanned),
+    /// else how many parents woke. A cancelled parent never reaches here:
+    /// the store reaps its children as it cancels the parked turn.
+    async fn sweep_parked(&self) -> AgentsResult<Option<usize>> {
+        if self.store.count_tasks_by_status(TaskStatus::WaitingChild).await? == 0 {
+            return Ok(None);
+        }
+        let parked = self
+            .store
+            .list_tasks_by_status(TaskStatus::WaitingChild)
+            .await?;
+        let mut woken = 0usize;
+        let mut failed = false;
+        for task in parked.iter().filter(|task| task.kind == CHAT_TURN_TASK_KIND) {
+            match self.wake_parked(task).await {
+                Ok(true) => woken += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    failed = true;
+                    self.waker
+                        .note_failure(&format!("parked parent {}", task.task_id), &error);
+                }
+            }
+        }
+        if !failed {
+            self.waker.warned.store(false, Ordering::Relaxed);
+        }
+        Ok(Some(woken))
+    }
+
+    async fn wake_parked(&self, task: &TaskRecord) -> AgentsResult<bool> {
+        let pending = self
+            .store
+            .list_inputs(AgentInputQuery {
+                session_id: task.scope_id.clone(),
+                kinds: Some(vec![AgentInputKind::HumanRequest]),
+                statuses: Some(vec![AgentInputStatus::Pending]),
+                target_task_id: Some(task.task_id.clone()),
+            })
+            .await?;
+        let Some(request) = pending
+            .into_iter()
+            .find(|request| is_child_wait(&request.input_id, &request.content))
+        else {
+            return Ok(false);
+        };
+        let mode = AwaitMode::from_arg(request.content["mode"].as_str()).unwrap_or_default();
+        // Sorted and unique: concurrent sweeps compute the same response.
+        let mut awaited: Vec<String> = request.content["awaited"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        awaited.sort();
+        awaited.dedup();
+        let deadline = request.content["deadlineMs"].as_i64().unwrap_or(i64::MAX);
+        let mut views = Vec::with_capacity(awaited.len());
+        let mut results = Vec::with_capacity(awaited.len());
+        for id in &awaited {
+            match self.store.get_subagent(id).await? {
+                Some(row) => {
+                    let view = self.refresh(&row).await?;
+                    results.push(await_result(&view));
+                    views.push(view);
+                }
+                None => results.push(missing_result(id)),
+            }
+        }
+        // A missing row can never settle: it is unsettled until the timeout.
+        let satisfied = views.len() == awaited.len() && mode.satisfied(&views);
+        let reason = if satisfied {
+            match mode {
+                AwaitMode::All => "all_settled",
+                AwaitMode::Any => "first_settled",
+            }
+        } else if self.owner_message_pending(&task.scope_id).await? {
+            "owner_message"
+        } else if self.now_ms() >= deadline {
+            "timeout"
+        } else {
+            return Ok(false);
+        };
+        if reason != "timeout" {
+            results.retain(|result| result.status != MISSING_STATUS);
+        }
+        let response = json!({
+            "wake": reason,
+            "settled": satisfied,
+            "timedOut": reason == "timeout",
+            "results": results,
+        });
+        let response_hash = sha256_hex(response.to_string());
+        let answered = self
+            .store
+            .answer_human_request(AnswerHumanRequest {
+                request_id: request.input_id.clone(),
+                answer_id: format!("wake:{}", request.input_id),
+                response,
+                response_hash,
+                now: self.now_ms(),
+                message_id: format!("msg_wake:{}", request.input_id),
+                plan_tool_names: vec![],
+                policy_denial: None,
+                granted_mode: None,
+            })
+            .await;
+        match answered {
+            Ok(_) => Ok(true),
+            // Cancelled, resolved, or answered differently by a concurrent
+            // sweep: the wait is settled either way, so this is a no-op.
+            Err(StoreError::AnswerStale(_) | StoreError::AnswerConflict(_)) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Whether the owner has a steer waiting in this chat (delivered when
+    /// the turn resumes). A queued follow-up is for AFTER the turn, so it
+    /// does not interrupt the wait.
+    async fn owner_message_pending(&self, chat_id: &str) -> AgentsResult<bool> {
+        Ok(!self
+            .store
+            .list_inputs(AgentInputQuery {
+                session_id: chat_id.to_owned(),
+                kinds: Some(vec![AgentInputKind::Steer]),
+                statuses: Some(vec![AgentInputStatus::Pending]),
+                target_task_id: None,
+            })
+            .await?
+            .is_empty())
     }
 
     /// Cooperatively cancel the child's live turn AND its queued inputs.
@@ -1315,7 +1659,10 @@ impl SubagentService {
                 Some(turn_id) => self.store.get_task(turn_id).await?.is_some_and(|task| {
                     matches!(
                         task.status,
-                        TaskStatus::Running | TaskStatus::Queued | TaskStatus::WaitingApproval
+                        TaskStatus::Running
+                            | TaskStatus::Queued
+                            | TaskStatus::WaitingApproval
+                            | TaskStatus::WaitingChild
                     )
                 }),
                 None => false,
@@ -1349,6 +1696,9 @@ impl SubagentService {
     /// idempotent because cancellation is cooperative and the store's CAS
     /// transitions reject double settles.
     pub async fn reap_orphans(&self) -> AgentsResult<usize> {
+        // Startup recovery: parked parents from a previous life are
+        // re-evaluated by the waker, never re-run.
+        self.ensure_waker();
         let config = self.config();
         self.leases.expire(self.now_ms());
         // Startup path: the lease table is memory-only, so re-derive it from
@@ -1380,6 +1730,8 @@ impl SubagentService {
     /// Observe one settled task: when a parent turn finishes, reap its
     /// still-running children (cooperative, durable).
     pub async fn observe_settled(&self, task: &TaskRecord) -> AgentsResult<()> {
+        self.ensure_waker();
+        self.waker.nudge.notify_one();
         if !task.status.is_terminal() {
             return Ok(());
         }
@@ -1718,9 +2070,22 @@ impl SubagentService {
     }
 }
 
+const MISSING_STATUS: &str = "missing";
+
+fn missing_result(child_chat_id: &str) -> AwaitResult {
+    AwaitResult {
+        child_chat_id: child_chat_id.to_owned(),
+        role: String::new(),
+        status: MISSING_STATUS.to_owned(),
+        result: None,
+        error: None,
+    }
+}
+
 fn await_result(view: &SubagentView) -> AwaitResult {
     AwaitResult {
         child_chat_id: view.child_chat_id.clone(),
+        role: view.role.clone(),
         status: view.status.clone(),
         result: view.result.clone(),
         error: view.error.clone(),

@@ -496,14 +496,15 @@ impl AgentRuntimeBuilder {
             executors,
             runtime.clone(),
             HostOptions {
-                // Delegation safety: a parent turn holds its worker slot
-                // while `subagent_await` polls, so the pool must host the
-                // root sessions, their delegating parents, AND in-flight
-                // children — with the default subagent limits (8 children
-                // active, depth 2, 4 per parent) a pool sized only for the
-                // parents starves every child until the await times out.
-                // Idle workers park on the wake queue; overprovisioning is
-                // free. The child term is the START-TIME subagent
+                // Delegation safety: a durable parent turn parks in
+                // `WaitingChild` while `subagent_await` waits and holds no
+                // slot, but a turn that cannot park (or a parent between
+                // awaits) still runs, so the pool hosts the root sessions,
+                // their parents, AND in-flight children — with the default
+                // subagent limits (8 children active, depth 2, 4 per
+                // parent) a pool sized only for the parents could starve
+                // children. Idle workers park on the wake queue;
+                // overprovisioning is free. The child term is the START-TIME subagent
                 // `maxConcurrency`; `configureSubagents` clamps later raises
                 // to it, because the pool is fixed once the worker starts.
                 lease_ttl_ms,

@@ -472,6 +472,29 @@ async fn an_answered_request_answered_differently_still_conflicts() {
     assert_eq!(error.failure_event_code(), "answer_conflict");
 }
 
+#[tokio::test]
+async fn a_child_wait_is_refused_to_humans_and_never_listed_as_waiting() {
+    let (store, service) = fixture().await;
+    let content = json!({
+        "kind": "child_wait", "awaited": ["child-1"], "mode": "all", "deadlineMs": 9_000,
+    });
+    parked_turn(
+        &store,
+        "turn-cw",
+        request("childwait:req-cw", Some("turn-cw"), content, None),
+    )
+    .await;
+    let error = service
+        .answer(&answer("childwait:req-cw", "ans-1", json!({"answer": "go"})))
+        .await
+        .unwrap_err();
+    assert_eq!(error.failure_event_code(), "invalid_input");
+    let turn = store.get_task("turn-cw").await.unwrap().unwrap();
+    assert_eq!(turn.status, TaskStatus::WaitingChild);
+    let state = service.get_state(SESSION).await.unwrap();
+    assert!(state.waiting.is_none(), "a child wait is not an owner question");
+}
+
 fn session_message(error: &agentkit_sessions::SessionsError<agentkit_store::StoreError>) -> String {
     let display = error.to_string();
     let prefix = format!("{}: ", error.failure_event_code());

@@ -159,3 +159,10 @@ async fn explicit_run_once_calls_share_the_same_durable_concurrency_limit() {
         TaskStatus::Queued
     );
 }
+
+#[test]
+fn the_default_worker_pool_has_four_slots() {
+    // A parent that awaits subagents parks and frees its slot; the pool
+    // default is sized for parallel read-only children (delegation spec 4.3).
+    assert_eq!(HostOptions::default().concurrency, 4);
+}

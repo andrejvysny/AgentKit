@@ -352,6 +352,28 @@ async fn display_state_follows_the_task_projection() {
 
 struct ParentExecutor;
 
+/// Park the attempt on its unfinished children (the store transaction),
+/// publishing the marker the runner reads to skip settlement.
+async fn park_on_children(
+    context: &ExecutionContext,
+) -> agentkit_engine::EngineResult<bool, agentkit_store::StoreError> {
+    let mut suspension = context.suspension.lock().await;
+    let parked = context
+        .store
+        .wait_for_children(context.fence.clone(), context.runtime.now_ms())
+        .await
+        .map_err(agentkit_engine::EngineError::Store)?;
+    if parked {
+        *suspension = Some(agentkit_core::HumanRequestSpec {
+            request_id: format!("teammate-wait:{}", context.task.task_id),
+            content: json!({"kind": "children_parked"}),
+            content_hash: String::new(),
+            expires_at: None,
+        });
+    }
+    Ok(parked)
+}
+
 #[async_trait]
 impl TaskExecutor<agentkit_store::SqliteStore> for ParentExecutor {
     async fn execute(
@@ -375,13 +397,13 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ParentExecutor {
                 .await?;
             context.emit("run.parent.spawned", json!({})).await?;
             assert!(
-                context.park_on_children().await?,
+                park_on_children(&context).await?,
                 "the unfinished child must hold the parent"
             );
             return Ok(());
         }
         assert!(
-            !context.park_on_children().await?,
+            !park_on_children(&context).await?,
             "the settled child must release the parent"
         );
         context.emit("run.parent.resumed", json!({})).await?;

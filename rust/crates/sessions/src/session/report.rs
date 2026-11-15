@@ -165,7 +165,10 @@ pub async fn session_usage<R: SessionBackend>(
         .find(|task| {
             matches!(
                 task.status,
-                TaskStatus::Running | TaskStatus::WaitingApproval | TaskStatus::Interrupted
+                TaskStatus::Running
+                    | TaskStatus::WaitingApproval
+                    | TaskStatus::WaitingChild
+                    | TaskStatus::Interrupted
             )
         })
         .or_else(|| tasks.last());

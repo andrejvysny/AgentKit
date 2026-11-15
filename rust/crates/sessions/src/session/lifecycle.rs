@@ -8,6 +8,7 @@ use crate::{
     SessionFault, SessionMutation, SessionsError, SessionsResult, execution_state_for_mode,
     inspect_execution_state, read_execution_state, with_execution,
 };
+use agentkit_store::is_child_wait;
 use serde_json::{Map, Value, json};
 
 use super::{
@@ -185,9 +186,13 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 target_task_id: None,
             })
             .await?;
+        // A child wait is not a question for the owner.
         let waiting = records
             .iter()
-            .find(|record| record.kind == AgentInputKind::HumanRequest)
+            .find(|record| {
+                record.kind == AgentInputKind::HumanRequest
+                    && !is_child_wait(&record.input_id, &record.content)
+            })
             .cloned();
         let pending: Vec<AgentInputRecord> = records
             .into_iter()

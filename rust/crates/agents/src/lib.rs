@@ -18,8 +18,8 @@ pub use advisor::{
 pub use agents::{AgentDefinitionService, validate_agent_definition};
 pub use errors::{AgentsError, AgentsResult, LeaseHeld, RoleDenial, SnapshotError};
 pub use subagents::{
-    AwaitOutcome, AwaitResult, BUILTIN_ROLES, EffectiveRole, MessageReceipt, RoleSnapshot,
-    RoleSpec, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SpawnRequest, SpawnedChild,
+    AwaitDecision, AwaitMode, AwaitOutcome, AwaitResult, BUILTIN_ROLES, EffectiveRole,
+    MessageReceipt, RoleSnapshot, RoleSpec, SUBAGENT_ARG_ALIASES, SUBAGENT_TOOL_NAMES, SpawnRequest, SpawnedChild,
     SubagentConfig, SubagentContributor, SubagentRoleGuard, SubagentRoleLimits, SubagentService,
     SubagentView, WorkspaceLeaseRegistry, child_identity, default_delegation_guidance,
     default_role_specs, effective_role, subagent_tool_definitions, DELEGATION_TOOLSET,
