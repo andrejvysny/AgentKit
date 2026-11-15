@@ -1,23 +1,62 @@
 //! History sent back to the model. Stored messages keep canonical tool
-//! names; the model must read the names it was offered, so every request
-//! shows earlier calls and results through the session's dialect.
+//! calls; the model reads each call as it emitted it (its wire call, kept in
+//! the message metadata), or, for a call stored without one, through the
+//! session's dialect. The emitted form matters beyond style: a Responses
+//! continuation hashes the calls exactly as the provider returned them, so
+//! the next request must show those bytes again.
 
 use super::Dialect;
 use crate::{ChatMessage, ToolCall};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// `messages` with each tool call shown as the wire tool that expresses it.
-/// A call no wire tool can express (or whose arguments are not JSON) stays
-/// as stored. Tool results take the name of the call they answer.
+/// Where a stored assistant message keeps the tool calls as the model emitted
+/// them, parallel to its canonical `tool_calls` (same ids, same order). Set
+/// only when they differ from the canonical calls.
+pub const WIRE_CALLS_METADATA_KEY: &str = "wireToolCalls";
+
+/// The emitted calls recorded on `message`, when they pair with its stored
+/// calls id by id.
+fn wire_calls(message: &ChatMessage) -> Option<Vec<ToolCall>> {
+    let value = message.metadata.as_ref()?.get(WIRE_CALLS_METADATA_KEY)?;
+    let wire: Vec<ToolCall> = serde_json::from_value(value.clone()).ok()?;
+    let paired = wire.len() == message.tool_calls.len()
+        && wire
+            .iter()
+            .zip(&message.tool_calls)
+            .all(|(emitted, stored)| emitted.id == stored.id);
+    paired.then_some(wire)
+}
+
+/// `messages` with each tool call shown as the model emitted it, for a
+/// session without a dialect.
+pub fn restore_wire_calls(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    present(None, messages)
+}
+
+/// `messages` with each tool call shown as the model emitted it, else as the
+/// wire tool that expresses it. A call no wire tool can express (or whose
+/// arguments are not JSON) stays as stored. Tool results take the name of the
+/// call they answer.
 pub fn present_history(dialect: &Dialect, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    present(Some(dialect), messages)
+}
+
+fn present(dialect: Option<&Dialect>, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let mut shown: HashMap<String, String> = HashMap::new();
     let mut out = Vec::with_capacity(messages.len());
     for mut message in messages {
-        for call in &mut message.tool_calls {
-            if let Some(presented) = present_call(dialect, call) {
-                shown.insert(presented.id.clone(), presented.name.clone());
-                *call = presented;
+        if let Some(emitted) = wire_calls(&message) {
+            for call in &emitted {
+                shown.insert(call.id.clone(), call.name.clone());
+            }
+            message.tool_calls = emitted;
+        } else if let Some(dialect) = dialect {
+            for call in &mut message.tool_calls {
+                if let Some(presented) = present_call(dialect, call) {
+                    shown.insert(presented.id.clone(), presented.name.clone());
+                    *call = presented;
+                }
             }
         }
         if message.role == "tool"
@@ -25,7 +64,8 @@ pub fn present_history(dialect: &Dialect, messages: Vec<ChatMessage>) -> Vec<Cha
         {
             if let Some(name) = shown.get(id) {
                 message.name = Some(name.clone());
-            } else if let Some(name) = &message.name
+            } else if let Some(dialect) = dialect
+                && let Some(name) = &message.name
                 && let Some(wire) = dialect.wire_names_of(name).into_iter().next()
             {
                 message.name = Some(wire);

@@ -48,7 +48,8 @@ pub use toolset::{
 pub use dialect::{
     COMMON_ID as COMMON_DIALECT_ID, COMMON_VERSION as COMMON_DIALECT_VERSION, Dialect,
     DialectError, ToolForm, ToolLane, Translated, WireTool, common as common_dialect,
-    lookup as lookup_dialect, present_history, render_text as render_dialect_text, session_dialect,
+    lookup as lookup_dialect, present_history, render_text as render_dialect_text,
+    restore_wire_calls, session_dialect, WIRE_CALLS_METADATA_KEY,
 };
 // T3.2: the Anthropic dialect and its built-in tool markers.
 pub use dialect::{

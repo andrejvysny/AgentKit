@@ -507,11 +507,12 @@ impl State {
         request.run_id = self.run_id.clone();
         request.runtime = Some(self.options.runtime.clone());
         request.messages = expand_tool_result_content(&self.messages);
-        if let Some(dialect) = registry.dialect() {
-            // Stored history keeps canonical names; the model reads the names
-            // it was offered (T3.1).
-            request.messages = crate::present_history(dialect, request.messages);
-        }
+        // Stored history keeps canonical calls; the model reads each as it
+        // emitted it, else under the names it was offered (T3.1).
+        request.messages = match registry.dialect() {
+            Some(dialect) => crate::present_history(dialect, request.messages),
+            None => crate::restore_wire_calls(request.messages),
+        };
         request.tools = registry.definitions();
         request.continuation = self.continuation.clone();
         request.continuation_required |= request.continuation.is_some();
@@ -773,16 +774,33 @@ impl State {
             )
             .await?;
         }
+        // Resolved once, before the assistant record: what is stored, what the
+        // guards and receipts hash and what runs are the same canonical call.
+        let prepared_calls: Vec<_> = calls
+            .iter()
+            .map(|call| crate::call_pipeline::prepare(registry, call))
+            .collect();
         if push_assistant {
             let mut assistant = ChatMessage::text("assistant", content);
-            // Canonical names are stored; the request shows wire names (T3.1).
+            // The stored call is the canonical prepared identity (dialect,
+            // legacy name, alias and type normalisation applied); the request
+            // shows the call as the model emitted it (T3.1, wire calls).
             assistant.tool_calls = calls
                 .iter()
-                .map(|call| crate::call_pipeline::translate_call(registry, call).0)
+                .zip(&prepared_calls)
+                .map(|(call, prepared)| crate::call_pipeline::stored_call(registry, call, prepared))
                 .collect();
+            let mut metadata = serde_json::Map::new();
+            if assistant.tool_calls != calls {
+                metadata.insert(
+                    crate::WIRE_CALLS_METADATA_KEY.into(),
+                    serde_json::to_value(&calls).unwrap_or(Value::Null),
+                );
+            }
             if let Some(reasoning) = self.step_reasoning.take() {
-                let mut metadata = serde_json::Map::new();
                 metadata.insert(crate::REASONING_METADATA_KEY.into(), reasoning.into());
+            }
+            if !metadata.is_empty() {
                 assistant.metadata = Some(metadata);
             }
             self.pending_messages.push(assistant.clone());
@@ -791,11 +809,10 @@ impl State {
         let mut cancelled = false;
         let mut budget_error = None;
         let mut pending_suspension: Option<(crate::HumanRequestSpec, ToolCall)> = None;
-        for (index, call) in calls.iter().enumerate() {
-            // Resolve and normalise first: guards and execution below see the
-            // canonical call, and the record shows what normalisation did.
+        for (index, (call, prepared)) in calls.iter().zip(prepared_calls).enumerate() {
+            // Guards and execution below see the canonical call prepared
+            // above, and the record shows what normalisation did.
             let emitted_name = call.name.clone();
-            let prepared = crate::call_pipeline::prepare(registry, call);
             let call = &prepared.call;
             let call_started_ms = self.options.runtime.now_ms();
             if self.options.batch_suspension

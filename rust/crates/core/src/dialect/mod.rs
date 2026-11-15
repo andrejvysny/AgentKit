@@ -23,7 +23,7 @@ pub use anthropic::{
     builtin_tool_type,
 };
 pub use common::{COMMON_ID, COMMON_VERSION, common};
-pub use history::present_history;
+pub use history::{WIRE_CALLS_METADATA_KEY, present_history, restore_wire_calls};
 pub use placeholders::render_text;
 pub use openai::{
     OPENAI_CHAT_ID, OPENAI_ID, PATCH_NAME as OPENAI_PATCH_NAME, SHELL_NAME as OPENAI_SHELL_NAME,

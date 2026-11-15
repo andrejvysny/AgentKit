@@ -427,6 +427,39 @@ pub(crate) fn translate_call(
     }
 }
 
+/// The call a transcript stores for `emitted`: the canonical identity that
+/// guards, approvals and receipts hash (dialect translated, legacy name
+/// mapped, aliases and text-typed values normalised). An indirect call keeps
+/// its `tool_call` shape with the canonical inner call, so hosts that unwrap
+/// it (approval resume, receipt reconciliation) read the same name and
+/// arguments the receipt holds. A call that failed to resolve keeps the
+/// presentation-level translation only.
+pub(crate) fn stored_call(
+    registry: &ToolRegistry,
+    emitted: &ToolCall,
+    prepared: &Prepared,
+) -> ToolCall {
+    let Some(outer) = &prepared.outer else {
+        return prepared.call.clone();
+    };
+    if prepared.failure.is_some() {
+        return translate_call(registry, emitted).0;
+    }
+    let canonical = (|| {
+        let mut args = agentkit_contracts::parse_javascript_json(&outer.arguments_json).ok()?;
+        let inner = agentkit_contracts::parse_javascript_json(&prepared.call.arguments_json).ok()?;
+        let object = args.as_object_mut()?;
+        object.insert("name".into(), prepared.call.name.clone().into());
+        object.insert("arguments".into(), inner);
+        Some(ToolCall {
+            id: outer.id.clone(),
+            name: outer.name.clone(),
+            arguments_json: envelope::stringify(&args),
+        })
+    })();
+    canonical.unwrap_or_else(|| outer.clone())
+}
+
 /// The stages for one tool call. `via_meta` is an inner call of `tool_call`:
 /// it may name a deferred tool, which a direct call may not.
 pub(crate) fn prepare_resolved(

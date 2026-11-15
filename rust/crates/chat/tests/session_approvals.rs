@@ -153,12 +153,16 @@ impl Tool for Mutate {
 
 struct WriterContributor {
     tool: Arc<dyn Tool>,
+    legacy: Vec<agentkit_core::LegacyName>,
 }
 
 #[async_trait]
 impl ToolContributor for WriterContributor {
     fn namespace(&self) -> &str {
         "coding"
+    }
+    fn legacy_names(&self) -> Vec<agentkit_core::LegacyName> {
+        self.legacy.clone()
     }
     async fn contribute(
         &self,
@@ -284,6 +288,49 @@ async fn fixture_with_options(
     plan: Option<Arc<dyn PlanApprovalPolicy>>,
     options: HostOptions,
 ) -> Fixture {
+    fixture_shaped(
+        tool,
+        arguments_json,
+        guarded,
+        standing,
+        plan,
+        options,
+        Shape::default(),
+    )
+    .await
+}
+
+/// What a fixture varies beyond the tool name: its input schema (aliases and
+/// conversions need declared properties), the retired names its contributor
+/// offers, the name the provider emits, and the session's classification
+/// (a deferred tool is only reachable through `tool_call`).
+struct Shape {
+    schema: Value,
+    legacy: Vec<agentkit_core::LegacyName>,
+    emit: Option<&'static str>,
+    classification: Option<agentkit_core::Classification>,
+}
+
+impl Default for Shape {
+    fn default() -> Self {
+        Self {
+            schema: json!({"type": "object"}),
+            legacy: vec![],
+            emit: None,
+            classification: None,
+        }
+    }
+}
+
+async fn fixture_shaped(
+    tool: &'static str,
+    arguments_json: &'static str,
+    guarded: &'static str,
+    standing: bool,
+    plan: Option<Arc<dyn PlanApprovalPolicy>>,
+    options: HostOptions,
+    shape: Shape,
+) -> Fixture {
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let hits = Arc::new(AtomicUsize::new(0));
@@ -299,7 +346,7 @@ async fn fixture_with_options(
     let definition: ToolDefinition = serde_json::from_value(json!({
         "name": tool, "version": "1", "effect": "write",
         "capability": "fs.write", "description": "mutate",
-        "inputSchema": {"type": "object"},
+        "inputSchema": shape.schema,
     }))
     .unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
@@ -307,7 +354,7 @@ async fn fixture_with_options(
             Arc::new(Scripted {
                 requests: requests.clone(),
                 ask: ask.clone(),
-                tool,
+                tool: shape.emit.unwrap_or(tool),
                 arguments_json,
             }),
             Arc::new(ToolRegistry::new()),
@@ -325,6 +372,7 @@ async fn fixture_with_options(
                     gate: gate.clone(),
                     context_revision: context_revision.clone(),
                 }),
+                legacy: shape.legacy,
             })],
             tool_guards: vec![Arc::new(AskGuard {
                 tool: guarded,
@@ -335,6 +383,7 @@ async fn fixture_with_options(
                 },
             })],
             standing: standing.then(|| Arc::new(KeyPolicy) as Arc<dyn StandingApprovalPolicy>),
+            tool_classification: shape.classification,
             ..Default::default()
         }),
     );
@@ -1485,4 +1534,85 @@ async fn legacy_uncertainty_generation_approval_still_recovers() {
     f.set_ask(false);
     f.host.run_once().await.unwrap();
     assert_eq!(f.hits.load(Ordering::SeqCst), 1);
+}
+
+fn editor_shape(emit: &'static str, classification: Option<agentkit_core::Classification>) -> Shape {
+    Shape {
+        schema: json!({"type": "object", "properties": {
+            "file_path": {"type": "string"}, "command": {"type": "string"},
+            "limit": {"type": "integer"}}}),
+        legacy: vec![agentkit_core::LegacyName {
+            old: "old_edit".into(),
+            new: Some("edit_file".into()),
+            teach: "Use edit_file.".into(),
+        }],
+        emit: Some(emit),
+        classification,
+    }
+}
+
+/// The ask and the resume must hash the same canonical call: the approval
+/// is raised for the prepared call (alias `path` and `cmd`, text `limit`,
+/// retired name), so the stored declaration must carry that identity or the
+/// resume would refuse what the human approved.
+async fn approve_and_resume(arguments_json: &'static str, shape: Shape, canonical: Value) {
+    let f = fixture_shaped(
+        "edit_file",
+        arguments_json,
+        "edit_file",
+        false,
+        None,
+        HostOptions::default(),
+        shape,
+    )
+    .await;
+    f.set_ask(true);
+    let turn = f.send("edit", "t1").await;
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request.content["argsSha256"], json!(args_sha256(&canonical)));
+    f.service
+        .approve(&request.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1, "the approved call ran once");
+    assert!(
+        f.store
+            .messages("s1", true)
+            .await
+            .unwrap()
+            .iter()
+            .all(|message| !message.id.starts_with("approval-mismatch:")),
+        "no approval mismatch on the record"
+    );
+}
+
+#[tokio::test]
+async fn approval_resumes_an_aliased_converted_legacy_named_call() {
+    approve_and_resume(
+        r#"{"path":"a.txt","cmd":"x","limit":"5"}"#,
+        editor_shape("old_edit", None),
+        json!({"file_path": "a.txt", "command": "x", "limit": 5}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn approval_resumes_an_indirect_tool_call_with_the_canonical_inner_call() {
+    let deferred = agentkit_core::Classification {
+        direct: agentkit_core::DirectSet::names(Vec::<String>::new()),
+        max_tokens: 0,
+        max_definitions: 0,
+        ..agentkit_core::Classification::default()
+    };
+    approve_and_resume(
+        r#"{"name":"old_edit","arguments":{"path":"a.txt","cmd":"x","limit":"5"}}"#,
+        editor_shape("tool_call", Some(deferred)),
+        json!({"file_path": "a.txt", "command": "x", "limit": 5}),
+    )
+    .await;
 }

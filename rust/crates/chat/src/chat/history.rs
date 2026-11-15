@@ -266,15 +266,29 @@ fn stored_reasoning(record: &MessageRecord) -> Option<serde_json::Map<String, Va
     if record.role != "assistant" {
         return None;
     }
-    let text = record.metadata[agentkit_core::REASONING_METADATA_KEY]
-        .as_str()
-        .filter(|text| !text.is_empty())?;
     let mut metadata = serde_json::Map::new();
-    metadata.insert(
-        agentkit_core::REASONING_METADATA_KEY.into(),
-        text.to_owned().into(),
-    );
-    Some(metadata)
+    if let Some(text) = record.metadata[agentkit_core::REASONING_METADATA_KEY]
+        .as_str()
+        .filter(|text| !text.is_empty())
+    {
+        metadata.insert(
+            agentkit_core::REASONING_METADATA_KEY.into(),
+            text.to_owned().into(),
+        );
+    }
+    // The calls as the model emitted them: the next request shows them again
+    // (a provider continuation hashes exactly that form).
+    if let Some(wire) = record
+        .metadata
+        .get(agentkit_core::WIRE_CALLS_METADATA_KEY)
+        .filter(|wire| wire.is_array())
+    {
+        metadata.insert(
+            agentkit_core::WIRE_CALLS_METADATA_KEY.into(),
+            wire.clone(),
+        );
+    }
+    (!metadata.is_empty()).then_some(metadata)
 }
 /// A run's final answer stores the reasoning of the whole turn; the steps
 /// before it carry their own. Keep each piece of reasoning once: the final
@@ -612,6 +626,14 @@ impl DurableEvents {
             }
             if let Some(name) = &message.name {
                 metadata["toolName"] = name.clone().into();
+            }
+            if message.role == "assistant"
+                && let Some(wire) = message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get(agentkit_core::WIRE_CALLS_METADATA_KEY))
+            {
+                metadata[agentkit_core::WIRE_CALLS_METADATA_KEY] = wire.clone();
             }
             if message.role == "assistant"
                 && let Some(step) = &step
@@ -964,6 +986,39 @@ mod tests {
         let tool = messages.iter().rfind(|m| m.role == "tool").unwrap();
         let parsed: Value = serde_json::from_str(tool.content.as_str().unwrap()).unwrap();
         assert_eq!(parsed["data"]["errorCode"], json!("tool_effect_uncertain"));
+    }
+
+    #[test]
+    fn a_completed_receipt_matches_the_stored_canonical_call_direct_or_indirect() {
+        // The run stores the canonical prepared call (aliases, text-typed
+        // values and legacy names already resolved), so reconciliation after
+        // a crash finds the receipt the admission hashed.
+        let args = json!({"file_path": "a.txt", "limit": 5, "timeout": 2000});
+        let direct = (
+            "call-1",
+            "edit_file",
+            "{\"file_path\":\"a.txt\",\"limit\":5,\"timeout\":2000}",
+        );
+        let indirect_args = json!({"name": "edit_file", "arguments": args}).to_string();
+        let indirect = ("call-1", "tool_call", indirect_args.as_str());
+        for stored in [direct, indirect] {
+            let messages = assemble_with(
+                vec![assistant("a1", "runA", 1, &[stored])],
+                &[receipt(
+                    "runA",
+                    "call-1",
+                    "edit_file",
+                    &args,
+                    ExecutionReceiptStatus::Completed,
+                    Some(stored_result(json!({"done": true}))),
+                )],
+                "runA",
+            );
+            let tool = messages.iter().rfind(|m| m.role == "tool").unwrap();
+            let content = tool.content.as_str().unwrap_or_default();
+            assert!(!content.contains("tool_effect_uncertain"), "{}: {content}", stored.1);
+            assert!(content.contains("done"), "{}: {content}", stored.1);
+        }
     }
 
     #[test]
