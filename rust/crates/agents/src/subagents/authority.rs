@@ -7,6 +7,7 @@
 use super::config::RoleSpec;
 use super::snapshot::EffectiveRole;
 use super::tools::SUBAGENT_TOOL_NAMES;
+use crate::ADVISOR_TOOL_NAMES;
 use agentkit_core::permission::{CodingMode, ToolClass, classify_capability};
 use agentkit_core::{ToolDefinition, is_meta_tool};
 use std::collections::BTreeSet;
@@ -100,10 +101,12 @@ fn is_memory_tool(namespace: &str, definition: &ToolDefinition) -> bool {
     namespace == "memory" || definition.capability.starts_with("memory.")
 }
 
-/// Tools a child never runs: the named memory writes, and any tool with the
-/// memory write capability or a non-read effect in the memory namespace.
+/// Tools a child never runs: the named memory writes, any tool with the
+/// memory write capability or a non-read effect in the memory namespace, and
+/// the advisor tools (the advisor runs outside the child's token budget).
 pub(super) fn is_child_denied(namespace: &str, definition: &ToolDefinition) -> bool {
     CHILD_DENIED_TOOLS.contains(&definition.name.as_str())
+        || ADVISOR_TOOL_NAMES.contains(&definition.name.as_str())
         || definition.capability == "memory.write"
         || (is_memory_tool(namespace, definition) && definition.effect != "read")
 }

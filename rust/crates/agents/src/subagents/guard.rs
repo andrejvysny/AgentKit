@@ -4,7 +4,7 @@ use super::authority::{
 };
 use super::service::SubagentService;
 use super::tools::{REPORT_FINDINGS_TOOL, SUBAGENT_TOOL_NAMES};
-use crate::{AgentsResult, LeaseHeld};
+use crate::{ADVISOR_TOOL_NAMES, AgentsResult, LeaseHeld};
 use agentkit_core::{META_TOOLSET, is_meta_tool};
 use agentkit_governance::{GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use agentkit_sessions::read_session_descriptor;
@@ -195,6 +195,15 @@ impl SubagentRoleGuard {
         // A child reads memory but never proposes or forgets it, whatever
         // its role (or a legacy snapshot) would otherwise admit.
         if is_child_denied(&context.namespace, &context.tool) {
+            // Advisor reviews run on the advisor's own model outside this
+            // child's token budget and rate window, so a child may never
+            // summon one, whatever its role admits.
+            if ADVISOR_TOOL_NAMES.contains(&context.tool.name.as_str()) {
+                return Ok(Some(format!(
+                    "advisor_not_available_to_children: {} is not available to child sessions",
+                    context.tool.name
+                )));
+            }
             return Ok(Some(format!(
                 "role_denied: subagents may not use {}; memory writes belong to the parent session",
                 context.tool.name

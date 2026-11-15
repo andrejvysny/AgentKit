@@ -37,12 +37,14 @@ pub use brief::{
     OutputFormat, RefKind, RenderedRef, TITLE_MAX_CHARS, cap_message_text, confine_to_workspace,
     render_brief,
 };
+pub use budget::SubagentTokenGate;
+pub(crate) use budget::{charge_advisor_usage, events_tenths};
 pub use config::{
     BUILTIN_ROLES, DELEGATION_GUIDANCE, RoleSpec, SubagentConfig, SubagentRoleLimits,
     default_delegation_guidance, default_role_specs,
 };
 pub use envelope::{
-    ChildReport, EnvelopeArtifact, EnvelopeUsage, ReportedFinding, ResultEnvelope,
+    BudgetExhausted, ChildReport, EnvelopeArtifact, EnvelopeUsage, ReportedFinding, ResultEnvelope,
     SUMMARY_CAP_BYTES, cut_summary, envelope_status, present_envelope, usage_from_events,
 };
 pub use guard::{SubagentRoleGuard, WorkspaceLeaseRegistry};

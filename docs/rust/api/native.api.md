@@ -1938,6 +1938,7 @@ export interface NativeSubagentLimits {
     maxDepth?: number;
     maxPerParent?: number;
     maxTreeProviderRequests?: number;
+    maxTreeTokens?: number;
 }
 
 // @public

@@ -276,6 +276,48 @@ impl UsageAuthorizer for Denied {
         )))
     }
 }
+struct Spy(Arc<Mutex<Vec<(String, Value)>>>);
+#[async_trait]
+impl UsageAuthorizer for Spy {
+    async fn authorize(&self, run_id: &str, input: &Value) -> agentkit_chat::ChatResult<()> {
+        self.0.lock().unwrap().push((run_id.into(), input.clone()));
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn usage_request_names_the_turn_and_counts_tools_and_an_output_reserve() {
+    let store = store().await;
+    let seen = Arc::new(Mutex::new(vec![]));
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(Arc::new(Echo {
+            store: store.clone(),
+            bindings: Arc::new(Mutex::new(vec![])),
+            definition: serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"x".repeat(4_000),"inputSchema":{"type":"object"}})).unwrap(),
+        }))
+        .unwrap();
+    let host = make_host(
+        store,
+        Arc::new(Provider {
+            requests: Arc::new(Mutex::new(vec![])),
+            tool: false,
+        }),
+        tools,
+        ChatExecutorOptions {
+            usage: Some(Arc::new(Spy(seen.clone()))),
+            ..Default::default()
+        },
+    );
+    submit(&host, "spied-turn", json!("question")).await;
+    let seen = seen.lock().unwrap();
+    let (_, request) = seen.first().expect("one authorized request");
+    assert_eq!(request["taskId"], "spied-turn");
+    assert_eq!(request["estimatedOutputTokens"], 1_024);
+    assert!(
+        request["estimatedPromptTokens"].as_u64().unwrap() >= 1_000,
+        "the 4000-character tool definition is counted: {request}"
+    );
+}
 #[tokio::test]
 async fn usage_denial_prevents_provider_work_and_settles_failed() {
     let store = store().await;

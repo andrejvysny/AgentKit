@@ -275,8 +275,13 @@ impl ChatProvider for PreparedProvider {
             }
             let admission = provider.budget.as_ref().map(|budget| budget.admit(&mut input, provider.context.runtime.id(), provider.inner.allows_implicit_output_limit())).transpose()?;
             if let Some(usage)=&provider.options.usage {
-                let estimate=input.selected_content.iter().chain(input.messages.iter()).map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);
-                let request=json!({"runId":input.run_id,"chatId":provider.chat_id,"providerId":provider.inner.id(),"model":input.model,"estimatedPromptTokens":estimate});
+                // Prompt text plus the tool definitions the provider will be
+                // sent, and an output reserve for a call that reports no usage.
+                let text=input.selected_content.iter().chain(input.messages.iter()).map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>();
+                let tools=serde_json::to_string(&input.tools).map_or(0,|json|json.encode_utf16().count());
+                let estimate=(text+tools).div_ceil(4);
+                let output=input.max_output_tokens.unwrap_or(1_024);
+                let request=json!({"runId":input.run_id,"taskId":provider.context.task.task_id,"chatId":provider.chat_id,"providerId":provider.inner.id(),"model":input.model,"estimatedPromptTokens":estimate,"estimatedOutputTokens":output});
                 bounded(usage.authorize(&input.run_id,&request),cancellation.clone(),provider.options.hook_timeouts.usage_ms,"usage.authorize").await.map_err(core_error)?;
             }
             if cancellation.is_cancelled() {return Err(CoreError::new("cancelled","aborted"));}

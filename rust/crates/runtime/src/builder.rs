@@ -569,6 +569,11 @@ impl AgentRuntimeBuilder {
                         Arc::clone(&subagent_lane) as Arc<dyn agentkit_chat::DelegationGuidance>
                     ),
                     run_hooks: Some(Arc::clone(&advisor_lane) as Arc<dyn RunHooks>),
+                    // Token budgets of subagent children, checked before
+                    // every provider request; non-children pass through.
+                    usage: Some(
+                        Arc::clone(&subagent_lane) as Arc<dyn agentkit_chat::UsageAuthorizer>
+                    ),
                     output: output_gate,
                     ..Default::default()
                 },

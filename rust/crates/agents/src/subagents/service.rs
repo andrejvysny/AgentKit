@@ -9,8 +9,9 @@ use super::brief::{
 use super::budget;
 use super::config::{RoleSpec, SubagentConfig};
 use super::envelope::{
-    ChildReport, EnvelopeArtifact, EnvelopeUsage, ResultEnvelope, cut_summary, envelope_status,
-    present_envelope, usage_from_events,
+    BudgetExhausted, ChildReport, EnvelopeArtifact, EnvelopeUsage, ResultEnvelope,
+    SUMMARY_CAP_BYTES, cut_summary, cut_summary_to, envelope_status, present_envelope,
+    usage_from_events,
 };
 use super::guard::WorkspaceLeaseRegistry;
 use super::memory_refs::MemoryRefReader;
@@ -223,6 +224,9 @@ pub struct SubagentService {
     tool_namespaces: ToolNamespaces,
     /// Serializes the spawn check→insert critical section (see `spawn`).
     spawn_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes token-gate check + reserve across this service's gates, so
+    /// two siblings cannot both pass the tree check against one budget.
+    token_gate_lock: Arc<tokio::sync::Mutex<()>>,
     /// Provider ids this service's executor can route to; `None` = unknown
     /// (host-only users), which skips spawn-time validation.
     routable_providers: Option<Arc<std::collections::BTreeSet<String>>>,
@@ -317,8 +321,10 @@ pub(super) fn is_terminal_status(status: &str) -> bool {
 pub(super) const SUBAGENT_ITERATIONS_CEILING: u32 = 64;
 pub(super) const SUBAGENT_PROVIDER_REQUESTS_CEILING: u64 = 200;
 pub(super) const SUBAGENT_OVERALL_MS_CEILING: u64 = 30 * 60 * 1_000;
-/// Token ceiling per child (spec "Budgets"). The request is clamped and
-/// recorded now; enforcement arrives with the token budgets (DEL-06).
+/// Token budget per child (spec "Budgets"): the default and the ceiling a
+/// request is clamped to. Recorded at spawn and enforced before each
+/// provider request by the token gate (DEL-06).
+pub(super) const SUBAGENT_TOKENS_DEFAULT: u64 = 200_000;
 pub(super) const SUBAGENT_TOKENS_CEILING: u64 = 1_000_000;
 
 /// Deterministic child identity for one logical spawn call. Public so
@@ -346,6 +352,7 @@ impl SubagentService {
             leases: WorkspaceLeaseRegistry::default(),
             tool_namespaces: ToolNamespaces::default(),
             spawn_gate: Arc::new(tokio::sync::Mutex::new(())),
+            token_gate_lock: Arc::new(tokio::sync::Mutex::new(())),
             routable_providers: None,
             memory_refs: None,
             waker: Arc::new(WakerState::default()),
@@ -390,6 +397,15 @@ impl SubagentService {
         provider_id: Option<&str>,
         parent_provider: Option<&str>,
     ) -> AgentsResult<()> {
+        // The native lane runs turns outside the usage authorizer, so its
+        // children would escape the token budgets: refuse it outright.
+        if provider_id == Some("native") {
+            return Err(AgentsError::SubagentProviderUnavailable(
+                "native_lane_unsupported: subagent children run on model providers; \
+                 the native lane is not metered by the token budgets"
+                    .to_owned(),
+            ));
+        }
         let (Some(known), Some(provider_id)) = (&self.routable_providers, provider_id) else {
             return Ok(());
         };
@@ -419,6 +435,23 @@ impl SubagentService {
 
     pub fn configure(&self, config: SubagentConfig) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = config.effective();
+    }
+
+    /// The pre-request token-budget check, as a usage authorizer: install it
+    /// as the executor's `usage` hook, passing the host's own authorizer (if
+    /// any) as `inner` so both run. It reads the live config, so a changed
+    /// tree token limit applies without rebuilding the executor.
+    pub fn token_gate(
+        &self,
+        inner: Option<Arc<dyn agentkit_chat::UsageAuthorizer>>,
+    ) -> Arc<budget::SubagentTokenGate> {
+        Arc::new(budget::SubagentTokenGate::new(
+            self.store.clone(),
+            Arc::clone(&self.config),
+            self.runtime.clone(),
+            inner,
+            Arc::clone(&self.token_gate_lock),
+        ))
     }
 
     /// Exclusive-lease admission with a refusal instead of silent
@@ -848,12 +881,15 @@ impl SubagentService {
                 json!(overall.clamp(1_000, SUBAGENT_OVERALL_MS_CEILING)),
             );
         }
-        if let Some(tokens) = request.brief.budget.max_tokens {
-            role_limits.insert(
-                "maxTokens".into(),
-                json!(tokens.clamp(1, SUBAGENT_TOKENS_CEILING)),
-            );
-        }
+        let tokens = request
+            .brief
+            .budget
+            .max_tokens
+            .unwrap_or(SUBAGENT_TOKENS_DEFAULT);
+        role_limits.insert(
+            "maxTokens".into(),
+            json!(tokens.clamp(1, SUBAGENT_TOKENS_CEILING)),
+        );
         let role_snapshot = RoleSnapshot::from_role(&role).with_effective_tools(Some(effective));
         let brief_digest = request.brief.digest();
         let subagent_metadata = json!({
@@ -1920,6 +1956,14 @@ impl SubagentService {
                     let max_depth = self.config().limits.max_depth;
                     budget::check_resume(&self.store, child_chat_id, tree_limit, max_depth).await?;
                 }
+                let limits = self.config().limits;
+                budget::check_resume_tokens(
+                    &self.store,
+                    child_chat_id,
+                    limits.max_tree_tokens,
+                    limits.max_depth,
+                )
+                .await?;
                 let lease = self.admit_resume_lease(child_chat_id).await?;
                 // Rebind unconditionally and before dispatch: the reaper must
                 // never judge the revived child by the settled original
@@ -2214,6 +2258,7 @@ impl SubagentService {
         if task.kind == CHAT_TURN_TASK_KIND
             && let Some(row) = self.store.get_subagent(&task.scope_id).await?
         {
+            budget::settle_turn(&self.store, task, self.now_ms()).await?;
             let view = self.refresh(&row).await?;
             // If the parent already settled, the reactivated child is
             // reaped here (policy-gated like every other reap); the
@@ -2564,12 +2609,53 @@ impl SubagentService {
         if !is_terminal_status(&view.status) {
             return Ok(None);
         }
-        let full = view
-            .result
-            .clone()
-            .or_else(|| view.error.clone())
+        let metadata = self
+            .store
+            .get_chat(&view.child_chat_id)
+            .await?
+            .map(|chat| chat.metadata[SUBAGENT_METADATA_KEY].clone())
             .unwrap_or_default();
-        let (summary, truncated) = cut_summary(&full);
+        let report = ChildReport::from_metadata(&metadata);
+        // A token-budget stop is read from what the gate recorded for this
+        // very turn, never from error text a tool or model could forge.
+        let stopped_by_tokens = metadata["budgetExhausted"]["taskId"].as_str()
+            == view.turn_task_id.as_deref()
+            && view.turn_task_id.is_some();
+        let budget_exhausted = BudgetExhausted::from_metadata(&metadata).filter(|_| {
+            stopped_by_tokens && !matches!(view.status.as_str(), "completed" | "cancelled")
+        });
+        let status = match envelope_status(&view.status, view.error.as_deref()) {
+            "failed" if budget_exhausted.is_some() => "budget_exhausted",
+            other => other,
+        };
+        // A child stopped by its token budget reports what it had said so
+        // far; the exhaustion note is appended after the cut so a long
+        // partial answer can never push it out of the summary.
+        let partial = match &budget_exhausted {
+            Some(spent) => Some(self.partial_answer(view, spent).await?),
+            None => None,
+        };
+        let full = match &partial {
+            Some((text, _)) => text.clone(),
+            None => view
+                .result
+                .clone()
+                .or_else(|| view.error.clone())
+                .unwrap_or_default(),
+        };
+        let (mut summary, mut truncated) = cut_summary(&full);
+        if let Some((_, note)) = &partial {
+            // The note is part of the cap: cut the partial text to what
+            // room it leaves, then append it.
+            let room = SUMMARY_CAP_BYTES.saturating_sub(note.len() + 2);
+            let (head, cut) = cut_summary_to(&full, room);
+            truncated |= cut;
+            summary = if head.is_empty() {
+                note.clone()
+            } else {
+                format!("{head}\n\n{note}")
+            };
+        }
         let mut artifacts = vec![];
         let mut full_result_handle = None;
         if truncated {
@@ -2582,16 +2668,10 @@ impl SubagentService {
                 });
             }
         }
-        let report = self
-            .store
-            .get_chat(&view.child_chat_id)
-            .await?
-            .map(|chat| ChildReport::from_metadata(&chat.metadata[SUBAGENT_METADATA_KEY]))
-            .unwrap_or_default();
         Ok(Some(ResultEnvelope {
             child_id: view.child_chat_id.clone(),
             role: view.role.clone(),
-            status: envelope_status(&view.status, view.error.as_deref()).to_owned(),
+            status: status.to_owned(),
             summary,
             findings: report.findings,
             artifacts,
@@ -2599,7 +2679,27 @@ impl SubagentService {
             usage: self.child_usage(&view.child_chat_id).await?,
             truncated,
             full_result_handle,
+            budget_exhausted,
         }))
+    }
+
+    /// `(the child's last assistant text so far, the exhaustion note)` of a
+    /// child that spent a token budget. The text is empty when it had said
+    /// nothing yet.
+    async fn partial_answer(
+        &self,
+        view: &SubagentView,
+        spent: &BudgetExhausted,
+    ) -> AgentsResult<(String, String)> {
+        let text = match self.store.get_subagent(&view.child_chat_id).await? {
+            Some(row) => self.final_answer(&row).await?,
+            None => None,
+        };
+        let note = format!(
+            "[token budget exhausted: the {} budget spent {} of {} tokens; the child stopped before finishing]",
+            spent.budget, spent.used, spent.limit
+        );
+        Ok((text.unwrap_or_default(), note))
     }
 
     /// Write the child's whole final message to the output store, once per

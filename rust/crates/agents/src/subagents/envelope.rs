@@ -178,16 +178,46 @@ pub struct ResultEnvelope {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_result_handle: Option<String>,
+    /// Which token budget stopped the child; present only for
+    /// `budget_exhausted` children that spent a token budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_exhausted: Option<BudgetExhausted>,
+}
+
+/// The `subagent.budget_exhausted` event's payload beyond the child id:
+/// `budget` is `child` or `tree`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BudgetExhausted {
+    pub budget: String,
+    pub used: u64,
+    pub limit: u64,
+}
+
+impl BudgetExhausted {
+    /// Reads the event the token gate stored on the child's metadata.
+    pub fn from_metadata(subagent: &Value) -> Option<Self> {
+        let event = &subagent["budgetExhausted"];
+        Some(Self {
+            budget: event["budget"].as_str()?.to_owned(),
+            used: event["used"].as_u64()?,
+            limit: event["limit"].as_u64()?,
+        })
+    }
 }
 
 /// `text` cut to [`SUMMARY_CAP_BYTES`] on a paragraph boundary (a blank
 /// line); with no blank line inside the cap the cut falls on a character
 /// boundary. The flag says whether anything was cut.
 pub fn cut_summary(text: &str) -> (String, bool) {
-    if text.len() <= SUMMARY_CAP_BYTES {
+    cut_summary_to(text, SUMMARY_CAP_BYTES)
+}
+
+/// [`cut_summary`] against an explicit byte cap.
+pub(super) fn cut_summary_to(text: &str, cap: usize) -> (String, bool) {
+    if text.len() <= cap {
         return (text.to_owned(), false);
     }
-    let mut end = SUMMARY_CAP_BYTES;
+    let mut end = cap;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -203,7 +233,8 @@ pub fn cut_summary(text: &str) -> (String, bool) {
 }
 
 /// The envelope status for a settled child: a failure caused by the turn's
-/// time or budget limit says so.
+/// time or request-budget limit says so. A token-budget stop is not read
+/// from text; the service takes it from the child's recorded exhaustion.
 pub fn envelope_status(status: &str, error: Option<&str>) -> &'static str {
     match status {
         "completed" => "completed",
@@ -212,9 +243,7 @@ pub fn envelope_status(status: &str, error: Option<&str>) -> &'static str {
             let error = error.unwrap_or_default();
             if error.contains("execution_timeout") {
                 "timeout"
-            } else if error.contains("execution_budget_exhausted")
-                || error.contains("subagent_budget_exhausted")
-            {
+            } else if error.contains("execution_budget_exhausted") {
                 "budget_exhausted"
             } else {
                 "failed"
@@ -223,7 +252,7 @@ pub fn envelope_status(status: &str, error: Option<&str>) -> &'static str {
     }
 }
 
-fn count(value: &Value) -> u64 {
+pub(super) fn count(value: &Value) -> u64 {
     value
         .as_u64()
         .or_else(|| {
@@ -304,6 +333,25 @@ mod tests {
     }
 
     #[test]
+    fn a_smaller_cap_leaves_room_for_a_note() {
+        let text = "word ".repeat(2_000);
+        let (cut, truncated) = cut_summary_to(&text, SUMMARY_CAP_BYTES - 100);
+        assert!(truncated && cut.len() <= SUMMARY_CAP_BYTES - 100);
+        assert_eq!(cut_summary_to("short", 10), ("short".to_owned(), false));
+    }
+
+    #[test]
+    fn token_budget_text_alone_never_sets_the_status() {
+        assert_eq!(
+            envelope_status(
+                "failed",
+                Some("host_hook_failed: subagent_budget_exhausted: x")
+            ),
+            "failed"
+        );
+    }
+
+    #[test]
     fn status_reads_the_limit_that_stopped_the_turn() {
         assert_eq!(envelope_status("completed", None), "completed");
         assert_eq!(envelope_status("cancelled", Some("cancelled")), "cancelled");
@@ -362,6 +410,7 @@ mod tests {
             usage: EnvelopeUsage::default(),
             truncated: false,
             full_result_handle: None,
+            budget_exhausted: None,
         };
         let value = serde_json::to_value(&envelope).unwrap();
         assert_eq!(value["artifacts"][0]["ref"], "out_x");
@@ -382,6 +431,7 @@ mod tests {
             usage: EnvelopeUsage::default(),
             truncated: false,
             full_result_handle: None,
+            budget_exhausted: None,
         };
         let text = present_envelope(&envelope);
         assert!(text.starts_with(

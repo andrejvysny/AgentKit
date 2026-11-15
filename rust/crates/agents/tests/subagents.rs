@@ -112,6 +112,7 @@ fn config() -> SubagentConfig {
             lease_ttl_ms: 60_000,
             cancel_orphans: true,
             max_tree_provider_requests: None,
+            max_tree_tokens: None,
         },
         roles: Default::default(), // effective() preloads the five built-ins
         delegation_guidance: None,

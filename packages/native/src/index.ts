@@ -349,9 +349,14 @@ export interface NativeSubagentLimits {
    * (startup sweep + settle observers). Default true. */
   cancelOrphans?: boolean;
   /** Cap on provider requests reserved by all subagents below one root
-   * session; unset means unlimited. Provider requests only; token and
-   * monetary budgets are not enforced. Integer 1..=1000000. */
+   * session; unset means unlimited. Provider requests only. Integer
+   * 1..=1000000. */
   maxTreeProviderRequests?: number;
+  /** Cap on weighted tokens (input + cache writes + 0.1 x cache reads +
+   * output + reasoning) spent by all subagents below one root session,
+   * checked before each provider request. Default 1000000. Integer
+   * 1..=1000000. */
+  maxTreeTokens?: number;
 }
 
 /** One delegation role: a ceiling, never a grant (mirrors `RoleSpec`).

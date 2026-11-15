@@ -549,6 +549,7 @@ pub async fn agentkit_store::SqliteStore::retire_native_binding(&self, &str) -> 
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::append_events(&self, agentkit_engine::model::LeaseFence, alloc::vec::Vec<serde_json::value::Value>, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
 pub async fn agentkit_store::SqliteStore::append_projected(&self, agentkit_engine::model::LeaseFence, alloc::vec::Vec<serde_json::value::Value>, alloc::vec::Vec<agentkit_engine::model::MessageInput>, i64) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
+pub async fn agentkit_store::SqliteStore::append_system_event(&self, &str, &str, serde_json::value::Value, i64) -> agentkit_store::Result<()>
 pub async fn agentkit_store::SqliteStore::claim(&self, agentkit_engine::model::ClaimInput) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::ClaimedTask>>
 pub async fn agentkit_store::SqliteStore::claim_with_concurrency(&self, agentkit_engine::model::ClaimInput, usize) -> agentkit_store::Result<core::option::Option<agentkit_engine::model::ClaimedTask>>
 pub async fn agentkit_store::SqliteStore::count_tasks_by_status(&self, agentkit_engine::model::TaskStatus) -> agentkit_store::Result<i64>

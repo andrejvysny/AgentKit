@@ -300,8 +300,8 @@ impl SessionService {
 
     /// Configure the subagent subsystem: `{enabled?, limits?:
     /// {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
-    /// maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? (positive
-    /// integer <= 1_000_000)}, roles?:
+    /// maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? and
+    /// maxTreeTokens? (each a positive integer <= 1_000_000)}, roles?:
     /// {<id>: {description?, prompt?, allowedTools?, readOnly?,
     /// canSpawn?, model?, providerId?, maxIterations?, capability?}},
     /// delegationGuidance?}`. An omitted `roles` table ships the five
@@ -315,7 +315,19 @@ impl SessionService {
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
-        let config: agentkit_agents::SubagentConfig = serde_json::from_str(&config_json)
+        let raw: serde_json::Value = serde_json::from_str(&config_json)
+            .map_err(|error| errors::invalid(format!("invalid subagent config: {error}")))?;
+        // `null` would read as "unlimited"; the tree token cap is always on
+        // (an absent key keeps the 1_000_000 default).
+        if raw["limits"]
+            .get("maxTreeTokens")
+            .is_some_and(serde_json::Value::is_null)
+        {
+            return Err(errors::invalid(
+                "invalid subagent config: maxTreeTokens must be an integer in 1..=1000000, not null",
+            ));
+        }
+        let config: agentkit_agents::SubagentConfig = serde_json::from_value(raw)
             .map_err(|error| errors::invalid(format!("invalid subagent config: {error}")))?;
         if config
             .limits
@@ -324,6 +336,15 @@ impl SessionService {
         {
             return Err(errors::invalid(
                 "invalid subagent config: maxTreeProviderRequests must be an integer in 1..=1000000",
+            ));
+        }
+        if config
+            .limits
+            .max_tree_tokens
+            .is_some_and(|limit| !(1..=1_000_000).contains(&limit))
+        {
+            return Err(errors::invalid(
+                "invalid subagent config: maxTreeTokens must be an integer in 1..=1000000",
             ));
         }
         core.runtime.subagent_lane().configure(config);

@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use agentkit_agents::{
     AgentsError, AgentsResult, SubagentConfig, SubagentContributor, SubagentRoleGuard,
-    SubagentService, SubagentView,
+    SubagentService, SubagentTokenGate, SubagentView,
 };
-use agentkit_chat::DelegationGuidance;
+use agentkit_chat::{ChatResult, DelegationGuidance, UsageAuthorizer};
 use agentkit_engine::EngineError;
 use agentkit_engine::{ObserverError, TaskSettledObserver};
 use agentkit_governance::{
@@ -27,6 +27,10 @@ use crate::error::RuntimeError;
 /// configuration/list/status surface.
 pub struct SubagentLane {
     service: Mutex<Option<Arc<SubagentService>>>,
+    /// The per-request token gate, late-bound with the service: the executor
+    /// holds the lane as its `usage` authorizer from construction, and the
+    /// gate exists only once `bind` has a service to read budgets from.
+    token_gate: Mutex<Option<Arc<SubagentTokenGate>>>,
     config: Mutex<SubagentConfig>,
     /// Start-time `maxConcurrency`. The worker pool was sized from it, so a
     /// hot config may lower the limit but never raise it above this.
@@ -39,6 +43,7 @@ impl SubagentLane {
         config.limits.max_concurrency = config.limits.max_concurrency.min(concurrency_ceiling);
         Self {
             service: Mutex::new(None),
+            token_gate: Mutex::new(None),
             config: Mutex::new(config),
             concurrency_ceiling,
         }
@@ -60,6 +65,10 @@ impl SubagentLane {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         service.configure(config);
+        *self
+            .token_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(service.token_gate(None));
         *slot = Some(Arc::new(service));
         Ok(())
     }
@@ -223,6 +232,24 @@ impl TaskSettledObserver for SubagentLane {
                 .observe_settled(task)
                 .await
                 .map_err(EngineError::from)?),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Usage-authorizer adapter: every provider request of a subagent child is
+/// checked against its own and its tree's token budget before it is sent.
+/// Unbound, or for a chat that is not a subagent child, it passes through.
+#[async_trait::async_trait]
+impl UsageAuthorizer for SubagentLane {
+    async fn authorize(&self, task_id: &str, usage: &serde_json::Value) -> ChatResult<()> {
+        let gate = self
+            .token_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match gate {
+            Some(gate) => gate.authorize(task_id, usage).await,
             None => Ok(()),
         }
     }

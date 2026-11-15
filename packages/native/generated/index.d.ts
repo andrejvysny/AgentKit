@@ -378,8 +378,8 @@ export declare class SessionService {
   /**
    * Configure the subagent subsystem: `{enabled?, limits?:
    * {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
-   * maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? (positive
-   * integer <= 1_000_000)}, roles?:
+   * maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? and
+   * maxTreeTokens? (each a positive integer <= 1_000_000)}, roles?:
    * {<id>: {description?, prompt?, allowedTools?, readOnly?,
    * canSpawn?, model?, providerId?, maxIterations?, capability?}},
    * delegationGuidance?}`. An omitted `roles` table ships the five

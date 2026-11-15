@@ -163,6 +163,8 @@ struct LoopRun<'a> {
     model: &'a str,
     config: &'a AdvisorConfig,
     run_id: &'a str,
+    /// The reviewed chat; a subagent child pays for reviews of its work.
+    chat_id: &'a str,
     cancellation: &'a CancellationToken,
 }
 
@@ -491,6 +493,7 @@ impl AdvisorEngine {
             model: &model,
             config: &config,
             run_id: &run_id,
+            chat_id: &request.chat_id,
             cancellation: &cancellation,
         };
         let first = self.run_once(&run, request_messages.clone()).await?;
@@ -667,6 +670,7 @@ impl AdvisorEngine {
             model,
             config,
             run_id,
+            chat_id,
             cancellation,
         } = *run;
         let limits = agentkit_core::BudgetLimits {
@@ -702,7 +706,22 @@ impl AdvisorEngine {
         let handle = run_chat(options, provider.clone(), registry.clone());
         // Drain the event stream to completion (backpressure on the core
         // channel), then join the result.
-        futures::StreamExt::for_each(handle.events, |_event| async {}).await;
+        let usage =
+            futures::StreamExt::fold(handle.events, Vec::new(), |mut usage, event| async move {
+                if let Ok(value) = serde_json::to_value(event)
+                    && value["type"] == "run.usage"
+                {
+                    usage.push(value);
+                }
+                usage
+            })
+            .await;
+        // The reviewed child's budget pays for the review, whether or not it
+        // completes: a watchdog or a forged `advisor_review` call cannot
+        // spend outside the child's tree.
+        let (tenths, _) = crate::subagents::events_tenths(usage.iter());
+        crate::subagents::charge_advisor_usage(&self.store, chat_id, tenths, self.runtime.now_ms())
+            .await?;
         let result = handle.result.await.map_err(AgentsError::AdvisorWorker)?;
         match result.terminal {
             Terminal::Completed => {}

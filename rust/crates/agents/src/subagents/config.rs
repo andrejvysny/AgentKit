@@ -80,9 +80,14 @@ pub struct SubagentRoleLimits {
     /// them (coopatively, through the session service).
     pub cancel_orphans: bool,
     /// Optional cap on provider requests reserved by ALL subagents below one
-    /// root session; `None` means unlimited. Provider requests only: token
-    /// and monetary budgets are not enforced.
+    /// root session; `None` means unlimited. Provider requests only; tokens
+    /// are `max_tree_tokens`.
     pub max_tree_provider_requests: Option<u64>,
+    /// Cap on weighted tokens (input + cache writes + 0.1 x cache reads +
+    /// output + reasoning) spent by ALL subagents below one root session;
+    /// `None` means unlimited. Enforced before each provider request by the
+    /// token gate (`SubagentService::token_gate`).
+    pub max_tree_tokens: Option<u64>,
 }
 
 impl Default for SubagentRoleLimits {
@@ -96,6 +101,7 @@ impl Default for SubagentRoleLimits {
             lease_ttl_ms: 900_000,
             cancel_orphans: true,
             max_tree_provider_requests: None,
+            max_tree_tokens: Some(1_000_000),
         }
     }
 }

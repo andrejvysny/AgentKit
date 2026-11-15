@@ -317,6 +317,26 @@ impl SqliteStore {
         .await
     }
 
+    /// Store-authored event on a task whose emitter is not the caller (no
+    /// lease fence to present): the store owns `seq` and `eventId`. `data`
+    /// must carry ids and reasons only.
+    pub async fn append_system_event(
+        &self,
+        task_id: &str,
+        kind: &str,
+        data: Value,
+        now: i64,
+    ) -> Result<()> {
+        let (task_id, kind) = (task_id.to_owned(), kind.to_owned());
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            append_system_event(&transaction, &task_id, &kind, data, now)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn append_events(
         &self,
         proof: LeaseFence,
