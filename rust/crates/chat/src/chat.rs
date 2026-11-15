@@ -500,7 +500,7 @@ impl ChatExecutor {
             .await?
             .into_iter()
             .map(|(message, _)| message)
-            .collect()
+            .collect::<Vec<_>>()
         } else {
             if session && continuation.is_some() {
                 let manual = context.store.get_chat(chat_id).await?.is_some_and(|chat| {
@@ -528,7 +528,10 @@ impl ChatExecutor {
                     context.emit("run.warning", json!({"code":"compaction_failed","message":"Context compaction is unavailable for provider continuation; the continuation and request remain unchanged."})).await?;
                 }
             }
-            entries.into_iter().map(|(message, _)| message).collect()
+            entries
+                .into_iter()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>()
         };
         if let Some(hook) = &options.turn_context {
             crate::turn_context::append_line(hook.as_ref(), chat_id, &registry, &mut messages)
