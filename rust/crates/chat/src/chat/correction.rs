@@ -180,6 +180,16 @@ impl ChatSession {
         {
             passes += 1;
             self.boundary(passes,"empty_response","The model completed the turn without an answer; asking the original question once more.").await?;
+            // The re-ask runs without tools (TU-02): say so, as the chat-only
+            // retry does, so the loss of tools is never silent.
+            if !self.registry.is_empty() {
+                self.context
+                    .emit(
+                        "run.warning",
+                        json!({"code":"tool_less_retry","message":"Tools were removed for this retry because the model returned an empty answer; it is asked once more without them.","pass":passes,"reason":"empty_response"}),
+                    )
+                    .await?;
+            }
             let messages = if self.private() {
                 self.followup(
                     &pass,

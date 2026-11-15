@@ -10,7 +10,10 @@
 
 mod builtin;
 mod freeze;
+mod messages;
+mod request;
 mod resolve;
+mod salvage;
 mod validate;
 
 pub use agentkit_contracts::AiModelToolProfile;
@@ -18,5 +21,13 @@ pub use builtin::{
     ANTHROPIC_PROFILE_ID, GENERIC_PROFILE_ID, OPENAI_PROFILE_ID, QWEN_PROFILE_ID, builtin_profile,
 };
 pub use freeze::{frozen_profile, model_profile_digest, stamp_model_profile};
+pub use messages::{
+    TOOL_RESPONSE_CLOSE, TOOL_RESPONSE_OPEN, apply_message_rules, escape_tool_response_tags,
+};
+pub use request::{
+    ProfileNote, QWEN_EFFORT_TEMPLATE_KEY, REASONING_HISTORY_FIELD, REASONING_METADATA_KEY,
+    RequestSettings, THINKING_TEMPLATE_KEY, ToolChoice, resolve_request_settings, wire_tool_choice,
+};
 pub use resolve::{LimitFacts, ModelFacts, ProfileQuery, resolve_profile};
+pub use salvage::{Salvage, SalvagedCall, nudge_after_announced_call, salvage_tool_calls};
 pub use validate::{BODY_EXTRA_ALLOW_LIST, ProfileError, validate_profile, validate_profile_json};

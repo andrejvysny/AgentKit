@@ -159,6 +159,11 @@ struct State {
     /// Runtime clock at the last persisted event (`run.progress` cadence).
     last_emit_ms: u64,
     tool_records: crate::tool_record::ToolRecords,
+    /// The latest step's reasoning text, attached to its assistant message so
+    /// a profile that sends reasoning back finds it in history (TU-17).
+    step_reasoning: Option<String>,
+    /// The latest step's calls were parsed from reply text (TU-21).
+    step_salvaged: bool,
 }
 /// How long a terminal/usage event may wait for a full channel after the run
 /// was cancelled.
@@ -186,6 +191,9 @@ struct Turn {
     phase: Option<&'static str>,
     /// The phase `run.progress` last reported.
     reported_phase: Option<&'static str>,
+    /// The provider parsed this turn's calls out of reply text (TU-21).
+    salvaged: bool,
+    reasoning: Option<String>,
 }
 impl State {
     fn new(options: RunOptions, sender: mpsc::Sender<AiRunEvent>) -> Self {
@@ -209,6 +217,8 @@ impl State {
             applied_steers: HashSet::new(),
             last_emit_ms,
             tool_records: Default::default(),
+            step_reasoning: None,
+            step_salvaged: false,
             options,
             sender,
         }
@@ -385,6 +395,8 @@ impl State {
             }
             self.check()?;
             let turn = self.provider_turn(provider.clone(), &registry).await?;
+            self.step_reasoning = turn.reasoning.clone();
+            self.step_salvaged = turn.salvaged;
             let content = turn.content.clone().unwrap_or(turn.delta.clone());
             let mut calls = if turn.calls.is_empty() {
                 turn.requested.clone()
@@ -616,6 +628,9 @@ impl State {
                 if code == "tool_call_unparseable" {
                     turn.saw_no_tool_warning = true;
                 }
+                if code == "tool_call_salvaged" {
+                    turn.salvaged = true;
+                }
                 if !matches!(
                     code.as_str(),
                     "multimodal_flattened" | "tool_schema_unsupported"
@@ -644,6 +659,10 @@ impl State {
                     turn.completed = true;
                     turn.content = data["content"].as_str().map(str::to_owned);
                     turn.finish = data["finishReason"].as_str().unwrap_or("").into();
+                    turn.reasoning = data["reasoningContent"]
+                        .as_str()
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned);
                     turn.calls =
                         serde_json::from_value(data["toolCalls"].clone()).unwrap_or_default();
                 }
@@ -730,6 +749,11 @@ impl State {
         if push_assistant {
             let mut assistant = ChatMessage::text("assistant", content);
             assistant.tool_calls = calls.clone();
+            if let Some(reasoning) = self.step_reasoning.take() {
+                let mut metadata = serde_json::Map::new();
+                metadata.insert(crate::REASONING_METADATA_KEY.into(), reasoning.into());
+                assistant.metadata = Some(metadata);
+            }
             self.pending_messages.push(assistant.clone());
             self.messages.push(assistant);
         }
@@ -930,7 +954,11 @@ impl State {
                     aliases_used: &prepared.aliases_used,
                     values_converted: prepared.values_converted,
                 };
-                self.tool_records.data(&finished, &verdict)
+                let mut data = self.tool_records.data(&finished, &verdict);
+                if self.step_salvaged {
+                    data["salvaged"] = true.into();
+                }
+                data
             });
             self.emit(outcome.kind, outcome.data).await?;
             if let Some(record) = record {

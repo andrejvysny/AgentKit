@@ -1,11 +1,12 @@
 use crate::{
-    TrustedTransport, content,
+    TrustedTransport,
+    chat_completions_request::build_body,
     sse::{SseDecoder, SseFrame},
     transport::{self, read_json},
 };
 use agentkit_core::{
     ChatProvider, ChatRequest, ConnectionIdentity, CoreError, ProviderEvent, ProviderStream,
-    ToolCall,
+    ToolCall, salvage_tool_calls,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -115,9 +116,16 @@ impl ChatCompletionsProvider {
     fn events(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         let provider = self.clone();
         Box::pin(async_stream::try_stream! {
-            let (body, roles) = build_body(&input)?;
+            let (body, roles, notes) = build_body(&input)?;
             provider.transport.check_authority().await?;
             yield ProviderEvent::Started;
+            for note in notes {
+                provider.transport.check_authority().await?;
+                yield ProviderEvent::Warning {
+                    code: note.code.into(),
+                    message: note.message,
+                };
+            }
             if !roles.is_empty() {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {
@@ -226,6 +234,35 @@ impl ChatCompletionsProvider {
                 ))?;
             }
             let (mut calls, repairs) = state.assemble();
+            // Recovery (TU-21): tool-call text the server left in the reply is
+            // parsed once, only when the profile asks and no call was parsed.
+            let mut content = state.content.clone();
+            if calls.is_empty()
+                && !input.tools.is_empty()
+                && input.profile.as_ref().is_some_and(|profile| profile.recovery.salvage)
+                && let Some(salvage) = salvage_tool_calls(&state.content)
+            {
+                let count = salvage.calls.len();
+                for call in salvage.calls {
+                    calls.push(ToolCall {
+                        id: input
+                            .runtime
+                            .as_ref()
+                            .map(|runtime| runtime.id_with_prefix("call_"))
+                            .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4())),
+                        name: call.name,
+                        arguments_json: Value::Object(call.arguments).to_string(),
+                    });
+                }
+                content = salvage.text;
+                provider.transport.check_authority().await?;
+                yield ProviderEvent::Warning {
+                    code: "tool_call_salvaged".into(),
+                    message: format!(
+                        "The server returned {count} tool call(s) as text; they were parsed from the reply and are marked salvaged."
+                    ),
+                };
+            }
             if !repairs.is_empty() {
                 provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {
@@ -266,7 +303,7 @@ impl ChatCompletionsProvider {
                 };
             }
             let mut data = json!({
-                "content": state.content,
+                "content": content,
                 "toolCallCount": calls.len(),
                 "toolCalls": calls,
             });
@@ -334,82 +371,6 @@ impl ChatProvider for ChatCompletionsProvider {
             })
             .collect())
     }
-}
-fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
-    content::validate_selected(&input.selected_content)?;
-    let mut messages = vec![];
-    let mut roles = vec![];
-    for message in input.selected_content.iter().chain(input.messages.iter()) {
-        let (content, dropped) = content::parts(message, false, true)?;
-        if dropped && !roles.contains(&message.role) {
-            roles.push(message.role.clone());
-        }
-        let mut mapped = json!({
-            "role": message.role,
-            "content": content,
-        });
-        if let Some(name) = &message.name {
-            mapped["name"] = name.clone().into();
-        }
-        if let Some(id) = &message.tool_call_id {
-            mapped["tool_call_id"] = id.clone().into();
-        }
-        if !message.tool_calls.is_empty() {
-            mapped["tool_calls"] = message
-                .tool_calls
-                .iter()
-                .map(|call| {
-                    json!({
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": call.arguments_json,
-                        },
-                    })
-                })
-                .collect();
-        }
-        messages.push(mapped);
-    }
-    let mut body = json!({
-        "model": input.model,
-        "messages": messages,
-        "stream": true,
-        "stream_options": {
-            "include_usage": true,
-        },
-    });
-    if let Some(value) = input.reasoning_effort {
-        body["reasoning_effort"] = serde_json::to_value(value).expect("enum serialization");
-    }
-    if let Some(value) = input.temperature {
-        body["temperature"] = value.into();
-    }
-    if let Some(value) = input.max_output_tokens {
-        body["max_tokens"] = value.into();
-    }
-    if !input.tools.is_empty() {
-        body["tools"] = input
-            .tools
-            .iter()
-            .map(|tool| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": agentkit_core::presented_description(
-                            tool,
-                            agentkit_core::ExampleLane::ChatCompletions,
-                        ),
-                        "parameters": tool.input_schema,
-                    },
-                })
-            })
-            .collect();
-        body["tool_choice"] = "auto".into();
-    }
-    Ok((body, roles))
 }
 async fn read_body(
     response: reqwest::Response,

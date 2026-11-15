@@ -349,6 +349,21 @@ async fn tool_less_retry_emits_a_visible_notice_with_the_provider_error() {
     );
 }
 #[tokio::test]
+async fn empty_answer_reask_runs_without_tools_and_says_so() {
+    let (host, requests) = make(ChatExecutorOptions::default(), false, true).await;
+    execute(&host).await;
+    assert_eq!(requests.lock().unwrap().len(), 2);
+    assert!(requests.lock().unwrap()[1].tools.is_empty());
+    let events = host.store().events("run", None, 1000).await.unwrap();
+    let notice = events
+        .iter()
+        .find(|event| event.event["data"]["code"] == "tool_less_retry")
+        .expect("the tool-less re-ask is visible");
+    assert_eq!(notice.event["data"]["reason"], "empty_response");
+    assert_eq!(notice.event["data"]["pass"], 2);
+}
+
+#[tokio::test]
 async fn generic_400_does_not_retry_without_tools() {
     let (host, requests) = make_with(
         ChatExecutorOptions::default(),

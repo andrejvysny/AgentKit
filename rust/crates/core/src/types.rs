@@ -347,6 +347,15 @@ pub struct ChatRequest {
     pub budget: Option<Arc<crate::ExecutionBudget>>,
     pub continuation_store: Option<Arc<dyn ContinuationStore>>,
     pub runtime: Option<Arc<dyn crate::Runtime>>,
+    /// The session's frozen model profile (T2.2). Transports apply its
+    /// sampling, effort channel, message rules and recovery; `None` keeps
+    /// the request exactly as the caller built it.
+    pub profile: Option<Arc<agentkit_contracts::AiModelToolProfile>>,
+    /// The host asked for thinking off. The profile's `off` level decides
+    /// what that means for the model.
+    pub reasoning_off: bool,
+    /// What the caller wants `tool_choice` to be; the profile may downgrade it.
+    pub tool_choice: crate::ToolChoice,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

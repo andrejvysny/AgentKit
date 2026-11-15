@@ -38,6 +38,11 @@ pub use model_profile::{
     ModelFacts, OPENAI_PROFILE_ID, ProfileError, ProfileQuery, QWEN_PROFILE_ID, builtin_profile,
     frozen_profile, model_profile_digest, resolve_profile, stamp_model_profile, validate_profile,
     validate_profile_json,
+    // T2.2: applying the frozen profile to a request.
+    ProfileNote, QWEN_EFFORT_TEMPLATE_KEY, REASONING_HISTORY_FIELD, REASONING_METADATA_KEY,
+    RequestSettings, Salvage, SalvagedCall, THINKING_TEMPLATE_KEY, TOOL_RESPONSE_CLOSE,
+    TOOL_RESPONSE_OPEN, ToolChoice, apply_message_rules, escape_tool_response_tags,
+    nudge_after_announced_call, resolve_request_settings, salvage_tool_calls, wire_tool_choice,
 };
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};

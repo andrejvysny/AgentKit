@@ -179,11 +179,14 @@ pub(super) fn assemble_with_ids(
         messages.push((message, None, None));
     }
     let declared = declared_calls(&eligible[start..]);
+    let mut history = vec![];
     for record in eligible.into_iter().skip(start) {
         if let Some(message) = visible_message(record, &declared) {
-            messages.push(message);
+            history.push(message);
         }
     }
+    dedupe_run_reasoning(&mut history);
+    messages.extend(history);
     reconcile(messages, receipts)
 }
 
@@ -256,6 +259,66 @@ fn declared_calls(records: &[&MessageRecord]) -> HashSet<(Option<String>, String
 }
 
 type OwnedHistoryMessage = (ChatMessage, Option<String>, Option<String>);
+/// An assistant record's stored reasoning, carried on the message so a
+/// profile that sends reasoning back (TU-17) can find it. Other lanes ignore
+/// message metadata.
+fn stored_reasoning(record: &MessageRecord) -> Option<serde_json::Map<String, Value>> {
+    if record.role != "assistant" {
+        return None;
+    }
+    let text = record.metadata[agentkit_core::REASONING_METADATA_KEY]
+        .as_str()
+        .filter(|text| !text.is_empty())?;
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        agentkit_core::REASONING_METADATA_KEY.into(),
+        text.to_owned().into(),
+    );
+    Some(metadata)
+}
+/// A run's final answer stores the reasoning of the whole turn; the steps
+/// before it carry their own. Keep each piece of reasoning once: the final
+/// answer keeps only what follows the earlier steps' text.
+fn dedupe_run_reasoning(messages: &mut [OwnedHistoryMessage]) {
+    let reasoning = |message: &ChatMessage| {
+        message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(agentkit_core::REASONING_METADATA_KEY))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    for index in 0..messages.len() {
+        let (message, run, _) = &messages[index];
+        if message.role != "assistant" || !message.tool_calls.is_empty() {
+            continue;
+        }
+        let Some(own) = reasoning(message) else {
+            continue;
+        };
+        let earlier: String = messages[..index]
+            .iter()
+            .filter(|(other, other_run, _)| {
+                other_run == run && other.role == "assistant" && !other.tool_calls.is_empty()
+            })
+            .filter_map(|(other, _, _)| reasoning(other))
+            .collect();
+        if earlier.is_empty() {
+            continue;
+        }
+        if let Some(rest) = own.strip_prefix(&earlier) {
+            let metadata = &mut messages[index].0.metadata;
+            *metadata = (!rest.is_empty()).then(|| {
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    agentkit_core::REASONING_METADATA_KEY.into(),
+                    rest.to_owned().into(),
+                );
+                map
+            });
+        }
+    }
+}
 fn visible_message(
     record: &MessageRecord,
     declared: &HashSet<(Option<String>, String)>,
@@ -280,7 +343,7 @@ fn visible_message(
             name: record.metadata["toolName"].as_str().map(str::to_owned),
             tool_call_id: record.tool_call_id.clone(),
             tool_calls: calls,
-            metadata: None,
+            metadata: stored_reasoning(record),
         },
         record.run_id.clone(),
         Some(record.id.clone()),
@@ -1057,5 +1120,33 @@ mod tests {
                 .as_str()
                 .is_some_and(|t| t.contains("tool_result_missing"))
         }),);
+    }
+    #[test]
+    fn stored_reasoning_rides_on_assistant_messages_once_per_run() {
+        let mut step = assistant("a1", "runA", 2, &[("call-1", "read", "{}")]);
+        step.metadata = json!({"internal": true, "reasoningContent": "first. "});
+        let mut answer = record("f1", Some("runA"), "assistant", json!("done"), 4, true);
+        // The final answer stores the whole turn's reasoning.
+        answer.metadata = json!({"reasoningContent": "first. second."});
+        let records = vec![
+            record("u1", None, "user", json!("go"), 1, true),
+            step,
+            tool_result_of("t1", "runA", "call-1", "{}", 3),
+            answer,
+            record("u2", None, "user", json!("again"), 5, true),
+        ];
+        let messages = assemble_with(records, &[], "runB");
+        let reasoning = |role: &str, calls: bool| {
+            messages
+                .iter()
+                .find(|m| m.role == role && m.tool_calls.is_empty() != calls)
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|m| m.get(agentkit_core::REASONING_METADATA_KEY))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        assert_eq!(reasoning("assistant", true), Some("first. ".into()));
+        assert_eq!(reasoning("assistant", false), Some("second.".into()));
+        assert!(messages.iter().find(|m| m.role == "user").unwrap().metadata.is_none());
     }
 }

@@ -486,9 +486,18 @@ impl ChatExecutor {
             usage_timeout_ms: options.hook_timeouts.usage_ms,
             reasoning: Default::default(),
         });
+        // The session's frozen model profile (T2.2) rides on the request; the
+        // transport applies it. A chat without one is sent as the caller built it.
+        let model_profile = context
+            .store
+            .get_chat(chat_id)
+            .await?
+            .and_then(|chat| agentkit_sessions::read_model_profile(&chat.metadata))
+            .map(Arc::new);
         let mut request = ChatRequest {
             model: model.into(),
             messages,
+            profile: model_profile,
             selected_content,
             content_binding_digest: context.task.payload["contentSnapshot"]["digest"]
                 .as_str()
