@@ -22,6 +22,20 @@ pub(crate) fn failed(
         model_json: envelope::stringify(&envelope::error_envelope(&error.code, &message, detail)),
     }
 }
+/// Repair budget (TU-11): add the stop line to a failed result's summary, so
+/// the model sees it next to the failure it belongs to.
+pub(crate) fn append_stop_retrying(outcome: &mut ToolOutcome) {
+    let Ok(mut model) = serde_json::from_str::<Value>(&outcome.model_json) else {
+        return;
+    };
+    let current = model["summary"]
+        .as_str()
+        .or_else(|| outcome.data["errorMessage"].as_str())
+        .unwrap_or("The tool call failed.")
+        .to_owned();
+    model["summary"] = crate::failure_catalog::with_stop_retrying(&current).into();
+    outcome.model_json = envelope::stringify(&model);
+}
 pub(crate) async fn execute(
     registry: &ToolRegistry,
     call: &ToolCall,
@@ -225,10 +239,19 @@ fn outcome(
                         result.warnings.join("; ")
                     }
                 });
+                // A tool that carries the failure type reports its own code
+                // and one-sentence message; the model text stays the summary.
+                let carried = carried_failure(&result.data);
+                let message = carried
+                    .and_then(|failure| failure["message"].as_str().map(str::to_owned))
+                    .unwrap_or(message);
                 data["errorMessage"] = envelope::truncate(&message, envelope::text_budget(max))
                     .0
                     .into();
-                data["errorCode"] = "tool_failed".into();
+                data["errorCode"] = carried
+                    .and_then(|failure| failure["code"].as_str())
+                    .unwrap_or("tool_failed")
+                    .into();
             }
             ToolOutcome {
                 kind: if result.ok {
@@ -241,6 +264,13 @@ fn outcome(
             }
         }
     }
+}
+
+/// The `failure` object a tool put in its structured data, when it did.
+fn carried_failure(data: &Option<Value>) -> Option<&Value> {
+    data.as_ref()
+        .and_then(|data| data.get("failure"))
+        .filter(|failure| failure["code"].is_string())
 }
 
 pub fn dedupe(calls: &mut [ToolCall]) -> Vec<String> {

@@ -1,4 +1,4 @@
-use crate::{ToolLimits, ToolResult};
+use crate::{ToolLimits, ToolResult, failure_catalog};
 use serde_json::{Value, json};
 const MARKER: &str = "\n[...truncated]";
 pub(crate) fn stringify(value: &Value) -> String {
@@ -20,12 +20,15 @@ pub fn truncate(value: &str, max: usize) -> (String, bool) {
 pub fn text_budget(max: usize) -> usize {
     128.max(max / 8)
 }
+/// The model-facing envelope of a failed call. `summary` is the failure as the
+/// model reads it (message, Why, Next); `data.failure` is the structured type.
 pub fn error_envelope(code: &str, message: &str, detail: Value) -> Value {
-    let mut data = json!({"errorCode": code, "errorMessage": message});
+    let failure = failure_catalog::failure(code, message, None);
+    let mut data = json!({"errorCode": code, "errorMessage": message, "failure": failure_catalog::failure_json(&failure)});
     if let Some(detail) = detail.as_object() {
         data.as_object_mut().expect("object").extend(detail.clone());
     }
-    json!({"ok":false,"status":"error","summary":message,"warnings":[],"truncated":false,"data":data})
+    json!({"ok":false,"status":"error","summary":failure_catalog::render(&failure),"warnings":[],"truncated":false,"data":data})
 }
 pub fn build(result: &ToolResult, limits: &ToolLimits) -> Value {
     let status = if result.status.as_deref() == Some("partial") {

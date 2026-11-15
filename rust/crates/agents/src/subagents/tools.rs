@@ -4,7 +4,8 @@ use super::service::{
     SpawnRequest, SubagentService,
 };
 use agentkit_core::{
-    AliasTable, CoreError, Tool, ToolContext, ToolDefinition, ToolResult, normalise,
+    AliasTable, CoreError, Tool, ToolContext, ToolDefinition, ToolResult, failure_catalog,
+    normalise,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -200,10 +201,13 @@ fn payload(data: Value, context: &ToolContext) -> ToolResult {
 }
 
 fn refused(reason: String, context: &ToolContext) -> ToolResult {
+    // Bare codes such as `spawn_key_required` become full sentences with a
+    // next step (TU-10); the model reads the rendered failure.
+    let text = failure_catalog::render(&failure_catalog::from_refusal(&reason));
     ToolResult {
         ok: false,
-        data: Some(Value::String(reason.clone())),
-        model_data: Some(Value::String(reason)),
+        data: Some(Value::String(text.clone())),
+        model_data: Some(Value::String(text)),
         sources: vec![],
         warnings: vec![],
         truncated: false,

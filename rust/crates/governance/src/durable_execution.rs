@@ -17,7 +17,7 @@ use crate::{
     Admission, ApprovalGrant, CommandCompletion, DurableExecutionPort, PreGuard,
     StandingApprovalPolicy, ToolContributionContext, ToolGuardContext,
 };
-use agentkit_core::{CoreError, ToolContext, ToolDefinition, ToolResult};
+use agentkit_core::{CoreError, ToolContext, ToolDefinition, ToolResult, failure_catalog};
 use agentkit_kernel::sha256_hex;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -306,26 +306,8 @@ fn receipt_refusal(
     reason: &str,
     extra: Option<Value>,
 ) -> ToolResult {
-    let mut data =
-        json!({"errorCode": code, "errorMessage": reason, "phase": "receipts", "retryable": false});
-    if let Some(Value::Object(extra)) = extra {
-        for (key, value) in extra {
-            data[key] = value;
-        }
-    }
-    ToolResult {
-        ok: false,
-        data: Some(data.clone()),
-        model_data: Some(data),
-        summary: Some(reason.into()),
-        sources: vec![],
-        warnings: vec![],
-        truncated: false,
-        limits: context.limits.clone(),
-        status: None,
-
-        model_content: None,
-    }
+    let failure = failure_catalog::failure(code, reason, None);
+    failure_catalog::failure_result(code, &failure, "receipts", extra, &context.limits)
 }
 
 fn uncertain_message() -> String {

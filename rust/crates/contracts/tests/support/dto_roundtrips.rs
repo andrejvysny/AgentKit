@@ -59,6 +59,7 @@ fn all_dtos_roundtrip() {
     support::roundtrip::<AiSourceRef>("AiSourceRefSchema");
     support::roundtrip::<AiTextPart>("AiTextPartSchema");
     support::roundtrip::<AiToolCall>("AiToolCallSchema");
+    support::roundtrip::<AiToolFailure>("AiToolFailureSchema");
     support::roundtrip::<AiToolDefinition>("AiToolDefinitionSchema");
     support::roundtrip::<AiToolEffect>("AiToolEffectSchema");
     support::roundtrip::<AiToolEnvelope>("AiToolEnvelopeSchema");

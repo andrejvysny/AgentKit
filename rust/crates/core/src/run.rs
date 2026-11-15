@@ -749,7 +749,7 @@ impl State {
                 self.cancel_suspended(&held).await?;
             }
             let mut executed = false;
-            let outcome = if self.options.cancellation.is_cancelled() || cancelled {
+            let mut outcome = if self.options.cancellation.is_cancelled() || cancelled {
                 cancelled = true;
                 tool_execution::failed(
                     call,
@@ -886,6 +886,18 @@ impl State {
                     && message.tool_call_id.as_deref() == Some(call.id.as_str())
                     && message.is_synthetic_missing())
             });
+            // Repair budget (TU-11): the call is classified before the model
+            // reads the result, so the stop line can ride on the result itself.
+            let verdict = self.tool_records.judge(&crate::tool_record::Judged {
+                tool_name: &call.name,
+                arguments_json: &call.arguments_json,
+                succeeded: outcome.kind == "run.tool.succeeded",
+                error_code: outcome.data["errorCode"].as_str(),
+                error_message: outcome.data["errorMessage"].as_str(),
+            });
+            if verdict.stop_retrying {
+                tool_execution::append_stop_retrying(&mut outcome);
+            }
             let mut message = ChatMessage::text("tool", &outcome.model_json);
             message.tool_call_id = Some(call.id.clone());
             message.name = Some(call.name.clone());
@@ -898,7 +910,7 @@ impl State {
             };
             let error_code = outcome.data.get("errorCode").cloned();
             let record = self.options.tool_call_records.then(|| {
-                self.tool_records.record(&crate::tool_record::Finished {
+                let finished = crate::tool_record::Finished {
                     tool_call_id: &call.id,
                     tool_name: &call.name,
                     arguments_json: &call.arguments_json,
@@ -917,7 +929,8 @@ impl State {
                     result_bytes: outcome.model_json.len(),
                     aliases_used: &prepared.aliases_used,
                     values_converted: prepared.values_converted,
-                })
+                };
+                self.tool_records.data(&finished, &verdict)
             });
             self.emit(outcome.kind, outcome.data).await?;
             if let Some(record) = record {

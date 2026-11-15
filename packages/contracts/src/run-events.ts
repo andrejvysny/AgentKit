@@ -442,6 +442,25 @@ export const AiToolOutcomeClassSchema = Type.Union([
 ]);
 export type AiToolOutcomeClass = Static<typeof AiToolOutcomeClassSchema>;
 
+/**
+ * The one failure shape every tool shares (TU-10). The model reads it as the
+ * message, then "Why: <cause>", then "Next: <nextStep>". `code` is stable and
+ * listed in the failure catalog with its next step.
+ */
+export const AiToolFailureSchema = Type.Object({
+  code: Type.String(),
+  class: AiToolOutcomeClassSchema,
+  /** What happened, in one sentence. */
+  message: Type.String(),
+  /** Why, when known. */
+  cause: Type.Optional(Type.String()),
+  /** One concrete action the model can take. */
+  nextStep: Type.String(),
+  /** Whether the same call can succeed later. */
+  retryable: Type.Boolean(),
+});
+export type AiToolFailure = Static<typeof AiToolFailureSchema>;
+
 export const AiRunToolRecordEventSchema = Type.Object({
   type: Type.Literal("run.tool.record"),
   ...runEventBaseFields,

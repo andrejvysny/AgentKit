@@ -267,7 +267,13 @@ async fn guards_receive_the_live_call_arguments() {
     let second = json!({ "block": true, "n": 2 });
     let refused = tool.execute(context(), second.clone()).await.unwrap();
     assert!(!refused.ok);
-    assert_eq!(refused.summary.as_deref(), Some("blocked by arguments"));
+    assert!(
+        refused
+            .summary
+            .as_deref()
+            .is_some_and(|text| text.starts_with("blocked by arguments")),
+        "{refused:?}"
+    );
     // Each `canExecute` saw ITS OWN call's arguments, in call order.
     let seen = guard.seen.lock().unwrap();
     assert_eq!(seen.as_slice(), &[Some(first), Some(second)]);
@@ -290,7 +296,13 @@ async fn thrown_guard_errors_and_context_mismatch_never_dispatch_tool() {
         .unwrap();
     let tool = staged.registry.get("read_document").unwrap();
     let result = tool.execute(context(), json!({})).await.unwrap();
-    assert_eq!(result.summary.as_deref(), Some("guard error"));
+    assert!(
+        result
+            .summary
+            .as_deref()
+            .is_some_and(|text| text.starts_with("guard error")),
+        "{result:?}"
+    );
     assert!(
         !serde_json::to_string(&result)
             .unwrap()

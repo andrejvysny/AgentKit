@@ -1476,11 +1476,25 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolErrorData
 pub fn agentkit_contracts::AiToolErrorData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiToolErrorData
 pub fn agentkit_contracts::AiToolErrorData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiToolFailure
+pub agentkit_contracts::AiToolFailure::cause: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiToolFailure::class: agentkit_contracts::AiToolOutcomeClass
+pub agentkit_contracts::AiToolFailure::code: alloc::string::String
+pub agentkit_contracts::AiToolFailure::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiToolFailure::message: alloc::string::String
+pub agentkit_contracts::AiToolFailure::next_step: alloc::string::String
+pub agentkit_contracts::AiToolFailure::retryable: bool
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolFailure
+pub fn agentkit_contracts::AiToolFailure::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiToolFailure
+pub fn agentkit_contracts::AiToolFailure::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::AiToolLimits
 pub agentkit_contracts::AiToolLimits::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
 pub agentkit_contracts::AiToolLimits::max_bytes: f64
 pub agentkit_contracts::AiToolLimits::max_items: agentkit_contracts::Optional<f64>
 pub agentkit_contracts::AiToolLimits::profile: agentkit_contracts::AiContextSizePreference
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolFailure
+pub fn agentkit_contracts::AiToolFailure::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolLimits
 pub fn agentkit_contracts::AiToolLimits::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiToolLimits

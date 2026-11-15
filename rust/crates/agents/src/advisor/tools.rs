@@ -156,7 +156,11 @@ impl Tool for AdvisorReviewTool {
 }
 
 fn refused(reason: &str, context: &ToolContext) -> ToolResult {
-    let text = format!("advisor_refused: {reason}");
+    let text = agentkit_core::failure_catalog::render(&agentkit_core::failure_catalog::failure(
+        "advisor_refused",
+        &format!("advisor_refused: {reason}"),
+        None,
+    ));
     ToolResult {
         ok: false,
         data: Some(Value::String(text.clone())),

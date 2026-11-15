@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentkit_core::{
-    AliasTable, CoreError, Tool, ToolConstraint, ToolContext, ToolDefinition, ToolResult, normalise,
+    AliasTable, CoreError, Tool, ToolConstraint, ToolContext, ToolDefinition, ToolResult,
+    failure_catalog, normalise,
 };
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
 use crate::coordination::WorkspaceCoordinator;
@@ -236,15 +237,22 @@ pub struct ToolSpec {
     pub aliases: &'static [(&'static str, &'static str)],
 }
 
+/// A tool failure as the one failure type: the model reads the message, then
+/// "Why:" and "Next:"; the structured failure rides in `details` so the run
+/// records the real code (`edit_no_match`), not a generic one.
 pub fn failure(error: &CodingError) -> Outcome {
-    let text = format!("{}: {}", error.code, error.message);
+    // The `code: message` line stays (the TypeScript pack and its tests read
+    // it); the Why and Next lines are what the failure type adds.
+    let line = format!("{}: {}", error.code, error.message);
+    let failure = failure_catalog::failure(&error.code, &line, None);
+    let text = failure_catalog::render(&failure);
     Outcome {
         ok: false,
         summary: Some(text.clone()),
         text,
         truncated: false,
         warnings: vec![],
-        details: None,
+        details: Some(json!({"failure": failure_catalog::failure_json(&failure)})),
     }
 }
 

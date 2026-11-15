@@ -2,13 +2,22 @@
 //! Holds counts and sizes only, never argument or result content.
 use agentkit_contracts::AiToolOutcomeClass as Class;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+/// Failures of one tool in a row, all in one class (the repair budget).
+#[derive(Clone, Copy)]
+struct Streak {
+    class: Class,
+    length: u32,
+}
 
 #[derive(Default)]
 pub(crate) struct ToolRecords {
     /// Failures per tool name over the run; a later success is a repair.
     failures: HashMap<String, u32>,
-    failed_calls: HashSet<(String, String)>,
+    /// Times each identical failing call has failed (tool name, arguments).
+    failed_calls: HashMap<(String, String), u32>,
+    streaks: HashMap<String, Streak>,
 }
 
 pub(crate) struct Finished<'a> {
@@ -26,41 +35,92 @@ pub(crate) struct Finished<'a> {
     pub values_converted: u32,
 }
 
-impl ToolRecords {
-    pub(crate) fn record(&mut self, finished: &Finished<'_>) -> Value {
-        let key = (
-            finished.tool_name.to_string(),
-            finished.arguments_json.to_string(),
-        );
-        let prior = self.failures.get(finished.tool_name).copied().unwrap_or(0);
-        let class = if finished.succeeded {
-            if prior > 0 {
-                Class::OkAfterRepair
-            } else {
-                Class::Ok
-            }
-        } else if self.failed_calls.contains(&key) {
-            Class::RepeatIdentical
-        } else {
-            classify(finished.error_code, finished.error_message)
-        };
-        if !finished.succeeded {
-            *self
-                .failures
-                .entry(finished.tool_name.to_string())
-                .or_default() += 1;
-            self.failed_calls.insert(key);
+/// The part of a finished call that decides its class.
+pub(crate) struct Judged<'a> {
+    pub tool_name: &'a str,
+    pub arguments_json: &'a str,
+    pub succeeded: bool,
+    pub error_code: Option<&'a str>,
+    pub error_message: Option<&'a str>,
+}
+
+impl<'a> From<&Finished<'a>> for Judged<'a> {
+    fn from(finished: &Finished<'a>) -> Self {
+        Self {
+            tool_name: finished.tool_name,
+            arguments_json: finished.arguments_json,
+            succeeded: finished.succeeded,
+            error_code: finished.error_code,
+            error_message: finished.error_message,
         }
+    }
+}
+
+/// What one finished call means for the run: its class, the failures before
+/// it, and whether the repair budget says to stop.
+pub(crate) struct Verdict {
+    pub class: Class,
+    pub prior: u32,
+    pub stop_retrying: bool,
+}
+
+/// Codes that say nothing about the model's call, so they never spend the
+/// repair budget.
+fn outside_budget(code: Option<&str>) -> bool {
+    matches!(
+        code,
+        Some("cancelled" | "tool_call_cap" | "execution_budget_exhausted" | "execution_timeout")
+    )
+}
+
+impl ToolRecords {
+    /// Classify a finished call and update the run's counters. Runs for every
+    /// call, whether or not records are emitted, because the repair budget
+    /// depends on it.
+    pub(crate) fn judge(&mut self, call: &Judged<'_>) -> Verdict {
+        let tool = call.tool_name.to_string();
+        let key = (tool.clone(), call.arguments_json.to_string());
+        let prior = self.failures.get(&tool).copied().unwrap_or(0);
+        if call.succeeded {
+            self.streaks.remove(&tool);
+            return Verdict {
+                class: if prior > 0 { Class::OkAfterRepair } else { Class::Ok },
+                prior,
+                stop_retrying: false,
+            };
+        }
+        let base = classify(call.error_code, call.error_message);
+        // The identical third call is a repeat; the second only fails again.
+        let repeats = self.failed_calls.get(&key).copied().unwrap_or(0);
+        let class = if repeats >= 2 { Class::RepeatIdentical } else { base };
+        *self.failures.entry(tool.clone()).or_default() += 1;
+        *self.failed_calls.entry(key).or_default() += 1;
+        let spends = !outside_budget(call.error_code);
+        let length = match self.streaks.get(&tool) {
+            Some(streak) if streak.class == base => streak.length + 1,
+            _ => 1,
+        };
+        if spends {
+            self.streaks.insert(tool, Streak { class: base, length });
+        }
+        Verdict {
+            class,
+            prior,
+            stop_retrying: spends && length >= 2,
+        }
+    }
+
+    pub(crate) fn data(&self, finished: &Finished<'_>, verdict: &Verdict) -> Value {
         let mut data = json!({
             "toolCallId": finished.tool_call_id,
             "toolName": finished.tool_name,
             "step": finished.step,
             "model": finished.model,
-            "outcomeClass": class,
+            "outcomeClass": verdict.class,
             "aliasesUsed": finished.aliases_used,
             "valuesConverted": finished.values_converted,
             "salvaged": false,
-            "repairAttempt": prior,
+            "repairAttempt": verdict.prior,
             "durationMs": finished.duration_ms,
             "argumentBytes": finished.arguments_json.len(),
             "resultBytes": finished.result_bytes,
@@ -72,20 +132,16 @@ impl ToolRecords {
         }
         data
     }
+
+    #[cfg(test)]
+    pub(crate) fn record(&mut self, finished: &Finished<'_>) -> Value {
+        let verdict = self.judge(&Judged::from(finished));
+        self.data(finished, &verdict)
+    }
 }
 
 fn classify(code: Option<&str>, message: Option<&str>) -> Class {
-    match code {
-        Some("tool_missing") => Class::UnknownTool,
-        Some("bad_args") => Class::InvalidJson,
-        Some("schema_invalid" | "tool_name_missing") => Class::InvalidStructure,
-        Some("tool_hook_denied" | "lease_lost" | "tool_not_allowed") => Class::GuardRefused,
-        Some("execution_timeout" | "execution_budget_exhausted") => Class::Timeout,
-        Some("exec_failed") if message.is_some_and(|text| text.contains("timed out after")) => {
-            Class::Timeout
-        }
-        _ => Class::ToolError,
-    }
+    crate::failure_catalog::class_of(code.unwrap_or(""), message.unwrap_or(""))
 }
 
 #[cfg(test)]
@@ -110,17 +166,55 @@ mod tests {
     }
 
     #[test]
-    fn success_after_failure_is_repair_and_same_failure_repeats() {
+    fn success_after_failure_is_repair_and_third_identical_failure_repeats() {
         let mut records = ToolRecords::default();
         let first = records.record(&finished(false, Some("schema_invalid"), "{}"));
         assert_eq!(first["outcomeClass"], "invalid_structure");
         let again = records.record(&finished(false, Some("schema_invalid"), "{}"));
-        assert_eq!(again["outcomeClass"], "repeat_identical");
+        assert_eq!(again["outcomeClass"], "invalid_structure");
         assert_eq!(again["repairAttempt"], 1);
+        let third = records.record(&finished(false, Some("schema_invalid"), "{}"));
+        assert_eq!(third["outcomeClass"], "repeat_identical");
+        assert_eq!(third["repairAttempt"], 2);
+        assert_eq!(third["failureCode"], "schema_invalid");
         let fixed = records.record(&finished(true, None, r#"{"a":1}"#));
         assert_eq!(fixed["outcomeClass"], "ok_after_repair");
-        assert_eq!(fixed["repairAttempt"], 2);
+        assert_eq!(fixed["repairAttempt"], 3);
         assert!(fixed.get("failureCode").is_none());
+    }
+
+    #[test]
+    fn second_failure_in_one_class_stops_retrying_and_the_third_stays_stopped() {
+        let mut records = ToolRecords::default();
+        let first = records.judge(&Judged::from(&finished(false, Some("schema_invalid"), r#"{"a":1}"#)));
+        assert!(!first.stop_retrying);
+        let second = records.judge(&Judged::from(&finished(false, Some("schema_invalid"), r#"{"a":2}"#)));
+        assert!(second.stop_retrying);
+        let third = records.judge(&Judged::from(&finished(false, Some("schema_invalid"), r#"{"a":3}"#)));
+        assert!(third.stop_retrying);
+        assert_eq!(third.class, Class::InvalidStructure);
+    }
+
+    #[test]
+    fn a_different_class_a_success_or_a_cancel_does_not_extend_the_streak() {
+        let mut records = ToolRecords::default();
+        records.judge(&Judged::from(&finished(false, Some("schema_invalid"), "{}")));
+        let other = records.judge(&Judged::from(&finished(false, Some("bad_args"), "{}")));
+        assert!(!other.stop_retrying, "a new class starts a new streak");
+        records.judge(&Judged::from(&finished(true, None, "{}")));
+        let after_success = records.judge(&Judged::from(&finished(false, Some("bad_args"), "{}")));
+        assert!(!after_success.stop_retrying, "success resets the streak");
+        let cancel = records.judge(&Judged::from(&finished(false, Some("cancelled"), "{}")));
+        assert!(!cancel.stop_retrying, "cancelled never spends the budget");
+    }
+
+    #[test]
+    fn the_budget_counts_each_tool_on_its_own() {
+        let mut records = ToolRecords::default();
+        records.judge(&Judged::from(&finished(false, Some("schema_invalid"), "{}")));
+        let mut other = finished(false, Some("schema_invalid"), "{}");
+        other.tool_name = "read";
+        assert!(!records.judge(&Judged::from(&other)).stop_retrying);
     }
 
     #[test]
