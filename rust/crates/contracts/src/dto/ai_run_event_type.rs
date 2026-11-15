@@ -20,6 +20,8 @@ pub enum AiRunEventType {
     RunToolSucceeded,
     #[serde(rename = "run.tool.failed")]
     RunToolFailed,
+    #[serde(rename = "run.tool.record")]
+    RunToolRecord,
     #[serde(rename = "run.warning")]
     RunWarning,
     #[serde(rename = "run.usage")]

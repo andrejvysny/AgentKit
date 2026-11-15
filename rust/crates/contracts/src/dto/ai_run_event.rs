@@ -3,8 +3,8 @@ use crate::{
     AiRunContextCompactedEvent, AiRunFailedEvent, AiRunInputAppliedEvent,
     AiRunMessageCompletedEvent, AiRunMessageDeltaEvent, AiRunMessageReasoningDeltaEvent,
     AiRunProgressEvent, AiRunStartedEvent, AiRunToolFailedEvent, AiRunToolPreparingEvent,
-    AiRunToolRequestedEvent, AiRunToolRunningEvent, AiRunToolSucceededEvent, AiRunUsageEvent,
-    AiRunVerificationEvent, AiRunWaitingEvent, AiRunWarningEvent,
+    AiRunToolRecordEvent, AiRunToolRequestedEvent, AiRunToolRunningEvent, AiRunToolSucceededEvent,
+    AiRunUsageEvent, AiRunVerificationEvent, AiRunWaitingEvent, AiRunWarningEvent,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -21,6 +21,7 @@ pub enum AiRunEvent {
     ToolRunning(AiRunToolRunningEvent),
     ToolSucceeded(AiRunToolSucceededEvent),
     ToolFailed(AiRunToolFailedEvent),
+    ToolRecord(AiRunToolRecordEvent),
     Warning(AiRunWarningEvent),
     Usage(AiRunUsageEvent),
     ContextCompacted(AiRunContextCompactedEvent),
@@ -72,6 +73,9 @@ crate::impl_json_deserialize!(AiRunEvent, |value: Value| {
     }
     if let Ok(member) = <AiRunToolFailedEvent as crate::JsonDeserialize>::from_json(value.clone()) {
         return Ok(Self::ToolFailed(member));
+    }
+    if let Ok(member) = <AiRunToolRecordEvent as crate::JsonDeserialize>::from_json(value.clone()) {
+        return Ok(Self::ToolRecord(member));
     }
     if let Ok(member) = <AiRunWarningEvent as crate::JsonDeserialize>::from_json(value.clone()) {
         return Ok(Self::Warning(member));

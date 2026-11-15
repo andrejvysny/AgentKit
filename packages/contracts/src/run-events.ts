@@ -12,6 +12,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.tool.running"),
   Type.Literal("run.tool.succeeded"),
   Type.Literal("run.tool.failed"),
+  Type.Literal("run.tool.record"),
   Type.Literal("run.warning"),
   Type.Literal("run.usage"),
   Type.Literal("run.context.compacted"),
@@ -416,6 +417,59 @@ export type AiRunWarningEvent = Omit<
 };
 
 /**
+ * One record per tool call (TU-35), emitted only when the run enables
+ * `toolCallRecords`. Carries no argument or result content, only sizes.
+ * Optional context (provider, lane, dialect, profile, toolset) is absent until
+ * the layer that knows it fills it in.
+ */
+export const AiToolOutcomeClassSchema = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("ok_after_repair"),
+  Type.Literal("unknown_tool"),
+  Type.Literal("invalid_json"),
+  Type.Literal("invalid_structure"),
+  Type.Literal("invalid_value"),
+  Type.Literal("precondition"),
+  Type.Literal("guard_refused"),
+  Type.Literal("approval_denied"),
+  Type.Literal("tool_error"),
+  Type.Literal("timeout"),
+  Type.Literal("repeat_identical"),
+  Type.Literal("announced_no_call"),
+]);
+export type AiToolOutcomeClass = Static<typeof AiToolOutcomeClassSchema>;
+
+export const AiRunToolRecordEventSchema = Type.Object({
+  type: Type.Literal("run.tool.record"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    toolCallId: Type.String(),
+    /** Name as the model wrote it. */
+    toolName: Type.String(),
+    /** Registry name when it differs from the wire name. */
+    canonicalTool: Type.Optional(Type.String()),
+    step: Type.Number(),
+    model: Type.String(),
+    provider: Type.Optional(Type.String()),
+    lane: Type.Optional(Type.String()),
+    dialect: Type.Optional(Type.String()),
+    dialectVersion: Type.Optional(Type.String()),
+    profile: Type.Optional(Type.String()),
+    toolset: Type.Optional(Type.String()),
+    outcomeClass: AiToolOutcomeClassSchema,
+    failureCode: Type.Optional(Type.String()),
+    aliasesUsed: Type.Array(Type.String()),
+    valuesConverted: Type.Number(),
+    salvaged: Type.Boolean(),
+    repairAttempt: Type.Number(),
+    durationMs: Type.Number(),
+    argumentBytes: Type.Number(),
+    resultBytes: Type.Number(),
+  }),
+});
+export type AiRunToolRecordEvent = Static<typeof AiRunToolRecordEventSchema>;
+
+/**
  * Token accounting for ONE provider call. A run makes several (every tool
  * round-trip is another call), so usage is reported per call rather than once
  * per run — summing is the consumer's job, and it cannot sum what it never saw.
@@ -736,6 +790,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunToolRunningEventSchema,
   AiRunToolSucceededEventSchema,
   AiRunToolFailedEventSchema,
+  AiRunToolRecordEventSchema,
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
   AiRunContextCompactedEventSchema,
@@ -765,6 +820,7 @@ export type AiRunEvent =
   | AiRunToolRunningEvent
   | AiRunToolSucceededEvent
   | AiRunToolFailedEvent
+  | AiRunToolRecordEvent
   | AiRunWarningEvent
   | AiRunUsageEvent
   | AiRunContextCompactedEvent

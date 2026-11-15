@@ -210,6 +210,7 @@ pub agentkit_core::RunOptions::runtime: alloc::rcs::arc::Arc<dyn agentkit_kernel
 pub agentkit_core::RunOptions::scope_id: core::option::Option<alloc::string::String>
 pub agentkit_core::RunOptions::steering: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::SteeringSource>>
 pub agentkit_core::RunOptions::suspender: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::SuspendSink>>
+pub agentkit_core::RunOptions::tool_call_records: bool
 pub agentkit_core::RunOptions::tool_close: core::option::Option<tokio_util::sync::cancellation_token::CancellationToken>
 pub agentkit_core::RunOptions::tool_metadata: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
 pub agentkit_core::RunOptions::user_id: core::option::Option<alloc::string::String>

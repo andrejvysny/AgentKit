@@ -70,6 +70,7 @@ export {
   AiRunToolRunningEventSchema,
   AiRunToolSucceededEventSchema,
   AiRunToolFailedEventSchema,
+  AiRunToolRecordEventSchema,
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
   AiRunContextCompactedEventSchema,

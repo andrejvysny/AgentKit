@@ -48,6 +48,7 @@ mod ai_run_progress_event;
 mod ai_run_started_event;
 mod ai_run_tool_failed_event;
 mod ai_run_tool_preparing_event;
+mod ai_run_tool_record_event;
 mod ai_run_tool_requested_event;
 mod ai_run_tool_running_event;
 mod ai_run_tool_succeeded_event;
@@ -208,6 +209,9 @@ pub use ai_run_tool_failed_event::{
 };
 pub use ai_run_tool_preparing_event::{
     AiRunToolPreparingEvent, AiRunToolPreparingEventData, AiRunToolPreparingEventType,
+};
+pub use ai_run_tool_record_event::{
+    AiRunToolRecordEvent, AiRunToolRecordEventData, AiRunToolRecordEventType, AiToolOutcomeClass,
 };
 pub use ai_run_tool_requested_event::{
     AiRunToolRequestedEvent, AiRunToolRequestedEventData, AiRunToolRequestedEventType,

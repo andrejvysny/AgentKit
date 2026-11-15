@@ -61,6 +61,8 @@ pub struct RunOptions {
     /// any model request (ADR 0019 part 1). Their ids are excluded from
     /// orphan reconciliation by the host.
     pub resume_calls: Vec<ToolCall>,
+    /// Emit one `run.tool.record` event per finished tool call (TU-35).
+    pub tool_call_records: bool,
 }
 impl Default for RunOptions {
     fn default() -> Self {
@@ -91,6 +93,7 @@ impl Default for RunOptions {
             interruption: None,
             steering: None,
             resume_calls: vec![],
+            tool_call_records: false,
         }
     }
 }
@@ -155,6 +158,7 @@ struct State {
     applied_steers: HashSet<String>,
     /// Runtime clock at the last persisted event (`run.progress` cadence).
     last_emit_ms: u64,
+    tool_records: crate::tool_record::ToolRecords,
 }
 /// How long a terminal/usage event may wait for a full channel after the run
 /// was cancelled.
@@ -204,6 +208,7 @@ impl State {
             continuation,
             applied_steers: HashSet::new(),
             last_emit_ms,
+            tool_records: Default::default(),
             options,
             sender,
         }
@@ -732,6 +737,7 @@ impl State {
         let mut budget_error = None;
         let mut pending_suspension: Option<(crate::HumanRequestSpec, ToolCall)> = None;
         for (index, call) in calls.iter().enumerate() {
+            let call_started_ms = self.options.runtime.now_ms();
             if self.options.batch_suspension
                 && self.options.cancellation.is_cancelled()
                 && let Some((_, held)) = pending_suspension.take()
@@ -884,7 +890,30 @@ impl State {
                 "failed"
             };
             let error_code = outcome.data.get("errorCode").cloned();
+            let record = self.options.tool_call_records.then(|| {
+                self.tool_records.record(&crate::tool_record::Finished {
+                    tool_call_id: &call.id,
+                    tool_name: &call.name,
+                    arguments_json: &call.arguments_json,
+                    model: &self.options.request.model,
+                    step: self.iteration,
+                    succeeded: outcome.kind == "run.tool.succeeded",
+                    error_code: outcome.data["errorCode"].as_str(),
+                    error_message: outcome.data["errorMessage"].as_str(),
+                    duration_ms: self
+                        .options
+                        .runtime
+                        .now_ms()
+                        .saturating_sub(call_started_ms)
+                        .max(0)
+                        .cast_unsigned(),
+                    result_bytes: outcome.model_json.len(),
+                })
+            });
             self.emit(outcome.kind, outcome.data).await?;
+            if let Some(record) = record {
+                self.emit("run.tool.record", record).await?;
+            }
             if !cancelled && self.options.hooks.is_some() {
                 self.observe("onToolResult", json!({"runId":self.run_id,"step":self.iteration,"toolCallId":call.id,"toolName":call.name,"status":status,"errorCode":error_code})).await?;
             }

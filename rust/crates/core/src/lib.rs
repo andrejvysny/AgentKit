@@ -8,6 +8,7 @@ mod provider_retry;
 mod registry;
 mod run;
 mod tool_execution;
+mod tool_record;
 mod types;
 
 pub use budget::{BudgetCheckpoint, BudgetLimits, BudgetSnapshot, ExecutionBudget};

@@ -51,6 +51,7 @@ fn all_dtos_roundtrip() {
     support::roundtrip::<AiRunToolRequestedEvent>("AiRunToolRequestedEventSchema");
     support::roundtrip::<AiRunToolRunningEvent>("AiRunToolRunningEventSchema");
     support::roundtrip::<AiRunToolSucceededEvent>("AiRunToolSucceededEventSchema");
+    support::roundtrip::<AiRunToolRecordEvent>("AiRunToolRecordEventSchema");
     support::roundtrip::<AiRunUsageEvent>("AiRunUsageEventSchema");
     support::roundtrip::<AiRunVerificationEvent>("AiRunVerificationEventSchema");
     support::roundtrip::<AiRunWaitingEvent>("AiRunWaitingEventSchema");

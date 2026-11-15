@@ -159,6 +159,7 @@ pub agentkit_contracts::AiRunEvent::Progress(agentkit_contracts::AiRunProgressEv
 pub agentkit_contracts::AiRunEvent::Started(agentkit_contracts::AiRunStartedEvent)
 pub agentkit_contracts::AiRunEvent::ToolFailed(agentkit_contracts::AiRunToolFailedEvent)
 pub agentkit_contracts::AiRunEvent::ToolPreparing(agentkit_contracts::AiRunToolPreparingEvent)
+pub agentkit_contracts::AiRunEvent::ToolRecord(agentkit_contracts::AiRunToolRecordEvent)
 pub agentkit_contracts::AiRunEvent::ToolRequested(agentkit_contracts::AiRunToolRequestedEvent)
 pub agentkit_contracts::AiRunEvent::ToolRunning(agentkit_contracts::AiRunToolRunningEvent)
 pub agentkit_contracts::AiRunEvent::ToolSucceeded(agentkit_contracts::AiRunToolSucceededEvent)
@@ -187,6 +188,7 @@ pub agentkit_contracts::AiRunEventType::RunProgress
 pub agentkit_contracts::AiRunEventType::RunStarted
 pub agentkit_contracts::AiRunEventType::RunToolFailed
 pub agentkit_contracts::AiRunEventType::RunToolPreparing
+pub agentkit_contracts::AiRunEventType::RunToolRecord
 pub agentkit_contracts::AiRunEventType::RunToolRequested
 pub agentkit_contracts::AiRunEventType::RunToolRunning
 pub agentkit_contracts::AiRunEventType::RunToolSucceeded
@@ -243,6 +245,10 @@ pub enum agentkit_contracts::AiRunToolPreparingEventType
 pub agentkit_contracts::AiRunToolPreparingEventType::RunToolPreparing
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolPreparingEventType
 pub fn agentkit_contracts::AiRunToolPreparingEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiRunToolRecordEventType
+pub agentkit_contracts::AiRunToolRecordEventType::RunToolRecord
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRecordEventType
+pub fn agentkit_contracts::AiRunToolRecordEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 pub enum agentkit_contracts::AiRunToolRequestedEventType
 pub agentkit_contracts::AiRunToolRequestedEventType::RunToolRequested
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRequestedEventType
@@ -317,6 +323,22 @@ pub agentkit_contracts::AiToolErrorPhase::Guard
 pub agentkit_contracts::AiToolErrorPhase::Validation
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolErrorPhase
 pub fn agentkit_contracts::AiToolErrorPhase::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub enum agentkit_contracts::AiToolOutcomeClass
+pub agentkit_contracts::AiToolOutcomeClass::AnnouncedNoCall
+pub agentkit_contracts::AiToolOutcomeClass::ApprovalDenied
+pub agentkit_contracts::AiToolOutcomeClass::GuardRefused
+pub agentkit_contracts::AiToolOutcomeClass::InvalidJson
+pub agentkit_contracts::AiToolOutcomeClass::InvalidStructure
+pub agentkit_contracts::AiToolOutcomeClass::InvalidValue
+pub agentkit_contracts::AiToolOutcomeClass::Ok
+pub agentkit_contracts::AiToolOutcomeClass::OkAfterRepair
+pub agentkit_contracts::AiToolOutcomeClass::Precondition
+pub agentkit_contracts::AiToolOutcomeClass::RepeatIdentical
+pub agentkit_contracts::AiToolOutcomeClass::Timeout
+pub agentkit_contracts::AiToolOutcomeClass::ToolError
+pub agentkit_contracts::AiToolOutcomeClass::UnknownTool
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolOutcomeClass
+pub fn agentkit_contracts::AiToolOutcomeClass::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 pub enum agentkit_contracts::AiToolResultStatus
 pub agentkit_contracts::AiToolResultStatus::Ok
 pub agentkit_contracts::AiToolResultStatus::Partial
@@ -1146,6 +1168,46 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolPrepar
 pub fn agentkit_contracts::AiRunToolPreparingEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunToolPreparingEventData
 pub fn agentkit_contracts::AiRunToolPreparingEventData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiRunToolRecordEvent
+pub agentkit_contracts::AiRunToolRecordEvent::attempt_id: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEvent::contract_version: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEvent::data: agentkit_contracts::AiRunToolRecordEventData
+pub agentkit_contracts::AiRunToolRecordEvent::event_id: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEvent::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiRunToolRecordEvent::run_id: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEvent::seq: f64
+pub agentkit_contracts::AiRunToolRecordEvent::timestamp: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEvent::type_: agentkit_contracts::AiRunToolRecordEventType
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRecordEvent
+pub fn agentkit_contracts::AiRunToolRecordEvent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunToolRecordEvent
+pub fn agentkit_contracts::AiRunToolRecordEvent::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct agentkit_contracts::AiRunToolRecordEventData
+pub agentkit_contracts::AiRunToolRecordEventData::aliases_used: alloc::vec::Vec<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::argument_bytes: f64
+pub agentkit_contracts::AiRunToolRecordEventData::canonical_tool: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::dialect: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::dialect_version: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::duration_ms: f64
+pub agentkit_contracts::AiRunToolRecordEventData::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub agentkit_contracts::AiRunToolRecordEventData::failure_code: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::lane: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::model: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEventData::outcome_class: agentkit_contracts::AiToolOutcomeClass
+pub agentkit_contracts::AiRunToolRecordEventData::profile: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::provider: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::repair_attempt: f64
+pub agentkit_contracts::AiRunToolRecordEventData::result_bytes: f64
+pub agentkit_contracts::AiRunToolRecordEventData::salvaged: bool
+pub agentkit_contracts::AiRunToolRecordEventData::step: f64
+pub agentkit_contracts::AiRunToolRecordEventData::tool_call_id: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEventData::tool_name: alloc::string::String
+pub agentkit_contracts::AiRunToolRecordEventData::toolset: agentkit_contracts::Optional<alloc::string::String>
+pub agentkit_contracts::AiRunToolRecordEventData::values_converted: f64
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRecordEventData
+pub fn agentkit_contracts::AiRunToolRecordEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl<'de> serde_core::de::Deserialize<'de> for agentkit_contracts::AiRunToolRecordEventData
+pub fn agentkit_contracts::AiRunToolRecordEventData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct agentkit_contracts::AiRunToolRequestedEvent
 pub agentkit_contracts::AiRunToolRequestedEvent::attempt_id: agentkit_contracts::Optional<alloc::string::String>
 pub agentkit_contracts::AiRunToolRequestedEvent::contract_version: alloc::string::String
@@ -2317,6 +2379,12 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolPrepar
 pub fn agentkit_contracts::AiRunToolPreparingEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolPreparingEventType
 pub fn agentkit_contracts::AiRunToolPreparingEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRecordEvent
+pub fn agentkit_contracts::AiRunToolRecordEvent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRecordEventData
+pub fn agentkit_contracts::AiRunToolRecordEventData::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRecordEventType
+pub fn agentkit_contracts::AiRunToolRecordEventType::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRequestedEvent
 pub fn agentkit_contracts::AiRunToolRequestedEvent::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunToolRequestedEventData
@@ -2393,6 +2461,8 @@ impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolErrorPhas
 pub fn agentkit_contracts::AiToolErrorPhase::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolLimits
 pub fn agentkit_contracts::AiToolLimits::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolOutcomeClass
+pub fn agentkit_contracts::AiToolOutcomeClass::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolResult
 pub fn agentkit_contracts::AiToolResult::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiToolResultStatus

@@ -54,6 +54,7 @@ impl AiRunEvent {
             Self::ToolRunning(_) => "run.tool.running",
             Self::ToolSucceeded(_) => "run.tool.succeeded",
             Self::ToolFailed(_) => "run.tool.failed",
+            Self::ToolRecord(_) => "run.tool.record",
             Self::Warning(_) => "run.warning",
             Self::Usage(_) => "run.usage",
             Self::ContextCompacted(_) => "run.context.compacted",

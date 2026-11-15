@@ -2360,6 +2360,10 @@
             "type": "string"
           },
           {
+            "const": "run.tool.record",
+            "type": "string"
+          },
+          {
             "const": "run.warning",
             "type": "string"
           },
@@ -3086,6 +3090,182 @@
           },
           "type": {
             "const": "run.tool.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "aliasesUsed": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "argumentBytes": {
+                "type": "number"
+              },
+              "canonicalTool": {
+                "type": "string"
+              },
+              "dialect": {
+                "type": "string"
+              },
+              "dialectVersion": {
+                "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "failureCode": {
+                "type": "string"
+              },
+              "lane": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "outcomeClass": {
+                "anyOf": [
+                  {
+                    "const": "ok",
+                    "type": "string"
+                  },
+                  {
+                    "const": "ok_after_repair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "unknown_tool",
+                    "type": "string"
+                  },
+                  {
+                    "const": "invalid_json",
+                    "type": "string"
+                  },
+                  {
+                    "const": "invalid_structure",
+                    "type": "string"
+                  },
+                  {
+                    "const": "invalid_value",
+                    "type": "string"
+                  },
+                  {
+                    "const": "precondition",
+                    "type": "string"
+                  },
+                  {
+                    "const": "guard_refused",
+                    "type": "string"
+                  },
+                  {
+                    "const": "approval_denied",
+                    "type": "string"
+                  },
+                  {
+                    "const": "tool_error",
+                    "type": "string"
+                  },
+                  {
+                    "const": "timeout",
+                    "type": "string"
+                  },
+                  {
+                    "const": "repeat_identical",
+                    "type": "string"
+                  },
+                  {
+                    "const": "announced_no_call",
+                    "type": "string"
+                  }
+                ]
+              },
+              "profile": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "repairAttempt": {
+                "type": "number"
+              },
+              "resultBytes": {
+                "type": "number"
+              },
+              "salvaged": {
+                "type": "boolean"
+              },
+              "step": {
+                "type": "number"
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "toolset": {
+                "type": "string"
+              },
+              "valuesConverted": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "step",
+              "model",
+              "outcomeClass",
+              "aliasesUsed",
+              "valuesConverted",
+              "salvaged",
+              "repairAttempt",
+              "durationMs",
+              "argumentBytes",
+              "resultBytes"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.record",
             "type": "string"
           }
         },
@@ -4004,6 +4184,10 @@
         "type": "string"
       },
       {
+        "const": "run.tool.record",
+        "type": "string"
+      },
+      {
         "const": "run.warning",
         "type": "string"
       },
@@ -4655,6 +4839,182 @@
       },
       "type": {
         "const": "run.tool.preparing",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunToolRecordEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "aliasesUsed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "argumentBytes": {
+            "type": "number"
+          },
+          "canonicalTool": {
+            "type": "string"
+          },
+          "dialect": {
+            "type": "string"
+          },
+          "dialectVersion": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "number"
+          },
+          "failureCode": {
+            "type": "string"
+          },
+          "lane": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "outcomeClass": {
+            "anyOf": [
+              {
+                "const": "ok",
+                "type": "string"
+              },
+              {
+                "const": "ok_after_repair",
+                "type": "string"
+              },
+              {
+                "const": "unknown_tool",
+                "type": "string"
+              },
+              {
+                "const": "invalid_json",
+                "type": "string"
+              },
+              {
+                "const": "invalid_structure",
+                "type": "string"
+              },
+              {
+                "const": "invalid_value",
+                "type": "string"
+              },
+              {
+                "const": "precondition",
+                "type": "string"
+              },
+              {
+                "const": "guard_refused",
+                "type": "string"
+              },
+              {
+                "const": "approval_denied",
+                "type": "string"
+              },
+              {
+                "const": "tool_error",
+                "type": "string"
+              },
+              {
+                "const": "timeout",
+                "type": "string"
+              },
+              {
+                "const": "repeat_identical",
+                "type": "string"
+              },
+              {
+                "const": "announced_no_call",
+                "type": "string"
+              }
+            ]
+          },
+          "profile": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "repairAttempt": {
+            "type": "number"
+          },
+          "resultBytes": {
+            "type": "number"
+          },
+          "salvaged": {
+            "type": "boolean"
+          },
+          "step": {
+            "type": "number"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "toolset": {
+            "type": "string"
+          },
+          "valuesConverted": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "toolCallId",
+          "toolName",
+          "step",
+          "model",
+          "outcomeClass",
+          "aliasesUsed",
+          "valuesConverted",
+          "salvaged",
+          "repairAttempt",
+          "durationMs",
+          "argumentBytes",
+          "resultBytes"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.tool.record",
         "type": "string"
       }
     },
@@ -8917,6 +9277,182 @@
           },
           "type": {
             "const": "run.tool.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "aliasesUsed": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "argumentBytes": {
+                "type": "number"
+              },
+              "canonicalTool": {
+                "type": "string"
+              },
+              "dialect": {
+                "type": "string"
+              },
+              "dialectVersion": {
+                "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "failureCode": {
+                "type": "string"
+              },
+              "lane": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "outcomeClass": {
+                "anyOf": [
+                  {
+                    "const": "ok",
+                    "type": "string"
+                  },
+                  {
+                    "const": "ok_after_repair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "unknown_tool",
+                    "type": "string"
+                  },
+                  {
+                    "const": "invalid_json",
+                    "type": "string"
+                  },
+                  {
+                    "const": "invalid_structure",
+                    "type": "string"
+                  },
+                  {
+                    "const": "invalid_value",
+                    "type": "string"
+                  },
+                  {
+                    "const": "precondition",
+                    "type": "string"
+                  },
+                  {
+                    "const": "guard_refused",
+                    "type": "string"
+                  },
+                  {
+                    "const": "approval_denied",
+                    "type": "string"
+                  },
+                  {
+                    "const": "tool_error",
+                    "type": "string"
+                  },
+                  {
+                    "const": "timeout",
+                    "type": "string"
+                  },
+                  {
+                    "const": "repeat_identical",
+                    "type": "string"
+                  },
+                  {
+                    "const": "announced_no_call",
+                    "type": "string"
+                  }
+                ]
+              },
+              "profile": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "repairAttempt": {
+                "type": "number"
+              },
+              "resultBytes": {
+                "type": "number"
+              },
+              "salvaged": {
+                "type": "boolean"
+              },
+              "step": {
+                "type": "number"
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "toolset": {
+                "type": "string"
+              },
+              "valuesConverted": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "step",
+              "model",
+              "outcomeClass",
+              "aliasesUsed",
+              "valuesConverted",
+              "salvaged",
+              "repairAttempt",
+              "durationMs",
+              "argumentBytes",
+              "resultBytes"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.record",
             "type": "string"
           }
         },
