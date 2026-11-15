@@ -127,7 +127,7 @@ async fn create(service: &AgentSessionService<SqliteStore>, skills: Option<Vec<V
         .create_session(&CreateSessionInput {
             session_id: Some("chat".into()),
             profile_id: "coding".into(),
-            context: Some(json!({"toolResultElision":false})),
+            context: Some(json!({"policy":"transcript"})),
             skills,
             ..Default::default()
         })

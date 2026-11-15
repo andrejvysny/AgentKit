@@ -216,6 +216,29 @@ impl PromotionRecorder {
     }
 }
 
+/// The tool definitions of the session's frozen S1 manifest, which is what
+/// every request carries. Context budgets (B) count these, not whatever the
+/// registry offers this turn; a session without a manifest yet falls back to
+/// the registry's own list.
+pub(super) async fn frozen_tools(
+    context: &ExecutionContext,
+    chat_id: &str,
+    registry: &ToolRegistry,
+) -> ChatResult<Vec<ToolDefinition>> {
+    let chat = context
+        .store
+        .get_chat(chat_id)
+        .await?
+        .ok_or(ChatError::SessionDisappeared)?;
+    Ok(agentkit_sessions::read_session_prefix(&chat.metadata)
+        .as_ref()
+        .and_then(ToolManifest::from_prefix)
+        .map_or_else(
+            || registry.definitions(),
+            |manifest| manifest.definitions().to_vec(),
+        ))
+}
+
 /// Record or compare the prefix of this turn. `branch_id` feeds the cache
 /// key and is empty for lanes without provider continuation.
 ///

@@ -51,6 +51,21 @@ fn rows(db: &rusqlite::Connection) -> Result<Vec<(String, Value)>> {
         })
         .collect()
 }
+/// Removes every summary of `session` on `db`; callers own the transaction.
+pub(crate) fn delete_for_session(db: &rusqlite::Connection, session: &str) -> Result<usize> {
+    let keys: Vec<_> = rows(db)?
+        .into_iter()
+        .filter(|(_, value)| value["sessionId"].as_str() == Some(session))
+        .map(|(key, _)| key)
+        .collect();
+    for key in &keys {
+        db.execute(
+            "DELETE FROM settings WHERE namespace=? AND key=?",
+            params![CONTEXT_SUMMARIES_NAMESPACE, key],
+        )?;
+    }
+    Ok(keys.len())
+}
 impl SqliteStore {
     pub async fn save_context_summary(&self, record: Value) -> Result<()> {
         if !valid(&record) {
@@ -79,19 +94,9 @@ impl SqliteStore {
         let session = session.to_owned();
         self.call(move |db| {
             let tx = crate::transaction::atomic(db)?;
-            let keys: Vec<_> = rows(&tx)?
-                .into_iter()
-                .filter(|(_, value)| value["sessionId"].as_str() == Some(session.as_str()))
-                .map(|(key, _)| key)
-                .collect();
-            for key in &keys {
-                tx.execute(
-                    "DELETE FROM settings WHERE namespace=? AND key=?",
-                    params![CONTEXT_SUMMARIES_NAMESPACE, key],
-                )?;
-            }
+            let count = delete_for_session(&tx, &session)?;
             tx.commit()?;
-            Ok(keys.len())
+            Ok(count)
         })
         .await
     }

@@ -22,6 +22,9 @@ pub(super) struct Input {
     pub receipt_snapshot: Value,
     pub usage: Option<Arc<dyn crate::UsageAuthorizer>>,
     pub usage_timeout_ms: u64,
+    /// Batched masking found too little to free (ADR 0034): summarize now,
+    /// even though the history still fits.
+    pub force: bool,
 }
 
 struct Snapshot {
@@ -67,6 +70,8 @@ struct Plan {
     cut: usize,
     budget: u64,
     triggered: bool,
+    /// Masking asked for a compaction but the last one is too recent.
+    force_skipped: bool,
 }
 fn make_plan(input: &Input, snapshot: &Snapshot) -> Plan {
     let found = snapshot.summaries.iter().find_map(|record| {
@@ -103,6 +108,21 @@ fn make_plan(input: &Input, snapshot: &Snapshot) -> Plan {
         .and_then(|c| c["keepRecentTokens"].as_u64())
         .unwrap_or(20_000);
     let cut = compaction::find_cut(body, from, keep);
+    let mut triggered = snapshot.manual() || tokens > budget;
+    let mut force_skipped = false;
+    if !triggered && input.force {
+        // Hysteresis: a compaction leaves about its summary plus `keep` tokens
+        // of recent history. Until the view has grown by 0.20 B beyond that,
+        // another forced one would only repeat the last.
+        force_skipped = previous.as_ref().is_some_and(|record| {
+            let left = record["tokensAfter"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_add(keep);
+            tokens < left.saturating_add(budget / 5)
+        });
+        triggered = !force_skipped;
+    }
     Plan {
         working,
         previous,
@@ -110,27 +130,19 @@ fn make_plan(input: &Input, snapshot: &Snapshot) -> Plan {
         from,
         cut,
         budget,
-        triggered: snapshot.manual() || tokens > budget,
+        triggered,
+        force_skipped,
     }
 }
 fn message_budget(input: &Input) -> u64 {
-    let tools = serde_json::to_string(&input.tools)
-        .unwrap_or_default()
-        .encode_utf16()
-        .count() as u64;
-    input
-        .context_budget
-        .window
-        .saturating_sub(input.context_budget.reserve)
-        .saturating_sub(if input.tools.is_empty() {
-            0
-        } else {
-            tools.div_ceil(4)
-        })
+    input.context_budget.message_budget(&input.tools)
 }
 pub(super) async fn apply(input: Input) -> ChatResult<Vec<Entry>> {
     let snapshot = Snapshot::capture(&input).await?;
     let plan = make_plan(&input, &snapshot);
+    if plan.force_skipped {
+        input.context.emit("run.warning", json!({"code":"compaction_skipped","message":"Masking found too little to free, but the last compaction is recent: less than 0.20 of the budget was added since, so no new summary was written."})).await?;
+    }
     if !plan.triggered {
         return Ok(plan.working);
     }
@@ -178,7 +190,11 @@ async fn save_summary(
     let record = record(input, body, plan.cut, id, &summary, details)?;
     commit(input, snapshot, Some(record.clone())).await?;
     input.context.emit("run.context.compacted", json!({"summaryId":id,"tokensBefore":record["tokensBefore"],"tokensAfter":record["tokensAfter"],"coveredMessages":plan.cut,"reason":if snapshot.manual() {"manual"} else {"threshold"}})).await?;
-    Ok(compaction::apply_summary(&input.entries, &record).unwrap_or_else(|| plan.working.clone()))
+    let working =
+        compaction::apply_summary(&input.entries, &record).unwrap_or_else(|| plan.working.clone());
+    // INV-3: a new summary rewrites the cached prefix.
+    input.context.emit("context.cache_break", json!({"reason":"compact","tokens_before":entries_tokens(&plan.working),"tokens_after":entries_tokens(&working)})).await?;
+    Ok(working)
 }
 async fn emit_usage(input: &Input, usage: Vec<Value>) -> ChatResult<()> {
     account_all(usage, |item| account_one(input, item)).await
@@ -439,15 +455,28 @@ async fn validate_snapshot(
     Ok(chat)
 }
 
+/// Last resort: a history still over budget after masking and compaction is
+/// cut in ONE step down to half the budget (0.50B), so the next turns do not
+/// trim again one turn at a time.
 async fn trim_and_report(
     context: &ExecutionContext,
     entries: Vec<Entry>,
     budget: u64,
 ) -> ChatResult<Vec<Entry>> {
-    let (entries, dropped) = trim_entries(entries, budget);
+    let before = entries_tokens(&entries);
+    if before <= budget {
+        return Ok(entries);
+    }
+    let (entries, dropped) = trim_entries(entries, budget / 2);
     if dropped > 0 {
         let remaining = entries_tokens(&entries);
         context.emit("run.warning", json!({"code":"context_trimmed","message":format!("Dropped the {dropped} oldest turn(s) to fit the context window; about {remaining} of {budget} budgeted tokens remain in use.")})).await?;
+        context
+            .emit(
+                "context.cache_break",
+                json!({"reason":"compact","tokens_before":before,"tokens_after":remaining}),
+            )
+            .await?;
     }
     Ok(entries)
 }

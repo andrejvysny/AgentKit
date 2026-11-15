@@ -68,17 +68,18 @@ pub(crate) async fn effective_session_descriptor(
 }
 
 /// What the provider-facing history is assembled from (ADR 0017 part 1):
-/// the anchored-history policy and the tool-result elision for THIS turn,
+/// the anchored-history policy and the masking thresholds for THIS turn,
 /// both resolved exactly once from the staged snapshot.
 pub(crate) struct ContextAssembly {
     pub(crate) policy: super::history::HistoryPolicy,
-    pub(crate) elision: Option<super::elision::ToolResultElisionOptions>,
+    pub(crate) masking: super::masking::MaskSettings,
 }
 
 /// The frozen session defaults (`turn-runner.ts`): the policy defaults to
 /// `transcript` — the native executor always replayed the active-path
-/// transcript — and tool-result elision is opt-in. A chat that is not a
-/// session assembles as it always did: full replay, no elision.
+/// transcript. Masking (ADR 0034) is on for sessions with its own defaults;
+/// it only acts past 80% of the budget. A chat that is not a session
+/// assembles as it always did: full replay, no masking.
 pub(crate) async fn resolve_context_assembly(
     context: &ExecutionContext,
     chat_id: &str,
@@ -97,9 +98,9 @@ pub(crate) async fn resolve_context_assembly(
             // absent (or a non-session chat) is the frozen default.
             _ => super::history::HistoryPolicy::Transcript,
         },
-        elision: options
-            .and_then(|context| context.get("toolResultElision"))
-            .and_then(|value| super::elision::resolve_tool_result_elision(Some(value))),
+        masking: super::masking::MaskSettings::resolve(
+            options.and_then(|context| context.get("masking")),
+        ),
     })
 }
 
@@ -146,6 +147,19 @@ impl ContextBudget {
             source,
             reserve,
         }))
+    }
+
+    /// B: the window less the reply reserve and the tool definitions, the
+    /// room the messages may fill.
+    pub(crate) fn message_budget(&self, tools: &[agentkit_core::ToolDefinition]) -> u64 {
+        let tool_tokens = if tools.is_empty() {
+            0
+        } else {
+            chars(&serde_json::to_string(tools).unwrap_or_default()).div_ceil(4)
+        };
+        self.window
+            .saturating_sub(self.reserve)
+            .saturating_sub(tool_tokens)
     }
 
     pub(crate) fn admit(

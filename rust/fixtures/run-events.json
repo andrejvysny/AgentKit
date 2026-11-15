@@ -1301,6 +1301,10 @@
                   {
                     "const": "refreeze",
                     "type": "string"
+                  },
+                  {
+                    "const": "mask_invalidated",
+                    "type": "string"
                   }
                 ]
               },

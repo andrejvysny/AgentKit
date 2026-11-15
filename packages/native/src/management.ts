@@ -8,12 +8,22 @@ export interface NativeModelInput {
   providerId?: string;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
 }
+/** Batched masking thresholds (ADR 0034): ratios of the message budget, turn counts. */
+export interface NativeMaskingOptions {
+  /** Default true; `false` turns batched masking off (also the legacy `toolResultElision: false`). */
+  enabled?: boolean;
+  triggerRatio?: number;
+  targetRatio?: number;
+  minGainRatio?: number;
+  keepRecentTurns?: number;
+  imageMaxAgeTurns?: number;
+}
 export interface NativeContextOptions {
   policy?: "final_answers" | "transcript";
   windowTokens?: number;
   reserveTokens?: number;
   keepRecentTokens?: number;
-  toolResultElision?: { keepRecentTurns?: number; maxChars?: number } | false;
+  masking?: NativeMaskingOptions;
 }
 export interface NativeConfiguration {
   skills?: { id: string; revision: string }[];

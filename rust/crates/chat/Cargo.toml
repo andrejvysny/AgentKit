@@ -46,6 +46,8 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Wi
 
 [dev-dependencies]
 agentkit-mcp = { workspace = true }
+# The cache-simulating provider and the in-memory output store (CE-13).
+agentkit-testkit = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled"] }
 tempfile.workspace = true
 # The imported-receipt acceptance tests drive the TypeScript importer

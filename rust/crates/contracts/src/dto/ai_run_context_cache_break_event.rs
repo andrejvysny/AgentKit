@@ -20,6 +20,8 @@ pub enum AiRunContextCacheBreakEventDataReason {
     Compact,
     #[serde(rename = "refreeze")]
     Refreeze,
+    #[serde(rename = "mask_invalidated")]
+    MaskInvalidated,
 }
 crate::impl_json_via_serde!(AiRunContextCacheBreakEventDataReason);
 

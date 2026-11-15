@@ -238,15 +238,15 @@ async fn empty_skills_keep_the_payload_unchanged() {
 
 #[tokio::test]
 async fn submit_stages_context_assembly_overrides() {
-    // `policy` and `toolResultElision` are no longer refused at staging:
+    // `policy` and `masking` are no longer refused at staging:
     // the executor honors them (`chat_context.rs::resolve_context_assembly`,
-    // `chat_history.rs::HistoryPolicy`, `tool_result_elision.rs`). What the
+    // `chat_history.rs::HistoryPolicy`, `masking.rs`). What the
     // descriptor grammar admits, staging must carry verbatim.
     let fixture = fixture();
     let context = json!({
         "policy": "final_answers",
         "windowTokens": 8192,
-        "toolResultElision": {"keepRecentTurns": 3, "maxChars": 500}
+        "masking": {"keepRecentTurns": 4, "triggerRatio": 0.9}
     });
     let input = CreateSessionInput {
         context: Some(context.clone()),

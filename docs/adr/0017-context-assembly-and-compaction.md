@@ -1,6 +1,8 @@
 # ADR 0017 — Context assembly and compaction: transcript replay, token budget, project instructions
 
 **Status:** part 1 accepted, implemented (2026-10-27; milestone M3a of [ADR 0015](0015-unified-agent-runtime.md)).
+The "Tool-result elision" section is **superseded** by [ADR 0034](0034-output-store-and-masking.md) (batched masking, 2026-11-15):
+sliding elision and `context.toolResultElision` are removed, and the per-turn trim is now a one-step last resort.
 Part 2 accepted, implemented (milestone M3b): derived, versioned summaries; see the end of this document.
 **Contract impact:** additive only. Part 2 adds the `run.context.compacted` event and the `compaction_failed` warning code. Four new `run.warning` codes (`context_budget_fallback`, `context_trimmed`,
 `skill_unavailable`, `project_instructions_unavailable`), a new host `errorCode` (`context_overflow`), optional
@@ -217,6 +219,9 @@ flag stays, so the next turn tries again.
 - `describeContextSummaryStoreConformance` on both adapters; `scripts/live/compaction-session.ts` (manual, real model).
 
 ## Tool-result elision
+
+> **Superseded** by [ADR 0034](0034-output-store-and-masking.md) (addendum, batched masking). Kept as the record of
+> what shipped before 2.4; the code, the `toolResultElision` option and the `maxChars`/head+tail cut are gone.
 
 Compaction and trimming act only once the window is nearly full; until then a long coding session resends every old
 `read_file` and command output on every request. The provider view therefore elides large tool results from older

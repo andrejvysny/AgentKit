@@ -31,7 +31,7 @@ fn cache_breaks(capture: &Capture) -> Vec<EventMark> {
 fn source_hint(case: &Scenario, previous: usize, path: &str) -> Option<&'static str> {
     let schedule = case.config.schedule.unwrap_or_default();
     if previous == 3 && path == "/messages/3/content" {
-        Some("Stale tool-result elision: crates/chat/src/chat.rs:352 and chat/elision.rs:159")
+        Some("Batched masking at the context threshold: crates/chat/src/chat/masking.rs")
     } else if schedule.rules && previous == 7 && path == "/messages/0/content" {
         Some("Project instructions reloaded: crates/chat/src/chat.rs:278")
     } else if schedule.selection
@@ -126,7 +126,7 @@ pub async fn baseline_with_captures(include_captures: bool) -> Value {
         let capture = run(case.config.clone()).await;
         results.push(summarize(&case, &capture, include_captures));
     }
-    json!({"mode":"report-only","profiles":"custom AgentKit fixtures; tool-result elision enabled",
+    json!({"mode":"report-only","profiles":"custom AgentKit fixtures; batched masking at its default thresholds",
         "capture":"provider-assembled Values, not literal HTTP wire bytes",
         "comparison":"literal provider-assembled serialization through previous last input item; zero-based UTF-8 byte offsets; source hypotheses require corroboration",
         "scope":"scripted offline sessions; not a full CE-02 or live-provider claim; Anthropic deferred",

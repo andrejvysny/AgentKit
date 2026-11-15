@@ -164,6 +164,10 @@ impl SqliteStore {
             transaction.execute("DELETE FROM subagents WHERE parent_chat_id=?", [&chat_id])?;
             transaction.execute("DELETE FROM advisor_findings WHERE chat_id=?", [&chat_id])?;
             transaction.execute("DELETE FROM advisor_reviews WHERE chat_id=?", [&chat_id])?;
+            // Derived context records of the chat (summaries and masks) go
+            // with it; nothing else reads them once the chat is gone.
+            crate::context_summaries::delete_for_session(&transaction, &chat_id)?;
+            crate::context_masks::delete_for_session(&transaction, &chat_id)?;
             // Stored tool outputs go with the chat (ADR 0034). Rows go in
             // this transaction; the files are renamed aside just before the
             // commit and removed after it, so a failed commit renames them

@@ -3,7 +3,8 @@
 Status: accepted (2026-11-15). Implements package 2.1 of the context
 efficiency spec (CE-10, INV-6, layer 1 of "Tool output handling"). Builds on
 ADR 0024 (repository ports) and ADR 0031 (deferred tools). Layer 4 (batched
-masking, package 2.x) is decided here and built later; it reuses this store.
+masking, package 2.4) is decided here, built in the addendum at the end, and
+reuses this store.
 
 ## Context
 
@@ -105,7 +106,7 @@ its retention ends.
    builder sweeps expired outputs when it builds and then every hour; the
    sweep also removes aside directories and files no row names (older than an
    hour, so an in-flight write is spared).
-10. **Masking (layer 4, not built here).** A masked result body becomes
+10. **Masking (layer 4; built in the addendum below).** A masked result body becomes
     `[result masked to save context · N bytes · handle out_…]`. A result that
     was inline is written through this same port at mask time, so the handle
     exists. Masks are a derived record applied on assembly; canonical history
@@ -150,3 +151,113 @@ its retention ends.
 - Descendants are read from the `subagents` table; a session deleted while
   its children live cuts the link, and the parent then reads only its own
   outputs.
+
+## Addendum: batched masking (package 2.4, CE-13, INV-3, INV-6, F2, F10)
+
+Status: accepted (2026-11-15). Supersedes the sliding elision of
+[ADR 0017](0017-context-assembly-and-compaction.md); it replaces both that
+elision and the per-turn trim.
+
+### Problem
+
+Sliding elision rewrote the oldest still-visible result on every turn, so the
+provider's cached prefix changed on every turn. The per-turn trim did the same
+once the history was over budget. Both cost the cache the spec wants to keep
+(F2, F10) and neither left the cut text readable (INV-6).
+
+### Decision
+
+1. **Trigger.** B is the message budget: window minus reply reserve minus the
+   tool definitions. E is the current estimate of the messages. Nothing
+   changes while E is at or under 0.80 B. Past it, one batch runs. All
+   ratios and counts are session profile settings (`context.masking`:
+   `triggerRatio` 0.80, `targetRatio` 0.50, `minGainRatio` 0.20,
+   `keepRecentTurns` 3, `imageMaxAgeTurns` 6). E is the existing character
+   estimate; the calibration that replaces it is package 2.5.
+2. **Candidates.** Tool results outside the last 3 turns (every `user`
+   message opens a turn), oldest first, and never ones that `edit_file`,
+   `write_file`, `apply_patch`, `submit_plan`, `tool_search`, `tool_describe`,
+   `toolset_load`, `read_output`, `search_output` or any `memory_*` tool
+   produced. A deferred call (`tool_call`) counts as the inner tool it runs
+   (its `name` argument). A result
+   that is already masked, or a synthetic one that records an unresolved
+   effect, stays. Candidates also start at the first message a summary kept:
+   a summary's source hash covers what it replaced, so those bytes never
+   change after it was written. Images in user messages older than 6 turns
+   join the same batch.
+3. **Stop and give up.** The batch masks candidates oldest first until E is at
+   or under 0.50 B. If masking every candidate together would free less than
+   0.20 B, no mask is written: the cache break is not worth it, and the run
+   compacts instead (the summary runs even though the history still fits).
+   Without an output store no tool result may be masked (INV-6), so only
+   images count, and compaction follows when they are too few. Compaction is
+   also signalled when a batch leaves E above 0.80 B, or when the store
+   refused every write of the batch: the turn does not go on over the trigger.
+4. **Handle.** A result that was inline is written through the `OutputStore`
+   at mask time (tool, call id and session recorded), once per content within
+   the batch. A result that is already a stored preview keeps its own handle,
+   but a handle quoted in the text is trusted only when the stored output is
+   this result (same sha256 and size) or the output the run stored for this
+   very call; a result that merely quotes another output's handle is written
+   under its own. Writes happen only after the batch is final. The body becomes
+   `[result masked to save context · <bytes> bytes · handle out_…]`, where
+   `<bytes>` is the stored size. An image part becomes a text part,
+   `[image omitted to save context · attachment <name>]`, the name taken from
+   the part (`name`, URL file name, ref or media type), followed by
+   ` · id <ref>` when the attachment is referenced by an id that differs from
+   its name, so the model can name it again. Images are not copied to the
+   output store: the attachment stays in the stored history and only the
+   provider view changes. If the store refuses, that result stays unmasked.
+5. **Record.** The batch is one `context_masks` record, stored like a context
+   summary (a settings namespace, `agentkit.compat.context-masks`; no table,
+   so no schema bump): mask id, session, covered call ids, per-result
+   message id, call id, handle and bytes, masked images, a source hash over
+   the covered messages as they were (built from one hash per message), token
+   counts and a time. The mask id is a UUID v7; saving a second record under a
+   taken id is an error. It is applied
+   on every assembly, oldest record first, before the summary is applied. A
+   record whose covered messages are missing or whose hash no longer matches
+   is skipped whole and reported: `context.cache_break` with `reason`
+   `mask_invalidated` and a `run.warning` (`mask_invalidated`). Canonical
+   history is never touched, and a masked prefix
+   stays byte-identical on later turns.
+6. **Event (INV-3).** One `context.cache_break` with `reason` `mask`,
+   `tokens_before`, `tokens_after`, `results_masked` and `images_masked`. A
+   new summary emits `reason` `compact` too, and so does a last-resort trim.
+7. **Trim.** The trim stays as the last resort for a history still over B
+   after masking and compaction (a failed summary, nothing left to cut). It
+   now runs once and cuts down to 0.50 B, so the next turns do not trim one
+   turn at a time. It still never drops the leading summary or the last turn.
+8. **Retired.** `context.toolResultElision` is gone from the session
+   descriptor, the native options type and the chat executor; a stored
+   descriptor that still has the key reads as if it were absent, except that
+   `toolResultElision: false` reads as `context.masking.enabled: false`
+   (`enabled` defaults to true). The wire
+   contract bundle never carried it. The `context.cache_break` event already
+   allows the extra counts (its `data` is open) and the `mask` reason; the
+   `mask_invalidated` reason is one more value of that enum (bundle, DTO,
+   TypeScript schema and fixtures regenerated).
+
+### Consequences
+
+- In a long tool-heavy session the prefix is byte-stable between batches; a
+  60-turn scripted run breaks the cache a handful of times, each break is an
+  event, and every masked result is readable through its handle (CE-13,
+  `chat/tests/batched_masking.rs`).
+- The estimate E is character-based until package 2.5; a batch can fire a
+  little early or late. The thresholds are settings for that reason.
+- Mask and summary records are deleted with their chat, in the same
+  transaction as the chat; the output store purge removes the stored bytes.
+- B counts the tool definitions of the session's frozen S1 manifest, not the
+  registry of the turn, so masking and compaction plan against what every
+  request carries.
+- The effective thresholds are validated once, by the session descriptor
+  grammar: `0 < targetRatio < triggerRatio <= 1`, `0 < minGainRatio < 1`,
+  defaults included; an invalid set is refused, not adjusted.
+- A compaction that masking asked for is skipped (with a `run.warning`,
+  `compaction_skipped`) while the view has grown by less than 0.20 B since
+  the last summary, so a session that cannot shrink does not summarize on
+  every turn.
+- Deferred to package 2.5: CE-15 (masking and compaction on the
+  provider-continuation lane, which replays its durable branch untouched
+  and so still only warns).

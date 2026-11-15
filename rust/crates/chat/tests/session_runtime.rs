@@ -3568,8 +3568,8 @@ async fn cancelling_summary_preserves_pending_request() {
 
 // ---------------------------------------------------------------------------
 // Context assembly (S4): the recipe's exact config admits and compacts, the
-// anchored-history policy drops prior-run records, and stale tool results are
-// elided to the frozen head+tail marker.
+// anchored-history policy drops prior-run records, and batched masking
+// (ADR 0034) hides old images and tool results only when the context fills.
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
@@ -3625,13 +3625,42 @@ async fn seed_turn(
     answer_id: &str,
     answer: &str,
 ) {
+    seed_turn_with(
+        f,
+        now,
+        run,
+        user_id,
+        json!(user),
+        call_id,
+        tool_content,
+        steering,
+        answer_id,
+        answer,
+    )
+    .await;
+}
+
+/// [`seed_turn`] with the user's content given as a JSON value (parts).
+#[allow(clippy::too_many_arguments)]
+async fn seed_turn_with(
+    f: &Fixture,
+    now: i64,
+    run: &str,
+    user_id: &str,
+    user: Value,
+    call_id: &str,
+    tool_content: Value,
+    steering: Option<(&str, &str)>,
+    answer_id: &str,
+    answer: &str,
+) {
     seed_message(
         f,
         now,
         user_id,
         None,
         "user",
-        json!(user),
+        user,
         None,
         None,
         None,
@@ -3724,100 +3753,140 @@ fn shape(request: &agentkit_core::ChatRequest) -> Vec<String> {
         .collect()
 }
 
-/// The frozen elision fixture: `elideStaleToolResults` on a 9000-character
-/// result (defaults 2/6000/2000/1000) cuts it to 3092 characters —
-/// head(2000) followed by
-/// `\n…[6000 characters of an earlier tool result elided; call the tool
-/// again if you need them]…\n` followed by tail(1000). sha256
-/// `c0234dd33ad2c17372db91edbf1532a2577d03f0c58b281753f8a969f8289c5c` —
-/// pinned from the TS helper's output, so the native marker string and the
-/// head/tail/omitted arithmetic are byte-checked against the frozen lane.
-const ELIDED_9000_SHA256: &str = "c0234dd33ad2c17372db91edbf1532a2577d03f0c58b281753f8a969f8289c5c";
+async fn cache_breaks(f: &Fixture, turn_id: &str) -> Vec<Value> {
+    f.store
+        .events_after_number(turn_id, None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event["type"] == "context.cache_break")
+        .map(|event| event.event["data"].clone())
+        .collect()
+}
 
 #[tokio::test]
-async fn stale_tool_results_elide_to_head_and_tail_before_compaction() {
+async fn images_older_than_six_turns_mask_to_a_placeholder_when_the_context_fills() {
     let f = fixture_with(false).await;
     f.service
-        .configure("s1", None, Some(json!({"toolResultElision":{}})), None)
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":2400,"reserveTokens":240})),
+            None,
+        )
         .await
         .unwrap();
-    let big = format!(
-        "{}{}{}",
-        "H".repeat(2000),
-        "m".repeat(6000),
-        "T".repeat(1000)
-    );
-    seed_turn(
+    let first = json!([
+        {"type":"text","text":"p".repeat(2800)},
+        {"type":"image","source":{"kind":"ref","ref":"shot.png"}}
+    ]);
+    seed_turn_with(
         &f,
         10,
-        "run-r1",
-        "u1",
-        "q1",
-        "call-old",
-        json!(big),
+        "run-0",
+        "u0",
+        first,
+        "call-0",
+        json!("tiny"),
         None,
-        "a1",
-        "answer one",
+        "a0",
+        "answer 0",
     )
     .await;
-    seed_turn(
-        &f,
-        20,
-        "run-r2",
-        "u2",
-        "q2",
-        "call-mid",
-        json!(big),
-        None,
-        "a2",
-        "answer two",
-    )
-    .await;
+    for turn in 1..7 {
+        seed_turn(
+            &f,
+            10 + turn * 10,
+            &format!("run-{turn}"),
+            &format!("u{turn}"),
+            &format!("q{turn}"),
+            &format!("call-{turn}"),
+            json!("tiny"),
+            None,
+            &format!("a{turn}"),
+            &format!("answer {turn}"),
+        )
+        .await;
+    }
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("q7"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let requests = f.requests.lock().unwrap();
+    let request = requests.first().unwrap();
+    let user = request
+        .messages
+        .iter()
+        .find(|message| message.content.to_string().contains("pppp"))
+        .expect("the first user message is replayed");
+    assert_eq!(
+        user.content[1],
+        json!({"type":"text","text":"[image omitted to save context · attachment shot.png]"})
+    );
+    let masks = f.store.list_context_masks("s1").await.unwrap();
+    assert_eq!(masks.len(), 1);
+    assert_eq!(masks[0]["images"][0]["messageId"], "u0");
+    assert_eq!(masks[0]["images"][0]["names"], json!(["shot.png"]));
+    let breaks = cache_breaks(&f, &turn_id).await;
+    assert_eq!(breaks.len(), 1);
+    assert_eq!(breaks[0]["reason"], "mask");
+    assert_eq!(breaks[0]["results_masked"], 0);
+    assert_eq!(breaks[0]["images_masked"], 1);
+    assert!(breaks[0]["tokens_after"].as_u64() < breaks[0]["tokens_before"].as_u64());
+}
+
+#[tokio::test]
+async fn masking_that_would_free_too_little_signals_compaction_instead() {
+    let f = fixture_with(false).await;
     f.service
-        .send("s1", &send_input(json!("q3"), None, WhenBusy::Reject))
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    f.service
+        .send(
+            "s1",
+            &send_input(json!("a".repeat(6000)), None, WhenBusy::Reject),
+        )
         .await
         .unwrap();
     f.host.run_once().await.unwrap();
-    let requests = f.requests.lock().unwrap();
-    let last = requests.last().unwrap();
-    // Transcript replay still pairs every call with its result…
+    // About 2700 tokens: past 0.80 of the budget, under the budget itself,
+    // and nothing in it can be masked.
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send(
+            "s1",
+            &send_input(json!("b".repeat(4800)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
     assert_eq!(
-        shape(last),
-        [
-            "user:q1".to_owned(),
-            "assistant:".to_owned(),
-            "tool:call-old".to_owned(),
-            "assistant:answer one".to_owned(),
-            "user:q2".to_owned(),
-            "assistant:".to_owned(),
-            "tool:call-mid".to_owned(),
-            "assistant:answer two".to_owned(),
-            "user:q3".to_owned(),
-        ]
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
     );
-    let tools: Vec<&agentkit_core::ChatMessage> =
-        last.messages.iter().filter(|m| m.role == "tool").collect();
-    assert_eq!(tools.len(), 2);
-    // …but the result older than the last two turns is cut to head + tail,
-    // byte-for-byte the frozen helper's output…
-    let cut = tools[0].content.as_str().unwrap();
-    {
-        use sha2::{Digest, Sha256};
-        assert_eq!(
-            format!("{:x}", Sha256::digest(cut.as_bytes())),
-            ELIDED_9000_SHA256,
-            "elided content diverged from the frozen TS helper output"
-        );
-    }
-    assert!(cut.starts_with(&"H".repeat(2000)));
-    assert!(cut.ends_with(&"T".repeat(1000)));
-    assert!(
-        cut.contains("[6000 characters of an earlier tool result elided; call the tool again if you need them]"),
-        "{cut}"
-    );
-    assert_eq!(cut.chars().count(), 3092);
-    // …while the last two turns' result stays whole.
-    assert_eq!(tools[1].content, json!(big));
+    assert!(f.store.list_context_masks("s1").await.unwrap().is_empty());
+    assert_eq!(f.store.list_context_summaries("s1").await.unwrap().len(), 1);
+    let breaks = cache_breaks(&f, &turn_id).await;
+    assert_eq!(breaks.len(), 1);
+    assert_eq!(breaks[0]["reason"], "compact");
 }
 
 #[tokio::test]

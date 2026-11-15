@@ -180,7 +180,7 @@ impl Harness {
                 workspace: Some(
                     json!({"root":self.workspace.path().display().to_string(),"trusted":true}),
                 ),
-                context: Some(json!({"toolResultElision":{}})),
+                context: Some(json!({"policy":"transcript"})),
                 skills: None,
                 turn_kind: None,
                 execution_mode: None,

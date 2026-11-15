@@ -701,8 +701,11 @@ pub async fn agentkit_store::SqliteStore::replace_provider_models(&self, &str, a
 pub async fn agentkit_store::SqliteStore::save_provider_capabilities(&self, &str, serde_json::value::Value) -> agentkit_store::Result<()>
 pub async fn agentkit_store::SqliteStore::upsert_provider(&self, serde_json::value::Value) -> agentkit_store::Result<serde_json::value::Value>
 impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::delete_session_context_masks(&self, &str) -> agentkit_store::Result<usize>
 pub async fn agentkit_store::SqliteStore::delete_session_context_summaries(&self, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::list_context_masks(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
 pub async fn agentkit_store::SqliteStore::list_context_summaries(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
+pub async fn agentkit_store::SqliteStore::save_context_mask(&self, serde_json::value::Value) -> agentkit_store::Result<()>
 pub async fn agentkit_store::SqliteStore::save_context_summary(&self, serde_json::value::Value) -> agentkit_store::Result<()>
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::events(&self, &str, core::option::Option<u64>, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
@@ -883,6 +886,7 @@ pub const agentkit_store::AGENT_EXPORT_FORMAT_VERSION: i64
 pub const agentkit_store::AGENT_INPUT_TRANSITIONS: [(agentkit_sessions::model::AgentInputKind, &[agentkit_sessions::model::AgentInputStatus]); 3]
 pub const agentkit_store::ASSISTANT_SETTINGS_KEY: &str
 pub const agentkit_store::ASSISTANT_SETTINGS_NAMESPACE: &str
+pub const agentkit_store::CONTEXT_MASKS_NAMESPACE: &str
 pub const agentkit_store::CONTEXT_SUMMARIES_NAMESPACE: &str
 pub const agentkit_store::MAX_AGENT_IMPORT_AGENTS: usize
 pub const agentkit_store::MAX_AGENT_IMPORT_BYTES: usize

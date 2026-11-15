@@ -1342,14 +1342,11 @@ export interface NativeContextOptions {
     // (undocumented)
     keepRecentTokens?: number;
     // (undocumented)
+    masking?: NativeMaskingOptions;
+    // (undocumented)
     policy?: "final_answers" | "transcript";
     // (undocumented)
     reserveTokens?: number;
-    // (undocumented)
-    toolResultElision?: {
-        keepRecentTurns?: number;
-        maxChars?: number;
-    } | false;
     // (undocumented)
     windowTokens?: number;
 }
@@ -1466,6 +1463,21 @@ export interface NativeManagedOAuthOptions {
     resourceUrl: string;
     // (undocumented)
     scopes: string[];
+}
+
+// @public
+export interface NativeMaskingOptions {
+    enabled?: boolean;
+    // (undocumented)
+    imageMaxAgeTurns?: number;
+    // (undocumented)
+    keepRecentTurns?: number;
+    // (undocumented)
+    minGainRatio?: number;
+    // (undocumented)
+    targetRatio?: number;
+    // (undocumented)
+    triggerRatio?: number;
 }
 
 // @public (undocumented)

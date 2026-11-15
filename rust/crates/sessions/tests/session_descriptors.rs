@@ -276,43 +276,97 @@ fn context_grammar() {
 }
 
 #[test]
-fn tool_result_elision_grammar() {
-    assert_eq!(
-        accepted(with(json!({"context": {"toolResultElision": false}})))["context"],
-        json!({"toolResultElision": false})
-    );
+fn masking_grammar() {
     let descriptor = accepted(with(json!({
-        "context": {"toolResultElision": {"keepRecentTurns": 2, "maxChars": 1000}}
+        "context": {"masking": {"triggerRatio": 0.8, "targetRatio": 0.5, "minGainRatio": 0.2, "keepRecentTurns": 3, "imageMaxAgeTurns": 6}}
     })));
     assert_eq!(
-        descriptor["context"]["toolResultElision"],
-        json!({"keepRecentTurns": 2, "maxChars": 1000})
+        descriptor["context"]["masking"],
+        json!({"triggerRatio": 0.8, "targetRatio": 0.5, "minGainRatio": 0.2, "keepRecentTurns": 3, "imageMaxAgeTurns": 6})
     );
     assert_eq!(
-        accepted(with(json!({"context": {"toolResultElision": {}}})))["context"],
-        json!({"toolResultElision": {}})
+        accepted(with(json!({"context": {"masking": {}}})))["context"],
+        json!({"masking": {}})
     );
-    // `true`, null, scalars and arrays are all malformed-present.
-    for bad in [
-        json!(true),
-        Value::Null,
-        json!("1000"),
-        json!(2),
-        json!([2]),
-    ] {
+    for bad in [json!(true), Value::Null, json!("0.8"), json!([1])] {
         rejected(
-            with(json!({"context": {"toolResultElision": bad.clone()}})),
-            &format!("toolResultElision = {bad}"),
+            with(json!({"context": {"masking": bad.clone()}})),
+            &format!("masking = {bad}"),
         );
     }
-    for bad in [json!(0), json!("1000"), Value::Null, json!(-5)] {
-        for key in ["keepRecentTurns", "maxChars"] {
+    for bad in [json!(0), json!(1.5), json!("0.5"), Value::Null, json!(-0.1)] {
+        for key in ["triggerRatio", "targetRatio", "minGainRatio"] {
             rejected(
-                with(json!({"context": {"toolResultElision": {key: bad.clone()}}})),
-                &format!("toolResultElision.{key} = {bad}"),
+                with(json!({"context": {"masking": {key: bad.clone()}}})),
+                &format!("masking.{key} = {bad}"),
             );
         }
     }
+    for bad in [json!(0), json!(1.5), json!("3"), Value::Null, json!(-5)] {
+        for key in ["keepRecentTurns", "imageMaxAgeTurns"] {
+            rejected(
+                with(json!({"context": {"masking": {key: bad.clone()}}})),
+                &format!("masking.{key} = {bad}"),
+            );
+        }
+    }
+    rejected(
+        with(json!({"context": {"masking": {"triggerRatio": 0.5, "targetRatio": 0.5}}})),
+        "targetRatio must stay below triggerRatio",
+    );
+    // The EFFECTIVE thresholds are checked: a lone trigger below the default
+    // target, a lone target above the default trigger, minGain of 1.
+    for bad in [
+        json!({"triggerRatio": 0.4}),
+        json!({"targetRatio": 0.9}),
+        json!({"minGainRatio": 1}),
+        json!({"enabled": "yes"}),
+        json!({"enabled": null}),
+    ] {
+        rejected(
+            with(json!({"context": {"masking": bad.clone()}})),
+            &format!("masking = {bad}"),
+        );
+    }
+    assert_eq!(
+        accepted(with(json!({"context": {"masking": {"enabled": false}}})))["context"],
+        json!({"masking": {"enabled": false}})
+    );
+}
+
+#[test]
+fn legacy_elision_opt_out_reads_as_masking_disabled() {
+    assert_eq!(
+        accepted(with(json!({"context": {"toolResultElision": false}})))["context"],
+        json!({"masking": {"enabled": false}})
+    );
+    assert_eq!(
+        accepted(with(
+            json!({"context": {"toolResultElision": false, "masking": {"keepRecentTurns": 4}}})
+        ))["context"],
+        json!({"masking": {"keepRecentTurns": 4, "enabled": false}})
+    );
+    // An explicit `enabled` wins over the legacy key.
+    assert_eq!(
+        accepted(with(
+            json!({"context": {"toolResultElision": false, "masking": {"enabled": true}}})
+        ))["context"],
+        json!({"masking": {"enabled": true}})
+    );
+}
+
+#[test]
+fn retired_tool_result_elision_key_is_dropped() {
+    assert_eq!(
+        accepted(with(
+            json!({"context": {"toolResultElision": {"maxChars": 10}}})
+        ))["context"],
+        json!({})
+    );
+    assert_eq!(
+        accepted(with(json!({"context": {"toolResultElision": true}})))["context"],
+        json!({})
+    );
 }
 
 #[test]

@@ -61,6 +61,7 @@ dependencies = [
  "agentkit-mcp",
  "agentkit-sessions",
  "agentkit-store",
+ "agentkit-testkit",
  "async-trait",
  "chrono",
  "futures",

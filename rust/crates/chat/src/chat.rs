@@ -11,8 +11,8 @@ mod compaction_prompts;
 mod compaction_request;
 mod compaction_runner;
 mod context_budget;
-mod elision;
 mod hooks;
+mod masking;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
 mod prefix;
 mod session_run;
@@ -421,7 +421,7 @@ impl ChatExecutor {
         // the model in this same attempt, not only after a restart.
         let records = context.store.messages(chat_id, true).await?;
         // What the provider-facing history is built from (ADR 0017 part 1):
-        // the session's anchored-history policy and its tool-result elision,
+        // the session's anchored-history policy and its masking thresholds,
         // both from the turn's staged context snapshot. A non-session chat
         // assembles exactly as it always did.
         let assembly = context_budget::resolve_context_assembly(&context, chat_id).await?;
@@ -460,17 +460,6 @@ impl ChatExecutor {
                 )
             }));
         }
-        // Frozen order (turn-runner.ts:1758): stale tool results are elided in
-        // the assembled view BEFORE summaries/compaction see them, so the
-        // summary is written over the same bytes the provider gets. The
-        // provider-continuation lane replays its durable branch untouched, so
-        // assembly stays exactly as the continuation recorded it.
-        if session
-            && continuation.is_none()
-            && let Some(options) = assembly.elision
-        {
-            elision::elide_stale_tool_results(&mut entries, &options);
-        }
         let runtime: Arc<dyn agentkit_core::Runtime> = context.runtime.clone();
         // Subagent children carry per-role execution bounds on their chat
         // metadata; non-subagent sessions get defaults (no behavior change).
@@ -491,6 +480,33 @@ impl ChatExecutor {
             crate::restore_execution_budget(&context, execution_limits, runtime.clone()).await?;
         let context_budget =
             context_budget::ContextBudget::resolve(&context, chat_id, provider.id(), model).await?;
+        // Batched masking (ADR 0034): stored masks apply on every assembly;
+        // a new batch runs only once the estimate passes the trigger, BEFORE
+        // compaction so a summary is written over the bytes the provider
+        // gets. The provider-continuation lane replays its durable branch
+        // untouched, so assembly stays exactly as the continuation recorded.
+        // B counts the frozen S1 manifest's tools, not this turn's registry.
+        let tool_definitions = if session {
+            prefix::frozen_tools(&context, chat_id, &registry).await?
+        } else {
+            registry.definitions()
+        };
+        let mut compact_forced = false;
+        if session && continuation.is_none() {
+            let masked = masking::apply(
+                masking::Input {
+                    context: &context,
+                    chat_id,
+                    settings: assembly.masking,
+                    budget: context_budget.as_ref(),
+                    tools: &tool_definitions,
+                    store: options.output.as_ref().map(|gate| gate.store()),
+                },
+                &mut entries,
+            )
+            .await?;
+            compact_forced = masked.compact;
+        }
         let record_identity = agentkit_core::RecordIdentity {
             provider: Some(provider.id().to_owned()),
             lane: Some(
@@ -526,11 +542,12 @@ impl ChatExecutor {
                 request_budget: budget.clone(),
                 context_budget,
                 entries,
-                tools: registry.definitions(),
+                tools: tool_definitions,
                 path_snapshot,
                 receipt_snapshot,
                 usage: options.usage.clone(),
                 usage_timeout_ms: options.hook_timeouts.usage_ms,
+                force: compact_forced,
             })
             .await?
             .into_iter()

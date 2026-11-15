@@ -18,8 +18,11 @@
 //! - `context` is absent or a record with `policy` ∈ {`final_answers`,
 //!   `transcript`}, positive integers (`Number.isInteger(n) && n > 0`) for
 //!   `windowTokens` / `reserveTokens` / `keepRecentTokens`, and
-//!   `toolResultElision` absent, `false`, or a record of positive integers
-//!   `keepRecentTurns` / `maxChars` (`true` is malformed);
+//!   `masking` absent or a record of `enabled` (bool, default true), ratios
+//!   (`triggerRatio`, `targetRatio`, `minGainRatio`; effective values satisfy
+//!   `0 < target < trigger <= 1` and `0 < minGain < 1`) and positive integers
+//!   (`keepRecentTurns`, `imageMaxAgeTurns`); a retired `toolResultElision`
+//!   key is dropped, except `false` reads as `masking.enabled = false`;
 //! - `skills` is absent or an array of records each carrying string `id` AND
 //!   string `revision`;
 //! - `turnKind` is absent, exactly `chat.turn`, or a host kind matching the TS
@@ -237,26 +240,85 @@ fn read_context(raw: Option<&Value>) -> Field<Value> {
             }
         };
     }
-    if let Some(elision) = raw.get("toolResultElision") {
-        if elision == &Value::Bool(false) {
-            out.insert("toolResultElision".into(), Value::Bool(false));
-        } else {
-            // `true`, `null`, scalars and arrays are all malformed here.
-            let Some(elision) = elision.as_object() else {
-                return Field::Malformed;
-            };
-            let mut out_elision = Map::new();
-            for key in ["keepRecentTurns", "maxChars"] {
-                match read_positive_int(elision.get(key)) {
-                    Field::Absent => {}
-                    Field::Malformed => return Field::Malformed,
-                    Field::Valid(number) => {
-                        out_elision.insert(key.into(), number);
-                    }
-                };
-            }
-            out.insert("toolResultElision".into(), Value::Object(out_elision));
+    // `toolResultElision` is retired (ADR 0034 addendum): the key is dropped,
+    // except that the legacy opt-out (`false`) still reads as masking off.
+    let legacy_off = raw.get("toolResultElision") == Some(&Value::Bool(false));
+    match read_masking(raw.get("masking"), legacy_off) {
+        Field::Absent => {}
+        Field::Malformed => return Field::Malformed,
+        Field::Valid(masking) => {
+            out.insert("masking".into(), masking);
         }
+    }
+    Field::Valid(Value::Object(out))
+}
+
+/// Thresholds the executor applies when a key is absent (ADR 0034).
+const MASK_TRIGGER: f64 = 0.80;
+const MASK_TARGET: f64 = 0.50;
+const MASK_MIN_GAIN: f64 = 0.20;
+
+/// `masking` (batched masking, ADR 0034): `enabled` (default true), ratios of
+/// the message budget as numbers in (0, 1] and positive integer turn counts.
+/// The EFFECTIVE thresholds (given or default) must satisfy
+/// `0 < target < trigger <= 1` and `0 < minGain < 1`; this is the one place
+/// they are validated. `legacy_off` is a retired `toolResultElision: false`,
+/// read as `enabled: false` unless `enabled` is set explicitly.
+fn read_masking(raw: Option<&Value>, legacy_off: bool) -> Field<Value> {
+    let Some(value) = raw else {
+        return if legacy_off {
+            Field::Valid(Value::Object(Map::from_iter([(
+                "enabled".to_owned(),
+                Value::Bool(false),
+            )])))
+        } else {
+            Field::Absent
+        };
+    };
+    let Some(raw) = value.as_object() else {
+        return Field::Malformed;
+    };
+    let mut out = Map::new();
+    for key in ["triggerRatio", "targetRatio", "minGainRatio"] {
+        let Some(value) = raw.get(key) else {
+            continue;
+        };
+        match value.as_f64() {
+            Some(ratio) if ratio > 0.0 && ratio <= 1.0 => {
+                out.insert(key.into(), value.clone());
+            }
+            _ => return Field::Malformed,
+        }
+    }
+    for key in ["keepRecentTurns", "imageMaxAgeTurns"] {
+        match read_positive_int(raw.get(key)) {
+            Field::Absent => {}
+            Field::Malformed => return Field::Malformed,
+            Field::Valid(number) => {
+                out.insert(key.into(), number);
+            }
+        };
+    }
+    match raw.get("enabled") {
+        None => {
+            if legacy_off {
+                out.insert("enabled".into(), Value::Bool(false));
+            }
+        }
+        Some(enabled @ Value::Bool(_)) => {
+            out.insert("enabled".into(), enabled.clone());
+        }
+        Some(_) => return Field::Malformed,
+    }
+    let effective =
+        |key: &str, default: f64| out.get(key).and_then(Value::as_f64).unwrap_or(default);
+    let (trigger, target, min_gain) = (
+        effective("triggerRatio", MASK_TRIGGER),
+        effective("targetRatio", MASK_TARGET),
+        effective("minGainRatio", MASK_MIN_GAIN),
+    );
+    if !(0.0 < target && target < trigger && trigger <= 1.0 && 0.0 < min_gain && min_gain < 1.0) {
+        return Field::Malformed;
     }
     Field::Valid(Value::Object(out))
 }

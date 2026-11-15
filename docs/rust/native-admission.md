@@ -48,9 +48,9 @@ fail with `context_overflow` before provider dispatch.
 `windowSource` retains the shared event vocabulary: `descriptor` includes a frozen per-turn window override as well as a session descriptor; `model` includes frozen native model metadata and the stored model catalog. These labels do not change admission precedence.
 
 Automatic compaction requires `ChatExecutorOptions.auto_compaction = true`.
-An explicit session compact request remains supported. Tool-result elision is disabled by default. Supply an explicit
-`context.toolResultElision` options object to enable it, or `false` to preserve
-the complete tool transcript explicitly.
+An explicit session compact request remains supported. Tool-result elision is retired ([ADR 0034](../adr/0034-output-store-and-masking.md)):
+a legacy `context.toolResultElision` key is read as absent. Batched masking replaces it and is on by default; it acts only past 80% of the message
+budget. `context.masking` overrides its thresholds (`triggerRatio`, `targetRatio`, `minGainRatio`, `keepRecentTurns`, `imageMaxAgeTurns`).
 
 ## Selected managed content
 

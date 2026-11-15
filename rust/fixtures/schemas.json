@@ -2669,6 +2669,10 @@
               {
                 "const": "refreeze",
                 "type": "string"
+              },
+              {
+                "const": "mask_invalidated",
+                "type": "string"
               }
             ]
           },
@@ -4182,6 +4186,10 @@
                   },
                   {
                     "const": "refreeze",
+                    "type": "string"
+                  },
+                  {
+                    "const": "mask_invalidated",
                     "type": "string"
                   }
                 ]
@@ -10827,6 +10835,10 @@
                   },
                   {
                     "const": "refreeze",
+                    "type": "string"
+                  },
+                  {
+                    "const": "mask_invalidated",
                     "type": "string"
                   }
                 ]

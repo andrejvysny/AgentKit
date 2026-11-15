@@ -648,7 +648,9 @@ export type AiRunContextAdmittedEvent = Static<
 /**
  * The cached prompt prefix was rewritten, so provider caches restart (INV-3).
  * `reason` is `"params"` (frozen request parameters changed), `"mask"`,
- * `"compact"` or `"refreeze"` (the frozen head S1-S4 changed). Token fields
+ * `"compact"`, `"refreeze"` (the frozen head S1-S4 changed) or
+ * `"mask_invalidated"` (a stored mask no longer matched the history and was
+ * dropped). Token fields
  * are host estimates and absent when unknown.
  */
 export const AiRunContextCacheBreakEventSchema = Type.Object({
@@ -660,6 +662,7 @@ export const AiRunContextCacheBreakEventSchema = Type.Object({
       Type.Literal("mask"),
       Type.Literal("compact"),
       Type.Literal("refreeze"),
+      Type.Literal("mask_invalidated"),
     ]),
     tokens_before: Type.Optional(
       Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),

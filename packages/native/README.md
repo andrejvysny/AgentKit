@@ -109,7 +109,7 @@ await service.close(); // Open → Closing → Closed; idempotent, concurrent-sa
 await store.close();  // releases the file lock — service closes first
 ```
 
-Native built-in profiles are active by default; unknown profile ids fail admission. Resolve profiles with `listNativeProfiles` or `resolveNativeProfile`, and pass the same overrides to `createService`. `createSession` accepts typed `reasoningEffort` and `contentSelection`. Native defaults preserve full eligible history and disable automatic compaction/tool-result elision. See [native admission and host ports](../../docs/rust/native-admission.md) for ceilings, immutable selections, explicit vault/consent/MCP ports and migration limits.
+Native built-in profiles are active by default; unknown profile ids fail admission. Resolve profiles with `listNativeProfiles` or `resolveNativeProfile`, and pass the same overrides to `createService`. `createSession` accepts typed `reasoningEffort` and `contentSelection`. Native defaults preserve full eligible history and disable automatic compaction; batched masking acts only once the context passes 80% of its budget. See [native admission and host ports](../../docs/rust/native-admission.md) for ceilings, immutable selections, explicit vault/consent/MCP ports and migration limits.
 
 Session management and send methods accept an optional `{ signal }`. A signal
 already aborted prevents the call. Aborting afterward stops waiting only;
