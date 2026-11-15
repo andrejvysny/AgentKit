@@ -20,5 +20,8 @@ pub use native_provider_factory::{
 };
 pub use presets::{ProviderPreset, preset_by_kind, provider_presets};
 pub use responses::ResponsesProvider;
-pub use responses_request::{build_responses_request, build_responses_request_with_warnings};
+pub use responses_request::{
+    RESPONSES_SCHEMA_KEYS, SchemaLane, allowed_schema_keys, build_responses_request,
+    build_responses_request_with_warnings, schema_lane_violations,
+};
 pub use transport::TrustedTransport;

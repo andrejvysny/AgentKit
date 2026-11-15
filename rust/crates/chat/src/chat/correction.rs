@@ -22,6 +22,39 @@ impl Default for CorrectionConfig {
         }
     }
 }
+/// Provider error phrasings that mean "this endpoint or model takes no tools".
+/// A generic 400/422 (chat-template error, bad parameter) is not among them.
+pub const TOOLS_UNSUPPORTED_PHRASES: &[&str] = &[
+    "tools unsupported",
+    "tools are not supported",
+    "tools is not supported",
+    "tool use is not supported",
+    "tool calling is not supported",
+    "tool calls are not supported",
+    "function calling is not supported",
+    "does not support tools",
+    "doesn't support tools",
+    "does not support tool use",
+    "does not support tool calling",
+    "does not support function calling",
+    "does not support function call",
+    "enable-auto-tool-choice",
+    "tool_choice is not supported",
+];
+/// Whether a failed pass says tools are unsupported: the explicit
+/// `unsupported_tools` code, or a 400/422 whose message uses a known phrasing.
+pub fn tools_unsupported_failure(code: Option<&str>, message: &str) -> bool {
+    match code {
+        Some("unsupported_tools") => true,
+        Some("400" | "422") => {
+            let lower = message.to_lowercase();
+            TOOLS_UNSUPPORTED_PHRASES
+                .iter()
+                .any(|phrase| lower.contains(phrase))
+        }
+        _ => false,
+    }
+}
 pub(super) struct ChatSession {
     pub context: ExecutionContext,
     pub options: ChatExecutorOptions,
@@ -31,6 +64,9 @@ pub(super) struct ChatSession {
     pub sink: Arc<DurableEvents>,
     pub anchor: String,
     pub system_prompt: Option<String>,
+    /// The provider record or host settings explicitly mark tools as
+    /// supported; a rejection then is never read as "no tools here".
+    pub tools_declared_capable: bool,
     /// Set the instant a pass streams its `run.completed` terminal event.
     /// The core loop appends the final answer's messages and that event to
     /// the durable sink in ONE transaction (`sink.append_messages`), and the
@@ -117,12 +153,23 @@ impl ChatSession {
         let mut passes = 1;
         if self.can_retry_chat_only(&pass) {
             passes += 1;
+            let provider_error = pass
+                .failure
+                .as_ref()
+                .map(|failure| failure.message.clone())
+                .unwrap_or_default();
             self.boundary(
                 passes,
                 "chat_only",
-                "The provider rejected the request with tools attached; re-asking without them.",
+                "The provider reported that tools are unsupported; re-asking without them.",
             )
             .await?;
+            self.context
+                .emit(
+                    "run.warning",
+                    json!({"code":"tool_less_retry","message":format!("Tools were removed for this retry because the provider said it does not support them: {provider_error}"),"pass":passes,"reason":"chat_only"}),
+                )
+                .await?;
             let messages = filter_tools(pass.messages.clone());
             pass = self
                 .run_pass(messages, Arc::new(ToolRegistry::new()), 1)
@@ -276,12 +323,10 @@ impl ChatSession {
             && pass.tool_calls == 0
             && !self.context.cancellation.is_cancelled()
             && !self.private()
-            && matches!(
-                pass.failure
-                    .as_ref()
-                    .and_then(|failure| failure.code.as_deref()),
-                Some("400" | "422" | "unsupported_tools" | "invalid_tool_schema")
-            )
+            && !self.tools_declared_capable
+            && pass.failure.as_ref().is_some_and(|failure| {
+                tools_unsupported_failure(failure.code.as_deref(), &failure.message)
+            })
     }
     fn private(&self) -> bool {
         self.base.request.continuation_scope.is_some()

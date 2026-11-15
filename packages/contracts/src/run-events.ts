@@ -368,7 +368,9 @@ export type AiRunWarningCode =
   | "context_trimmed"
   | "compaction_failed"
   | "skill_unavailable"
-  | "project_instructions_unavailable";
+  | "project_instructions_unavailable"
+  | "tool_schema_unsupported"
+  | "tool_less_retry";
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),

@@ -20,6 +20,7 @@ struct Provider {
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     fail_first: bool,
     empty_first: bool,
+    fail_message: &'static str,
 }
 #[async_trait]
 impl ChatProvider for Provider {
@@ -32,7 +33,7 @@ impl ChatProvider for Provider {
         let has_tools = !input.tools.is_empty();
         requests.push(input);
         let events = if index == 0 && self.fail_first {
-            vec![Err(CoreError::new("400", "tools unsupported"))]
+            vec![Err(CoreError::new("400", self.fail_message))]
         } else if index == 0 && self.empty_first {
             vec![Ok(ProviderEvent::Completed {
                 content: String::new(),
@@ -120,13 +121,29 @@ async fn make(
     fail_first: bool,
     empty_first: bool,
 ) -> (AgentHost, Arc<Mutex<Vec<ChatRequest>>>) {
+    make_with(options, fail_first, empty_first, "tools unsupported", None).await
+}
+async fn make_with(
+    options: ChatExecutorOptions,
+    fail_first: bool,
+    empty_first: bool,
+    fail_message: &'static str,
+    capabilities: Option<Value>,
+) -> (AgentHost, Arc<Mutex<Vec<ChatRequest>>>) {
     let store = SqliteStore::memory(64).unwrap();
     store.create_chat("chat", None, json!({}), 0).await.unwrap();
+    if let Some(capabilities) = capabilities {
+        store
+            .save_provider_capabilities("test", capabilities)
+            .await
+            .unwrap();
+    }
     let requests = Arc::new(Mutex::new(vec![]));
     let provider = Provider {
         requests: requests.clone(),
         fail_first,
         empty_first,
+        fail_message,
     };
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(Echo {definition:serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap()})).unwrap();
@@ -301,6 +318,72 @@ async fn tool_schema_rejection_retries_once_without_tools_and_empty_answer_reask
     }
 }
 
+async fn warning_codes(host: &AgentHost) -> Vec<String> {
+    host.store()
+        .events("run", None, 1000)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.event["type"] == "run.warning")
+        .filter_map(|event| event.event["data"]["code"].as_str().map(str::to_owned))
+        .collect()
+}
+#[tokio::test]
+async fn tool_less_retry_emits_a_visible_notice_with_the_provider_error() {
+    let (host, requests) = make(ChatExecutorOptions::default(), true, false).await;
+    execute(&host).await;
+    assert_eq!(requests.lock().unwrap().len(), 2);
+    let codes = warning_codes(&host).await;
+    assert!(codes.contains(&"retry_pass".to_owned()), "{codes:?}");
+    assert!(codes.contains(&"tool_less_retry".to_owned()), "{codes:?}");
+    let events = host.store().events("run", None, 1000).await.unwrap();
+    let notice = events
+        .iter()
+        .find(|event| event.event["data"]["code"] == "tool_less_retry")
+        .unwrap();
+    assert!(
+        notice.event["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("tools unsupported")
+    );
+}
+#[tokio::test]
+async fn generic_400_does_not_retry_without_tools() {
+    let (host, requests) = make_with(
+        ChatExecutorOptions::default(),
+        true,
+        false,
+        "chat template error: System message must be at the beginning",
+        None,
+    )
+    .await;
+    execute(&host).await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        host.store().get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Failed
+    );
+    assert!(!warning_codes(&host).await.contains(&"tool_less_retry".to_owned()));
+}
+#[tokio::test]
+async fn tool_capable_provider_never_retries_without_tools() {
+    let (host, requests) = make_with(
+        ChatExecutorOptions::default(),
+        true,
+        false,
+        "tools unsupported",
+        Some(json!({"streaming": true, "toolCalling": true})),
+    )
+    .await;
+    execute(&host).await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        host.store().get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Failed
+    );
+    assert!(!warning_codes(&host).await.contains(&"tool_less_retry".to_owned()));
+}
 #[tokio::test]
 async fn correction_hard_cap_is_five_despite_larger_host_configuration() {
     let verifier = Arc::new(Verify {

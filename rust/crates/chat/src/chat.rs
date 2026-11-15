@@ -68,6 +68,28 @@ impl ChatExecutor {
             .and_then(|capabilities| capabilities["toolCalling"].as_bool())
             .unwrap_or(true))
     }
+    /// Tools are explicitly declared supported: settings force them "on", or
+    /// the provider's capability record says `toolCalling: true`.
+    async fn tools_declared_capable(
+        &self,
+        context: &ExecutionContext,
+        provider_id: &str,
+    ) -> ChatResult<bool> {
+        let forced = context
+            .store
+            .get_setting("http", "settings")
+            .await?
+            .is_some_and(|settings| settings["toolCalling"].as_str() == Some("on"));
+        if forced {
+            return Ok(true);
+        }
+        Ok(context
+            .store
+            .get_setting(agentkit_store::PROVIDER_CAPABILITIES_NAMESPACE, provider_id)
+            .await?
+            .and_then(|capabilities| capabilities["toolCalling"].as_bool())
+            == Some(true))
+    }
     async fn provider(&self, context: &ExecutionContext) -> ChatResult<Arc<dyn ChatProvider>> {
         if let Some(factory) = &self.options.provider_factory
             && context
@@ -245,6 +267,7 @@ impl ChatExecutor {
         // a provider-emitted call resolves as a `tool_missing` failure
         // (frozen loop behavior) — the tool is never executed.
         let stage_tools = self.stage_tools(&context, provider.id()).await?;
+        let tools_declared_capable = self.tools_declared_capable(&context, provider.id()).await?;
         let registry = if stage_tools {
             hooks::stage_registry(
                 &options,
@@ -519,6 +542,7 @@ impl ChatExecutor {
             sink,
             anchor,
             system_prompt,
+            tools_declared_capable,
         };
         session.execute().await
     }

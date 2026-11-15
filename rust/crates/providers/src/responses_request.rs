@@ -321,8 +321,9 @@ fn tools(input: &ChatRequest) -> Result<(Vec<Value>, Vec<String>), CoreError> {
         // fail the whole turn: leave it out and tell the run.
         let Some(schema) = supported_schema(&tool.input_schema) else {
             warnings.push(format!(
-                "Tool {} was excluded from the request: its input schema is not supported.",
-                tool.name
+                "Tool {} was excluded from the request: {}.",
+                tool.name,
+                unsupported_reason(&tool.input_schema)
             ));
             continue;
         };
@@ -336,6 +337,75 @@ fn tools(input: &ChatRequest) -> Result<(Vec<Value>, Vec<String>), CoreError> {
         ]
     };
     Ok((tools, warnings))
+}
+/// Lanes whose schema acceptance can be linted at build time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchemaLane {
+    Responses,
+    ChatCompletions,
+    Anthropic,
+}
+/// The keys a lane accepts, or `None` when the lane takes any JSON Schema
+/// keyword (no allow-list exists for it).
+pub fn allowed_schema_keys(lane: SchemaLane) -> Option<&'static [&'static str]> {
+    match lane {
+        SchemaLane::Responses => Some(RESPONSES_SCHEMA_KEYS),
+        SchemaLane::ChatCompletions | SchemaLane::Anthropic => None,
+    }
+}
+/// Lint helper: every schema key of `schema` (annotation-only keywords are
+/// ignored, as the request builder strips them) that `lane` cannot carry, as
+/// `path: key` strings. Empty means the lane offers the tool as defined.
+pub fn schema_lane_violations(lane: SchemaLane, schema: &Value) -> Vec<String> {
+    let Some(allowed) = allowed_schema_keys(lane) else {
+        return vec![];
+    };
+    let mut schema = schema.clone();
+    strip_annotations(&mut schema);
+    let mut out = vec![];
+    collect_unknown_keys(&schema, allowed, "$", &mut out);
+    out
+}
+fn collect_unknown_keys(schema: &Value, allowed: &[&str], path: &str, out: &mut Vec<String>) {
+    let Some(map) = schema.as_object() else {
+        return;
+    };
+    for (key, value) in map {
+        if !allowed.contains(&key.as_str()) {
+            out.push(format!("{path}: unsupported key `{key}`"));
+            continue;
+        }
+        match key.as_str() {
+            "properties" => {
+                if let Some(children) = value.as_object() {
+                    for (name, child) in children {
+                        collect_unknown_keys(child, allowed, &format!("{path}.{name}"), out);
+                    }
+                }
+            }
+            "items" => collect_unknown_keys(value, allowed, &format!("{path}[]"), out),
+            "additionalProperties" if !value.is_boolean() => {
+                collect_unknown_keys(value, allowed, &format!("{path}.*"), out)
+            }
+            "anyOf" | "oneOf" | "allOf" => {
+                for (index, child) in value.as_array().into_iter().flatten().enumerate() {
+                    collect_unknown_keys(child, allowed, &format!("{path}.{key}[{index}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+fn unsupported_reason(schema: &Value) -> String {
+    let violations = schema_lane_violations(SchemaLane::Responses, schema);
+    if violations.is_empty() {
+        "its input schema is not supported by the Responses lane".into()
+    } else {
+        format!(
+            "its input schema is not supported by the Responses lane ({})",
+            violations.join("; ")
+        )
+    }
 }
 fn supported_schema(schema: &Value) -> Option<Value> {
     let mut schema = schema.clone();
@@ -380,6 +450,34 @@ fn strip_annotations(schema: &mut Value) {
         }
     }
 }
+/// Schema keywords the Responses lane carries; any other key makes a tool
+/// unofferable there (see [`schema_lane_violations`]).
+pub const RESPONSES_SCHEMA_KEYS: &[&str] = &[
+    "type",
+    "description",
+    "properties",
+    "required",
+    "items",
+    "enum",
+    "additionalProperties",
+    "default",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "const",
+    "title",
+    "format",
+    "pattern",
+];
 fn validate_schema(schema: &Value, depth: usize) -> Result<(), CoreError> {
     let schema = schema
         .as_object()
@@ -387,34 +485,8 @@ fn validate_schema(schema: &Value, depth: usize) -> Result<(), CoreError> {
     if depth > 32 {
         return Err(CoreError::responses("unsupported_tool_schema"));
     }
-    const KEYS: &[&str] = &[
-        "type",
-        "description",
-        "properties",
-        "required",
-        "items",
-        "enum",
-        "additionalProperties",
-        "default",
-        "minimum",
-        "maximum",
-        "exclusiveMinimum",
-        "exclusiveMaximum",
-        "minLength",
-        "maxLength",
-        "minItems",
-        "maxItems",
-        "uniqueItems",
-        "anyOf",
-        "oneOf",
-        "allOf",
-        "const",
-        "title",
-        "format",
-        "pattern",
-    ];
     for (key, value) in schema {
-        if !KEYS.contains(&key.as_str()) {
+        if !RESPONSES_SCHEMA_KEYS.contains(&key.as_str()) {
             return Err(CoreError::responses("unsupported_tool_schema"));
         }
         match key.as_str() {
@@ -550,5 +622,46 @@ mod selected_content_tests {
         );
         input.run_id = "next-run".into();
         assert!(build_responses_request(&input, &identity, false).is_ok());
+    }
+
+    #[test]
+    fn dropped_tool_produces_a_diagnostic_naming_tool_and_key() {
+        let identity = ConnectionIdentity {
+            provider_id: "p".into(),
+            protocol: "responses".into(),
+            connection_id: "c".into(),
+            generation: 1,
+        };
+        let tool = |name: &str, schema: Value| {
+            serde_json::from_value(json!({"name":name,"version":"1","effect":"read","capability":"test","description":"d","inputSchema":schema})).unwrap()
+        };
+        let input = ChatRequest {
+            run_id: "run".into(),
+            model: "model".into(),
+            messages: vec![ChatMessage::text("user", "hi")],
+            tools: vec![
+                tool("good", json!({"type":"object","properties":{"a":{"type":"string"}}})),
+                tool("bad", json!({"type":"object","properties":{"a":{"type":"string"}},"minProperties":1})),
+            ],
+            ..Default::default()
+        };
+        let (body, warnings) =
+            build_responses_request_with_warnings(&input, &identity, false).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad"), "{}", warnings[0]);
+        assert!(warnings[0].contains("minProperties"), "{}", warnings[0]);
+        let names = body["tools"][0]["tools"].as_array().unwrap();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0]["name"], "good");
+    }
+    #[test]
+    fn lane_lint_reports_keys_outside_the_allow_list() {
+        let schema = json!({"type":"object","properties":{"a":{"type":"array","items":{"type":"string","contentEncoding":"x"}}},"minProperties":1});
+        let found = schema_lane_violations(SchemaLane::Responses, &schema);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().any(|v| v.contains("minProperties")));
+        assert!(found.iter().any(|v| v.contains("contentEncoding")));
+        assert!(schema_lane_violations(SchemaLane::Responses, &json!({"type":"object","$schema":"x","properties":{}})).is_empty());
+        assert!(schema_lane_violations(SchemaLane::Anthropic, &schema).is_empty());
     }
 }
