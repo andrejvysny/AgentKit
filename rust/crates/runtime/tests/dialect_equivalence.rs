@@ -284,15 +284,21 @@ async fn anthropic_registry() -> ToolRegistry {
 }
 
 /// The canonical call an example is expected to translate to: the editor's
-/// `str_replace` always states `replace_all` false, which the flat edit call
-/// leaves out by default.
+/// `str_replace` always states `replace_all` false (the flat edit call's
+/// default), so the translated call carries it even when the example omits it.
 fn normalised(name: &str, args: &Value) -> Value {
     let mut args = args.clone();
     if name == "edit_file"
         && let Some(object) = args.as_object_mut()
-        && object.get("replace_all") == Some(&json!(false))
     {
-        object.remove("replace_all");
+        object.entry("replace_all").or_insert(json!(false));
+    }
+    // The editor's `view` needs a path, so the dialect says the default ("."
+    // = the root) out loud; the canonical call means the same.
+    if name == "list_dir"
+        && let Some(object) = args.as_object_mut()
+    {
+        object.entry("path").or_insert(json!("."));
     }
     args
 }

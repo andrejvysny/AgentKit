@@ -141,7 +141,9 @@ describe("runAgentLoop steering", () => {
     });
     const t = types(events);
     const applied = t.indexOf("run.input.applied");
-    expect(t[applied - 1]).toBe("run.tool.succeeded");
+    // The call record (TU-35) closes each call, right after its outcome event.
+    expect(t[applied - 1]).toBe("run.tool.record");
+    expect(t[applied - 2]).toBe("run.tool.succeeded");
     // Nothing of step 2 (its delta / completed message) precedes the placement.
     expect(
       t.slice(0, applied).filter((x) => x === "run.message.completed"),

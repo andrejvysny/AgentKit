@@ -1698,7 +1698,7 @@ mod tests {
             .run(&h.write_file, json!({ "path": "n.txt", "content": 5 }))
             .await;
         assert_eq!(
-            Harness::text(&not_string),
+            Harness::first_line(&not_string),
             "invalid_arguments: \"content\" must be a string"
         );
         let bad_sha = h
@@ -2106,7 +2106,7 @@ mod tests {
             .run(&h.edit_file, json!({ "path": "f.txt", "edits": [] }))
             .await;
         assert_eq!(
-            Harness::text(&empty_edits),
+            Harness::first_line(&empty_edits),
             "invalid_arguments: \"edits\" must be an array of 1..50 {oldText,newText}"
         );
         let malformed = h

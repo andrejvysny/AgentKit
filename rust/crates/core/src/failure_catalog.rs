@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(made.code, "spawn_key_required");
         assert!(
             made.message
-                .starts_with("This spawn has no tool-call identity")
+                .starts_with("This call carries no tool-call identity")
         );
         let made = from_refusal("read_only: edit_file is not allowed");
         assert_eq!(made.code, "read_only");

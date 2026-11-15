@@ -161,7 +161,7 @@ fn names(tools: &[ToolDefinition]) -> Vec<&str> {
 async fn the_tools_array_is_frozen_sorted_and_late_tools_are_deferred() {
     let store = SqliteStore::memory(64).expect("store");
     // Turn one: contributors answer in reverse name order.
-    let first = rig(&store, registry(&["read_file", "dir_list", "file_finder"]));
+    let first = rig(&store, registry(&["read_file", "repo_map", "run_tests"]));
     first
         .service
         .create_session(&CreateSessionInput {
@@ -184,15 +184,15 @@ async fn the_tools_array_is_frozen_sorted_and_late_tools_are_deferred() {
         .unwrap();
     let one = turn(&first, &store, "in1").await;
     let sent_one = first.tools.lock().unwrap()[0].clone();
-    assert_eq!(names(&sent_one), ["dir_list", "file_finder", "read_file"]);
+    assert_eq!(names(&sent_one), ["read_file", "repo_map", "run_tests"]);
     let chat = store.get_chat("s1").await.unwrap().unwrap();
     let frozen = read_session_prefix(&chat.metadata).expect("prefix recorded");
     assert!(!frozen.tool_manifest_hash.is_absent());
 
-    // Turn two: file_finder timed out, text_search joined late. (The tools
-    // are not named after coding ids: a new session presents those through
-    // the common dialect, T3.1.)
-    let second = rig(&store, registry(&["text_search", "read_file", "dir_list"]));
+    // Turn two: run_tests timed out, write_file joined late. (The tools are
+    // coding profile ids the common dialect leaves alone, T3.1: the profile
+    // drops any name it does not list, and the dialect renames the others.)
+    let second = rig(&store, registry(&["write_file", "read_file", "repo_map"]));
     let two = turn(&second, &store, "in2").await;
     let sent_two = second.tools.lock().unwrap()[0].clone();
     assert_eq!(
@@ -210,11 +210,11 @@ async fn the_tools_array_is_frozen_sorted_and_late_tools_are_deferred() {
         panic!("the late tool is listed in the catalog");
     };
     assert_eq!(catalog.len(), 1);
-    assert_eq!(catalog[0].name, "text_search");
+    assert_eq!(catalog[0].name, "write_file");
 
     assert!(warnings(&store, &one, "tool_deferred").await.is_empty());
     assert!(warnings(&store, &two, "prefix_refrozen").await.is_empty());
     assert_eq!(warnings(&store, &two, "tool_deferred").await.len(), 1);
     let gone = warnings(&store, &two, "tool_unavailable").await;
-    assert_eq!(gone[0]["tools"], json!(["file_finder"]));
+    assert_eq!(gone[0]["tools"], json!(["run_tests"]));
 }

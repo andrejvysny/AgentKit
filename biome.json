@@ -68,6 +68,18 @@
       "formatter": { "enabled": false }
     },
     {
+      "includes": [
+        "rust/crates/core/tests/fixtures/**",
+        "rust/crates/providers/conformance/tasks/**"
+      ],
+      "formatter": { "enabled": false }
+    },
+    {
+      "includes": ["docs/reviews/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false }
+    },
+    {
       "includes": ["packages/native/generated/**"],
       "formatter": { "enabled": false },
       "linter": { "enabled": false }

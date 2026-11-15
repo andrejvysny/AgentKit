@@ -392,7 +392,7 @@ async fn tool_capable_provider_never_retries_without_tools() {
         true,
         false,
         "tools unsupported",
-        Some(json!({"streaming": true, "toolCalling": true})),
+        Some(json!({"streaming": true, "toolCalling": true, "modelList": true})),
     )
     .await;
     execute(&host).await;

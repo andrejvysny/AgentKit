@@ -158,11 +158,13 @@ fn split_git_tools_are_flat_and_hold_no_command() {
         assert!(!definition.description.contains("git_inspect"));
     }
     let diff = &rendered[2];
-    let keys: Vec<&String> = diff.input_schema["properties"]
+    // serde_json keeps declared order (preserve_order); the set is the contract.
+    let mut keys: Vec<&String> = diff.input_schema["properties"]
         .as_object()
         .unwrap()
         .keys()
         .collect();
+    keys.sort();
     assert_eq!(keys, ["path", "rev", "staged"]);
 }
 

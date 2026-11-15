@@ -91,7 +91,9 @@ export const AiModelToolProfileSchema = Type.Object({
   }),
   bodyExtras: Type.Object(
     {
-      chat_template_kwargs: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      chat_template_kwargs: Type.Optional(
+        Type.Record(Type.String(), Type.Unknown()),
+      ),
       parallel_tool_calls: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },

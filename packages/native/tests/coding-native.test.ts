@@ -283,7 +283,7 @@ function counterWorkspace(options: { counter: string }): string {
 
 // ---------------------------------------------------------------------------
 // 1. Descriptor parity: provider-visible descriptors vs the frozen TS
-//    authority (`fixtures/coding-descriptors.json`, frozen 2026-11-02).
+//    authority (`fixtures/coding-descriptors.json`, re-frozen 2026-11-15 under the common dialect).
 // ---------------------------------------------------------------------------
 
 nativeTest(
@@ -340,7 +340,7 @@ nativeTest(
       expect(new Set(native.keys())).toEqual(
         new Set(tsTools.map((tool) => tool.definition.name)),
       );
-      expect(tsTools.length).toBe(11);
+      expect(tsTools.length).toBe(14);
 
       for (const tool of tsTools) {
         const name = tool.definition.name;

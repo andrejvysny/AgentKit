@@ -238,5 +238,9 @@ async fn the_prefix_is_recorded_once_kept_while_unchanged_and_refrozen_on_edit()
         leading_system(&requests[1]),
         "the head is byte-identical across unchanged turns"
     );
-    assert!(leading_system(&requests[2])[0].1.contains("rule two"));
+    // Rules is the last segment block (CE-01), no longer the only one.
+    let refrozen_blocks = leading_system(&requests[2]);
+    let (rules_segment, rules_text) = refrozen_blocks.last().expect("a rules block");
+    assert_eq!(*rules_segment, Some(Rules));
+    assert!(rules_text.contains("rule two"));
 }

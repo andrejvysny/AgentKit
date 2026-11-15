@@ -843,7 +843,7 @@ async fn schema_sent_equals_schema_defined_on_every_provider_path() {
         assert_eq!(sent["function"]["name"], json!(defined.name));
         assert_eq!(
             sent["function"]["description"],
-            json!(defined.description),
+            json!(presented_description(defined, ExampleLane::ChatCompletions)),
             "{}: description sent differs",
             defined.name
         );

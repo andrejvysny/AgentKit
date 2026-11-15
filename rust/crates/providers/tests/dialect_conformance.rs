@@ -182,10 +182,9 @@ async fn round_trip(reply: String) -> (Value, Vec<ToolCall>) {
     let calls = events
         .into_iter()
         .filter_map(|event| match event.expect("provider event") {
-            ProviderEvent::Completed { tool_calls, .. } => Some(tool_calls),
+            ProviderEvent::ToolRequested(call) => Some(call),
             _ => None,
         })
-        .flatten()
         .collect();
     let sent = transport.sent.lock().unwrap()[0].clone();
     (sent, calls)

@@ -360,7 +360,10 @@ mod tests {
         let result = run(&tool, json!({ "plan": "do it" })).await;
         assert!(!result.ok);
         assert_eq!(
-            result.summary.as_deref(),
+            result
+                .summary
+                .as_deref()
+                .and_then(|text| text.lines().next()),
             Some("io_error: session store unreachable")
         );
     }

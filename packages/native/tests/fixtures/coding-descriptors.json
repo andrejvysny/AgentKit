@@ -1,78 +1,138 @@
 {
-  "source": "packages/toolpacks-coding/src (frozen at Phase 2 deletion, 2026-11-02)",
-  "note": "The coding lane model-facing contract as the TypeScript authority produced it. The native binding lane is asserted against this fixture byte-for-byte (modulo the host DirectWrite annotation prefix), replacing the retired TS differential oracle. Deliberate post-freeze divergence: git_inspect states that paths are literal pathspecs (2026-11-04 hardening).",
+  "source": "native lane under the common dialect (ADR 0032), re-frozen 2026-11-15 from the tools array the provider receives",
+  "note": "The coding lane model-facing contract: wire names, descriptions with rendered examples, flat git tools. The native binding lane is asserted against this fixture byte-for-byte (modulo the host DirectWrite annotation prefix). The 2026-11-02 TypeScript-pack freeze (canonical ids, git_inspect) is superseded because the model now sees the dialect's names; regenerate it deliberately when the dialect table or a description changes.",
   "tools": [
     {
-      "name": "read_file",
+      "name": "edit",
+      "effect": "write",
+      "description": "Replace exact text in an existing file: old_string becomes new_string, once per call. old_string must match exactly one place in the file (whitespace and quotes are matched leniently only when no exact match exists); keep it as small as possible while unique, or set replace_all to change every occurrence. Line endings and any BOM are preserved, and the call is refused with file_changed if the file changed since you last read it. Read the file first. Returns a unified diff and the new sha256.\n\nExample: edit({\"file_path\":\"src/lib.rs\",\"old_string\":\"let retries = 3;\",\"new_string\":\"let retries = 5;\"})\nExample: edit({\"file_path\":\"src/lib.rs\",\"old_string\":\"old_name\",\"new_string\":\"new_name\",\"replace_all\":true})",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "File to edit, relative to the workspace root."
+          },
+          "old_string": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact text to replace; it must match one place in the file."
+          },
+          "new_string": {
+            "type": "string",
+            "description": "Replacement text. An empty string deletes the matched text."
+          },
+          "replace_all": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique match. Default false."
+          }
+        },
+        "required": ["file_path", "old_string", "new_string"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "git_diff",
       "effect": "read",
-      "description": "Read text files in the workspace: one file with path, or up to 8 with paths (each under a \"==> path <==\" header; the output cap is shared; a file that fails is reported inline). Output lines are numbered \"<n>\\t<line>\". Returns at most 2000 lines per file and 50.0KB in total, and ends with a continuation notice (offset=N) when more remains. offset is 1-based. The result data carries sha256 (of the whole file) and totalLines: pass that sha256 as edit_file's expectedSha256. Prefer the native tools (read_file, list_dir, find_files, code_search, repo_map) over shell commands for exploring code.",
+      "description": "Show changes (read-only): the unstaged working tree changes, or the staged changes with staged true; rev compares against a commit, branch, tag or range, and path limits the diff to one file or directory. Use it instead of running git through run_shell_command. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.\n\nExample: git_diff({\"path\":\"src/lib.rs\",\"staged\":true})",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "File path, relative to the workspace root."
+            "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
           },
-          "paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "minItems": 1,
-            "maxItems": 8,
-            "description": "Several files (1..8) instead of path."
+          "staged": {
+            "type": "boolean",
+            "description": "Show staged changes (command diff only)."
           },
-          "offset": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "1-based first line to read (applies to every file)."
+          "rev": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Commit, branch, tag or range, e.g. HEAD~2."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "git_log",
+      "effect": "read",
+      "description": "List commits, newest first (read-only). limit sets how many (default 20); rev starts from a commit, branch or tag; path keeps only commits that touch it. Use it instead of running git through run_shell_command. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.\n\nExample: git_log({\"limit\":10})",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
           },
           "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum number of lines per file."
+            "maximum": 50,
+            "description": "Maximum number of commits (command log only)."
+          },
+          "rev": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Commit, branch, tag or range, e.g. HEAD~2."
           }
         },
-        "oneOf": [
-          {
-            "required": ["path"]
-          },
-          {
-            "required": ["paths"]
-          }
-        ],
+        "required": [],
         "additionalProperties": false
       }
     },
     {
-      "name": "list_dir",
+      "name": "git_show",
       "effect": "read",
-      "description": "List a directory in the workspace (max 500 entries; directories end with /, symlinks with @; credential files and entries matched by .gitignore are hidden unless includeIgnored is set). Prefer the native tools (read_file, list_dir, find_files, code_search, repo_map) over shell commands for exploring code.",
+      "description": "Show one commit with its changes (read-only). rev names the commit, branch or tag (default HEAD), for example HEAD~2; path limits the output to one file or directory. Use it instead of running git through run_shell_command. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "Directory, relative to the workspace root. Default: the root."
+            "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
           },
-          "includeIgnored": {
-            "type": "boolean",
-            "description": "Also list entries matched by .gitignore / .ignore / .git/info/exclude."
+          "rev": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Commit, branch, tag or range, e.g. HEAD~2."
           }
         },
+        "required": [],
         "additionalProperties": false
       }
     },
     {
-      "name": "find_files",
+      "name": "git_status",
       "effect": "read",
-      "description": "Find files by glob (e.g. **/*.ts, src/**/*.test.{ts,tsx}). Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks and credential files. Up to 1000 results. Use this instead of grep, rg, find or ls in a shell command.",
+      "description": "Show the working tree status and the current branch (read-only). Use it instead of running git through run_shell_command. path limits the report to one file or directory. Repository hooks, fsmonitor, filter, textconv and external-diff drivers, the pager and ssh helpers are neutralized and never run; paths are taken literally; output is capped.\n\nExample: git_status({})",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "glob",
+      "effect": "read",
+      "description": "Find files by name with a glob such as **/*.ts or src/**/*.test.{ts,tsx}. Use it to locate a file; to search inside files use grep_search, to see one folder use list_directory. Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks and credential files. Returns up to 1000 paths, one per line. Use this instead of grep, rg, find or ls in a shell command.\n\nExample: glob({\"pattern\":\"**/*.rs\"})\nExample: glob({\"pattern\":\"*.test.ts\",\"path\":\"src\",\"limit\":20})",
       "inputSchema": {
         "type": "object",
         "properties": {
           "pattern": {
             "type": "string",
-            "description": "Glob matched against the path relative to `path`, or the file name."
+            "description": "Glob matched against paths relative to the search directory, or against the file name."
           },
           "path": {
             "type": "string",
@@ -81,7 +141,8 @@
           "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 1000
+            "maximum": 1000,
+            "description": "Maximum number of paths to return."
           }
         },
         "required": ["pattern"],
@@ -89,15 +150,15 @@
       }
     },
     {
-      "name": "code_search",
+      "name": "grep_search",
       "effect": "read",
-      "description": "Search text files for a regex or literal. Output lines are \"<path>:<line>:<text>\". Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks, binary and credential files. Bounded: 10000 entries, 1 MiB per file, 48 KiB output, 20s; a bounded search says so. Use this instead of grep, rg, find or ls in a shell command.",
+      "description": "Search the text of workspace files for a regular expression. Output lines are \"<path>:<line>:<text>\". Use it to find where something is defined or used; to find a file by name use glob. Respects .gitignore, .ignore and .git/info/exclude; skips .git, node_modules, symlinks, binary and credential files. Bounded: 10000 entries, 1 MiB per file, 48 KiB output, 20s; a bounded search says so. Use this instead of grep, rg, find or ls in a shell command.\n\nExample: grep_search({\"pattern\":\"fn main\"})\nExample: grep_search({\"pattern\":\"TODO|FIXME\",\"path\":\"src\",\"glob\":\"*.rs\",\"limit\":20})",
       "inputSchema": {
         "type": "object",
         "properties": {
           "pattern": {
             "type": "string",
-            "description": "Regular expression (or literal text with literal=true)."
+            "description": "Regular expression. Escape special characters with a backslash to match them literally."
           },
           "path": {
             "type": "string",
@@ -105,31 +166,13 @@
           },
           "glob": {
             "type": "string",
-            "description": "Only files whose path or name matches, e.g. *.ts."
-          },
-          "literal": {
-            "type": "boolean",
-            "description": "Treat pattern as plain text."
-          },
-          "ignoreCase": {
-            "type": "boolean"
-          },
-          "context": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 20,
-            "description": "Lines of context around each match."
+            "description": "Only files matching this glob, such as *.ts."
           },
           "limit": {
             "type": "integer",
             "minimum": 1,
             "maximum": 1000,
             "description": "Maximum matches (default 100)."
-          },
-          "offset": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Matches to skip, to page through a truncated result (use the offset the notice gives)."
           }
         },
         "required": ["pattern"],
@@ -137,9 +180,57 @@
       }
     },
     {
+      "name": "list_directory",
+      "effect": "read",
+      "description": "List the entries of one directory in the workspace; directories end with /, symlinks with @. Use it to see what a folder holds, glob to search by name and repo_map for an overview of the whole project. Shows at most 500 entries; credential files and entries matched by .gitignore are hidden unless include_ignored is true. Prefer the native tools (read_file, list_directory, glob, grep_search, repo_map) over shell commands for exploring code.\n\nExample: list_directory({})\nExample: list_directory({\"path\":\"src\",\"include_ignored\":true})",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Directory, relative to the workspace root. Default: the root."
+          },
+          "include_ignored": {
+            "type": "boolean",
+            "description": "Also list entries matched by .gitignore, .ignore and .git/info/exclude."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_file",
+      "effect": "read",
+      "description": "Read one text file in the workspace and return its lines numbered \"<n>\\t<line>\". Use it before edit or write_file; to locate code first use grep_search or glob. Returns at most 2000 lines or 50.0KB per call and ends with a continuation notice (offset=N) when more remains; offset is 1-based. Read several files with several calls. Prefer the native tools (read_file, list_directory, glob, grep_search, repo_map) over shell commands for exploring code.\n\nExample: read_file({\"file_path\":\"src/main.rs\"})\nExample: read_file({\"file_path\":\"src/main.rs\",\"offset\":120,\"limit\":80})",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "File to read, relative to the workspace root."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "1-based first line to read. Default 1."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "Maximum number of lines to return."
+          }
+        },
+        "required": ["file_path"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "repo_map",
       "effect": "read",
-      "description": "Orient yourself in a repository: top-level manifests (package.json, tsconfig, Cargo.toml, pyproject, go.mod, README) with short excerpts, plus a depth-limited directory tree (default depth 3, max 400 entries). Respects ignore files. Call this first, before any shell command.",
+      "description": "Orient yourself in a repository: top-level manifests (package.json, tsconfig, Cargo.toml, pyproject, go.mod, README) with short excerpts, plus a depth-limited directory tree (default depth 3, max 400 entries). Respects ignore files. Call this first in an unfamiliar project, before any shell command; to look inside one folder use list_directory.\n\nExample: repo_map({})\nExample: repo_map({\"path\":\"crates\",\"depth\":2})",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -150,136 +241,36 @@
           "depth": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 6
+            "maximum": 6,
+            "description": "How many directory levels the tree shows."
           }
         },
+        "required": [],
         "additionalProperties": false
       }
     },
     {
-      "name": "git_inspect",
-      "effect": "read",
-      "description": "Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at 50.0KB. Paths are taken literally (no globs or pathspec magic). Prefer this over running git through a shell.",
+      "name": "run_shell_command",
+      "effect": "write",
+      "description": "Run a shell command (bash -c) in the workspace WITHOUT a sandbox. Use it for builds, tests and tooling. Do NOT use it to read or search files, list directories or inspect git: use read_file, list_directory, glob, grep_search, repo_map and git_status, git_diff, git_log or git_show, which are cheaper and safer. Output keeps the last 2000 lines / 50 KB. Default timeout 120s, max 600s; timeout is in milliseconds.\n\nExample: run_shell_command({\"command\":\"cargo build --workspace\"})\nExample: run_shell_command({\"command\":\"npm run lint\",\"directory\":\"web\",\"timeout\":120000})",
       "inputSchema": {
         "type": "object",
         "properties": {
           "command": {
             "type": "string",
-            "enum": ["status", "diff", "log", "show"]
-          },
-          "args": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string",
-                "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
-              },
-              "staged": {
-                "type": "boolean",
-                "description": "diff only: show staged changes."
-              },
-              "maxCount": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 50,
-                "description": "log only."
-              },
-              "rev": {
-                "type": "string",
-                "maxLength": 100,
-                "description": "Commit, branch, tag or range, e.g. HEAD~2."
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "required": ["command"],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "edit_file",
-      "effect": "write",
-      "description": "Edit an existing text file with exact text replacement. Pass edits[]; each oldText must match exactly once in the ORIGINAL file (whitespace, quotes and trailing spaces are matched leniently only when no exact match exists) and edits must not overlap. Keep oldText as small as possible while unique. Each line's original terminator (CRLF, LF or CR) and any BOM are preserved; new lines use the file's dominant ending. Files that are not valid UTF-8 are refused. The edit is refused with file_changed if the file changed since this session last read it (or since the optional expectedSha256). Read the file first. Returns a unified diff and the new sha256.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "File path, relative to the workspace root."
-          },
-          "edits": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 50,
-            "items": {
-              "type": "object",
-              "properties": {
-                "oldText": {
-                  "type": "string",
-                  "description": "Exact text to replace; unique in the file."
-                },
-                "newText": {
-                  "type": "string",
-                  "description": "Replacement text."
-                }
-              },
-              "required": ["oldText", "newText"],
-              "additionalProperties": false
-            }
-          },
-          "expectedSha256": {
-            "type": "string",
-            "description": "sha256 (hex) the file must currently have."
-          }
-        },
-        "required": ["path", "edits"],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "write_file",
-      "effect": "write",
-      "description": "Create or overwrite a text file inside the workspace (parent directories are created; .git is refused; max 5.0MB). A new file is created only if it does not exist yet. Overwriting an existing file requires that you read it first in this session (or pass expectedSha256 from read_file); it is refused with file_changed if the file changed since. For changing part of an existing file use edit_file instead.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "File path, relative to the workspace root."
-          },
-          "content": {
-            "type": "string",
-            "description": "Full new file content."
-          },
-          "expectedSha256": {
-            "type": "string",
-            "description": "sha256 (hex) the existing file must currently have. Default: the version this session last read."
-          }
-        },
-        "required": ["path", "content"],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "run_command",
-      "effect": "write",
-      "description": "Run a shell command (bash -c) in the workspace WITHOUT a sandbox. Use it for builds, tests and tooling. Do NOT use it to read or search files, list directories or inspect git: use read_file, list_dir, find_files, code_search, repo_map and git_inspect, which are cheaper and safer. Output keeps the last 2000 lines / 50 KB. Default timeout 120s, max 600s.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "command": {
-            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384,
             "description": "Shell command line."
           },
-          "cwd": {
+          "directory": {
             "type": "string",
             "description": "Directory inside the workspace. Default: the root."
           },
-          "timeoutSec": {
+          "timeout": {
             "type": "integer",
-            "minimum": 1,
-            "maximum": 600
+            "minimum": 1000,
+            "maximum": 600000,
+            "description": "Timeout in milliseconds. Default 120000."
           }
         },
         "required": ["command"],
@@ -289,12 +280,13 @@
     {
       "name": "run_tests",
       "effect": "write",
-      "description": "Run one of the project's configured test commands, exactly as written: \"bun test\". Same sandbox and output limits as run_command.",
+      "description": "Run one of the project's configured test commands, exactly as written: \"bun test\". Use it to check your change; for any other command use run_shell_command. Same sandbox and output limits as run_shell_command, and the run is limited to 600s. The result is the command's output tail and exit status.\n\nExample: run_tests({\"command\":\"bun test\"})",
       "inputSchema": {
         "type": "object",
         "properties": {
           "command": {
             "type": "string",
+            "enum": ["bun test"],
             "description": "One of the allowed test commands, verbatim."
           }
         },
@@ -305,7 +297,7 @@
     {
       "name": "submit_plan",
       "effect": "read",
-      "description": "Propose a plan for the user to approve. Only meaningful in plan mode: there it is the ONLY way to be granted write and command execution — the call pauses for the user, and if they approve, this call completes and you may edit and run commands as the granted mode allows. Write the plan so a person can decide from it alone: which files change, in what order, how each change is verified.",
+      "description": "Propose a plan for the user to approve. Only meaningful in plan mode: there it is the ONLY way to be granted write and command execution — the call pauses for the user, and if they approve, this call completes and you may edit and run commands as the granted mode allows. Write the plan so a person can decide from it alone: which files change, in what order, how each change is verified.\n\nExample: submit_plan({\"plan\":\"1. Add the retry limit to src/client.rs.\\n2. Cover it in tests/client.rs.\\n3. Verify with the configured test command.\",\"mode\":\"auto_edit\"})",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -320,6 +312,26 @@
           }
         },
         "required": ["plan"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_file",
+      "effect": "write",
+      "description": "Create a text file or replace the whole content of an existing one inside the workspace; parent directories are created, .git is refused, and content is at most 5.0MB. Overwriting a file requires that you read it completely in this session first, and is refused with file_changed if the file changed since. To change part of a file use edit instead. Returns the new sha256.\n\nExample: write_file({\"file_path\":\"docs/notes.md\",\"content\":\"# Notes\\n\\nFirst line.\\n\"})",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "File to write, relative to the workspace root."
+          },
+          "content": {
+            "type": "string",
+            "description": "Full new file content."
+          }
+        },
+        "required": ["file_path", "content"],
         "additionalProperties": false
       }
     }

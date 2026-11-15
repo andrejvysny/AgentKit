@@ -154,7 +154,6 @@ async fn non_integer_positions_are_invalid_input() {
     for (line, character) in [
         (json!(0), json!(1)),
         (json!(1.5), json!(1)),
-        (json!("2"), json!(1)),
         (json!(1), json!(null)),
         (json!(-1), json!(1)),
     ] {
@@ -168,6 +167,16 @@ async fn non_integer_positions_are_invalid_input() {
         .unwrap_err();
         assert_eq!(error.code, INVALID_INPUT, "{line} {character}");
     }
+    // Text that is exactly an integer is converted before validation (TU-08);
+    // it is not a non-integer.
+    call(
+        &pool,
+        &root,
+        "lsp_definition",
+        json!({"file": "src/lib.rs", "line": "2", "character": 1}),
+    )
+    .await
+    .expect("\"2\" reads as the integer 2");
     pool.close().await;
 }
 
