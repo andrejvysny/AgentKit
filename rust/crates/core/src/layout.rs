@@ -298,6 +298,7 @@ pub fn freeze(
         deferred_tools: carried.map_or(Optional::Absent, |p| p.deferred_tools.clone()),
         model_profile_id: carried.map_or(Optional::Absent, |p| p.model_profile_id.clone()),
         dialect_version: carried.map_or(Optional::Absent, |p| p.dialect_version.clone()),
+        model_profile_digest: carried.map_or(Optional::Absent, |p| p.model_profile_digest.clone()),
         extra: BTreeMap::new(),
     };
     let Some(prior) = prior else {

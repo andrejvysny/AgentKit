@@ -20,6 +20,9 @@ pub const EXECUTION_METADATA_KEY: &str = "agentkit.session.execution";
 pub const STANDING_APPROVALS_METADATA_KEY: &str = "agentkit.session.approvals";
 /// Chat metadata key holding the frozen prompt prefix (ADR 0028).
 pub const SESSION_PREFIX_METADATA_KEY: &str = "agentkit.session.prefix";
+/// Chat metadata key holding the model tool profile frozen with the session
+/// (native tool use T2.1, ADR 0030).
+pub const MODEL_PROFILE_METADATA_KEY: &str = "agentkit.session.modelProfile";
 
 /// Marks an approve answer in `appliedMessageId`: no tool record backs it.
 pub const APPROVE_MARKER: &str = "approval:";
@@ -185,6 +188,30 @@ pub fn with_session_prefix(
     next.insert(
         SESSION_PREFIX_METADATA_KEY.into(),
         serde_json::to_value(prefix).expect("session prefix serializes"),
+    );
+    Value::Object(next)
+}
+
+/// The model profile frozen with the session, or `None` when absent or
+/// invalid. A host writes it once at session start (`with_model_profile`
+/// through the creation metadata); later changes to settings or built-in
+/// profiles never touch it.
+pub fn read_model_profile(metadata: &Value) -> Option<agentkit_contracts::AiModelToolProfile> {
+    use agentkit_contracts::JsonDeserialize;
+    let raw = metadata.get(MODEL_PROFILE_METADATA_KEY)?;
+    agentkit_contracts::validate_schema("AiModelToolProfileSchema", raw).ok()?;
+    agentkit_contracts::AiModelToolProfile::from_json(raw.clone()).ok()
+}
+
+/// The metadata with the model profile frozen into it.
+pub fn with_model_profile(
+    metadata: &Value,
+    profile: &agentkit_contracts::AiModelToolProfile,
+) -> Value {
+    let mut next = metadata.as_object().cloned().unwrap_or_default();
+    next.insert(
+        MODEL_PROFILE_METADATA_KEY.into(),
+        serde_json::to_value(profile).expect("model profile serializes"),
     );
     Value::Object(next)
 }

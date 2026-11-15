@@ -25,6 +25,8 @@ mod ai_image_source;
 mod ai_json_primitive_type;
 mod ai_json_schema_object;
 mod ai_message_content;
+mod ai_model_tool_profile;
+mod ai_model_tool_profile_parts;
 mod ai_prompt_context_block;
 mod ai_prompt_preset;
 mod ai_provider_capabilities;
@@ -161,6 +163,13 @@ pub use ai_image_source::{
 pub use ai_json_primitive_type::AiJsonPrimitiveType;
 pub use ai_json_schema_object::AiJsonSchemaObject;
 pub use ai_message_content::AiMessageContent;
+pub use ai_model_tool_profile::AiModelToolProfile;
+pub use ai_model_tool_profile_parts::{
+    AiModelBodyExtras, AiModelDialect, AiModelEffortChannel, AiModelEffortMap, AiModelEffortSetting,
+    AiModelFamily, AiModelImagePosition, AiModelLimitSource, AiModelLimits, AiModelLoadMode,
+    AiModelMessageRules, AiModelReasoning, AiModelRecovery, AiModelSampling, AiModelSamplingSet,
+    AiModelToolChoicePolicy,
+};
 pub use ai_prompt_context_block::AiPromptContextBlock;
 pub use ai_prompt_preset::AiPromptPreset;
 pub use ai_provider_capabilities::AiProviderCapabilities;

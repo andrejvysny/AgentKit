@@ -67,6 +67,13 @@ pub struct AiSessionPrefix {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub dialect_version: Optional<String>,
+    /// SHA-256 of the frozen model profile record (T2.1, ADR 0030).
+    #[serde(
+        rename = "modelProfileDigest",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub model_profile_digest: Optional<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -82,11 +89,12 @@ crate::impl_json_deserialize!(AiSessionPrefix, |value: Value| {
         frozen_at_task: crate::required_field(&mut object, "frozenAtTask")?,
         cache_key: crate::required_field(&mut object, "cacheKey")?,
         tool_manifest_hash: crate::optional_field(&mut object, "toolManifestHash")?,
+        tool_manifest: crate::optional_field(&mut object, "toolManifest")?,
+        deferred_tools: crate::optional_field(&mut object, "deferredTools")?,
         model_profile_id: crate::optional_field(&mut object, "modelProfileId")?,
         dialect_version: crate::optional_field(&mut object, "dialectVersion")?,
+        model_profile_digest: crate::optional_field(&mut object, "modelProfileDigest")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)
 });
-        tool_manifest: crate::optional_field(&mut object, "toolManifest")?,
-        deferred_tools: crate::optional_field(&mut object, "deferredTools")?,

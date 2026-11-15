@@ -17,6 +17,7 @@ export * from "./content.js";
 export * from "./tool.js";
 export * from "./provider.js";
 export * from "./prompt.js";
+export * from "./model-profile.js";
 export * from "./run-events.js";
 
 // The task-kind-agnostic envelope every durable event log stores; AiRunEvent is

@@ -58,6 +58,8 @@ export {
   RunContentSelectionSchema,
 } from "./prompt.js";
 
+export { AiModelToolProfileSchema } from "./model-profile.js";
+
 export {
   AiRunEventTypeSchema,
   AiRunEventBaseSchema,

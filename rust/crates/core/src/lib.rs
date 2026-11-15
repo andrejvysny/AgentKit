@@ -5,6 +5,7 @@ mod dispatch;
 mod envelope;
 mod layout;
 mod manifest;
+mod model_profile;
 pub mod permission;
 mod provider_identity;
 mod provider_retry;
@@ -26,6 +27,12 @@ pub use layout::{
     cache_key, freeze, segment_of, tools_digest,
 };
 pub use manifest::{ToolManifest, ToolSurface, manifest_hash};
+pub use model_profile::{
+    ANTHROPIC_PROFILE_ID, AiModelToolProfile, BODY_EXTRA_ALLOW_LIST, GENERIC_PROFILE_ID, LimitFacts,
+    ModelFacts, OPENAI_PROFILE_ID, ProfileError, ProfileQuery, QWEN_PROFILE_ID, builtin_profile,
+    frozen_profile, model_profile_digest, resolve_profile, stamp_model_profile, validate_profile,
+    validate_profile_json,
+};
 pub use provider_identity::{AuthKind, ConnectionIdentity};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 pub use registry::{RegistryError, ToolRegistry};

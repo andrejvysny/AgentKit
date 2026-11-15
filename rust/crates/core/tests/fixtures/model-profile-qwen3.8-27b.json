@@ -1,0 +1,49 @@
+{
+  "id": "qwen3.8-27b",
+  "family": "qwen",
+  "dialect": { "id": "common", "version": "1" },
+  "directTools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "find_files",
+    "code_search",
+    "run_command",
+    "git_inspect",
+    "tool_search",
+    "tool_describe",
+    "toolset_load"
+  ],
+  "maxVisibleTools": 12,
+  "loadMode": "promote",
+  "toolChoice": "auto_only",
+  "sampling": {
+    "thinking": { "temperature": 1, "topP": 0.95, "topK": 20 },
+    "nonThinking": {
+      "temperature": 0.7,
+      "topP": 0.8,
+      "topK": 20,
+      "presencePenalty": 1.5
+    }
+  },
+  "reasoning": {
+    "effortChannel": "template_option",
+    "effortMap": {
+      "off": { "thinking": false },
+      "low": { "thinking": true, "effort": "low" },
+      "medium": { "thinking": true, "effort": "medium" },
+      "high": { "thinking": true, "effort": "xhigh" }
+    },
+    "sendBack": true
+  },
+  "bodyExtras": {},
+  "messageRules": {
+    "systemFirstOnly": true,
+    "escapeToolResultTags": true,
+    "imagePositions": ["user"]
+  },
+  "limits": { "contextWindow": 131072, "maxOutput": 32768, "source": "user" },
+  "recovery": { "salvage": true, "nudge": false },
+  "qualifiedToolsets": []
+}

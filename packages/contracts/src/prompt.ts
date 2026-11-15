@@ -41,6 +41,7 @@ export const AiSessionPrefixSchema = Type.Object({
   deferredTools: Type.Optional(Type.Array(AiToolDefinitionSchema)),
   modelProfileId: Type.Optional(Type.String({ minLength: 1 })),
   dialectVersion: Type.Optional(Type.String({ minLength: 1 })),
+  modelProfileDigest: Type.Optional(Sha256HexSchema),
 });
 export type AiSessionPrefix = Static<typeof AiSessionPrefixSchema>;
 
