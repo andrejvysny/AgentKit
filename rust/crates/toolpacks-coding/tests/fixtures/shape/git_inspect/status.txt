@@ -1,0 +1,71 @@
+## feat/output-store...origin/feat/output-store [ahead 3]
+ M crates/core/src/mod_00.rs
+ M crates/core/src/mod_01.rs
+ M crates/core/src/mod_02.rs
+ M crates/core/src/mod_03.rs
+ M crates/core/src/mod_04.rs
+ M crates/core/src/mod_05.rs
+ M crates/core/src/mod_06.rs
+ M crates/core/src/mod_07.rs
+ M crates/core/src/mod_08.rs
+ M crates/core/src/mod_09.rs
+ M crates/core/src/mod_10.rs
+ M crates/core/src/mod_11.rs
+ M crates/core/src/mod_12.rs
+ M crates/core/src/mod_13.rs
+ M crates/core/src/mod_14.rs
+ M crates/core/src/mod_15.rs
+ M crates/core/src/mod_16.rs
+ M crates/core/src/mod_17.rs
+M  crates/store/src/migrations/v15.sql
+M  crates/store/src/migrations/v16.sql
+M  crates/store/src/migrations/v17.sql
+M  crates/store/src/migrations/v18.sql
+M  crates/store/src/migrations/v19.sql
+D  crates/core/src/envelope_old.rs
+?? target-fixtures/generated/case_000.json
+?? target-fixtures/generated/case_001.json
+?? target-fixtures/generated/case_002.json
+?? target-fixtures/generated/case_003.json
+?? target-fixtures/generated/case_004.json
+?? target-fixtures/generated/case_005.json
+?? target-fixtures/generated/case_006.json
+?? target-fixtures/generated/case_007.json
+?? target-fixtures/generated/case_008.json
+?? target-fixtures/generated/case_009.json
+?? target-fixtures/generated/case_010.json
+?? target-fixtures/generated/case_011.json
+?? target-fixtures/generated/case_012.json
+?? target-fixtures/generated/case_013.json
+?? target-fixtures/generated/case_014.json
+?? target-fixtures/generated/case_015.json
+?? target-fixtures/generated/case_016.json
+?? target-fixtures/generated/case_017.json
+?? target-fixtures/generated/case_018.json
+?? target-fixtures/generated/case_019.json
+?? target-fixtures/generated/case_020.json
+?? target-fixtures/generated/case_021.json
+?? target-fixtures/generated/case_022.json
+?? target-fixtures/generated/case_023.json
+?? target-fixtures/generated/case_024.json
+?? target-fixtures/generated/case_025.json
+?? target-fixtures/generated/case_026.json
+?? target-fixtures/generated/case_027.json
+?? target-fixtures/generated/case_028.json
+?? target-fixtures/generated/case_029.json
+?? target-fixtures/generated/case_030.json
+?? target-fixtures/generated/case_031.json
+?? target-fixtures/generated/case_032.json
+?? target-fixtures/generated/case_033.json
+?? target-fixtures/generated/case_034.json
+?? target-fixtures/generated/case_035.json
+?? target-fixtures/generated/case_036.json
+?? target-fixtures/generated/case_037.json
+?? target-fixtures/generated/case_038.json
+?? target-fixtures/generated/case_039.json
+?? docs/notes/draft_0.md
+?? docs/notes/draft_1.md
+?? docs/notes/draft_2.md
+?? docs/notes/draft_3.md
+?? docs/notes/draft_4.md
+?? docs/notes/draft_5.md

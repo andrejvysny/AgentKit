@@ -111,6 +111,33 @@ its retention ends.
     exists. Masks are a derived record applied on assembly; canonical history
     is untouched. Nothing in this package changes history or the prompt
     layout.
+11. **Shaped results (layer 2, package 2.2).** A tool that knows a smaller
+    text for the model returns `model_data = shaped_value(raw, shaped, N,
+    what, note)` (core `output.rs`), only when the context says a store is in
+    play and only when its own text is over the inline limit; a result at or
+    below the limit is returned unchanged and nothing is stored. The marker
+    carries a per-process proof written by `shaped_value`: the gate takes it
+    only with that proof and a string `text`, and strips the marker keys from
+    every other result (also on the early return of a session-less call), so
+    a foreign tool cannot hide its output behind a forged marker. The gate
+    accepts a shaped text only when it hides something, fits the inline limit
+    and, footer included, is at most 80% of the raw text; otherwise the raw
+    path (preview or whole) applies. An accepted shaped text goes to
+    `model_data` as `<shaped>\n[<N> <what> hidden · <note> · handle out_…]`;
+    the tool's `data` (exit code, signal, `fullLog`) and its `truncated` flag
+    stay. The raw text goes to the store, cut at the 64 MiB storage cap (the
+    footer says so when it cuts). For `run_command` and `run_tests` the raw
+    text is the full log (`details.fullLog`, at most 64 MiB) and the rules,
+    including the `run_tests` counts, run on it. For a tool whose own cap cut
+    its output (read_file, git_inspect, code_search, list_dir, edit_file) the
+    footer says `tool output capped at <limit>` and the hidden counts cover
+    the returned part; read_file counts from the file's real length when the
+    tool's notice gives it. A shaped read_file marks the version read in the
+    session ledger as partial, since the model saw an outline. The coding
+    pack's rules live in `toolpacks-coding/src/shape/`; rules see the text
+    without ANSI codes (the store keeps it as it was), a line naming a failure
+    is never dropped, a rule fault returns the raw text with a warning, and a
+    rule that drops lines checks no failure line was lost.
 
 ## Consequences
 

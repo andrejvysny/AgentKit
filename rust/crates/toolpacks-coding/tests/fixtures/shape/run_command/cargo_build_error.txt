@@ -1,0 +1,64 @@
+    Updating crates.io index
+     Locking 211 packages to latest compatible versions
+  Downloaded serde v1.0.203
+  Downloaded serde_json v1.0.117
+  Downloaded tokio v1.38.0
+  Downloaded regex v1.10.5
+  Downloaded regex-syntax v0.8.4
+  Downloaded memchr v2.7.4
+  Downloaded bytes v1.6.0
+  Downloaded mio v0.8.11
+  Downloaded libc v0.2.155
+  Downloaded uuid v1.8.0
+  Downloaded thiserror v1.0.61
+  Downloaded async-trait v0.1.80
+  Downloaded futures-util v0.3.30
+  Downloaded pin-project-lite v0.2.14
+  Downloaded itoa v1.0.11
+  Downloaded ryu v1.0.18
+  Downloaded tracing v0.1.40
+  Downloaded rusqlite v0.31.0
+  Downloaded sha2 v0.10.8
+  Downloaded hashbrown v0.14.5
+ Downloaded 20 crates (4.1MB) in 2.31s
+   Compiling serde v1.0.203
+   Compiling serde_json v1.0.117
+   Compiling tokio v1.38.0
+   Compiling regex v1.10.5
+   Compiling regex-syntax v0.8.4
+   Compiling memchr v2.7.4
+   Compiling bytes v1.6.0
+   Compiling mio v0.8.11
+   Compiling libc v0.2.155
+   Compiling uuid v1.8.0
+   Compiling thiserror v1.0.61
+   Compiling async-trait v0.1.80
+   Compiling futures-util v0.3.30
+   Compiling pin-project-lite v0.2.14
+   Compiling itoa v1.0.11
+   Compiling ryu v1.0.18
+   Compiling tracing v0.1.40
+   Compiling rusqlite v0.31.0
+   Compiling sha2 v0.10.8
+   Compiling hashbrown v0.14.5
+   Compiling agentkit-core v0.8.0 (/work/rust/crates/core)
+warning: unused variable: `limit`
+   --> crates/core/src/output.rs:731:13
+    |
+731 |         let limit = self.effective_limit(call.tool, call.max_bytes);
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_limit`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+   Compiling agentkit-store v0.8.0 (/work/rust/crates/store)
+error[E0308]: mismatched types
+   --> crates/store/src/output_store.rs:188:30
+    |
+188 |         let handle: OutputHandle = row.get(0)?;
+    |                     ------------   ^^^^^^^^^^ expected `OutputHandle`, found `String`
+    |                     |
+    |                     expected due to this
+
+error: could not compile `agentkit-store` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+[exit code 101]

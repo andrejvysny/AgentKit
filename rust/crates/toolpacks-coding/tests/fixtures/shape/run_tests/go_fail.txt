@@ -1,0 +1,43 @@
+=== RUN   TestParseHeader
+--- PASS: TestParseHeader (0.00s)
+=== RUN   TestParseBody
+--- PASS: TestParseBody (0.00s)
+=== RUN   TestParseTrailer
+--- PASS: TestParseTrailer (0.00s)
+=== RUN   TestRouteExact
+--- PASS: TestRouteExact (0.00s)
+=== RUN   TestRouteWildcard
+--- PASS: TestRouteWildcard (0.00s)
+=== RUN   TestRouteWildcard/prefix
+=== PAUSE TestRouteWildcard/prefix
+=== CONT  TestRouteWildcard/prefix
+    --- PASS: TestRouteWildcard/prefix (0.00s)
+=== RUN   TestRouteConflict
+--- PASS: TestRouteConflict (0.00s)
+=== RUN   TestMiddlewareOrder
+--- PASS: TestMiddlewareOrder (0.00s)
+=== RUN   TestMiddlewareRecover
+--- PASS: TestMiddlewareRecover (0.00s)
+=== RUN   TestTimeoutHonoured
+--- PASS: TestTimeoutHonoured (0.00s)
+=== RUN   TestCompressSkipsSmall
+--- PASS: TestCompressSkipsSmall (0.00s)
+=== RUN   TestCompressGzip
+--- PASS: TestCompressGzip (0.00s)
+=== RUN   TestEtagMatches
+--- PASS: TestEtagMatches (0.00s)
+=== RUN   TestRangeRequest
+    server_test.go:204: Content-Range = "bytes 0-99/200", want "bytes 100-199/200"
+--- FAIL: TestRangeRequest (0.00s)
+=== RUN   TestRangeInvalid
+--- PASS: TestRangeInvalid (0.00s)
+=== RUN   TestCookieSigned
+--- PASS: TestCookieSigned (0.00s)
+=== RUN   TestCookieExpired
+--- PASS: TestCookieExpired (0.00s)
+FAIL
+FAIL	example.com/svc/http	0.412s
+ok  	example.com/svc/util	0.118s
+ok  	example.com/svc/config	(cached)
+FAIL
+[exit code 1]

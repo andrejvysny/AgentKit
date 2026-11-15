@@ -47,6 +47,126 @@ pub const OUTPUT_STORE_METADATA_KEY: &str = "outputStore";
 /// the gate will store it.
 pub const OUTPUT_INLINE_LIMIT_METADATA_KEY: &str = "outputInlineLimit";
 
+/// Keys of a shaped result (roadmap 2.2, ADR 0034 addendum). A tool that has
+/// both the raw text and a smaller shaped text for the model returns
+/// `model_data = shaped_value(raw, shaped, hidden, what, note)`. The gate
+/// stores the raw text and shows the shaped text with a footer naming the
+/// handle. A tool returns this only when the context says an output store is
+/// in play (`OUTPUT_STORE_METADATA_KEY`).
+///
+/// Provenance: [`shaped_value`] also writes `SHAPED_PROOF_KEY`, a per-process
+/// token no tool output can know. The gate takes the marker only with that
+/// proof; every other result has the marker keys stripped, so a foreign tool
+/// (an MCP server, a file's text) cannot hide its output behind a forged one.
+pub const SHAPED_TEXT_KEY: &str = "shapedText";
+pub const SHAPED_HIDDEN_KEY: &str = "shapedHidden";
+const SHAPED_PROOF_KEY: &str = "shapedProof";
+/// Room the shaped footer takes besides its `what` and `note` text: count,
+/// handle and the storage-cap remark.
+const SHAPED_FOOTER_ROOM: usize = 192;
+/// A shaped text is used only when it, with its footer, is at most this share
+/// of the raw text (the 20% bar).
+const SHAPED_MAX_SHARE_PERCENT: usize = 80;
+
+fn shaped_proof() -> &'static str {
+    static PROOF: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PROOF.get_or_init(|| OutputHandle::generate().to_string())
+}
+
+/// The model-data value a tool returns for a shaped result: `hidden` items of
+/// kind `what` (for example `43 passing tests`) are in `raw` but not `shaped`.
+/// `note` is an optional remark for the footer, for example that the tool had
+/// capped its own output.
+pub fn shaped_value(raw: &str, shaped: &str, hidden: u64, what: &str, note: Option<&str>) -> Value {
+    serde_json::json!({
+        "text": raw,
+        SHAPED_TEXT_KEY: shaped,
+        SHAPED_HIDDEN_KEY: { "count": hidden, "what": what, "note": note },
+        SHAPED_PROOF_KEY: shaped_proof(),
+    })
+}
+
+/// A shaped text taken out of a result value.
+#[derive(Clone)]
+struct ShapedText {
+    text: String,
+    hidden: u64,
+    what: String,
+    note: Option<String>,
+}
+
+/// Remove the marker keys from `value`, whatever their origin. Returns the
+/// removed parts and whether anything was removed.
+fn strip_shaped_keys(value: &mut Value) -> Option<[Option<Value>; 3]> {
+    let map = value.as_object_mut()?;
+    let removed = [
+        map.remove(SHAPED_TEXT_KEY),
+        map.remove(SHAPED_HIDDEN_KEY),
+        map.remove(SHAPED_PROOF_KEY),
+    ];
+    removed.iter().any(Option::is_some).then_some(removed)
+}
+
+/// Strip the marker from a result that no gate will shape.
+fn strip_marker(value: &mut Value) {
+    if strip_shaped_keys(value).is_some() {
+        collapse_text(value);
+    }
+}
+
+/// A value left with only its `text` becomes that bare string, as the pack
+/// wrote it unshaped.
+fn collapse_text(value: &mut Value) {
+    if let Some(map) = value.as_object()
+        && map.len() == 1
+        && let Some(text @ Value::String(_)) = map.get("text")
+    {
+        *value = text.clone();
+    }
+}
+
+/// Take the shaped marker out of `value`. The marker keys are always removed;
+/// the shaped text is returned only when the proof matches and `text` is a
+/// string. The value is left as the raw result: a bare string when `text`
+/// was its only member.
+fn take_shaped(value: &mut Value) -> Option<ShapedText> {
+    let [text, hidden, proof] = strip_shaped_keys(value)?;
+    let proven = proof.as_ref().and_then(Value::as_str) == Some(shaped_proof());
+    let text = text.as_ref().and_then(Value::as_str).map(str::to_owned);
+    let map = value.as_object_mut()?;
+    if !proven || !map.get("text").is_some_and(Value::is_string) {
+        collapse_text(value);
+        return None;
+    }
+    let text = text?;
+    let count = hidden
+        .as_ref()
+        .and_then(|value| value.get("count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let what = hidden
+        .as_ref()
+        .and_then(|value| value.get("what"))
+        .and_then(Value::as_str)
+        .unwrap_or("lines")
+        .to_owned();
+    let note = hidden
+        .as_ref()
+        .and_then(|value| value.get("note"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if map.len() == 1 {
+        let raw = map.get("text").cloned().unwrap_or_default();
+        *value = raw;
+    }
+    Some(ShapedText {
+        text,
+        hidden: count,
+        what,
+        note,
+    })
+}
+
 const HANDLE_PREFIX: &str = "out_";
 
 #[derive(Debug, thiserror::Error)]
@@ -619,6 +739,19 @@ struct Prepared {
     changed: bool,
     raw: String,
     mime: &'static str,
+    shaped: Option<ShapedText>,
+}
+
+/// The gate's own check of a shaped text: it hides something, fits the inline
+/// limit with its footer, and with that footer is at most 80% of the raw text.
+fn usable_shape(prepared: &Prepared, limit: usize) -> Option<&ShapedText> {
+    let shaped = prepared.shaped.as_ref()?;
+    let extra =
+        SHAPED_FOOTER_ROOM + shaped.what.len() + shaped.note.as_ref().map_or(0, String::len);
+    let fits = escaped_len(&shaped.text) + extra <= limit;
+    let cost = shaped.text.len() + extra;
+    (shaped.hidden > 0 && fits && cost * 100 <= prepared.raw.len() * SHAPED_MAX_SHARE_PERCENT)
+        .then_some(shaped)
 }
 
 /// The run loop's seam: stores a large result and swaps its model-visible
@@ -684,9 +817,10 @@ impl OutputGate {
     /// holds.
     pub fn will_store(&self, tool: &str, max_bytes: usize, result: &ToolResult) -> bool {
         !exempt(tool)
-            && self
-                .prepare(result)
-                .is_some_and(|prepared| prepared.raw.len() > self.effective_limit(tool, max_bytes))
+            && self.prepare(result).is_some_and(|prepared| {
+                let limit = self.effective_limit(tool, max_bytes);
+                usable_shape(&prepared, limit).is_some() || prepared.raw.len() > limit
+            })
     }
 
     fn redact_text(&self, text: &str) -> String {
@@ -714,6 +848,7 @@ impl OutputGate {
         if self.redactor.is_some() {
             self.redact_strings(&mut value);
         }
+        let shaped = take_shaped(&mut value);
         let changed = value != *source;
         let (raw, mime) = raw_text(&value);
         Some(Prepared {
@@ -722,11 +857,18 @@ impl OutputGate {
             changed,
             raw,
             mime,
+            shaped,
         })
     }
 
     pub async fn shape(&self, call: OutputCall<'_>, mut result: ToolResult) -> ToolResult {
         if call.session.is_empty() || exempt(call.tool) {
+            for value in [result.model_data.as_mut(), result.data.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                strip_marker(value);
+            }
             return result;
         }
         let exit_code = exit_code_of(&result);
@@ -764,6 +906,41 @@ impl OutputGate {
         Ok(render_preview(&raw, &handle, failure, limit, cut_from))
     }
 
+    /// Store `raw` and render the shaped text with its hidden-count footer.
+    async fn store_shaped(
+        &self,
+        meta: OutputMeta,
+        raw: &str,
+        shaped: &ShapedText,
+    ) -> Result<String, OutputError> {
+        let whole = raw.len();
+        let mut stored = raw.to_owned();
+        stored.truncate(floor_boundary(&stored, MAX_STORED_BYTES));
+        let cut_from = (whole > MAX_STORED_BYTES).then_some(whole);
+        let handle = self.store.put(meta, stored.into_bytes()).await?;
+        let mut text = shaped.text.clone();
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        let note = shaped
+            .note
+            .as_ref()
+            .map_or(String::new(), |note| format!(" · {note}"));
+        let capped = cut_from.map_or(String::new(), |whole| {
+            format!(
+                " · the stored text is cut at the {} MiB storage cap, the result was {} bytes",
+                MAX_STORED_BYTES / (1024 * 1024),
+                group(whole as u64)
+            )
+        });
+        text.push_str(&format!(
+            "[{} {} hidden{note}{capped} · handle {handle}]",
+            group(shaped.hidden),
+            shaped.what
+        ));
+        Ok(text)
+    }
+
     async fn shape_data(
         &self,
         call: &OutputCall<'_>,
@@ -775,12 +952,14 @@ impl OutputGate {
         let Some(prepared) = self.prepare(result) else {
             return;
         };
+        let usable = usable_shape(&prepared, limit).cloned();
         let Prepared {
             in_model_data,
             value,
             changed,
             raw,
             mime,
+            ..
         } = prepared;
         let put_back = |result: &mut ToolResult, value: Value| {
             if in_model_data {
@@ -789,18 +968,32 @@ impl OutputGate {
                 result.data = Some(value);
             }
         };
-        if raw.len() <= limit {
-            if changed {
-                put_back(result, value);
-            }
-            return;
-        }
         let raw = if self.redactor.is_some() {
             self.redact_text(&raw)
         } else {
             raw
         };
         let meta = self.meta(call, mime, exit_code);
+        if let Some(shaped) = usable.as_ref() {
+            // The raw text always goes to the store; the model reads the
+            // shaped text and the tool's structured data stays as it was.
+            match self.store_shaped(meta.clone(), &raw, shaped).await {
+                Ok(text) => result.model_data = Some(Value::String(text)),
+                Err(error) => {
+                    put_back(result, value);
+                    result.warnings.push(format!(
+                        "The full result could not be stored ({error}); the shaped text was dropped and the raw result kept whole, bounded by envelope."
+                    ));
+                }
+            }
+            return;
+        }
+        if raw.len() <= limit {
+            if changed {
+                put_back(result, value);
+            }
+            return;
+        }
         match self.store_preview(meta, raw, failure, limit).await {
             Ok(preview) => {
                 result.data = Some(Value::String(preview));

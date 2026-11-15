@@ -1,0 +1,195 @@
+1	//! Output store adapter: bytes in a private file, index in `tool_outputs`.
+2	use crate::error::StoreError;
+3	use agentkit_core::{OutputError, OutputHandle, OutputInfo, OutputMeta};
+4	use std::path::PathBuf;
+5	use std::sync::Arc;
+6	
+7	const MAX_STORED: u64 = 64 * 1024 * 1024;
+8	
+9	pub struct SqliteOutputStore {
+10	    root: PathBuf,
+11	    store: Arc<SqliteStore>,
+12	}
+13	
+14	impl SqliteOutputStore {
+15	    /// Write the bytes then insert the row.
+16	    pub async fn put(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+17	        let path = self.path_of(session, handle)?;
+18	        let guard = self.store.lock().await;
+19	        if !path.starts_with(&self.root) {
+20	            return Err(OutputError::InvalidHandle(handle.to_string()));
+21	        }
+22	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+23	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+24	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+25	        tracing::debug!(%handle, bytes = row, "put");
+26	        Ok(())
+27	    }
+28	
+29	    /// Read the index row of a handle.
+30	    pub async fn info(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+31	        let path = self.path_of(session, handle)?;
+32	        let guard = self.store.lock().await;
+33	        if !path.starts_with(&self.root) {
+34	            return Err(OutputError::InvalidHandle(handle.to_string()));
+35	        }
+36	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+37	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+38	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+39	        tracing::debug!(%handle, bytes = row, "info");
+40	        Ok(())
+41	    }
+42	
+43	    /// Slice a stored output by lines or bytes.
+44	    pub async fn read(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+45	        let path = self.path_of(session, handle)?;
+46	        let guard = self.store.lock().await;
+47	        if !path.starts_with(&self.root) {
+48	            return Err(OutputError::InvalidHandle(handle.to_string()));
+49	        }
+50	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+51	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+52	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+53	        tracing::debug!(%handle, bytes = row, "read");
+54	        Ok(())
+55	    }
+56	
+57	    /// Match a pattern against stored lines.
+58	    pub async fn search(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+59	        let path = self.path_of(session, handle)?;
+60	        let guard = self.store.lock().await;
+61	        if !path.starts_with(&self.root) {
+62	            return Err(OutputError::InvalidHandle(handle.to_string()));
+63	        }
+64	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+65	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+66	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+67	        tracing::debug!(%handle, bytes = row, "search");
+68	        Ok(())
+69	    }
+70	
+71	    /// Remove every output of a session.
+72	    pub async fn purge_session(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+73	        let path = self.path_of(session, handle)?;
+74	        let guard = self.store.lock().await;
+75	        if !path.starts_with(&self.root) {
+76	            return Err(OutputError::InvalidHandle(handle.to_string()));
+77	        }
+78	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+79	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+80	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+81	        tracing::debug!(%handle, bytes = row, "purge_session");
+82	        Ok(())
+83	    }
+84	
+85	    /// Remove expired rows and orphan files.
+86	    pub async fn sweep(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+87	        let path = self.path_of(session, handle)?;
+88	        let guard = self.store.lock().await;
+89	        if !path.starts_with(&self.root) {
+90	            return Err(OutputError::InvalidHandle(handle.to_string()));
+91	        }
+92	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+93	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+94	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+95	        tracing::debug!(%handle, bytes = row, "sweep");
+96	        Ok(())
+97	    }
+98	
+99	    /// Check length and digest of a stored file.
+100	    pub async fn verify(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+101	        let path = self.path_of(session, handle)?;
+102	        let guard = self.store.lock().await;
+103	        if !path.starts_with(&self.root) {
+104	            return Err(OutputError::InvalidHandle(handle.to_string()));
+105	        }
+106	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+107	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+108	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+109	        tracing::debug!(%handle, bytes = row, "verify");
+110	        Ok(())
+111	    }
+112	
+113	    /// Move the expiry of a session forward.
+114	    pub async fn touch(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+115	        let path = self.path_of(session, handle)?;
+116	        let guard = self.store.lock().await;
+117	        if !path.starts_with(&self.root) {
+118	            return Err(OutputError::InvalidHandle(handle.to_string()));
+119	        }
+120	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+121	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+122	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+123	        tracing::debug!(%handle, bytes = row, "touch");
+124	        Ok(())
+125	    }
+126	
+127	    /// Report size and line count.
+128	    pub async fn stat(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+129	        let path = self.path_of(session, handle)?;
+130	        let guard = self.store.lock().await;
+131	        if !path.starts_with(&self.root) {
+132	            return Err(OutputError::InvalidHandle(handle.to_string()));
+133	        }
+134	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+135	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+136	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+137	        tracing::debug!(%handle, bytes = row, "stat");
+138	        Ok(())
+139	    }
+140	
+141	    /// Tell whether a handle is known.
+142	    pub async fn exists(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+143	        let path = self.path_of(session, handle)?;
+144	        let guard = self.store.lock().await;
+145	        if !path.starts_with(&self.root) {
+146	            return Err(OutputError::InvalidHandle(handle.to_string()));
+147	        }
+148	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+149	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+150	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+151	        tracing::debug!(%handle, bytes = row, "exists");
+152	        Ok(())
+153	    }
+154	
+155	    /// Move a session directory aside.
+156	    pub async fn rename_aside(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+157	        let path = self.path_of(session, handle)?;
+158	        let guard = self.store.lock().await;
+159	        if !path.starts_with(&self.root) {
+160	            return Err(OutputError::InvalidHandle(handle.to_string()));
+161	        }
+162	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+163	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+164	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+165	        tracing::debug!(%handle, bytes = row, "rename_aside");
+166	        Ok(())
+167	    }
+168	
+169	    /// Move a session directory back.
+170	    pub async fn restore(&self, session: &str, handle: &OutputHandle) -> Result<(), OutputError> {
+171	        let path = self.path_of(session, handle)?;
+172	        let guard = self.store.lock().await;
+173	        if !path.starts_with(&self.root) {
+174	            return Err(OutputError::InvalidHandle(handle.to_string()));
+175	        }
+176	        let row = guard.query_row("SELECT byte_len FROM tool_outputs WHERE handle = ?1", [handle.as_str()], |r| r.get::<_, u64>(0))
+177	            .map_err(|e| OutputError::Storage(e.to_string()))?;
+178	        if row > MAX_STORED { return Err(OutputError::Integrity(handle.to_string())); }
+179	        tracing::debug!(%handle, bytes = row, "restore");
+180	        Ok(())
+181	    }
+182	
+183	}
+184	
+185	#[cfg(test)]
+186	mod tests {
+187	    use super::*;
+188	
+189	    #[tokio::test]
+190	    async fn put_then_read_round_trips() {
+191	        let store = open_temp().await;
+192	        let handle = store.put("s1", b"a\nb\n").await.unwrap();
+193	        assert_eq!(store.read(&handle, 1, 10).await.unwrap().total_lines, 2);
+194	    }
+195	}

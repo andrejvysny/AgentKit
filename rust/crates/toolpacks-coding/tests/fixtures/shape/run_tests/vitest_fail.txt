@@ -1,0 +1,47 @@
+ RUN  v1.6.0 /work/web
+
+ ✓ src/lib/date.test.ts (6 tests) 20ms
+   ✓ date > formats iso 2ms
+   ✓ date > parses relative 1ms
+   ✓ date > handles dst 2ms
+   ✓ date > rounds to minute 2ms
+   ✓ date > compares zones 5ms
+   ✓ date > clamps ranges 4ms
+ ✓ src/lib/money.test.ts (5 tests) 21ms
+   ✓ money > adds cents 1ms
+   ✓ money > splits evenly 4ms
+   ✓ money > formats locale 5ms
+   ✓ money > rejects NaN 2ms
+   ✓ money > rounds half even 2ms
+ ❯ src/store/cart.test.ts (7 tests | 1 failed) 22ms
+   ✓ cart > adds line 5ms
+   ✓ cart > merges duplicates 3ms
+   × cart > applies coupon 4ms
+   ✓ cart > recomputes tax 5ms
+   ✓ cart > empties on checkout 5ms
+   ✓ cart > persists to storage 5ms
+   ✓ cart > drops sold out 5ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/store/cart.test.ts > cart > applies coupon
+AssertionError: expected 8999 to be 8099 // Object.is equality
+
+- Expected
++ Received
+
+- 8099
++ 8999
+
+ ❯ src/store/cart.test.ts:58:25
+     56|     cart.add(sku('A1', 9999));
+     57|     cart.applyCoupon('TEN');
+     58|     expect(cart.total()).toBe(8099);
+       |                         ^
+     59|   });
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 17 passed (18)
+   Start at  10:41:07
+   Duration  1.12s (transform 88ms, setup 0ms, collect 210ms, tests 61ms)
+[exit code 1]

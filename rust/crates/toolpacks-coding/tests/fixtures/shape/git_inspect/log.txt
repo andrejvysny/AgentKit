@@ -1,0 +1,48 @@
+f2c3fb2 2026-11-01 Andrej Vysny fix envelope budget off by one
+3ee52d5 2026-11-02 Andrej Vysny add output store port
+3b0f9d8 2026-11-03 Andrej Vysny wire gate into run loop
+f9e40e4 2026-11-04 Andrej Vysny tests for preview split
+ee962ba 2026-11-05 Andrej Vysny docs: adr 0034
+f5f658d 2026-11-06 Andrej Vysny rename handle parse
+f7b92d1 2026-11-07 Andrej Vysny refactor line spans
+9fab1b7 2026-11-08 Andrej Vysny handle crlf in slices
+2bf9133 2026-11-09 Andrej Vysny sweep orphans hourly
+49c9c4b 2026-11-10 Andrej Vysny mask secrets before store
+3451ef6 2026-11-11 Andrej Vysny bound search matches
+af6df6f 2026-11-12 Andrej Vysny cap stored outputs at 64 MiB
+878e373 2026-11-13 Andrej Vysny retention follows chat
+f50def4 2026-11-14 Andrej Vysny purge on delete_chat
+52a814d 2026-11-15 Andrej Vysny guard foreign handles
+0bd333e 2026-11-16 Andrej Vysny fix envelope budget off by one
+6911f0e 2026-11-17 Andrej Vysny add output store port
+b9379e6 2026-11-18 Andrej Vysny wire gate into run loop
+4b0f7cd 2026-11-19 Andrej Vysny tests for preview split
+0dd8835 2026-11-20 Andrej Vysny docs: adr 0034
+989f360 2026-11-21 Andrej Vysny rename handle parse
+2e98ef4 2026-11-22 Andrej Vysny refactor line spans
+85b0e41 2026-11-23 Andrej Vysny handle crlf in slices
+bbc0132 2026-11-24 Andrej Vysny sweep orphans hourly
+5586888 2026-11-25 Andrej Vysny mask secrets before store
+b61dced 2026-11-26 Andrej Vysny bound search matches
+7211e44 2026-11-27 Andrej Vysny cap stored outputs at 64 MiB
+a8c9d98 2026-11-28 Andrej Vysny retention follows chat
+7232848 2026-11-01 Andrej Vysny purge on delete_chat
+63ea2e0 2026-11-02 Andrej Vysny guard foreign handles
+7a91054 2026-11-03 Andrej Vysny fix envelope budget off by one
+cd26806 2026-11-04 Andrej Vysny add output store port
+741732c 2026-11-05 Andrej Vysny wire gate into run loop
+665ba66 2026-11-06 Andrej Vysny tests for preview split
+fc4de6d 2026-11-07 Andrej Vysny docs: adr 0034
+b60c4b1 2026-11-08 Andrej Vysny rename handle parse
+0ed67c6 2026-11-09 Andrej Vysny refactor line spans
+0e4dc4b 2026-11-10 Andrej Vysny handle crlf in slices
+8f0ff27 2026-11-11 Andrej Vysny sweep orphans hourly
+f1c9731 2026-11-12 Andrej Vysny mask secrets before store
+84b280a 2026-11-13 Andrej Vysny bound search matches
+63256e0 2026-11-14 Andrej Vysny cap stored outputs at 64 MiB
+b04596e 2026-11-15 Andrej Vysny retention follows chat
+e4fb069 2026-11-16 Andrej Vysny purge on delete_chat
+b2f43d9 2026-11-17 Andrej Vysny guard foreign handles
+bab18e0 2026-11-18 Andrej Vysny fix envelope budget off by one
+293c4b3 2026-11-19 Andrej Vysny add output store port
+70e0700 2026-11-20 Andrej Vysny wire gate into run loop

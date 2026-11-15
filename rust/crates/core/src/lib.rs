@@ -134,8 +134,8 @@ pub use output::{
     MIN_INLINE_LIMIT as MIN_OUTPUT_INLINE_LIMIT, Match, OUTPUT_INLINE_LIMIT_METADATA_KEY,
     OUTPUT_STORE_METADATA_KEY, OutputCall, OutputError, OutputGate, OutputHandle, OutputInfo,
     OutputMeta, OutputSlice, OutputStore, PurgeReport, READ_OUTPUT,
-    RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT, SessionTree, count_lines, render_preview,
-    search_bytes, slice_bytes,
+    RETENTION_MS as OUTPUT_RETENTION_MS, SEARCH_OUTPUT, SHAPED_HIDDEN_KEY, SHAPED_TEXT_KEY,
+    SessionTree, count_lines, render_preview, search_bytes, shaped_value, slice_bytes,
 };
 pub use output_tools::{output_tools, read_output_definition, search_output_definition};
 pub use provider_identity::{AuthKind, ConnectionIdentity};

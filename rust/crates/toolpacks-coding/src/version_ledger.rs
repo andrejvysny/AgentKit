@@ -135,6 +135,22 @@ pub fn record_read(chat_id: Option<&str>, canonical_path: &str, sha256: &str, fu
     put(chat_id, canonical_path, sha256, full);
 }
 
+/// The model saw only part of a version it read whole (a shaped read shows an
+/// outline): no path of the chat at `sha256` stays "read in full".
+pub fn mark_partial(chat_id: Option<&str>, sha256: &str) {
+    let Some(chat_id) = chat_id else {
+        return;
+    };
+    let mut state = LEDGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(chat) = state.chats.get_mut(chat_id) {
+        for entry in chat.paths.values_mut().filter(|e| e.sha256 == sha256) {
+            entry.full = false;
+        }
+    }
+}
+
 pub fn record_write(chat_id: Option<&str>, canonical_path: &str, sha256: &str) {
     put(chat_id, canonical_path, sha256, true);
 }

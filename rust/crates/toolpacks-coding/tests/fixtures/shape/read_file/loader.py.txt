@@ -1,0 +1,258 @@
+1	"""Config loader with layered overrides."""
+2	from __future__ import annotations
+3	
+4	import json
+5	import os
+6	from dataclasses import dataclass, field
+7	from pathlib import Path
+8	
+9	
+10	@dataclass
+11	class Layer:
+12	    name: str
+13	    values: dict[str, object] = field(default_factory=dict)
+14	
+15	
+16	def from_env(source: str) -> Layer:
+17	    """Build a layer from the env source."""
+18	    values: dict[str, object] = {}
+19	    for key, raw in _items(source):
+20	        if key.startswith('_'):
+21	            continue
+22	        values[key.lower()] = _coerce(raw)
+23	    return Layer(name='env', values=values)
+24	
+25	
+26	def from_file(source: str) -> Layer:
+27	    """Build a layer from the file source."""
+28	    values: dict[str, object] = {}
+29	    for key, raw in _items(source):
+30	        if key.startswith('_'):
+31	            continue
+32	        values[key.lower()] = _coerce(raw)
+33	    return Layer(name='file', values=values)
+34	
+35	
+36	def from_args(source: str) -> Layer:
+37	    """Build a layer from the args source."""
+38	    values: dict[str, object] = {}
+39	    for key, raw in _items(source):
+40	        if key.startswith('_'):
+41	            continue
+42	        values[key.lower()] = _coerce(raw)
+43	    return Layer(name='args', values=values)
+44	
+45	
+46	def from_defaults(source: str) -> Layer:
+47	    """Build a layer from the defaults source."""
+48	    values: dict[str, object] = {}
+49	    for key, raw in _items(source):
+50	        if key.startswith('_'):
+51	            continue
+52	        values[key.lower()] = _coerce(raw)
+53	    return Layer(name='defaults', values=values)
+54	
+55	
+56	def from_secrets(source: str) -> Layer:
+57	    """Build a layer from the secrets source."""
+58	    values: dict[str, object] = {}
+59	    for key, raw in _items(source):
+60	        if key.startswith('_'):
+61	            continue
+62	        values[key.lower()] = _coerce(raw)
+63	    return Layer(name='secrets', values=values)
+64	
+65	
+66	def from_remote(source: str) -> Layer:
+67	    """Build a layer from the remote source."""
+68	    values: dict[str, object] = {}
+69	    for key, raw in _items(source):
+70	        if key.startswith('_'):
+71	            continue
+72	        values[key.lower()] = _coerce(raw)
+73	    return Layer(name='remote', values=values)
+74	
+75	
+76	def from_vault(source: str) -> Layer:
+77	    """Build a layer from the vault source."""
+78	    values: dict[str, object] = {}
+79	    for key, raw in _items(source):
+80	        if key.startswith('_'):
+81	            continue
+82	        values[key.lower()] = _coerce(raw)
+83	    return Layer(name='vault', values=values)
+84	
+85	
+86	def from_consul(source: str) -> Layer:
+87	    """Build a layer from the consul source."""
+88	    values: dict[str, object] = {}
+89	    for key, raw in _items(source):
+90	        if key.startswith('_'):
+91	            continue
+92	        values[key.lower()] = _coerce(raw)
+93	    return Layer(name='consul', values=values)
+94	
+95	
+96	def from_dotenv(source: str) -> Layer:
+97	    """Build a layer from the dotenv source."""
+98	    values: dict[str, object] = {}
+99	    for key, raw in _items(source):
+100	        if key.startswith('_'):
+101	            continue
+102	        values[key.lower()] = _coerce(raw)
+103	    return Layer(name='dotenv', values=values)
+104	
+105	
+106	def from_ini(source: str) -> Layer:
+107	    """Build a layer from the ini source."""
+108	    values: dict[str, object] = {}
+109	    for key, raw in _items(source):
+110	        if key.startswith('_'):
+111	            continue
+112	        values[key.lower()] = _coerce(raw)
+113	    return Layer(name='ini', values=values)
+114	
+115	
+116	def from_toml(source: str) -> Layer:
+117	    """Build a layer from the toml source."""
+118	    values: dict[str, object] = {}
+119	    for key, raw in _items(source):
+120	        if key.startswith('_'):
+121	            continue
+122	        values[key.lower()] = _coerce(raw)
+123	    return Layer(name='toml', values=values)
+124	
+125	
+126	def from_yaml(source: str) -> Layer:
+127	    """Build a layer from the yaml source."""
+128	    values: dict[str, object] = {}
+129	    for key, raw in _items(source):
+130	        if key.startswith('_'):
+131	            continue
+132	        values[key.lower()] = _coerce(raw)
+133	    return Layer(name='yaml', values=values)
+134	
+135	
+136	def from_cli(source: str) -> Layer:
+137	    """Build a layer from the cli source."""
+138	    values: dict[str, object] = {}
+139	    for key, raw in _items(source):
+140	        if key.startswith('_'):
+141	            continue
+142	        values[key.lower()] = _coerce(raw)
+143	    return Layer(name='cli', values=values)
+144	
+145	
+146	def from_cache(source: str) -> Layer:
+147	    """Build a layer from the cache source."""
+148	    values: dict[str, object] = {}
+149	    for key, raw in _items(source):
+150	        if key.startswith('_'):
+151	            continue
+152	        values[key.lower()] = _coerce(raw)
+153	    return Layer(name='cache', values=values)
+154	
+155	
+156	class Loader:
+157	    def __init__(self, layers: list[Layer]) -> None:
+158	        self.layers = layers
+159	
+160	    async def refresh(self) -> None:
+161	        for layer in self.layers:
+162	            layer.values.update(await _fetch(layer.name))
+163	
+164	    def get(self, key: str, default: object = None) -> object:
+165	        for layer in reversed(self.layers):
+166	            if key in layer.values:
+167	                return layer.values[key]
+168	        return default
+169	
+170	    def section_0(self) -> dict[str, object]:
+171	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s0.')}
+172	
+173	    def section_1(self) -> dict[str, object]:
+174	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s1.')}
+175	
+176	    def section_2(self) -> dict[str, object]:
+177	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s2.')}
+178	
+179	    def section_3(self) -> dict[str, object]:
+180	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s3.')}
+181	
+182	    def section_4(self) -> dict[str, object]:
+183	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s4.')}
+184	
+185	    def section_5(self) -> dict[str, object]:
+186	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s5.')}
+187	
+188	    def section_6(self) -> dict[str, object]:
+189	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s6.')}
+190	
+191	    def section_7(self) -> dict[str, object]:
+192	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s7.')}
+193	
+194	    def section_8(self) -> dict[str, object]:
+195	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s8.')}
+196	
+197	    def section_9(self) -> dict[str, object]:
+198	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s9.')}
+199	
+200	    def section_10(self) -> dict[str, object]:
+201	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s10.')}
+202	
+203	    def section_11(self) -> dict[str, object]:
+204	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s11.')}
+205	
+206	    def section_12(self) -> dict[str, object]:
+207	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s12.')}
+208	
+209	    def section_13(self) -> dict[str, object]:
+210	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s13.')}
+211	
+212	    def section_14(self) -> dict[str, object]:
+213	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s14.')}
+214	
+215	    def section_15(self) -> dict[str, object]:
+216	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s15.')}
+217	
+218	    def section_16(self) -> dict[str, object]:
+219	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s16.')}
+220	
+221	    def section_17(self) -> dict[str, object]:
+222	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s17.')}
+223	
+224	    def section_18(self) -> dict[str, object]:
+225	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s18.')}
+226	
+227	    def section_19(self) -> dict[str, object]:
+228	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s19.')}
+229	
+230	    def section_20(self) -> dict[str, object]:
+231	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s20.')}
+232	
+233	    def section_21(self) -> dict[str, object]:
+234	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s21.')}
+235	
+236	    def section_22(self) -> dict[str, object]:
+237	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s22.')}
+238	
+239	    def section_23(self) -> dict[str, object]:
+240	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s23.')}
+241	
+242	    def section_24(self) -> dict[str, object]:
+243	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s24.')}
+244	
+245	    def section_25(self) -> dict[str, object]:
+246	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s25.')}
+247	
+248	    def section_26(self) -> dict[str, object]:
+249	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s26.')}
+250	
+251	    def section_27(self) -> dict[str, object]:
+252	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s27.')}
+253	
+254	    def section_28(self) -> dict[str, object]:
+255	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s28.')}
+256	
+257	    def section_29(self) -> dict[str, object]:
+258	        return {k: v for k, v in self.layers[-1].values.items() if k.startswith('s29.')}

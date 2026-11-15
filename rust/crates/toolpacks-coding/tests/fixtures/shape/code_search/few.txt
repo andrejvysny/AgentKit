@@ -1,0 +1,2 @@
+src/a.rs:3:fn main() {}
+src/b.rs:9:fn helper() {}

@@ -1,0 +1,278 @@
+1	import { readFile } from 'node:fs/promises';
+2	import type { Logger } from './logger';
+3	
+4	export interface ClientOptions {
+5	  baseUrl: string;
+6	  retries?: number;
+7	}
+8	
+9	export type Handler = (req: Request) => Promise<Response>;
+10	
+11	export class ApiClient {
+12	  private readonly retries: number;
+13	
+14	  constructor(private readonly options: ClientOptions, private readonly log: Logger) {
+15	    this.retries = options.retries ?? 3;
+16	  }
+17	
+18	  async getUser(id: string, init: RequestInit = {}): Promise<unknown> {
+19	    const url = `${this.options.baseUrl}/getUser/${encodeURIComponent(id)}`;
+20	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+21	      const response = await fetch(url, init);
+22	      if (response.ok) return response.json();
+23	      this.log.warn('getUser failed', { attempt, status: response.status });
+24	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+25	    }
+26	    throw new Error('getUser: retries exhausted');
+27	  }
+28	
+29	  async listOrders(id: string, init: RequestInit = {}): Promise<unknown> {
+30	    const url = `${this.options.baseUrl}/listOrders/${encodeURIComponent(id)}`;
+31	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+32	      const response = await fetch(url, init);
+33	      if (response.ok) return response.json();
+34	      this.log.warn('listOrders failed', { attempt, status: response.status });
+35	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+36	    }
+37	    throw new Error('listOrders: retries exhausted');
+38	  }
+39	
+40	  async createOrder(id: string, init: RequestInit = {}): Promise<unknown> {
+41	    const url = `${this.options.baseUrl}/createOrder/${encodeURIComponent(id)}`;
+42	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+43	      const response = await fetch(url, init);
+44	      if (response.ok) return response.json();
+45	      this.log.warn('createOrder failed', { attempt, status: response.status });
+46	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+47	    }
+48	    throw new Error('createOrder: retries exhausted');
+49	  }
+50	
+51	  async cancelOrder(id: string, init: RequestInit = {}): Promise<unknown> {
+52	    const url = `${this.options.baseUrl}/cancelOrder/${encodeURIComponent(id)}`;
+53	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+54	      const response = await fetch(url, init);
+55	      if (response.ok) return response.json();
+56	      this.log.warn('cancelOrder failed', { attempt, status: response.status });
+57	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+58	    }
+59	    throw new Error('cancelOrder: retries exhausted');
+60	  }
+61	
+62	  async getInvoice(id: string, init: RequestInit = {}): Promise<unknown> {
+63	    const url = `${this.options.baseUrl}/getInvoice/${encodeURIComponent(id)}`;
+64	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+65	      const response = await fetch(url, init);
+66	      if (response.ok) return response.json();
+67	      this.log.warn('getInvoice failed', { attempt, status: response.status });
+68	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+69	    }
+70	    throw new Error('getInvoice: retries exhausted');
+71	  }
+72	
+73	  async downloadReport(id: string, init: RequestInit = {}): Promise<unknown> {
+74	    const url = `${this.options.baseUrl}/downloadReport/${encodeURIComponent(id)}`;
+75	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+76	      const response = await fetch(url, init);
+77	      if (response.ok) return response.json();
+78	      this.log.warn('downloadReport failed', { attempt, status: response.status });
+79	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+80	    }
+81	    throw new Error('downloadReport: retries exhausted');
+82	  }
+83	
+84	  async listUsers(id: string, init: RequestInit = {}): Promise<unknown> {
+85	    const url = `${this.options.baseUrl}/listUsers/${encodeURIComponent(id)}`;
+86	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+87	      const response = await fetch(url, init);
+88	      if (response.ok) return response.json();
+89	      this.log.warn('listUsers failed', { attempt, status: response.status });
+90	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+91	    }
+92	    throw new Error('listUsers: retries exhausted');
+93	  }
+94	
+95	  async updateUser(id: string, init: RequestInit = {}): Promise<unknown> {
+96	    const url = `${this.options.baseUrl}/updateUser/${encodeURIComponent(id)}`;
+97	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+98	      const response = await fetch(url, init);
+99	      if (response.ok) return response.json();
+100	      this.log.warn('updateUser failed', { attempt, status: response.status });
+101	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+102	    }
+103	    throw new Error('updateUser: retries exhausted');
+104	  }
+105	
+106	  async deleteUser(id: string, init: RequestInit = {}): Promise<unknown> {
+107	    const url = `${this.options.baseUrl}/deleteUser/${encodeURIComponent(id)}`;
+108	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+109	      const response = await fetch(url, init);
+110	      if (response.ok) return response.json();
+111	      this.log.warn('deleteUser failed', { attempt, status: response.status });
+112	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+113	    }
+114	    throw new Error('deleteUser: retries exhausted');
+115	  }
+116	
+117	  async listInvoices(id: string, init: RequestInit = {}): Promise<unknown> {
+118	    const url = `${this.options.baseUrl}/listInvoices/${encodeURIComponent(id)}`;
+119	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+120	      const response = await fetch(url, init);
+121	      if (response.ok) return response.json();
+122	      this.log.warn('listInvoices failed', { attempt, status: response.status });
+123	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+124	    }
+125	    throw new Error('listInvoices: retries exhausted');
+126	  }
+127	
+128	  async createInvoice(id: string, init: RequestInit = {}): Promise<unknown> {
+129	    const url = `${this.options.baseUrl}/createInvoice/${encodeURIComponent(id)}`;
+130	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+131	      const response = await fetch(url, init);
+132	      if (response.ok) return response.json();
+133	      this.log.warn('createInvoice failed', { attempt, status: response.status });
+134	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+135	    }
+136	    throw new Error('createInvoice: retries exhausted');
+137	  }
+138	
+139	  async refundOrder(id: string, init: RequestInit = {}): Promise<unknown> {
+140	    const url = `${this.options.baseUrl}/refundOrder/${encodeURIComponent(id)}`;
+141	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+142	      const response = await fetch(url, init);
+143	      if (response.ok) return response.json();
+144	      this.log.warn('refundOrder failed', { attempt, status: response.status });
+145	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+146	    }
+147	    throw new Error('refundOrder: retries exhausted');
+148	  }
+149	
+150	  async listRefunds(id: string, init: RequestInit = {}): Promise<unknown> {
+151	    const url = `${this.options.baseUrl}/listRefunds/${encodeURIComponent(id)}`;
+152	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+153	      const response = await fetch(url, init);
+154	      if (response.ok) return response.json();
+155	      this.log.warn('listRefunds failed', { attempt, status: response.status });
+156	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+157	    }
+158	    throw new Error('listRefunds: retries exhausted');
+159	  }
+160	
+161	  async getBalance(id: string, init: RequestInit = {}): Promise<unknown> {
+162	    const url = `${this.options.baseUrl}/getBalance/${encodeURIComponent(id)}`;
+163	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+164	      const response = await fetch(url, init);
+165	      if (response.ok) return response.json();
+166	      this.log.warn('getBalance failed', { attempt, status: response.status });
+167	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+168	    }
+169	    throw new Error('getBalance: retries exhausted');
+170	  }
+171	
+172	  async listTransfers(id: string, init: RequestInit = {}): Promise<unknown> {
+173	    const url = `${this.options.baseUrl}/listTransfers/${encodeURIComponent(id)}`;
+174	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+175	      const response = await fetch(url, init);
+176	      if (response.ok) return response.json();
+177	      this.log.warn('listTransfers failed', { attempt, status: response.status });
+178	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+179	    }
+180	    throw new Error('listTransfers: retries exhausted');
+181	  }
+182	
+183	  async createTransfer(id: string, init: RequestInit = {}): Promise<unknown> {
+184	    const url = `${this.options.baseUrl}/createTransfer/${encodeURIComponent(id)}`;
+185	    for (let attempt = 0; attempt <= this.retries; attempt++) {
+186	      const response = await fetch(url, init);
+187	      if (response.ok) return response.json();
+188	      this.log.warn('createTransfer failed', { attempt, status: response.status });
+189	      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 100));
+190	    }
+191	    throw new Error('createTransfer: retries exhausted');
+192	  }
+193	
+194	}
+195	
+196	export const buildHeaders = (input: Record<string, string>): Record<string, string> => {
+197	  const out: Record<string, string> = {};
+198	  for (const [key, value] of Object.entries(input)) {
+199	    out[key.toLowerCase()] = value.trim();
+200	  }
+201	  return out;
+202	};
+203	
+204	export const signRequest = (input: Record<string, string>): Record<string, string> => {
+205	  const out: Record<string, string> = {};
+206	  for (const [key, value] of Object.entries(input)) {
+207	    out[key.toLowerCase()] = value.trim();
+208	  }
+209	  return out;
+210	};
+211	
+212	export const parseLink = (input: Record<string, string>): Record<string, string> => {
+213	  const out: Record<string, string> = {};
+214	  for (const [key, value] of Object.entries(input)) {
+215	    out[key.toLowerCase()] = value.trim();
+216	  }
+217	  return out;
+218	};
+219	
+220	export const mergeOptions = (input: Record<string, string>): Record<string, string> => {
+221	  const out: Record<string, string> = {};
+222	  for (const [key, value] of Object.entries(input)) {
+223	    out[key.toLowerCase()] = value.trim();
+224	  }
+225	  return out;
+226	};
+227	
+228	export const redactUrl = (input: Record<string, string>): Record<string, string> => {
+229	  const out: Record<string, string> = {};
+230	  for (const [key, value] of Object.entries(input)) {
+231	    out[key.toLowerCase()] = value.trim();
+232	  }
+233	  return out;
+234	};
+235	
+236	export const isRetryable = (input: Record<string, string>): Record<string, string> => {
+237	  const out: Record<string, string> = {};
+238	  for (const [key, value] of Object.entries(input)) {
+239	    out[key.toLowerCase()] = value.trim();
+240	  }
+241	  return out;
+242	};
+243	
+244	export const normalizeKeys = (input: Record<string, string>): Record<string, string> => {
+245	  const out: Record<string, string> = {};
+246	  for (const [key, value] of Object.entries(input)) {
+247	    out[key.toLowerCase()] = value.trim();
+248	  }
+249	  return out;
+250	};
+251	
+252	export const stripEmpty = (input: Record<string, string>): Record<string, string> => {
+253	  const out: Record<string, string> = {};
+254	  for (const [key, value] of Object.entries(input)) {
+255	    out[key.toLowerCase()] = value.trim();
+256	  }
+257	  return out;
+258	};
+259	
+260	export const pickAllowed = (input: Record<string, string>): Record<string, string> => {
+261	  const out: Record<string, string> = {};
+262	  for (const [key, value] of Object.entries(input)) {
+263	    out[key.toLowerCase()] = value.trim();
+264	  }
+265	  return out;
+266	};
+267	
+268	export const dropSecrets = (input: Record<string, string>): Record<string, string> => {
+269	  const out: Record<string, string> = {};
+270	  for (const [key, value] of Object.entries(input)) {
+271	    out[key.toLowerCase()] = value.trim();
+272	  }
+273	  return out;
+274	};
+275	
+276	export function loadFixture(path: string): Promise<string> {
+277	  return readFile(path, 'utf8');
+278	}

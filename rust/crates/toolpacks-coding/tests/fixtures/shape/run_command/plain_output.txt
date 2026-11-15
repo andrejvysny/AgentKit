@@ -1,0 +1,4 @@
+total 8
+drwxr-xr-x  4 a  staff  128 Nov 15 10:00 .
+-rw-r--r--  1 a  staff   12 Nov 15 10:00 notes.txt
+[exit code 0]

@@ -282,6 +282,63 @@ struct WrappedTool {
 }
 
 impl WrappedTool {
+    /// Roadmap 2.2: the model-facing value of a finished call. With an output
+    /// store in play and a result over the inline limit, a rule may shape it:
+    /// the model reads the shaped text and the gate keeps the raw text behind
+    /// a handle. Otherwise (no store, a result within the limit, no rule) the
+    /// text goes out unchanged, so nothing is hidden unrecoverably.
+    async fn model_value(
+        &self,
+        context: &ToolContext,
+        input: &Value,
+        outcome: &mut Outcome,
+    ) -> Value {
+        let plain = Value::String(outcome.text.clone());
+        let in_play = context
+            .metadata
+            .get(agentkit_core::OUTPUT_STORE_METADATA_KEY)
+            .and_then(Value::as_bool)
+            == Some(true);
+        if !in_play {
+            return plain;
+        }
+        let inline_limit = context
+            .metadata
+            .get(agentkit_core::OUTPUT_INLINE_LIMIT_METADATA_KEY)
+            .and_then(Value::as_u64)
+            .and_then(|limit| usize::try_from(limit).ok())
+            .unwrap_or(crate::shape::DEFAULT_INLINE_LIMIT);
+        let tool = self.definition.name.as_str();
+        let full = if outcome.text.len() > inline_limit {
+            full_log(tool, outcome).await
+        } else {
+            None
+        };
+        let Some(shape) = crate::shape::shape_for_store(tool, input, outcome, inline_limit, full)
+        else {
+            return plain;
+        };
+        if tool == "read_file" {
+            // The model saw an outline, not the file: the read ledger must not
+            // let a later overwrite rest on a full read.
+            let sha = outcome
+                .details
+                .as_ref()
+                .and_then(|details| details.get("sha256"))
+                .and_then(Value::as_str);
+            if let Some(sha) = sha {
+                crate::version_ledger::mark_partial(context.chat_id.as_deref(), sha);
+            }
+        }
+        agentkit_core::shaped_value(
+            &shape.raw,
+            &shape.shaped.text,
+            shape.shaped.hidden,
+            &shape.shaped.what,
+            shape.shaped.note.as_deref(),
+        )
+    }
+
     /// The call pipeline already normalises real calls; this keeps direct
     /// callers on the same canonical names, and says what it did.
     fn normalised(&self, input: Value) -> (Value, Vec<String>) {
@@ -344,13 +401,14 @@ impl Tool for WrappedTool {
                 let message = full.strip_prefix(prefix.as_str()).unwrap_or(full);
                 failure(&CodingError::new(code, message))
             }
-            None => (self.body)(context.clone(), input).await,
+            None => (self.body)(context.clone(), input.clone()).await,
         };
         outcome.warnings.extend(
             applied
                 .into_iter()
                 .map(|alias| format!("argument alias applied: {alias}")),
         );
+        let model_data = self.model_value(&context, &input, &mut outcome).await;
         Ok(ToolResult {
             ok: outcome.ok,
             data: Some(
@@ -359,7 +417,7 @@ impl Tool for WrappedTool {
                     .clone()
                     .unwrap_or(Value::String(outcome.text.clone())),
             ),
-            model_data: Some(Value::String(outcome.text)),
+            model_data: Some(model_data),
             sources: vec![],
             warnings: outcome.warnings,
             truncated: outcome.truncated,
@@ -370,6 +428,30 @@ impl Tool for WrappedTool {
             model_content: None,
         })
     }
+}
+
+/// The complete log of a `run_command` / `run_tests` call, read from the
+/// scratch file the tool kept (at most 64 MiB), followed by the call's own
+/// status footer. `None` when the tool kept no log or it cannot be read.
+async fn full_log(tool: &str, outcome: &Outcome) -> Option<String> {
+    if !matches!(tool, "run_command" | "run_tests") {
+        return None;
+    }
+    let path = outcome.details.as_ref()?.get("fullLog")?.as_str()?;
+    let bytes = tokio::fs::read(path).await.ok()?;
+    let mut log = String::from_utf8_lossy(&bytes)
+        .trim_end_matches('\n')
+        .to_owned();
+    if let Some(footer) = outcome
+        .text
+        .lines()
+        .last()
+        .filter(|line| line.starts_with('[') && line.ends_with(']'))
+    {
+        log.push('\n');
+        log.push_str(footer);
+    }
+    Some(log)
 }
 
 /// Wraps a tool body so user errors become `ok:false` results and never

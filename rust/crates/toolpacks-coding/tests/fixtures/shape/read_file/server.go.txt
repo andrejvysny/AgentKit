@@ -1,0 +1,292 @@
+1	package http
+2	
+3	import (
+4		"context"
+5		"net/http"
+6		"time"
+7	)
+8	
+9	type Server struct {
+10		mux     *http.ServeMux
+11		timeout time.Duration
+12	}
+13	
+14	func NewServer(timeout time.Duration) *Server {
+15		return &Server{mux: http.NewServeMux(), timeout: timeout}
+16	}
+17	
+18	// Route registers the route behaviour.
+19	func (s *Server) Route(pattern string, h http.HandlerFunc) {
+20		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+21		defer cancel()
+22		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+23			select {
+24			case <-ctx.Done():
+25				http.Error(w, "timeout", http.StatusGatewayTimeout)
+26				return
+27			default:
+28			}
+29			h(w, r)
+30		})
+31	}
+32	
+33	// Handle registers the handle behaviour.
+34	func (s *Server) Handle(pattern string, h http.HandlerFunc) {
+35		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+36		defer cancel()
+37		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+38			select {
+39			case <-ctx.Done():
+40				http.Error(w, "timeout", http.StatusGatewayTimeout)
+41				return
+42			default:
+43			}
+44			h(w, r)
+45		})
+46	}
+47	
+48	// Compress registers the compress behaviour.
+49	func (s *Server) Compress(pattern string, h http.HandlerFunc) {
+50		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+51		defer cancel()
+52		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+53			select {
+54			case <-ctx.Done():
+55				http.Error(w, "timeout", http.StatusGatewayTimeout)
+56				return
+57			default:
+58			}
+59			h(w, r)
+60		})
+61	}
+62	
+63	// Recover registers the recover behaviour.
+64	func (s *Server) Recover(pattern string, h http.HandlerFunc) {
+65		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+66		defer cancel()
+67		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+68			select {
+69			case <-ctx.Done():
+70				http.Error(w, "timeout", http.StatusGatewayTimeout)
+71				return
+72			default:
+73			}
+74			h(w, r)
+75		})
+76	}
+77	
+78	// Logging registers the logging behaviour.
+79	func (s *Server) Logging(pattern string, h http.HandlerFunc) {
+80		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+81		defer cancel()
+82		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+83			select {
+84			case <-ctx.Done():
+85				http.Error(w, "timeout", http.StatusGatewayTimeout)
+86				return
+87			default:
+88			}
+89			h(w, r)
+90		})
+91	}
+92	
+93	// Auth registers the auth behaviour.
+94	func (s *Server) Auth(pattern string, h http.HandlerFunc) {
+95		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+96		defer cancel()
+97		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+98			select {
+99			case <-ctx.Done():
+100				http.Error(w, "timeout", http.StatusGatewayTimeout)
+101				return
+102			default:
+103			}
+104			h(w, r)
+105		})
+106	}
+107	
+108	// Range registers the range behaviour.
+109	func (s *Server) Range(pattern string, h http.HandlerFunc) {
+110		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+111		defer cancel()
+112		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+113			select {
+114			case <-ctx.Done():
+115				http.Error(w, "timeout", http.StatusGatewayTimeout)
+116				return
+117			default:
+118			}
+119			h(w, r)
+120		})
+121	}
+122	
+123	// Etag registers the etag behaviour.
+124	func (s *Server) Etag(pattern string, h http.HandlerFunc) {
+125		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+126		defer cancel()
+127		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+128			select {
+129			case <-ctx.Done():
+130				http.Error(w, "timeout", http.StatusGatewayTimeout)
+131				return
+132			default:
+133			}
+134			h(w, r)
+135		})
+136	}
+137	
+138	// Cors registers the cors behaviour.
+139	func (s *Server) Cors(pattern string, h http.HandlerFunc) {
+140		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+141		defer cancel()
+142		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+143			select {
+144			case <-ctx.Done():
+145				http.Error(w, "timeout", http.StatusGatewayTimeout)
+146				return
+147			default:
+148			}
+149			h(w, r)
+150		})
+151	}
+152	
+153	// Metrics registers the metrics behaviour.
+154	func (s *Server) Metrics(pattern string, h http.HandlerFunc) {
+155		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+156		defer cancel()
+157		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+158			select {
+159			case <-ctx.Done():
+160				http.Error(w, "timeout", http.StatusGatewayTimeout)
+161				return
+162			default:
+163			}
+164			h(w, r)
+165		})
+166	}
+167	
+168	// Trace registers the trace behaviour.
+169	func (s *Server) Trace(pattern string, h http.HandlerFunc) {
+170		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+171		defer cancel()
+172		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+173			select {
+174			case <-ctx.Done():
+175				http.Error(w, "timeout", http.StatusGatewayTimeout)
+176				return
+177			default:
+178			}
+179			h(w, r)
+180		})
+181	}
+182	
+183	// Limit registers the limit behaviour.
+184	func (s *Server) Limit(pattern string, h http.HandlerFunc) {
+185		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+186		defer cancel()
+187		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+188			select {
+189			case <-ctx.Done():
+190				http.Error(w, "timeout", http.StatusGatewayTimeout)
+191				return
+192			default:
+193			}
+194			h(w, r)
+195		})
+196	}
+197	
+198	// Static registers the static behaviour.
+199	func (s *Server) Static(pattern string, h http.HandlerFunc) {
+200		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+201		defer cancel()
+202		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+203			select {
+204			case <-ctx.Done():
+205				http.Error(w, "timeout", http.StatusGatewayTimeout)
+206				return
+207			default:
+208			}
+209			h(w, r)
+210		})
+211	}
+212	
+213	// Redirect registers the redirect behaviour.
+214	func (s *Server) Redirect(pattern string, h http.HandlerFunc) {
+215		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+216		defer cancel()
+217		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+218			select {
+219			case <-ctx.Done():
+220				http.Error(w, "timeout", http.StatusGatewayTimeout)
+221				return
+222			default:
+223			}
+224			h(w, r)
+225		})
+226	}
+227	
+228	// Health registers the health behaviour.
+229	func (s *Server) Health(pattern string, h http.HandlerFunc) {
+230		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+231		defer cancel()
+232		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+233			select {
+234			case <-ctx.Done():
+235				http.Error(w, "timeout", http.StatusGatewayTimeout)
+236				return
+237			default:
+238			}
+239			h(w, r)
+240		})
+241	}
+242	
+243	// Debug registers the debug behaviour.
+244	func (s *Server) Debug(pattern string, h http.HandlerFunc) {
+245		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+246		defer cancel()
+247		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+248			select {
+249			case <-ctx.Done():
+250				http.Error(w, "timeout", http.StatusGatewayTimeout)
+251				return
+252			default:
+253			}
+254			h(w, r)
+255		})
+256	}
+257	
+258	// Session registers the session behaviour.
+259	func (s *Server) Session(pattern string, h http.HandlerFunc) {
+260		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+261		defer cancel()
+262		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+263			select {
+264			case <-ctx.Done():
+265				http.Error(w, "timeout", http.StatusGatewayTimeout)
+266				return
+267			default:
+268			}
+269			h(w, r)
+270		})
+271	}
+272	
+273	// Csrf registers the csrf behaviour.
+274	func (s *Server) Csrf(pattern string, h http.HandlerFunc) {
+275		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+276		defer cancel()
+277		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+278			select {
+279			case <-ctx.Done():
+280				http.Error(w, "timeout", http.StatusGatewayTimeout)
+281				return
+282			default:
+283			}
+284			h(w, r)
+285		})
+286	}
+287	
+288	type Option func(*Server)
+289	
+290	var DefaultTimeout = 30 * time.Second
+291	
+292	const MaxBody = 1 << 20

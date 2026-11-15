@@ -1,0 +1,63 @@
+npm http fetch GET 200 https://registry.npmjs.org/typescript 142ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmjs.org/react 205ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/react-dom 117ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/scheduler 242ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/loose-envify 373ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/js-tokens 64ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/typescript 77ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/vite 314ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/esbuild 88ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/rollup 227ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/postcss 338ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/nanoid 69ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/picocolors 299ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/source-map-js 149ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/@types/react 59ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/@types/node 84ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/undici-types 262ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/csstype 254ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/eslint 75ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/@eslint/js 163ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/acorn 86ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/ajv 322ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/chalk 257ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/debug 70ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/ms 329ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/glob 103ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/minimatch 154ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/brace-expansion 362ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/balanced-match 361ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/concat-map 338ms (cache miss)
+npm http fetch GET 200 https://registry.npmjs.org/yargs 71ms (cache miss)
+npm timing reify:unpack Completed in 75ms
+npm timing reify:unpack Completed in 76ms
+npm timing reify:unpack Completed in 52ms
+npm timing reify:unpack Completed in 8ms
+npm timing reify:unpack Completed in 30ms
+npm timing reify:unpack Completed in 7ms
+npm timing reify:unpack Completed in 73ms
+npm timing reify:unpack Completed in 19ms
+npm timing reify:unpack Completed in 39ms
+npm timing reify:unpack Completed in 55ms
+npm timing reify:unpack Completed in 20ms
+npm timing reify:unpack Completed in 71ms
+npm timing reify:unpack Completed in 17ms
+npm timing reify:unpack Completed in 75ms
+npm timing reify:unpack Completed in 41ms
+npm timing reify:unpack Completed in 73ms
+npm timing reify:unpack Completed in 89ms
+npm timing reify:unpack Completed in 25ms
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it.
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+
+added 312 packages, and audited 313 packages in 14s
+
+87 packages are looking for funding
+  run `npm fund` for details
+
+2 moderate severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+[exit code 0]

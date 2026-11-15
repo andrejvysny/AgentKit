@@ -1,0 +1,59 @@
+a2318d6c47ec: Pulling fs layer
+7fb5c8d3e1a9: Pulling fs layer
+c0d1e5f4b7a2: Pulling fs layer
+91e3b2a6d8f0: Pulling fs layer
+5d7a9c1e3b4f: Pulling fs layer
+e8f0a2c4d6b1: Pulling fs layer
+a2318d6c47ec: Downloading  [===>                      ]  10.80MB/90.1MB
+a2318d6c47ec: Downloading  [===========>              ]  42.30MB/90.1MB
+a2318d6c47ec: Downloading  [======================>   ]  79.20MB/90.1MB
+a2318d6c47ec: Verifying Checksum
+a2318d6c47ec: Download complete
+7fb5c8d3e1a9: Downloading  [===>                      ]  10.80MB/90.1MB
+7fb5c8d3e1a9: Downloading  [===========>              ]  42.30MB/90.1MB
+7fb5c8d3e1a9: Downloading  [======================>   ]  79.20MB/90.1MB
+7fb5c8d3e1a9: Verifying Checksum
+7fb5c8d3e1a9: Download complete
+c0d1e5f4b7a2: Downloading  [===>                      ]  10.80MB/90.1MB
+c0d1e5f4b7a2: Downloading  [===========>              ]  42.30MB/90.1MB
+c0d1e5f4b7a2: Downloading  [======================>   ]  79.20MB/90.1MB
+c0d1e5f4b7a2: Verifying Checksum
+c0d1e5f4b7a2: Download complete
+91e3b2a6d8f0: Downloading  [===>                      ]  10.80MB/90.1MB
+91e3b2a6d8f0: Downloading  [===========>              ]  42.30MB/90.1MB
+91e3b2a6d8f0: Downloading  [======================>   ]  79.20MB/90.1MB
+91e3b2a6d8f0: Verifying Checksum
+91e3b2a6d8f0: Download complete
+5d7a9c1e3b4f: Downloading  [===>                      ]  10.80MB/90.1MB
+5d7a9c1e3b4f: Downloading  [===========>              ]  42.30MB/90.1MB
+5d7a9c1e3b4f: Downloading  [======================>   ]  79.20MB/90.1MB
+5d7a9c1e3b4f: Verifying Checksum
+5d7a9c1e3b4f: Download complete
+e8f0a2c4d6b1: Downloading  [===>                      ]  10.80MB/90.1MB
+e8f0a2c4d6b1: Downloading  [===========>              ]  42.30MB/90.1MB
+e8f0a2c4d6b1: Downloading  [======================>   ]  79.20MB/90.1MB
+e8f0a2c4d6b1: Verifying Checksum
+e8f0a2c4d6b1: Download complete
+a2318d6c47ec: Extracting [==================================================>]  90.1MB/90.1MB
+7fb5c8d3e1a9: Extracting [==================================================>]  90.1MB/90.1MB
+c0d1e5f4b7a2: Extracting [==================================================>]  90.1MB/90.1MB
+91e3b2a6d8f0: Extracting [==================================================>]  90.1MB/90.1MB
+5d7a9c1e3b4f: Extracting [==================================================>]  90.1MB/90.1MB
+e8f0a2c4d6b1: Extracting [==================================================>]  90.1MB/90.1MB
+a2318d6c47ec: Pull complete
+7fb5c8d3e1a9: Pull complete
+c0d1e5f4b7a2: Pull complete
+91e3b2a6d8f0: Pull complete
+5d7a9c1e3b4f: Pull complete
+e8f0a2c4d6b1: Pull complete
+#5 [2/6] RUN apt-get update && apt-get install -y build-essential
+#5 sha256:1f2e3d4c5b6a 12.5MB / 40.1MB 1.2s
+#5 sha256:1f2e3d4c5b6a 33.0MB / 40.1MB 2.4s
+#5 ERROR: process "/bin/sh -c apt-get update && apt-get install -y build-essential" did not complete successfully: exit code: 100
+------
+ > [2/6] RUN apt-get update && apt-get install -y build-essential:
+0.412 E: Failed to fetch http://deb.debian.org/debian/pool/main/g/gcc-12/gcc-12_12.2.0-14_amd64.deb  Connection timed out
+0.413 E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+------
+ERROR: failed to solve: process "/bin/sh -c apt-get update && apt-get install -y build-essential" did not complete successfully: exit code: 100
+[exit code 1]

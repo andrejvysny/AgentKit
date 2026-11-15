@@ -28,6 +28,7 @@ pub mod process_tree;
 pub mod sandbox;
 pub mod search;
 pub mod search_tools;
+pub mod shape;
 pub mod toolsets;
 pub mod truncate;
 pub mod types;

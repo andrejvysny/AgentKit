@@ -1,0 +1,9 @@
+Edited src/a.rs (1 edit, +1 -1)
+sha256: ab12
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,3 +1,3 @@
+ one
+-two
++TWO
+ three

@@ -1,0 +1,79 @@
+crates/core/src/output.rs:66:match self.store.read(&handle, range).await {
+crates/core/src/output.rs:92:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/core/src/output.rs:130:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/core/src/output.rs:169:let handle = self.store.put(meta, bytes).await?;
+crates/core/src/output.rs:211:match self.store.read(&handle, range).await {
+crates/core/src/output.rs:245:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/core/src/output.rs:275:OutputError::NotFound(handle.to_string())
+crates/core/src/output.rs:307:// an OutputHandle names a file, so it is parsed on every use
+crates/core/src/output.rs:333:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/core/src/output.rs:351:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/core/src/output.rs:398:match self.store.read(&handle, range).await {
+crates/core/src/output.rs:406:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/core/src/output.rs:442:// an OutputHandle names a file, so it is parsed on every use
+crates/core/src/output.rs:501:OutputError::NotFound(handle.to_string())
+crates/core/src/run.rs:97:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/core/src/run.rs:138:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/core/src/run.rs:148:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/core/src/run.rs:177:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/core/src/run.rs:228:OutputError::NotFound(handle.to_string())
+crates/core/src/run.rs:240:// an OutputHandle names a file, so it is parsed on every use
+crates/core/src/run.rs:269:let handle = self.store.put(meta, bytes).await?;
+crates/core/src/run.rs:314:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/core/src/run.rs:365:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/store/src/output_store.rs:109:OutputError::NotFound(handle.to_string())
+crates/store/src/output_store.rs:133:OutputError::NotFound(handle.to_string())
+crates/store/src/output_store.rs:174:// an OutputHandle names a file, so it is parsed on every use
+crates/store/src/output_store.rs:214:// an OutputHandle names a file, so it is parsed on every use
+crates/store/src/output_store.rs:221:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/store/src/output_store.rs:241:// an OutputHandle names a file, so it is parsed on every use
+crates/store/src/output_store.rs:288:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/store/src/output_store.rs:294:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/store/src/output_store.rs:338:// an OutputHandle names a file, so it is parsed on every use
+crates/store/src/output_store.rs:359:assert_eq!(slice.total_lines, 3);
+crates/store/src/output_store.rs:418:OutputError::NotFound(handle.to_string())
+crates/store/src/output_store.rs:422:// an OutputHandle names a file, so it is parsed on every use
+crates/store/src/output_store.rs:447:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/store/src/output_store.rs:489:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/store/src/output_store.rs:523:let handle = self.store.put(meta, bytes).await?;
+crates/store/src/output_store.rs:539:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/store/src/output_store.rs:550:match self.store.read(&handle, range).await {
+crates/store/src/output_store.rs:578:assert_eq!(slice.total_lines, 3);
+crates/store/src/output_store.rs:636:// an OutputHandle names a file, so it is parsed on every use
+crates/store/src/output_store.rs:644:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/store/src/output_store.rs:675:assert_eq!(slice.total_lines, 3);
+crates/store/src/output_store.rs:713:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/store/src/events.rs:87:assert_eq!(slice.total_lines, 3);
+crates/store/src/events.rs:145:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/store/src/events.rs:165:assert_eq!(slice.total_lines, 3);
+crates/testkit/src/output.rs:88:assert_eq!(slice.total_lines, 3);
+crates/testkit/src/output.rs:105:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/testkit/src/output.rs:113:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/testkit/src/output.rs:125:match self.store.read(&handle, range).await {
+crates/testkit/src/output.rs:170:match self.store.read(&handle, range).await {
+crates/testkit/src/output.rs:173:// an OutputHandle names a file, so it is parsed on every use
+crates/testkit/src/output.rs:229:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/testkit/src/output.rs:248:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/testkit/src/output.rs:251:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/testkit/src/output.rs:280:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/testkit/src/output.rs:306:OutputError::NotFound(handle.to_string())
+crates/toolpacks-coding/src/context.rs:91:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/toolpacks-coding/src/context.rs:133:let handle = self.store.put(meta, bytes).await?;
+crates/mcp/src/bridge.rs:109:let preview = render_preview(&raw, &handle, failure, limit, cut_from);
+crates/mcp/src/bridge.rs:137:assert_eq!(slice.total_lines, 3);
+crates/mcp/src/bridge.rs:165:assert_eq!(slice.total_lines, 3);
+crates/mcp/src/bridge.rs:174:// an OutputHandle names a file, so it is parsed on every use
+crates/mcp/src/bridge.rs:217:assert_eq!(slice.total_lines, 3);
+crates/chat/src/chat/hooks.rs:38:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/chat/src/chat/hooks.rs:54:// an OutputHandle names a file, so it is parsed on every use
+crates/chat/src/chat/hooks.rs:67:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/chat/src/chat/hooks.rs:91:let handle = self.store.put(meta, bytes).await?;
+crates/runtime/src/builder.rs:29:    /// Store `bytes` and return the handle. The caller has already redacted.
+crates/runtime/src/builder.rs:66:pub async fn put(&self, meta: OutputMeta, bytes: Vec<u8>) -> Result<OutputHandle, OutputError> {
+crates/runtime/src/builder.rs:92:let handle = self.store.put(meta, bytes).await?;
+crates/runtime/src/builder.rs:99:match self.store.read(&handle, range).await {
+crates/runtime/src/builder.rs:141:assert_eq!(slice.total_lines, 3);
+crates/runtime/src/builder.rs:153:let info = store.info(&handle).await.map_err(map_output_error)?;
+crates/runtime/src/builder.rs:178:OutputError::NotFound(handle.to_string())
+[stopped: match limit 80 reached; 77 matches so far, narrow the path, glob or pattern]
+[more matches: narrow the search with path or glob, or raise limit]
