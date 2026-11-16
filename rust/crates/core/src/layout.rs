@@ -449,6 +449,36 @@ pub fn freeze(
     }
 }
 
+/// Metadata key (inside the `agentkit.subagent` object) holding a child's
+/// cache-key seed.
+pub const CHILD_CACHE_SEED_KEY: &str = "cacheKeySeed";
+
+/// The seed siblings of one role under one root chat share (DEL-12): the
+/// children's own chat ids differ, so a key derived from them would never
+/// route two siblings to the same cache lane. The effective tool set joins
+/// the seed because the tool schemas are part of the frozen prefix: siblings
+/// with different sets must not share a lane. Every part is length-prefixed
+/// so no two part lists encode alike.
+pub fn child_cache_seed(root_chat_id: &str, role: &str, effective_tools: &[String]) -> String {
+    let mut tools: Vec<&str> = effective_tools.iter().map(String::as_str).collect();
+    tools.sort_unstable();
+    tools.dedup();
+    let mut input = String::new();
+    for part in [root_chat_id, role].into_iter().chain(tools) {
+        input.push_str(&part.len().to_string());
+        input.push(':');
+        input.push_str(part);
+    }
+    format!("subagent:{}", sha256_hex(input))
+}
+
+/// The prefix cache key of a child session: root chat + role (the seed) +
+/// prefix revision. Siblings of a role froze the same S1-S3 bytes, so they
+/// route together.
+pub fn child_cache_key(seed: &str, revision: u64) -> String {
+    cache_key(seed, "subagent", revision)
+}
+
 /// `base32(sha256(chat_id, branch_id, revision))[..32]`, lowercase, no padding.
 /// A re-freeze changes the key because the old cache no longer applies.
 pub fn cache_key(chat_id: &str, branch_id: &str, revision: u64) -> String {

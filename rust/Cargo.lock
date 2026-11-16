@@ -38,6 +38,7 @@ dependencies = [
  "agentkit-kernel",
  "agentkit-sessions",
  "agentkit-store",
+ "agentkit-testkit",
  "async-trait",
  "futures",
  "serde",

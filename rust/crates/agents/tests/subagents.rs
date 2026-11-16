@@ -113,6 +113,7 @@ fn config() -> SubagentConfig {
             cancel_orphans: true,
             max_tree_provider_requests: None,
             max_tree_tokens: None,
+            warm_hold_ms: 0,
         },
         roles: Default::default(), // effective() preloads the five built-ins
         delegation_guidance: None,
@@ -1734,6 +1735,7 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
         limits: SubagentRoleLimits {
             max_await_ms: 60_000,
             await_poll_ms: 50,
+            warm_hold_ms: 0,
             ..Default::default()
         },
         ..Default::default()

@@ -274,6 +274,42 @@ impl Brief {
         Ok(brief)
     }
 
+    /// The `subagent_spawn` argument form of this brief, the inverse of
+    /// [`Brief::from_input`]: a held child (warm-then-fan) keeps it on its
+    /// chat so a restarted process can still dispatch it.
+    pub fn to_input(&self) -> Value {
+        let refs: Vec<Value> = self
+            .context_refs
+            .iter()
+            .map(|reference| {
+                serde_json::json!({
+                    "kind": reference.kind.as_str(),
+                    "ref": reference.reference,
+                    "note": reference.note,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "role": self.role,
+            "title": self.title,
+            "objective": self.objective,
+            "output_format": self.output_format.as_str(),
+            "scope": {
+                "include": self.scope.include,
+                "exclude": self.scope.exclude,
+                "stop_when": self.scope.stop_when,
+            },
+            "context_refs": refs,
+            "budget": {
+                "max_tokens": self.budget.max_tokens,
+                "max_provider_requests": self.budget.max_provider_requests,
+                "timeout_ms": self.budget.timeout_ms,
+                "max_iterations": self.budget.max_iterations,
+            },
+            "model": self.model,
+        })
+    }
+
     /// Size and shape limits. Run for every brief, parsed or built in code,
     /// so no caller can smuggle an oversized or malformed field past the
     /// spawn.
@@ -803,5 +839,16 @@ mod tests {
         let mut other = brief.clone();
         other.objective = "find something else".into();
         assert_ne!(brief.digest(), other.digest());
+    }
+
+    #[test]
+    fn to_input_round_trips_every_field() {
+        let mut value = input();
+        value["scope"] = json!({"include": ["src"], "exclude": ["tests"], "stop_when": "done"});
+        value["context_refs"] = json!([{"kind": "path", "ref": "src/lib.rs", "note": "start"}]);
+        value["budget"] = json!({"max_tokens": 900, "timeout_ms": 5000, "max_iterations": 3});
+        value["model"] = json!("small-model");
+        let brief = Brief::from_input(&value).unwrap();
+        assert_eq!(Brief::from_input(&brief.to_input()).unwrap(), brief);
     }
 }

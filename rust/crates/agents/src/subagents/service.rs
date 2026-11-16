@@ -19,7 +19,7 @@ use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{AgentsError, AgentsResult, LeaseHeld, RoleDenial};
 use agentkit_core::{
     HumanRequestSpec, OutputHandle, OutputMeta, OutputStore, SUBAGENT_METADATA_KEY, SessionTree,
-    recorded_tools, untrusted_subagent_block,
+    child_cache_seed, recorded_tools, untrusted_subagent_block,
 };
 use agentkit_engine::SharedRuntime;
 use agentkit_kernel::sha256_hex;
@@ -235,6 +235,10 @@ pub struct SubagentService {
     memory_refs: Option<Arc<dyn MemoryRefReader>>,
     /// Parked-parent waker lifecycle (see `ensure_waker`).
     waker: Arc<WakerState>,
+    /// Per-child guard serializing a held child's release against its
+    /// cancellation, so a cancelled row is never revived by a release that
+    /// read the row before the cancel landed.
+    child_guards: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Keeps the store alive for as long as any handle exists. The waker
     /// loop holds only a `Weak` to it, so it never pins the store.
     owner: Option<Arc<ServiceOwner>>,
@@ -337,6 +341,55 @@ pub fn child_identity(parent_chat_id: &str, parent_task_id: &str, spawn_key: &st
     )
 }
 
+/// Child chat metadata key (inside `agentkit.subagent`) of a warm-then-fan
+/// hold: first held (`firstChildId`, `deadlineMs`, `brief`), then released
+/// (`heldMs`, `turnTaskId`).
+const WARM_HOLD_KEY: &str = "warmHold";
+
+/// Run events only a provider response produces. Seeing one on the first
+/// child's turn means the shared prefix is being cached; a failed or
+/// cancelled run will not warm it, so those release the siblings as well.
+const WARMED_BY: [&str; 8] = [
+    "run.message.delta",
+    "run.message.completed",
+    "run.usage",
+    "run.tool.preparing",
+    "run.tool.requested",
+    "run.completed",
+    "run.failed",
+    "run.cancelled",
+];
+
+/// Where the first child of a role stands for its held siblings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeadState {
+    /// Its first provider response has not started.
+    Pending,
+    /// Its first provider response has started.
+    Warm,
+    /// It settled before warming anything.
+    Ended,
+}
+
+/// Release attempts a held child gets before it is cancelled `release_failed`.
+const RELEASE_ATTEMPTS_MAX: i64 = 5;
+const RELEASE_BACKOFF_BASE_MS: i64 = 200;
+const RELEASE_BACKOFF_CAP_MS: i64 = 10_000;
+
+/// A held sibling waits `warm_hold_ms` from its OWN hold start.
+fn warm_deadline(held_at_ms: i64, warm_hold_ms: u64) -> i64 {
+    held_at_ms.saturating_add(i64::try_from(warm_hold_ms).unwrap_or(i64::MAX))
+}
+
+/// The deterministic input id of a child's first turn, so any replay or a
+/// held child's later release re-drives the SAME submission.
+fn first_turn_input_id(child_chat_id: &str) -> String {
+    format!(
+        "subin:{}",
+        &sha256_hex(format!("{child_chat_id}:turn"))[..24]
+    )
+}
+
 impl SubagentService {
     pub fn new(
         store: SqliteStore,
@@ -356,6 +409,7 @@ impl SubagentService {
             routable_providers: None,
             memory_refs: None,
             waker: Arc::new(WakerState::default()),
+            child_guards: Arc::default(),
             owner: None,
         }
         .with_owner()
@@ -716,7 +770,10 @@ impl SubagentService {
             // re-drive, not just report. The turn submission is
             // deterministic (content-derived input id), so re-driving can
             // never double-execute.
-            if !is_terminal_status(&existing.status) && existing.turn_task_id.is_none() {
+            if !is_terminal_status(&existing.status)
+                && existing.turn_task_id.is_none()
+                && !self.is_held(&existing.child_chat_id).await?
+            {
                 // The parent may have settled while this child sat queued
                 // and the settle observer may already have swept rows that
                 // did not exist yet: re-check liveness before dispatching.
@@ -761,7 +818,7 @@ impl SubagentService {
                         .await?;
                     return Err(error);
                 }
-                self.dispatch_initial_turn(&child_chat_id, &role, request, workspace_root)
+                self.dispatch_initial_turn(&child_chat_id, &role.prompt, request, workspace_root)
                     .await?;
                 let Some(reactualized) = self.store.get_subagent(&child_chat_id).await? else {
                     return Err(AgentsError::SubagentRowVanished);
@@ -825,7 +882,8 @@ impl SubagentService {
             // takes the replay branch and returns.
             return Box::pin(self.spawn(request)).await;
         }
-        self.check_fanout_caps(&request.parent_chat_id).await?;
+        self.check_fanout_caps(&request.parent_chat_id, None)
+            .await?;
         // The brief's references are resolved (and the parent's right to hand
         // each one on checked) before the child exists: a refused reference
         // leaves nothing behind.
@@ -890,6 +948,10 @@ impl SubagentService {
             "maxTokens".into(),
             json!(tokens.clamp(1, SUBAGENT_TOKENS_CEILING)),
         );
+        // Siblings share a cache lane only if they froze the same tools: the
+        // root comes from the stored parent chain (`root_of`), never from
+        // caller input, and the child's own id is derived (`child_identity`).
+        let cache_seed = child_cache_seed(&tree_root, &role.id, &effective);
         let role_snapshot = RoleSnapshot::from_role(&role).with_effective_tools(Some(effective));
         let brief_digest = request.brief.digest();
         let subagent_metadata = json!({
@@ -900,6 +962,10 @@ impl SubagentService {
                 "parentChatId": request.parent_chat_id,
                 "parentTaskId": request.parent_task_id,
                 "rootChatId": tree_root,
+                // Siblings of a role under one root share a provider cache
+                // lane (DEL-12): the prefix freeze keys on this (core's
+                // `CHILD_CACHE_SEED_KEY`), not on the child's own id.
+                "cacheKeySeed": cache_seed,
                 "depth": depth + 1,
                 "spawnKey": request.spawn_key,
                 "briefDigest": brief_digest,
@@ -1001,7 +1067,8 @@ impl SubagentService {
             })?;
         if !registered {
             self.leases.release(&child_chat_id);
-            self.check_fanout_caps(&request.parent_chat_id).await?;
+            self.check_fanout_caps(&request.parent_chat_id, None)
+                .await?;
             return Err(AgentsError::RegistrationConcurrencyLimit);
         }
 
@@ -1025,13 +1092,27 @@ impl SubagentService {
             return Err(AgentsError::ChildCancelledAfterParent);
         }
 
-        self.dispatch_initial_turn(&child_chat_id, &role, request, workspace_root)
-            .await
-            .inspect_err(|_| {
-                // The row stays QUEUED for an honest replay; the replay
-                // re-admits its lease, so do not hold the root meanwhile.
-                self.leases.release(&child_chat_id);
-            })?;
+        // Warm-then-fan: a sibling of a role whose first child has not yet
+        // started its first provider response waits for it, so it reads the
+        // shared prefix from cache instead of racing to write it.
+        let lead = self
+            .warm_lead(request, &child_chat_id, limits.warm_hold_ms)
+            .await?;
+        let dispatched = match lead {
+            Some(lead) => {
+                self.hold_child(&child_chat_id, request, &lead, &role.prompt)
+                    .await
+            }
+            None => {
+                self.dispatch_initial_turn(&child_chat_id, &role.prompt, request, workspace_root)
+                    .await
+            }
+        };
+        dispatched.inspect_err(|_| {
+            // The row stays QUEUED for an honest replay; the replay
+            // re-admits its lease, so do not hold the root meanwhile.
+            self.leases.release(&child_chat_id);
+        })?;
         let record = self
             .store
             .get_subagent(&child_chat_id)
@@ -1082,7 +1163,7 @@ impl SubagentService {
     async fn dispatch_initial_turn(
         &self,
         child_chat_id: &str,
-        role: &RoleSpec,
+        role_prompt: &str,
         request: &SpawnRequest,
         workspace_root: Option<&str>,
     ) -> AgentsResult<()> {
@@ -1091,15 +1172,12 @@ impl SubagentService {
         let context = self.resolve_context(request, workspace_root, false).await?;
         let limits = self.child_budget_lines(child_chat_id).await?;
         let content = Value::String(render_brief(
-            &role.prompt,
+            role_prompt,
             &request.brief,
             &context.rendered,
             &limits,
         ));
-        let input_id = format!(
-            "subin:{}",
-            &sha256_hex(format!("{child_chat_id}:turn"))[..24]
-        );
+        let input_id = first_turn_input_id(child_chat_id);
         let send = match self
             .session
             .send(
@@ -1146,6 +1224,359 @@ impl SubagentService {
                 }
             }
         }
+        Ok(())
+    }
+
+    // -- warm-then-fan ----------------------------------------------------------
+
+    /// The earlier sibling a new child of the same role and parent turn
+    /// should wait for: `None` when this child is the first of its role,
+    /// the hold is off, or the first child already warmed (or ended) — then
+    /// the child dispatches at once.
+    async fn warm_lead(
+        &self,
+        request: &SpawnRequest,
+        child_chat_id: &str,
+        warm_hold_ms: u64,
+    ) -> AgentsResult<Option<SubagentRecord>> {
+        if warm_hold_ms == 0 {
+            return Ok(None);
+        }
+        let siblings = self
+            .store
+            .list_subagents_by_parent_task(&request.parent_task_id)
+            .await?;
+        let Some(lead) = siblings
+            .into_iter()
+            .find(|row| row.role == request.brief.role && row.child_chat_id != child_chat_id)
+        else {
+            return Ok(None);
+        };
+        Ok((self.lead_state(&lead).await? == LeadState::Pending).then_some(lead))
+    }
+
+    /// Whether the first child of a fan-out still has to warm the cache.
+    /// Its first provider response has started once the turn logged any
+    /// event that only a response produces; a failed or cancelled first
+    /// child will never warm anything, so it releases its siblings too.
+    async fn lead_state(&self, lead: &SubagentRecord) -> AgentsResult<LeadState> {
+        let view = self.refresh(lead).await?;
+        if is_terminal_status(&view.status) {
+            return Ok(LeadState::Ended);
+        }
+        let Some(turn_id) = view.turn_task_id.as_deref() else {
+            return Ok(LeadState::Pending);
+        };
+        let events = self.store.events(turn_id, None, 500).await?;
+        let started = events.iter().any(|record| {
+            record.event["type"]
+                .as_str()
+                .is_some_and(|kind| WARMED_BY.contains(&kind))
+        });
+        Ok(if started {
+            LeadState::Warm
+        } else {
+            LeadState::Pending
+        })
+    }
+
+    /// Park a registered child instead of dispatching it. The brief and the
+    /// spawn-time role prompt ride the child's chat, so a restarted process
+    /// can still dispatch it from what the spawn saw, not from live config.
+    async fn hold_child(
+        &self,
+        child_chat_id: &str,
+        request: &SpawnRequest,
+        lead: &SubagentRecord,
+        role_prompt: &str,
+    ) -> AgentsResult<()> {
+        let now = self.now_ms();
+        let deadline = warm_deadline(now, self.config().limits.warm_hold_ms);
+        let first = lead.child_chat_id.clone();
+        let brief = request.brief.to_input();
+        let role_prompt = role_prompt.to_owned();
+        self.store
+            .mutate_chat(child_chat_id, now, move |chat| {
+                let meta = &mut chat.metadata[SUBAGENT_METADATA_KEY];
+                let role_digest = meta["roleDigest"].clone();
+                meta[WARM_HOLD_KEY] = json!({
+                    "firstChildId": first,
+                    "heldAtMs": now,
+                    "deadlineMs": deadline,
+                    "brief": brief,
+                    "rolePrompt": role_prompt,
+                    "roleDigest": role_digest,
+                    "attempts": 0,
+                });
+                Ok(())
+            })
+            .await?;
+        self.ensure_waker();
+        self.waker.nudge.notify_one();
+        Ok(())
+    }
+
+    /// Whether the child carries a hold. Callers pair it with "no turn yet":
+    /// a released child keeps its hold record (the `subagent.released` event
+    /// reads it) but is no longer held.
+    async fn is_held(&self, child_chat_id: &str) -> AgentsResult<bool> {
+        Ok(self
+            .store
+            .get_chat(child_chat_id)
+            .await?
+            .is_some_and(|chat| chat.metadata[SUBAGENT_METADATA_KEY][WARM_HOLD_KEY].is_object()))
+    }
+
+    /// The child's release/cancel guard. Lock order: `spawn_gate`, then this.
+    async fn child_guard(&self, child_chat_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let guard = Arc::clone(
+            self.child_guards
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(child_chat_id.to_owned())
+                .or_default(),
+        );
+        guard.lock_owned().await
+    }
+
+    /// One waker tick for held children: `true` while any remain. The answer
+    /// comes from the store every tick, never from a remembered count, so a
+    /// hold registered while a release runs cannot be stranded.
+    async fn sweep_held(&self) -> AgentsResult<bool> {
+        Ok(self.release_held(false).await?.1 > 0)
+    }
+
+    /// Release held children whose first sibling has warmed, ended or timed
+    /// out. `startup` releases every one: a restarted process has lost the
+    /// moment the hold was meant to wait for. Returns (released, still held).
+    async fn release_held(&self, startup: bool) -> AgentsResult<(usize, usize)> {
+        let (mut released, mut remaining) = (0usize, 0usize);
+        for row in self.store.list_active_subagents().await? {
+            if row.status != "queued" || row.turn_task_id.is_some() {
+                continue;
+            }
+            let Some(chat) = self.store.get_chat(&row.child_chat_id).await? else {
+                continue;
+            };
+            let hold = chat.metadata[SUBAGENT_METADATA_KEY][WARM_HOLD_KEY].clone();
+            if !hold.is_object() {
+                continue;
+            }
+            let now = self.now_ms();
+            if hold["nextAttemptMs"].as_i64().is_some_and(|at| now < at) {
+                remaining += 1;
+                continue;
+            }
+            let due = startup
+                || hold["heldMs"].is_i64()
+                || now >= hold["deadlineMs"].as_i64().unwrap_or(0)
+                || match hold["firstChildId"].as_str() {
+                    Some(first) => match self.store.get_subagent(first).await? {
+                        Some(lead) => self.lead_state(&lead).await? != LeadState::Pending,
+                        None => true,
+                    },
+                    None => true,
+                };
+            if !due {
+                remaining += 1;
+                continue;
+            }
+            let held_ms = hold["heldMs"]
+                .as_i64()
+                .unwrap_or_else(|| (now - hold["heldAtMs"].as_i64().unwrap_or(now)).max(0));
+            match self.release_one(&row.child_chat_id, held_ms).await {
+                Ok(()) => released += 1,
+                Err(error) => {
+                    remaining += 1;
+                    self.waker.note_failure("held-child release", &error);
+                    if let Err(retry) = self.note_release_failure(&row.child_chat_id, &error).await
+                    {
+                        self.waker.note_failure("held-child retry", &retry);
+                    }
+                }
+            }
+        }
+        Ok((released, remaining))
+    }
+
+    /// Count a failed release attempt on the child's hold: exponential
+    /// backoff, and after `RELEASE_ATTEMPTS_MAX` the child is cancelled.
+    async fn note_release_failure(
+        &self,
+        child_chat_id: &str,
+        error: &AgentsError,
+    ) -> AgentsResult<()> {
+        let _guard = self.child_guard(child_chat_id).await;
+        let Some(row) = self.store.get_subagent(child_chat_id).await? else {
+            return Ok(());
+        };
+        if row.status != "queued" || row.turn_task_id.is_some() {
+            return Ok(());
+        }
+        let now = self.now_ms();
+        let attempts = self
+            .store
+            .mutate_chat(child_chat_id, now, move |chat| {
+                let hold = &mut chat.metadata[SUBAGENT_METADATA_KEY][WARM_HOLD_KEY];
+                let attempts = hold["attempts"].as_i64().unwrap_or(0) + 1;
+                let backoff = RELEASE_BACKOFF_BASE_MS
+                    .saturating_mul(1i64 << (attempts - 1).clamp(0, 20))
+                    .min(RELEASE_BACKOFF_CAP_MS);
+                hold["attempts"] = json!(attempts);
+                hold["nextAttemptMs"] = json!(now.saturating_add(backoff));
+                Ok(attempts)
+            })
+            .await?;
+        if attempts >= RELEASE_ATTEMPTS_MAX {
+            self.cancel_held(child_chat_id, &format!("release_failed: {error}"))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Cancel a held child that cannot start. Callers hold the child's guard.
+    async fn cancel_held(&self, child_chat_id: &str, reason: &str) -> AgentsResult<()> {
+        self.leases.release(child_chat_id);
+        self.store
+            .update_subagent(
+                child_chat_id,
+                "cancelled",
+                None,
+                Some(reason),
+                self.now_ms(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The admission a release passes, as a resume does: depth, live parent
+    /// and fan-out caps (the held row itself excluded), then the tree request
+    /// and token budgets.
+    async fn admit_release(&self, view: &SubagentView, parent_task_id: &str) -> AgentsResult<()> {
+        self.check_resume_admission(
+            view,
+            Some(parent_task_id),
+            Some(view.child_chat_id.as_str()),
+        )
+        .await?;
+        let limits = self.config().limits;
+        if let Some(tree_limit) = limits.max_tree_provider_requests {
+            budget::check_release(
+                &self.store,
+                &view.child_chat_id,
+                tree_limit,
+                limits.max_depth,
+            )
+            .await?;
+        }
+        budget::check_resume_tokens(
+            &self.store,
+            &view.child_chat_id,
+            limits.max_tree_tokens,
+            limits.max_depth,
+        )
+        .await
+    }
+
+    /// Dispatch one held child's first turn. The hold duration and the turn
+    /// that will report it (`subagent.released`) are recorded on the chat
+    /// BEFORE the turn exists, so that turn's own first event carries them.
+    /// Everything is re-read under the child's guard: a cancel that landed
+    /// first wins, and a cancelled row is never revived.
+    async fn release_one(&self, child_chat_id: &str, held_ms: i64) -> AgentsResult<()> {
+        let _spawn_gate = self.spawn_gate.lock().await;
+        let _guard = self.child_guard(child_chat_id).await;
+        let Some(row) = self.store.get_subagent(child_chat_id).await? else {
+            return Ok(());
+        };
+        if row.status != "queued" || row.turn_task_id.is_some() {
+            return Ok(());
+        }
+        let Some(chat) = self.store.get_chat(child_chat_id).await? else {
+            return Ok(());
+        };
+        let meta = &chat.metadata[SUBAGENT_METADATA_KEY];
+        let hold = &meta[WARM_HOLD_KEY];
+        if !hold.is_object() {
+            return Ok(());
+        }
+        let snapshot_intact = matches!(
+            RoleSnapshot::from_metadata(meta),
+            Ok(Some(snapshot)) if snapshot.id == row.role
+                && hold["roleDigest"].as_str() == Some(snapshot.digest().as_str())
+        );
+        let Some(role_prompt) = hold["rolePrompt"].as_str().filter(|_| snapshot_intact) else {
+            return self
+                .cancel_held(child_chat_id, "role_snapshot_mismatch")
+                .await;
+        };
+        let parent_task_id = row.parent_task_id.clone().unwrap_or_default();
+        let parent_live = match row.parent_task_id.as_deref() {
+            Some(id) => self.store.get_task(id).await?.is_some_and(|task| {
+                task.scope_id == row.parent_chat_id && !task.status.is_terminal()
+            }),
+            None => false,
+        };
+        let config = self.config();
+        let brief = Brief::from_input(&hold["brief"]).ok();
+        let (true, Some(brief), true) = (
+            parent_live,
+            brief.as_ref(),
+            config.role(&row.role).is_some(),
+        ) else {
+            let reason = "held child could not be released: its parent turn, brief or role is gone";
+            return self.cancel_held(child_chat_id, reason).await;
+        };
+        let view = self.refresh(&row).await?;
+        match self.admit_release(&view, &parent_task_id).await {
+            Ok(()) => {}
+            Err(
+                error @ (AgentsError::SubagentDepthExceeded(_)
+                | AgentsError::ResumeParentTurnRequired
+                | AgentsError::SubagentBudgetExhausted(_)),
+            ) => {
+                let reason = format!("held child refused at release: {error}");
+                return self.cancel_held(child_chat_id, &reason).await;
+            }
+            // Fan-out caps and store errors are transient: retried with backoff.
+            Err(error) => return Err(error),
+        }
+        let lease = match self.admit_resume_lease(child_chat_id).await {
+            Ok(lease) => lease,
+            Err(error @ AgentsError::WorkspaceBusy(_)) => {
+                let reason = format!("workspace_busy before releasing held child: {error}");
+                return self.cancel_held(child_chat_id, &reason).await;
+            }
+            Err(error) => return Err(error),
+        };
+        let request = SpawnRequest {
+            parent_chat_id: row.parent_chat_id.clone(),
+            parent_task_id,
+            spawn_key: meta["spawnKey"].as_str().unwrap_or_default().to_owned(),
+            brief: brief.clone(),
+            exclusive_workspace: meta["exclusive"].as_bool().unwrap_or(false),
+        };
+        let root = read_session_descriptor(&chat.metadata).and_then(|descriptor| {
+            descriptor
+                .get("workspace")?
+                .get("root")?
+                .as_str()
+                .map(str::to_owned)
+        });
+        let turn_task_id = format!("turn:{}", first_turn_input_id(child_chat_id));
+        self.store
+            .mutate_chat(child_chat_id, self.now_ms(), move |chat| {
+                // Merged, not replaced: a dispatch that fails below leaves the
+                // brief in place for the next attempt.
+                let hold = &mut chat.metadata[SUBAGENT_METADATA_KEY][WARM_HOLD_KEY];
+                hold["heldMs"] = json!(held_ms);
+                hold["turnTaskId"] = json!(turn_task_id);
+                Ok(())
+            })
+            .await?;
+        self.dispatch_initial_turn(child_chat_id, role_prompt, &request, root.as_deref())
+            .await?;
+        lease.keep();
         Ok(())
     }
 
@@ -1395,6 +1826,10 @@ impl SubagentService {
                  only — resume restarts a failed or cancelled child, otherwise spawn a new one",
                 view.status
             )));
+        }
+        // A held child has no turn yet; only its release may start one.
+        if view.turn_task_id.is_none() && self.is_held(child_chat_id).await? {
+            return Err(AgentsError::ChildHeld);
         }
         let input_id = format!(
             "submsg:{}",
@@ -1662,10 +2097,22 @@ impl SubagentService {
                 let Some(owner) = weak.upgrade() else {
                     break;
                 };
-                match owner.core.sweep_parked().await {
-                    Ok(Some(_)) => idle = 0,
-                    Ok(None) => idle = idle.saturating_add(1),
-                    Err(error) => waker.note_failure("sweep", &error),
+                let parked = owner.core.sweep_parked().await;
+                // Held children must not wait out the idle backoff: their
+                // deadline is only a few seconds away.
+                let held = owner.core.sweep_held().await;
+                // Each sweep's failure is noted on its own: one failing must
+                // not hide the other's result.
+                if let Err(error) = &parked {
+                    waker.note_failure("sweep", error);
+                }
+                if let Err(error) = &held {
+                    waker.note_failure("held sweep", error);
+                }
+                if matches!(parked, Ok(Some(_))) || matches!(held, Ok(true)) {
+                    idle = 0;
+                } else if parked.is_ok() && held.is_ok() {
+                    idle = idle.saturating_add(1);
                 }
             }
         });
@@ -1856,6 +2303,8 @@ impl SubagentService {
     /// authoritative; the worker settles the task and `refresh` projects it
     /// onto the row.
     pub async fn cancel(&self, child_chat_id: &str) -> AgentsResult<SubagentView> {
+        // Serialized with a held child's release (`release_one`).
+        let _guard = self.child_guard(child_chat_id).await;
         let row = self.require_row(child_chat_id).await?;
         // "Cancel this child" means its whole backlog: a durable queued
         // input left behind would be promoted by the runner's settle plan
@@ -1895,6 +2344,10 @@ impl SubagentService {
                 self.now_ms(),
             )
             .await?;
+        // A held child has no turn whose settling would release its lease.
+        if view.turn_task_id.is_none() {
+            self.leases.release(child_chat_id);
+        }
         self.status(child_chat_id).await
     }
 
@@ -1951,7 +2404,8 @@ impl SubagentService {
                 // A resume is a fresh admission: it runs under the same
                 // gate and the same fan-out caps as `spawn`, so a cancelled
                 // roster cannot be revived past the limits.
-                self.check_resume_admission(&view, parent_task_id).await?;
+                self.check_resume_admission(&view, parent_task_id, None)
+                    .await?;
                 if let Some(tree_limit) = self.config().limits.max_tree_provider_requests {
                     let max_depth = self.config().limits.max_depth;
                     budget::check_resume(&self.store, child_chat_id, tree_limit, max_depth).await?;
@@ -2061,10 +2515,16 @@ impl SubagentService {
 
     /// The active-roster caps `spawn` enforces, against DURABLE state.
     /// Callers hold `spawn_gate`.
-    async fn check_fanout_caps(&self, parent_chat_id: &str) -> AgentsResult<()> {
+    /// `except` is a row already counted active (a held child being released).
+    async fn check_fanout_caps(
+        &self,
+        parent_chat_id: &str,
+        except: Option<&str>,
+    ) -> AgentsResult<()> {
         let config = self.config();
         let limits = &config.limits;
-        if self.store.count_active_subagents().await? >= limits.max_concurrency {
+        let own = i64::from(except.is_some());
+        if self.store.count_active_subagents().await? - own >= limits.max_concurrency {
             return Err(AgentsError::SubagentConcurrencyLimitDetail(format!(
                 "subagent_concurrency_limit: {} active children (max {})",
                 limits.max_concurrency, limits.max_concurrency
@@ -2074,6 +2534,7 @@ impl SubagentService {
         let active_siblings = siblings
             .iter()
             .filter(|row| !is_terminal_status(&row.status))
+            .filter(|row| Some(row.child_chat_id.as_str()) != except)
             .count();
         if active_siblings as i64 >= limits.max_per_parent {
             return Err(AgentsError::SubagentParentLimit(format!(
@@ -2090,6 +2551,7 @@ impl SubagentService {
         &self,
         view: &SubagentView,
         parent_task_id: Option<&str>,
+        except: Option<&str>,
     ) -> AgentsResult<()> {
         let max_depth = self.config().limits.max_depth;
         if view.depth > max_depth {
@@ -2110,7 +2572,7 @@ impl SubagentService {
                 return Err(AgentsError::ResumeParentTurnRequired);
             }
         }
-        self.check_fanout_caps(&view.parent_chat_id).await
+        self.check_fanout_caps(&view.parent_chat_id, except).await
     }
 
     /// A resumed writer re-admits its exclusive lease before its turn runs
@@ -2220,6 +2682,7 @@ impl SubagentService {
         // the durable roster before anything is reaped or resumed.
         self.restore_leases().await?;
         if !config.limits.cancel_orphans {
+            self.release_held(true).await?;
             return Ok(0);
         }
         let rows = self.store.list_active_subagents().await?;
@@ -2239,6 +2702,9 @@ impl SubagentService {
             self.cancel_row(&row).await?;
             reaped += 1;
         }
+        // Startup recovery: a child held for a sibling that no longer runs
+        // in this process starts now, after the orphans are gone.
+        self.release_held(true).await?;
         Ok(reaped)
     }
 
@@ -2294,6 +2760,8 @@ impl SubagentService {
     }
 
     async fn cancel_row(&self, row: &SubagentRecord) -> AgentsResult<()> {
+        // Serialized with a held child's release (`release_one`).
+        let _guard = self.child_guard(&row.child_chat_id).await;
         // Drop the child's not-yet-dispatched inputs too: a promoted turn
         // after this cancel would rebind the row back to life.
         let _ = self.session.clear_queue(&row.child_chat_id).await;

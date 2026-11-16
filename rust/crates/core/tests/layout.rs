@@ -1,8 +1,9 @@
 use agentkit_contracts::Optional;
 use agentkit_core::{
     ChatMessage, Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment,
-    ToolDefinition, cache_key, content_for_wire, escape_turn_context, fold_selected_content,
-    freeze, is_turn_context_text, segment_of, tools_digest, turn_context_part,
+    ToolDefinition, cache_key, child_cache_key, child_cache_seed, content_for_wire,
+    escape_turn_context, fold_selected_content, freeze, is_turn_context_text, segment_of,
+    tools_digest, turn_context_part,
 };
 use agentkit_kernel::sha256_hex;
 use serde_json::json;
@@ -265,4 +266,29 @@ fn typed_text_cannot_impersonate_a_turn_context_block() {
         host["text"]
     );
     assert_eq!(content_for_wire(&wire), wire);
+}
+
+#[test]
+fn child_cache_key_is_shared_by_role_and_tools_under_one_root_and_revision_sensitive() {
+    let tools = vec!["a:read".to_owned(), "b:write".to_owned()];
+    let seed = child_cache_seed("root", "explorer", &tools);
+    assert_eq!(child_cache_key(&seed, 1), child_cache_key(&seed, 1));
+    // Tool order does not matter.
+    let reordered = vec!["b:write".to_owned(), "a:read".to_owned()];
+    assert_eq!(seed, child_cache_seed("root", "explorer", &reordered));
+    assert_ne!(child_cache_key(&seed, 1), child_cache_key(&seed, 2));
+    for other in [
+        child_cache_seed("root", "reviewer", &tools),
+        child_cache_seed("other", "explorer", &tools),
+        child_cache_seed("root", "explorer", &tools[..1]),
+    ] {
+        assert_ne!(child_cache_key(&seed, 1), child_cache_key(&other, 1));
+    }
+    // Length prefixes: moving a character between parts changes the seed.
+    assert_ne!(
+        child_cache_seed("ab", "c", &[]),
+        child_cache_seed("a", "bc", &[])
+    );
+    assert_ne!(child_cache_key(&seed, 1), cache_key("root", "", 1));
+    assert_eq!(child_cache_key(&seed, 1).len(), 32);
 }

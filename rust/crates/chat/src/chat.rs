@@ -427,6 +427,7 @@ impl ChatExecutor {
                 },
             )
             .await?;
+            prefix::emit_released(&context, chat_id).await?;
             if classification.is_some() {
                 registry.set_promotion_observer(Arc::new(prefix::PromotionRecorder {
                     context: context.clone(),
@@ -740,20 +741,25 @@ impl ChatExecutor {
         }
         // Cache directives (CE-07) come from the frozen prefix's key and the
         // provider's declared capability; an unknown provider gets none.
-        if session
-            && let Some(prefix) = context
-                .store
-                .get_chat(chat_id)
-                .await?
-                .and_then(|chat| agentkit_sessions::read_session_prefix(&chat.metadata))
+        let cache_chat = if session {
+            context.store.get_chat(chat_id).await?
+        } else {
+            None
+        };
+        if let Some(chat) = cache_chat
+            && let Some(prefix) = agentkit_sessions::read_session_prefix(&chat.metadata)
         {
             let tools = registry.definitions();
             // The profile's `cacheTtl` ("5m" | "1h") sets BP1/BP2; 1h by default.
+            // A subagent always takes the 5-minute class: its prefix is short
+            // lived and shared by siblings inside one fan-out (DEL-12).
+            let is_child = chat.metadata[agentkit_core::SUBAGENT_METADATA_KEY].is_object();
             let long_ttl = match model_profile
                 .as_ref()
                 .and_then(|profile| profile.extra.get("cacheTtl"))
                 .and_then(Value::as_str)
             {
+                _ if is_child => agentkit_core::CacheTtl::FiveMinutes,
                 Some("5m") => agentkit_core::CacheTtl::FiveMinutes,
                 _ => agentkit_core::CacheTtl::OneHour,
             };

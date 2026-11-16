@@ -88,6 +88,11 @@ pub struct SubagentRoleLimits {
     /// `None` means unlimited. Enforced before each provider request by the
     /// token gate (`SubagentService::token_gate`).
     pub max_tree_tokens: Option<u64>,
+    /// Warm-then-fan (DEL-12): when a parent spawns several children of one
+    /// role in a turn, the first runs at once and its siblings wait until its
+    /// first provider response has started or this many milliseconds passed,
+    /// so they read the shared prefix from cache. 0 disables the hold.
+    pub warm_hold_ms: u64,
 }
 
 impl Default for SubagentRoleLimits {
@@ -102,6 +107,7 @@ impl Default for SubagentRoleLimits {
             cancel_orphans: true,
             max_tree_provider_requests: None,
             max_tree_tokens: Some(1_000_000),
+            warm_hold_ms: 3_000,
         }
     }
 }

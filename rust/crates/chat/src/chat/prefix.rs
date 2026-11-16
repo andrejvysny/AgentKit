@@ -8,8 +8,8 @@ use crate::{ChatError, ChatResult, ExecutionContext};
 use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
     Classification, CoreError, Dialect, Freeze, PrefixDigests, PromotionObserver, PromptLayout,
-    Segment, ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key, freeze,
-    tools_digest,
+    Segment, ToolDefinition, ToolLane, ToolManifest, ToolRegistry, ToolSurface, cache_key,
+    child_cache_key, freeze, tools_digest,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -205,7 +205,10 @@ impl PromotionRecorder {
         surface.stamp(&mut next);
         next.revision = revision as f64;
         next.tools_digest = tools_digest(surface.manifest.definitions());
-        next.cache_key = cache_key(&self.chat_id, &self.branch_id, revision);
+        next.cache_key = child_seed(&chat.metadata).map_or_else(
+            || cache_key(&self.chat_id, &self.branch_id, revision),
+            |seed| child_cache_key(seed, revision),
+        );
         next.frozen_at_task = self.context.task.task_id.clone();
         let decision = Freeze::Refrozen {
             prefix: next,
@@ -320,6 +323,7 @@ pub(super) async fn record(
         &surface,
     );
     let decision = stamp_profile(decision, &chat.metadata);
+    let decision = stamp_child_key(decision, &chat.metadata);
     let decision = stamp_dialect(decision, dialect.as_ref());
     let decision = stamp_index(decision, deferral.index);
     warn_tools(context, &surface).await?;
@@ -372,6 +376,65 @@ fn stamp_profile(mut decision: Freeze, metadata: &Value) -> Freeze {
         }
     }
     decision
+}
+
+/// The child's cache-key seed (DEL-12): set at spawn, read at every freeze.
+fn child_seed(metadata: &Value) -> Option<&str> {
+    metadata[agentkit_core::SUBAGENT_METADATA_KEY][agentkit_core::CHILD_CACHE_SEED_KEY].as_str()
+}
+
+/// A subagent's prefix is keyed by (root chat, role, revision) instead of
+/// its own chat id, so siblings of a role route to one provider cache lane.
+fn stamp_child_key(mut decision: Freeze, metadata: &Value) -> Freeze {
+    let Some(seed) = child_seed(metadata) else {
+        return decision;
+    };
+    match &mut decision {
+        Freeze::Created(prefix) | Freeze::Unchanged(prefix) | Freeze::Refrozen { prefix, .. } => {
+            prefix.cache_key = child_cache_key(seed, prefix.revision as u64);
+        }
+    }
+    decision
+}
+
+/// Durable `subagent.released` {childId, heldMs}: the child's own first turn
+/// says it was held for warm-then-fan before dispatch. The service records
+/// the hold (and that turn's task id) on the child's chat; only that turn
+/// reports it, so later turns of the same child stay silent.
+pub(super) async fn emit_released(context: &ExecutionContext, chat_id: &str) -> ChatResult<()> {
+    let Some(chat) = context.store.get_chat(chat_id).await? else {
+        return Ok(());
+    };
+    let hold = &chat.metadata[agentkit_core::SUBAGENT_METADATA_KEY]["warmHold"];
+    let (Some(held_ms), Some(turn)) = (hold["heldMs"].as_i64(), hold["turnTaskId"].as_str()) else {
+        return Ok(());
+    };
+    if turn != context.task.task_id {
+        return Ok(());
+    }
+    // Once-marker: decided and written in ONE store job, so a replay of
+    // this turn (crash, lease takeover) finds it set and stays silent.
+    let first = context
+        .store
+        .mutate_chat(chat_id, context.runtime.now_ms(), |chat| {
+            let hold = &mut chat.metadata[agentkit_core::SUBAGENT_METADATA_KEY]["warmHold"];
+            if hold["releasedEmitted"].as_bool().unwrap_or(false) {
+                return Ok(false);
+            }
+            hold["releasedEmitted"] = Value::Bool(true);
+            Ok(true)
+        })
+        .await?;
+    if !first {
+        return Ok(());
+    }
+    context
+        .emit(
+            "subagent.released",
+            json!({ "childId": chat_id, "heldMs": held_ms }),
+        )
+        .await?;
+    Ok(())
 }
 
 /// The decision with the dialect version actually used recorded in its

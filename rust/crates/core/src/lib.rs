@@ -77,10 +77,11 @@ pub use dialect::{
 pub use dispatch::{DispatchFence, DispatchGuard};
 pub use examples_render::{ExampleLane, RenderedExamples, presented_description, render_examples};
 pub use layout::{
-    Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY, Segment, SystemBlock,
-    TURN_CONTEXT_CLOSE, TURN_CONTEXT_OPEN, TURN_CONTEXT_PART_TYPE, cache_key, content_for_wire,
-    escape_turn_context, fold_selected_content, freeze, is_turn_context_text, segment_of,
-    tools_digest, turn_context_part,
+    CHILD_CACHE_SEED_KEY, Freeze, LayoutError, PrefixDigests, PromptLayout, SEGMENT_METADATA_KEY,
+    Segment, SystemBlock, TURN_CONTEXT_CLOSE, TURN_CONTEXT_OPEN, TURN_CONTEXT_PART_TYPE, cache_key,
+    child_cache_key, child_cache_seed, content_for_wire, escape_turn_context,
+    fold_selected_content, freeze, is_turn_context_text, segment_of, tools_digest,
+    turn_context_part,
 };
 pub use legacy_name::LegacyName;
 pub use manifest::{ToolManifest, ToolSurface, manifest_hash, recorded_tools};

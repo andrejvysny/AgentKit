@@ -301,7 +301,8 @@ impl SessionService {
     /// Configure the subagent subsystem: `{enabled?, limits?:
     /// {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
     /// maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? and
-    /// maxTreeTokens? (each a positive integer <= 1_000_000)}, roles?:
+    /// maxTreeTokens? (each a positive integer <= 1_000_000), warmHoldMs? (0 = no
+    /// warm-then-fan hold)}, roles?:
     /// {<id>: {description?, prompt?, allowedTools?, readOnly?,
     /// canSpawn?, model?, providerId?, maxIterations?, capability?}},
     /// delegationGuidance?}`. An omitted `roles` table ships the five

@@ -159,12 +159,34 @@ pub(super) async fn check_resume(
     limit: u64,
     max_depth: i64,
 ) -> AgentsResult<()> {
+    check_tree(store, child_chat_id, limit, max_depth, true).await
+}
+
+/// Refuses the release of a held child when its tree is already over the
+/// limit. The held row's one reservation is already charged (it is active
+/// without a turn), so no second one is added.
+pub(super) async fn check_release(
+    store: &SqliteStore,
+    child_chat_id: &str,
+    limit: u64,
+    max_depth: i64,
+) -> AgentsResult<()> {
+    check_tree(store, child_chat_id, limit, max_depth, false).await
+}
+
+async fn check_tree(
+    store: &SqliteStore,
+    child_chat_id: &str,
+    limit: u64,
+    max_depth: i64,
+    starting_turn: bool,
+) -> AgentsResult<()> {
     let root = root_of(store, child_chat_id, max_depth).await?;
     if root == child_chat_id {
         // Overflow/cycle fallback: no tree to charge against.
         return Ok(());
     }
-    let charged = tree_charge(store, &root, Some(child_chat_id)).await?;
+    let charged = tree_charge(store, &root, starting_turn.then_some(child_chat_id)).await?;
     if charged > limit {
         return Err(exhausted(format!(
             "resuming {child_chat_id} would raise the tree of {root} to {charged} of {limit} provider requests"

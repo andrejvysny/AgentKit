@@ -197,6 +197,7 @@ async fn rig(store: SqliteStore, pool: usize, provider: Arc<Scripted>) -> Rig {
         limits: SubagentRoleLimits {
             max_await_ms: 60_000,
             await_poll_ms: 20,
+            warm_hold_ms: 0,
             ..Default::default()
         },
         ..Default::default()

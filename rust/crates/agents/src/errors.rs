@@ -106,6 +106,8 @@ pub enum AgentsError {
     SubagentProviderUnavailable(String),
     #[error("subagent row vanished: {0}")]
     SubagentRowVanishedDetail(String),
+    #[error("child_held: the child has not started yet; wait for it or cancel it")]
+    ChildHeld,
     #[error("{0}")]
     SubagentTerminal(String),
     #[error("{0}")]
@@ -248,6 +250,7 @@ impl AgentsError {
             Self::SubagentProviderUnavailable(_) => "subagent_provider_unavailable".into(),
             Self::SubagentRowVanishedDetail(_) => "subagent row vanished".into(),
             Self::SubagentTerminal(_) => "subagent_terminal".into(),
+            Self::ChildHeld => "child_held".into(),
             Self::UnknownSubagentRole(_) => "unknown_subagent_role".into(),
             Self::ModelNotAllowed(_) => "model_not_allowed".into(),
             Self::InvalidBrief(_) => "invalid_brief".into(),
