@@ -500,11 +500,20 @@ fn claims(text: &str) -> Vec<Claim> {
     out
 }
 
-/// Whole-word negations (folded). The `n't` contractions are matched by
-/// suffix in [`is_negated`].
-const NEGATIONS: [&str; 14] = [
+/// Whole-word negations (folded, so "nič", "žiadny" and "není" are matched by
+/// their ASCII forms "nic", "ziadny" and "neni"). The `n't` contractions are
+/// matched by suffix in [`is_negated`].
+///
+/// Slovak and Czech verbs negate with the prefix "ne-" ("nemám", "nechce").
+/// That is not handled: a prefix match also hits "nedeľa", "nemocnica",
+/// "nebo" and every other word that merely starts with "ne", and a false
+/// positive refuses a valid sentence. Follow-up: a verb-aware check.
+const NEGATIONS: [&str; 27] = [
     "never", "not", "no", "nor", "without", "cannot", "dont", "doesnt", "isnt", "arent", "wont",
-    "cant", "didnt", "wasnt",
+    "cant", "didnt", "wasnt", // Slovak
+    "nie", "nikdy", "ani", "bez", "ziadny", "ziadna", "ziadne", "nic", "nijako",
+    // Czech (the rest is shared with Slovak)
+    "neni", "zadny", "zadna", "zadne",
 ];
 
 /// Whether `text` holds a negation word. The coverage check compares the
@@ -789,6 +798,29 @@ mod tests {
         assert!(text_covered(
             "Wants a note on Rust.",
             "I want a note on Rust, please"
+        ));
+
+        // Slovak and Czech negation words, with or without diacritics.
+        let affirmed = "Mám rád písanie v Ruste pre firmu Acme každý deň";
+        assert!(!text_covered(
+            "Nemám rád písanie v Ruste pre firmu Acme každý deň, nikdy.",
+            affirmed
+        ));
+        assert!(!text_covered(
+            "Píše v Ruste pre firmu Acme bez radosti každý deň.",
+            affirmed
+        ));
+        assert!(!text_covered(
+            "Piše v Ruste pre firmu Acme žiadny deň.",
+            affirmed
+        ));
+        assert!(!text_covered(
+            "Není rád písanie v Ruste pre firmu Acme každý deň",
+            affirmed
+        ));
+        assert!(text_covered(
+            "Nikdy nepíšem v Ruste pre firmu Acme.",
+            "Nikdy nepíšem v Ruste pre firmu Acme"
         ));
     }
 
