@@ -115,16 +115,7 @@ pub fn build_responses_request_notes(
     // sits inside the last user message (CE-01), so no request-local items
     // precede the history.
     let wire_items = items;
-    let mut body = json!({"model":input.model,"input":wire_items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
-    if !instructions.is_empty() {
-        body["instructions"] = instructions.into();
-    }
-    if let Some(cache) = &input.cache
-        && cache.key_field == Some(agentkit_core::CacheHint::PromptCacheKey)
-        && let Some(key) = &cache.cache_key
-    {
-        body["prompt_cache_key"] = key.clone().into();
-    }
+    let mut body = json!({"model":input.model});
     let mut notes: Vec<ProfileNote> = sanitized_note(&replaced).into_iter().collect();
     if !tools.is_empty() {
         let (choice, mut downgraded) = match &input.profile {
@@ -138,6 +129,19 @@ pub fn build_responses_request_notes(
         notes.append(&mut downgraded);
         body["tools"] = tools.into();
     }
+    if !instructions.is_empty() {
+        body["instructions"] = instructions.into();
+    }
+    if let Some(cache) = &input.cache
+        && cache.key_field == Some(agentkit_core::CacheHint::PromptCacheKey)
+        && let Some(key) = &cache.cache_key
+    {
+        body["prompt_cache_key"] = key.clone().into();
+    }
+    body["input"] = wire_items.into();
+    body["stream"] = true.into();
+    body["store"] = false.into();
+    body["include"] = json!(["reasoning.encrypted_content"]);
     let mut reasoning = serde_json::Map::new();
     if let Some(value) = input.reasoning_effort {
         reasoning.insert("effort".into(), json!(value));

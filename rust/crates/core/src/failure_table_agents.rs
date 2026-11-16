@@ -111,6 +111,27 @@ pub(crate) static AGENTS: &[Spec] = &[
         "Omit the model to use the role's default.",
     ),
     s(
+        "context_ref_refused",
+        C::GuardRefused,
+        true,
+        "A context reference in the brief cannot be read from this session.",
+        "Drop that reference, or put the needed text in the brief itself.",
+    ),
+    s(
+        "subagent_budget_check_failed",
+        C::ToolError,
+        true,
+        "The subagent token budget could not be checked.",
+        "Try again later or do the work yourself.",
+    ),
+    s(
+        "subagent_view_unserializable",
+        C::ToolError,
+        false,
+        "That subagent's status could not be read.",
+        "Call subagent_list to see the ids of your children.",
+    ),
+    s(
         "workspace_required",
         C::Precondition,
         false,

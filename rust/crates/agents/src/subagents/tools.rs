@@ -737,12 +737,12 @@ pub fn report_findings_definition() -> ToolDefinition {
             .to_owned(),
         input_schema: json!({"type":"object","required":[],"additionalProperties":false,
         "properties":{
-            "findings":{"type":"array","maxItems":20,"description":"Claims you can support, each with its evidence.",
+            "findings":{"type":"array","maxItems":20,"description":"Statements you can support, each with its sources.",
                 "items":{"type":"object","required":["claim","confidence"],"additionalProperties":false,
                     "properties":{
                         "claim":{"type":"string","minLength":1,"description":"One claim, in a sentence or two."},
-                        "evidence":{"type":"array","items":{"type":"string"},"maxItems":5,"description":"File and location, or another source, that supports the claim."},
-                        "confidence":{"type":"string","enum":["high","medium","low"],"description":"How sure you are of the claim."}
+                        "evidence":{"type":"array","items":{"type":"string"},"maxItems":5,"description":"File and location, or another source, that supports the statement."},
+                        "confidence":{"type":"string","enum":["high","medium","low"],"description":"How sure you are of the statement."}
                     }}},
             "open_questions":{"type":"array","items":{"type":"string"},"maxItems":10,"description":"Questions you could not settle."}
         }}),

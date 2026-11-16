@@ -5,6 +5,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # `paste` is archived (unmaintained, no vulnerability); it reaches the tree only
+  # through tokenizers 0.23.2 in agentkit-embed-local (3.5), which has no
+  # released replacement.
+  { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro pulled by tokenizers; no advisory of exploitability" },
+]
 
 [licenses]
 version = 2
