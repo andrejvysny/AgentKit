@@ -527,6 +527,75 @@ impl SubagentService {
             })
     }
 
+    /// True while the child's task lifecycle is not over. The turn task is
+    /// the truth: a row already marked cancelled whose turn still runs
+    /// (cooperative cancel, a wedged worker mid-tool) is live. A child with
+    /// no turn yet (queued/held) is live unless its row is terminal. This,
+    /// not the lease clock, decides whether a lease is still held.
+    pub async fn child_is_live(&self, child_chat_id: &str) -> AgentsResult<bool> {
+        let Some(row) = self.store.get_subagent(child_chat_id).await? else {
+            return Ok(false);
+        };
+        if let Some(turn_id) = row.turn_task_id.as_deref()
+            && let Some(task) = self.store.get_task(turn_id).await?
+        {
+            if !task.status.is_terminal() {
+                return Ok(true);
+            }
+            return Ok(self.live_child_turn(child_chat_id).await?.is_some());
+        }
+        Ok(!is_terminal_status(&row.status))
+    }
+
+    /// True for a child spawned exclusive (it must hold the write lease for
+    /// every mutating call it makes).
+    pub async fn is_writing_child(&self, chat_id: &str) -> AgentsResult<bool> {
+        if self.store.get_subagent(chat_id).await?.is_none() {
+            return Ok(false);
+        }
+        Ok(self.store.get_chat(chat_id).await?.is_some_and(|chat| {
+            chat.metadata["agentkit.subagent"]["exclusive"]
+                .as_bool()
+                .unwrap_or(false)
+        }))
+    }
+
+    /// Lease reaper. A lease whose child is no longer live (terminal turn,
+    /// whether or not anyone observed it) is dropped. With `cancel_wedged`
+    /// it also cancels (never releases) a live child whose lease expired;
+    /// that lease goes only once the turn is terminal. A child parked on
+    /// approval or on its own children is waiting, not wedged, and is left
+    /// alone.
+    async fn sweep_stale_leases(&self, cancel_wedged: bool) -> AgentsResult<()> {
+        let now = self.now_ms();
+        let stale = self.leases.stale_children(now);
+        let mut live = std::collections::HashSet::new();
+        for child in self.leases.holders() {
+            if !self.child_is_live(&child).await? {
+                self.leases.release(&child);
+                continue;
+            }
+            // Every live child keeps its lease, expired or not; only a cancel
+            // pass acts on the stale ones.
+            live.insert(child.clone());
+            if !cancel_wedged || !stale.contains(&child) {
+                continue;
+            }
+            let Some(row) = self.store.get_subagent(&child).await? else {
+                continue;
+            };
+            if let Some(turn_id) = row.turn_task_id.as_deref()
+                && let Some(task) = self.store.get_task(turn_id).await?
+                && matches!(task.status, TaskStatus::Running | TaskStatus::Queued)
+                && !task.cancel_requested
+            {
+                let _ = self.session.cancel(&child, turn_id).await;
+            }
+        }
+        self.leases.expire(now, &live);
+        Ok(())
+    }
+
     /// Record that `chat_id` offers tool `name` under contributor
     /// `namespace`. Called by the role guard while a session stages its
     /// tools; a later stage of the same name overwrites.
@@ -574,6 +643,7 @@ impl SubagentService {
         if !config.enabled {
             return Err(AgentsError::SubagentsDisabled);
         }
+        self.sweep_stale_leases(false).await?;
         request
             .brief
             .validate()
@@ -639,11 +709,30 @@ impl SubagentService {
             .as_ref()
             .and_then(|value| value.get("root"))
             .and_then(Value::as_str);
-        let parent_model = descriptor.get("model").and_then(Value::as_str);
+        // The parent's CURRENT admitted provider+model is the one its running
+        // turn payload carries (the host re-admits it per turn, and it
+        // freezes the provider snapshot). The session descriptor keeps the
+        // provider the chat was created with and goes stale after a switch,
+        // so it is only the fallback for a turn that carries no admission.
+        let admitted_provider = parent_task
+            .payload
+            .get("providerId")
+            .and_then(Value::as_str);
+        // Provider and model travel as a pair: never an admitted provider
+        // with a descriptor model.
+        let (parent_provider, parent_model) = match admitted_provider {
+            Some(provider) => (
+                Some(provider),
+                parent_task.payload.get("model").and_then(Value::as_str),
+            ),
+            None => (
+                descriptor.get("providerId").and_then(Value::as_str),
+                descriptor.get("model").and_then(Value::as_str),
+            ),
+        };
         // Role-level provider override: a host that pins a role to its own
         // provider must not have that role's model silently run against the
         // parent's provider binding.
-        let parent_provider = descriptor.get("providerId").and_then(Value::as_str);
         let provider_id = role
             .provider_id
             .clone()
@@ -2602,6 +2691,7 @@ impl SubagentService {
                 .as_str()
                 .map(str::to_owned)
         });
+        self.sweep_stale_leases(false).await?;
         let held_before = root
             .as_deref()
             .is_some_and(|root| self.leases.is_held_by(root, child_chat_id, self.now_ms()));
@@ -2677,7 +2767,7 @@ impl SubagentService {
         // re-evaluated by the waker, never re-run.
         self.ensure_waker();
         let config = self.config();
-        self.leases.expire(self.now_ms());
+        self.sweep_stale_leases(true).await?;
         // Startup path: the lease table is memory-only, so re-derive it from
         // the durable roster before anything is reaped or resumed.
         self.restore_leases().await?;

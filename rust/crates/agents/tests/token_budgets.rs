@@ -47,6 +47,12 @@ fn reply(text: &'static str, tool: bool, usage: Value) -> Step {
     Step { text, tool, usage }
 }
 
+// Hard caps (R13): the gate admits a request only when settled spend +
+// outstanding reservations + its own estimate fit under BOTH caps. A real
+// child turn estimates ~16.5k tokens (role prompt, tool definitions and the
+// 1,024-token default output reserve), so the end-to-end caps below sit well
+// above that floor.
+
 /// Scripted per child: the child is recognized by a marker in its prompt
 /// (the brief objective). Unscripted requests answer "done" without usage.
 #[derive(Default)]
@@ -487,22 +493,22 @@ fn spent_used(message: &str) -> u64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_stops_at_its_budget_and_returns_partial_text() {
     let rig = Rig::memory(None).await;
-    // The first request alone spends 1200 of the child's 1000 tokens and asks
+    // The first request alone spends 60000 of the child's 50000 tokens and asks
     // for a tool round; the gate must refuse the second request.
     rig.provider.script(
         "CHILD-A",
         vec![
-            reply("partial findings", true, json!({"output": 1200})),
+            reply("partial findings", true, json!({"output": 60_000})),
             reply("never sent", false, Value::Null),
         ],
     );
-    let child = rig.spawn("a", "CHILD-A", Some(1_000)).await;
+    let child = rig.spawn("a", "CHILD-A", Some(50_000)).await;
     let envelope = rig.settle(&child).await;
 
     assert_eq!(envelope.status, "budget_exhausted", "{envelope:?}");
     assert_eq!(
         envelope.budget_exhausted,
-        Some(exhausted("child", 1_200, 1_000))
+        Some(exhausted("child", 60_000, 50_000))
     );
     assert!(
         envelope.summary.starts_with("partial findings"),
@@ -512,7 +518,7 @@ async fn child_stops_at_its_budget_and_returns_partial_text() {
     assert!(
         envelope
             .summary
-            .contains("child budget spent 1200 of 1000 tokens"),
+            .contains("child budget spent 60000 of 50000 tokens"),
         "the exhaustion note follows it: {}",
         envelope.summary
     );
@@ -537,7 +543,7 @@ async fn child_stops_at_its_budget_and_returns_partial_text() {
     assert_eq!(events.len(), 1, "idempotent per child: {events:?}");
     assert_eq!(
         events[0]["data"],
-        json!({"childId": child.child_chat_id, "budget": "child", "used": 1200, "limit": 1000})
+        json!({"childId": child.child_chat_id, "budget": "child", "used": 60000, "limit": 50000})
     );
     // The chat record the envelope is rebuilt from.
     let chat = rig
@@ -554,10 +560,10 @@ async fn child_stops_at_its_budget_and_returns_partial_text() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tree_budget_stops_the_second_sibling() {
-    let rig = Rig::memory(Some(1_000)).await;
+    let rig = Rig::memory(Some(50_000)).await;
     rig.provider.script(
         "SIBLING-A",
-        vec![reply("a is done", false, json!({"output": 1000}))],
+        vec![reply("a is done", false, json!({"output": 50_000}))],
     );
     rig.provider.script("SIBLING-B", vec![]);
 
@@ -575,12 +581,12 @@ async fn tree_budget_stops_the_second_sibling() {
     );
     assert_eq!(
         second_envelope.budget_exhausted,
-        Some(exhausted("tree", 1_000, 1_000))
+        Some(exhausted("tree", 50_000, 50_000))
     );
     assert!(
         second_envelope
             .summary
-            .contains("tree budget spent 1000 of 1000 tokens"),
+            .contains("tree budget spent 50000 of 50000 tokens"),
         "{}",
         second_envelope.summary
     );
@@ -599,31 +605,31 @@ async fn restart_mid_run_keeps_the_remaining_budget_identical() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("budgets.db");
     {
-        let first = Rig::start(SqliteStore::open(&path, 64).unwrap(), Some(1_000), true).await;
+        let first = Rig::start(SqliteStore::open(&path, 64).unwrap(), Some(50_000), true).await;
         first.provider.script(
             "BEFORE-RESTART",
-            vec![reply("spent", false, json!({"output": 600}))],
+            vec![reply("spent", false, json!({"output": 30_000}))],
         );
         let child = first.spawn("before", "BEFORE-RESTART", None).await;
         assert_eq!(first.settle(&child).await.status, "completed");
-        // Process death: nothing of the 600 tokens lives anywhere but the
+        // Process death: nothing of the 30000 tokens lives anywhere but the
         // database.
         first.worker.interrupt_active().await;
     }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    let second = Rig::start(SqliteStore::open(&path, 64).unwrap(), Some(1_000), false).await;
+    let second = Rig::start(SqliteStore::open(&path, 64).unwrap(), Some(50_000), false).await;
     second.provider.script(
         "AFTER-RESTART",
-        vec![reply("spent", false, json!({"output": 400}))],
+        vec![reply("spent", false, json!({"output": 20_000}))],
     );
     second.provider.script("LAST", vec![]);
-    // 600 (before the restart) + 400 = exactly the tree budget.
+    // 30000 (before the restart) + 20000 = exactly the tree budget.
     let middle = second.spawn("after", "AFTER-RESTART", None).await;
     let middle = second.settle(&middle).await;
     assert_eq!(
         middle.status, "completed",
-        "400 fits the 400 that remained: {middle:?}"
+        "20000 fits the 20000 that remained: {middle:?}"
     );
 
     let last = second.spawn("last", "LAST", None).await;
@@ -631,7 +637,7 @@ async fn restart_mid_run_keeps_the_remaining_budget_identical() {
     assert_eq!(last.status, "budget_exhausted", "{last:?}");
     assert_eq!(
         last.budget_exhausted,
-        Some(exhausted("tree", 1_000, 1_000)),
+        Some(exhausted("tree", 50_000, 50_000)),
         "the pre-restart spend counts toward the same total"
     );
     assert_eq!(second.provider.requests_of("LAST"), 0);
@@ -640,29 +646,33 @@ async fn restart_mid_run_keeps_the_remaining_budget_identical() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cache_reads_are_weighted_a_tenth() {
     let rig = Rig::memory(None).await;
-    // Request 1: 5000 cache reads (500) + 400 output = 900 of 1000. At full
-    // weight it would be 5400 and the second request would be refused.
-    // Request 2: 2000 cache reads (+200) = 1100; the third is refused.
+    // Request 1: 200000 cache reads (20000) + 10000 output = 30000 of 50000.
+    // At full weight it would be 210000 and the second would be refused.
+    // Request 2: 300000 cache reads (+30000) = 60000; the third is refused.
     rig.provider.script(
         "CHILD-CACHE",
         vec![
-            reply("first", true, json!({"cache_read": 5000, "output": 400})),
-            reply("second", true, json!({"cache_read": 2000})),
+            reply(
+                "first",
+                true,
+                json!({"cache_read": 200_000, "output": 10_000}),
+            ),
+            reply("second", true, json!({"cache_read": 300_000})),
             reply("never sent", false, Value::Null),
         ],
     );
-    let child = rig.spawn("cache", "CHILD-CACHE", Some(1_000)).await;
+    let child = rig.spawn("cache", "CHILD-CACHE", Some(50_000)).await;
     let envelope = rig.settle(&child).await;
 
     assert_eq!(envelope.status, "budget_exhausted", "{envelope:?}");
     assert_eq!(
         envelope.budget_exhausted,
-        Some(exhausted("child", 1_100, 1_000))
+        Some(exhausted("child", 60_000, 50_000))
     );
     assert_eq!(
         rig.provider.requests_of("CHILD-CACHE"),
         2,
-        "the first request left 100 tokens, so the second ran"
+        "the first request left room for the second's estimate, so it ran"
     );
 }
 
@@ -671,26 +681,26 @@ async fn a_resumed_child_is_charged_to_the_same_budget() {
     let rig = Rig::memory(None).await;
     rig.provider.script("RESUME-A", vec![]);
     rig.provider.fail("RESUME-A", true);
-    let child = rig.spawn("resume-a", "RESUME-A", Some(1_000)).await;
+    let child = rig.spawn("resume-a", "RESUME-A", Some(200_000)).await;
     assert_eq!(rig.settle(&child).await.status, "failed");
-    // The failed turn had reported 500 tokens before it died.
+    // The failed turn had reported 20000 tokens before it died.
     let turn = child.turn_task_id.clone().expect("child turn");
     rig.store
         .append_system_event(
             &turn,
             "run.usage",
             json!({"callId": "seed", "attempt": 1, "step": 0, "model": "model",
-                "source": "stream", "finalForCall": true, "output": 500}),
+                "source": "stream", "finalForCall": true, "output": 20_000}),
             rig.subagents.now_ms(),
         )
         .await
         .unwrap();
 
-    // 500 of 1000 spent: the resume is admitted, and its turn spends 600 more.
+    // 20000 of 200000 spent: the resume is admitted, and its turn spends 190000 more.
     rig.provider.fail("RESUME-A", false);
     rig.provider.script(
         "RESUME-A",
-        vec![reply("resumed", false, json!({"output": 600}))],
+        vec![reply("resumed", false, json!({"output": 190_000}))],
     );
     let resumed = rig
         .subagents
@@ -700,24 +710,24 @@ async fn a_resumed_child_is_charged_to_the_same_budget() {
     assert_ne!(resumed.turn_task_id, child.turn_task_id);
     assert_eq!(rig.settle(&child).await.status, "completed");
 
-    // Both turns count: at least 500 + 600 against the one child budget.
+    // Both turns count: at least 20000 + 190000 against the one child budget.
     let error = rig.gate(&child.child_chat_id).await.expect_err("spent");
     let message = error.to_string();
     assert!(message.contains("subagent_budget_exhausted"), "{message}");
     assert!(message.contains("child token budget spent"), "{message}");
-    assert!(spent_used(&message) >= 1_100, "{message}");
+    assert!(spent_used(&message) >= 210_000, "{message}");
 
     // A failed child that already spent its budget cannot be resumed at all.
     rig.provider.script("RESUME-B", vec![]);
     rig.provider.fail("RESUME-B", true);
-    let doomed = rig.spawn("resume-b", "RESUME-B", Some(1_000)).await;
+    let doomed = rig.spawn("resume-b", "RESUME-B", Some(200_000)).await;
     assert_eq!(rig.settle(&doomed).await.status, "failed");
     rig.store
         .append_system_event(
             doomed.turn_task_id.as_deref().expect("child turn"),
             "run.usage",
             json!({"callId": "seed", "attempt": 1, "step": 0, "model": "model",
-                "source": "stream", "finalForCall": true, "output": 1000}),
+                "source": "stream", "finalForCall": true, "output": 200_000}),
             rig.subagents.now_ms(),
         )
         .await
@@ -835,16 +845,16 @@ async fn advisor_reviews_of_a_child_are_charged_to_its_budget() {
         "CHILD-REVIEWED",
         vec![reply("done", false, json!({"output": 5}))],
     );
-    let child = rig.spawn("reviewed", "CHILD-REVIEWED", Some(5_000)).await;
+    let child = rig.spawn("reviewed", "CHILD-REVIEWED", Some(50_000)).await;
     rig.settle(&child).await;
     rig.gate(&child.child_chat_id)
         .await
-        .expect("5 of 5000 tokens spent");
+        .expect("5 of 50000 tokens spent");
 
-    // A review (watchdog or explicit) of the child's session spends 6000
+    // A review (watchdog or explicit) of the child's session spends 60000
     // tokens on the advisor's own model.
     let engine = AdvisorEngine::new(
-        Arc::new(Reviewer { output: 6_000 }),
+        Arc::new(Reviewer { output: 60_000 }),
         rig.store.clone(),
         Arc::new(agentkit_core::SystemRuntime),
         AdvisorConfig {
@@ -876,7 +886,7 @@ async fn advisor_reviews_of_a_child_are_charged_to_its_budget() {
         .expect_err("the review spent the child's budget")
         .to_string();
     assert!(message.contains("child token budget spent"), "{message}");
-    assert_eq!(spent_used(&message), 6_005, "{message}");
+    assert_eq!(spent_used(&message), 60_005, "{message}");
     // A review of the parent (not a child) charges nothing.
     rig.gate("parent").await.expect("parent is not metered");
 }
@@ -893,10 +903,10 @@ async fn a_reservation_counts_against_siblings_and_is_keyed_by_the_turn() {
     rig.settle(&first).await;
     let second = rig.spawn("b", "RESERVE-B", None).await;
     rig.settle(&second).await;
-    rig.subagents.configure(config(Some(1_000)));
+    rig.subagents.configure(config(Some(2_000)));
 
     // Each child's next turn is live. A's request (500 prompt + 1000 output
-    // reserve) is admitted: 20 of 1000 spent so far.
+    // reserve) is admitted: 20 + 1500 fits the 2000 tree cap.
     rig.live_turn(&first.child_chat_id, "turn-a").await;
     rig.live_turn(&second.child_chat_id, "turn-b").await;
     rig.authorize(&first.child_chat_id, "turn-a", 500, 1_000)
@@ -915,14 +925,90 @@ async fn a_reservation_counts_against_siblings_and_is_keyed_by_the_turn() {
         "the ledger is keyed by the turn task, never the request run id: {ledger}"
     );
 
-    // B's request is refused because A's in-flight reservation counts.
+    // B's request (100 + 500) does not fit beside A's in-flight reservation:
+    // 1520 + 600 > 2000. The hard cap refuses it before dispatch.
     let message = rig
-        .authorize(&second.child_chat_id, "turn-b", 10, 10)
+        .authorize(&second.child_chat_id, "turn-b", 100, 500)
         .await
-        .expect_err("A's reservation exhausts the tree")
+        .expect_err("A's reservation leaves no room for B")
         .to_string();
-    assert!(message.contains("tree token budget spent"), "{message}");
-    assert!(spent_used(&message) >= 1_500, "{message}");
+    assert!(
+        message.contains("tree token budget cannot fit the request"),
+        "{message}"
+    );
+    assert!(message.contains("1520 used + 600 requested"), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_child_cap_of_one_token_refuses_the_first_request_before_dispatch() {
+    let rig = Rig::memory(None).await;
+    rig.provider.script(
+        "CAP-ONE",
+        vec![reply("never sent", false, json!({"output": 500}))],
+    );
+    let child = rig.spawn("cap-one", "CAP-ONE", Some(1)).await;
+    let envelope = rig.settle(&child).await;
+
+    assert_eq!(envelope.status, "budget_exhausted", "{envelope:?}");
+    assert_eq!(
+        rig.provider.requests_of("CAP-ONE"),
+        0,
+        "the provider must never be called past a hard cap"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_larger_than_the_tree_remainder_is_refused_not_reserved() {
+    let rig = Rig::memory(Some(1_000_000)).await;
+    rig.provider
+        .script("TREE-A", vec![reply("done", false, json!({"output": 10}))]);
+    let first = rig.spawn("a", "TREE-A", None).await;
+    rig.settle(&first).await;
+    rig.subagents.configure(config(Some(1_000)));
+    rig.live_turn(&first.child_chat_id, "turn-a").await;
+
+    // 10 of 1000 spent: 990 remain, the request needs 1500.
+    let message = rig
+        .authorize(&first.child_chat_id, "turn-a", 500, 1_000)
+        .await
+        .expect_err("1500 does not fit 990")
+        .to_string();
+    assert!(message.contains("subagent_budget_exhausted"), "{message}");
+    let chat = rig
+        .store
+        .get_chat(&first.child_chat_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let ledger = &chat.metadata["agentkit.subagent"]["tokenLedger"];
+    assert_eq!(ledger["turn-a"]["reserved"], 0, "{ledger}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_siblings_racing_for_the_last_remainder_admit_at_most_one() {
+    let rig = Rig::memory(Some(1_000_000)).await;
+    for marker in ["RACE-A", "RACE-B"] {
+        rig.provider
+            .script(marker, vec![reply("done", false, json!({"output": 10}))]);
+    }
+    let first = rig.spawn("a", "RACE-A", None).await;
+    rig.settle(&first).await;
+    let second = rig.spawn("b", "RACE-B", None).await;
+    rig.settle(&second).await;
+    rig.subagents.configure(config(Some(2_000)));
+    rig.live_turn(&first.child_chat_id, "turn-a").await;
+    rig.live_turn(&second.child_chat_id, "turn-b").await;
+
+    // 20 spent; each request needs 1100, so only one fits under 2000.
+    let (a, b) = tokio::join!(
+        rig.authorize(&first.child_chat_id, "turn-a", 100, 1_000),
+        rig.authorize(&second.child_chat_id, "turn-b", 100, 1_000),
+    );
+    assert_eq!(
+        usize::from(a.is_ok()) + usize::from(b.is_ok()),
+        1,
+        "exactly one sibling may take the last remainder: {a:?} / {b:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -930,9 +1016,9 @@ async fn totals_resume_from_the_last_event_and_survive_a_missing_ledger() {
     let rig = Rig::memory(None).await;
     rig.provider.script(
         "CHILD-TOTALS",
-        vec![reply("done", false, json!({"output": 300}))],
+        vec![reply("done", false, json!({"output": 30_000}))],
     );
-    let child = rig.spawn("totals", "CHILD-TOTALS", Some(1_000)).await;
+    let child = rig.spawn("totals", "CHILD-TOTALS", Some(50_000)).await;
     rig.settle(&child).await;
     rig.observe(&child.child_chat_id).await;
     let turn = child.turn_task_id.clone().expect("turn");
@@ -945,7 +1031,7 @@ async fn totals_resume_from_the_last_event_and_survive_a_missing_ledger() {
         .unwrap()
         .unwrap();
     let entry = chat.metadata["agentkit.subagent"]["tokenLedger"][turn.as_str()].clone();
-    assert_eq!(entry["tenths"], 3_000, "{entry}");
+    assert_eq!(entry["tenths"], 300_000, "{entry}");
     assert_eq!(entry["calls"], 1, "{entry}");
     assert!(entry["seq"].is_u64(), "{entry}");
 
@@ -955,7 +1041,7 @@ async fn totals_resume_from_the_last_event_and_survive_a_missing_ledger() {
             &turn,
             "run.usage",
             json!({"callId": "late", "attempt": 1, "step": 0, "model": "model",
-                "source": "stream", "finalForCall": true, "output": 800}),
+                "source": "stream", "finalForCall": true, "output": 40_000}),
             rig.subagents.now_ms(),
         )
         .await
@@ -963,9 +1049,9 @@ async fn totals_resume_from_the_last_event_and_survive_a_missing_ledger() {
     let message = rig
         .gate(&child.child_chat_id)
         .await
-        .expect_err("1100 of 1000")
+        .expect_err("70000 of 50000")
         .to_string();
-    assert_eq!(spent_used(&message), 1_100, "{message}");
+    assert_eq!(spent_used(&message), 70_000, "{message}");
 
     // ...and a restart that lost the totals rescans everything once.
     rig.store
@@ -980,7 +1066,7 @@ async fn totals_resume_from_the_last_event_and_survive_a_missing_ledger() {
         .await
         .expect_err("still spent")
         .to_string();
-    assert_eq!(spent_used(&message), 1_100, "{message}");
+    assert_eq!(spent_used(&message), 70_000, "{message}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1032,11 +1118,11 @@ async fn a_long_partial_answer_and_its_note_stay_inside_the_summary_cap() {
     rig.provider.script(
         "LONG-PARTIAL",
         vec![
-            reply(long, true, json!({"output": 1200})),
+            reply(long, true, json!({"output": 60_000})),
             reply("never sent", false, Value::Null),
         ],
     );
-    let child = rig.spawn("long", "LONG-PARTIAL", Some(1_000)).await;
+    let child = rig.spawn("long", "LONG-PARTIAL", Some(50_000)).await;
     let envelope = rig.settle(&child).await;
 
     assert_eq!(envelope.status, "budget_exhausted", "{envelope:?}");

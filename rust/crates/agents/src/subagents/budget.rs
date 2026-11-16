@@ -287,17 +287,6 @@ pub(super) struct TurnLedger {
     pub unreported: u64,
 }
 
-/// How `persist_totals` ends the in-flight reservation.
-#[derive(Clone, Copy)]
-pub(super) enum Close {
-    /// The next request of attempt `.0` is about to dispatch: a reservation
-    /// of the same attempt finished without usage (charge its estimate); one
-    /// of an earlier attempt died with its retry (drop it).
-    Next(u64),
-    /// The turn settled: `.0` is whether it completed (charge) or not (drop).
-    Settled(bool),
-}
-
 impl TurnLedger {
     fn read(entry: &Value) -> Self {
         Self {
@@ -399,13 +388,12 @@ async fn current_ledger(
 
 /// Persists a turn's up-to-date totals. The scan applies only while the
 /// stored `seq` is still the one it started from, so concurrent writers
-/// cannot count one event twice. `close` ends the in-flight reservation.
+/// cannot count one event twice. The in-flight reservation ends too.
 async fn persist_totals(
     store: &SqliteStore,
     chat_id: &str,
     task_id: &str,
     now: i64,
-    close: Close,
 ) -> AgentsResult<()> {
     let Some(chat) = store.get_chat(chat_id).await? else {
         return Ok(());
@@ -425,11 +413,9 @@ async fn persist_totals(
             if ledger.seq == before {
                 ledger.absorb(scan);
             }
-            match close {
-                Close::Next(attempt) if ledger.attempt == attempt => ledger.close_reservation(),
-                Close::Settled(true) => ledger.close_reservation(),
-                Close::Next(_) | Close::Settled(false) => ledger.reserved = 0,
-            }
+            // Unknown usage stays charged: a cancelled, failed or superseded
+            // request may have run, so its estimate counts as spent.
+            ledger.close_reservation();
             *entry = ledger.write();
             Ok(())
         })
@@ -493,15 +479,7 @@ pub(super) async fn settle_turn(
     if !task.status.is_terminal() || store.get_subagent(chat_id).await?.is_none() {
         return Ok(());
     }
-    let completed = Phase::of(task.status) == Phase::Completed;
-    persist_totals(
-        store,
-        chat_id,
-        &task.task_id,
-        now,
-        Close::Settled(completed),
-    )
-    .await?;
+    persist_totals(store, chat_id, &task.task_id, now).await?;
     let turn = task.task_id.clone();
     let claimed = store
         .mutate_chat(chat_id, now, move |chat| {
@@ -562,10 +540,18 @@ pub(super) struct Exhaustion {
     pub budget: &'static str,
     pub used: u64,
     pub limit: u64,
+    /// Tokens the refused request would have added (0 = already spent).
+    pub requested: u64,
 }
 
 impl Exhaustion {
     fn detail(&self) -> String {
+        if self.requested > 0 {
+            return format!(
+                "{} token budget cannot fit the request ({} used + {} requested > {})",
+                self.budget, self.used, self.requested, self.limit
+            );
+        }
         format!(
             "{} token budget spent ({} of {})",
             self.budget, self.used, self.limit
@@ -573,24 +559,34 @@ impl Exhaustion {
     }
 }
 
-/// `Some` when `child_chat_id` has used up its own budget or its tree's.
-/// The child limit is tested first: it is the tighter, more specific cause.
+/// Hard-cap test: `used` already spent, or `used + needed` over `limit`.
+fn over(used: u64, needed: u64, limit: u64) -> bool {
+    used >= limit || used.saturating_add(needed) > limit
+}
+
+/// `Some` when `child_chat_id` has used up its own budget or its tree's, or
+/// when `needed` more tokens (a request about to dispatch; 0 for a plain
+/// spent-check) would not fit under either cap. `used` includes the
+/// children's outstanding reservations. The child limit is tested first:
+/// it is the tighter, more specific cause.
 pub(super) async fn token_exhaustion(
     store: &SqliteStore,
     child_chat_id: &str,
     tree_limit: Option<u64>,
     max_depth: i64,
+    needed: u64,
 ) -> AgentsResult<Option<Exhaustion>> {
     if store.get_subagent(child_chat_id).await?.is_none() {
         return Ok(None);
     }
     let limit = child_limit(store, child_chat_id).await?;
     let used = whole_tokens(child_tenths(store, child_chat_id).await?);
-    if used >= limit {
+    if over(used, needed, limit) {
         return Ok(Some(Exhaustion {
             budget: "child",
             used,
             limit,
+            requested: if used >= limit { 0 } else { needed },
         }));
     }
     let Some(tree_limit) = tree_limit else {
@@ -601,10 +597,11 @@ pub(super) async fn token_exhaustion(
         return Ok(None);
     }
     let used = tree_tokens(store, &root).await?;
-    Ok((used >= tree_limit).then_some(Exhaustion {
+    Ok(over(used, needed, tree_limit).then_some(Exhaustion {
         budget: "tree",
         used,
         limit: tree_limit,
+        requested: if used >= tree_limit { 0 } else { needed },
     }))
 }
 
@@ -615,7 +612,7 @@ pub(super) async fn check_resume_tokens(
     tree_limit: Option<u64>,
     max_depth: i64,
 ) -> AgentsResult<()> {
-    match token_exhaustion(store, child_chat_id, tree_limit, max_depth).await? {
+    match token_exhaustion(store, child_chat_id, tree_limit, max_depth, 0).await? {
         Some(spent) => Err(exhausted(spent.detail())),
         None => Ok(()),
     }
@@ -678,14 +675,25 @@ impl SubagentTokenGate {
             .await?
             .filter(|task| !task.status.is_terminal())
             .map(|task| u64::from(task.attempt_count));
-        if let Some(attempt) = attempt {
+        if attempt.is_some() {
             // The previous request of this turn finished: settle its
             // reservation into the totals before judging the next one.
-            persist_totals(&self.store, chat_id, task_id, now, Close::Next(attempt)).await?;
+            persist_totals(&self.store, chat_id, task_id, now).await?;
         }
         let max_depth = limits.max_depth;
-        if let Some(spent) =
-            token_exhaustion(&self.store, chat_id, limits.max_tree_tokens, max_depth).await?
+        // Hard caps: settled totals + outstanding sibling reservations +
+        // this request's estimate must fit under BOTH the child and the tree
+        // cap, or the request is refused before dispatch. `UsageAuthorizer`
+        // can only admit or refuse (it cannot lower the request's output
+        // cap), so an output reserve that does not fit refuses too.
+        if let Some(spent) = token_exhaustion(
+            &self.store,
+            chat_id,
+            limits.max_tree_tokens,
+            max_depth,
+            estimate,
+        )
+        .await?
         {
             self.record_exhaustion(task_id, chat_id, &spent).await?;
             return Err(exhausted(spent.detail()));

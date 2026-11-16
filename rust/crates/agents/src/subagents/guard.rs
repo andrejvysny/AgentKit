@@ -9,7 +9,7 @@ use agentkit_core::{META_TOOLSET, is_meta_tool};
 use agentkit_governance::{GovernanceResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use agentkit_sessions::read_session_descriptor;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
@@ -24,6 +24,10 @@ pub struct WorkspaceLeaseRegistry {
     /// Source of lease generations: every table write gets a fresh one, so
     /// a holder can release exactly the lease it took, never a later one.
     generations: Arc<AtomicU64>,
+    /// The lease generation each (child, run) first acted under. A late
+    /// tool call from an older run is refused once the child's lease was
+    /// re-acquired under a newer generation (write fencing).
+    runs: Arc<Mutex<HashMap<(String, String), u64>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,8 +52,10 @@ fn lease_key(root: &str) -> String {
 
 impl WorkspaceLeaseRegistry {
     /// Exclusive admission: register the lease, or refuse with the current
-    /// unexpired foreign holder. Silent preemption would let two writing
-    /// children each believe they hold the workspace (the guard would then
+    /// foreign holder. A lease stays held past `expires_at` until the host
+    /// proves its child terminal (`expire`): liveness follows the child's
+    /// task lifecycle, never the clock alone. Silent preemption would let
+    /// two writing children each believe they hold the workspace (the guard would then
     /// deny the FIRST holder its own writes). A refresh by the current
     /// holder (same child id) always succeeds.
     ///
@@ -72,22 +78,83 @@ impl WorkspaceLeaseRegistry {
         }
         if let Some(holder) = table
             .get(&root)
-            .filter(|lease| lease.expires_at > now_ms)
             .filter(|lease| lease.child_chat_id != child_chat_id)
         {
             return Err(LeaseHeld {
                 holder: holder.child_chat_id.clone(),
             });
         }
+        let expires_at = now_ms.saturating_add(ttl_ms);
+        if let Some(own) = table.get_mut(&root) {
+            // Same holder: a refresh keeps the generation, so runs already
+            // fenced to it stay valid.
+            own.expires_at = expires_at;
+            return Ok(());
+        }
         table.insert(
             root,
             Lease {
                 child_chat_id: child_chat_id.to_owned(),
-                expires_at: now_ms.saturating_add(ttl_ms),
+                expires_at,
                 generation: self.generations.fetch_add(1, Ordering::Relaxed) + 1,
             },
         );
         Ok(())
+    }
+
+    /// Push the child's lease expiry out: called on the holder's own
+    /// execution (each guarded tool call), never by observation.
+    pub fn renew(&self, child_chat_id: &str, now_ms: i64, ttl_ms: i64) {
+        let mut table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        for lease in table
+            .values_mut()
+            .filter(|lease| lease.child_chat_id == child_chat_id)
+        {
+            lease.expires_at = now_ms.saturating_add(ttl_ms);
+        }
+    }
+
+    /// The (child, generation) registered on `root`, expired or not.
+    pub fn lease_on(&self, root: &str) -> Option<(String, u64)> {
+        let root = lease_key(root);
+        let table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        table
+            .get(&root)
+            .map(|lease| (lease.child_chat_id.clone(), lease.generation))
+    }
+
+    /// Bind `run_id` of `child_chat_id` to `generation` the first time it
+    /// acts and return the generation it is bound to.
+    pub fn bind_run(&self, child_chat_id: &str, run_id: &str, generation: u64) -> u64 {
+        let mut runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
+        // Bindings must outlive a release (that is what fences a late call),
+        // so only a very large table is pruned, down to current holders.
+        if runs.len() > 10_000 {
+            let holders = self.holders();
+            runs.retain(|(child, _), _| holders.contains(child));
+        }
+        *runs
+            .entry((child_chat_id.to_owned(), run_id.to_owned()))
+            .or_insert(generation)
+    }
+
+    /// Every child currently holding a lease.
+    pub fn holders(&self) -> Vec<String> {
+        let table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        table
+            .values()
+            .map(|lease| lease.child_chat_id.clone())
+            .collect()
+    }
+
+    /// Children whose lease passed `expires_at`: candidates for the reaper.
+    pub fn stale_children(&self, now_ms: i64) -> Vec<String> {
+        let table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        table
+            .values()
+            .filter(|lease| lease.expires_at <= now_ms)
+            .map(|lease| lease.child_chat_id.clone())
+            .collect()
     }
 
     /// The generation of the lease `child_chat_id` currently holds.
@@ -113,21 +180,25 @@ impl WorkspaceLeaseRegistry {
         table.retain(|_, lease| lease.child_chat_id != child_chat_id);
     }
 
-    /// Drop expired leases (a wedged child must not freeze the workspace
-    /// forever; the reaper also cancels the child itself).
-    pub fn expire(&self, now_ms: i64) {
+    /// Drop expired leases whose child is no longer live. A past-expiry
+    /// lease of a non-terminal child stays held: the host passes the live
+    /// children and the reaper cancels a wedged one before its lease can go.
+    pub fn expire(&self, now_ms: i64, live_children: &HashSet<String>) {
         let mut table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        table.retain(|_, lease| lease.expires_at > now_ms);
+        let dropped: Vec<String> = table
+            .values()
+            .filter(|lease| {
+                lease.expires_at <= now_ms && !live_children.contains(&lease.child_chat_id)
+            })
+            .map(|lease| lease.child_chat_id.clone())
+            .collect();
+        table.retain(|_, lease| !dropped.contains(&lease.child_chat_id));
     }
 
-    /// The child holding an exclusive lease on `root`, if any.
-    pub fn holder(&self, root: &str, now_ms: i64) -> Option<String> {
-        let root = lease_key(root);
-        let table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        table
-            .get(&root)
-            .filter(|lease| lease.expires_at > now_ms)
-            .map(|lease| lease.child_chat_id.clone())
+    /// The child holding an exclusive lease on `root`, if any. Expiry alone
+    /// never frees it (see `expire`); `now_ms` is kept for callers' symmetry.
+    pub fn holder(&self, root: &str, _now_ms: i64) -> Option<String> {
+        self.lease_on(root).map(|(child, _)| child)
     }
 
     pub fn is_held_by(&self, root: &str, child_chat_id: &str, now_ms: i64) -> bool {
@@ -136,6 +207,10 @@ impl WorkspaceLeaseRegistry {
 
     pub fn clear(&self) {
         self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.runs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
@@ -274,26 +349,66 @@ impl SubagentRoleGuard {
     }
 
     async fn lease_verdict(&self, context: &ToolGuardContext) -> AgentsResult<Option<String>> {
-        if !mutates_workspace(&context.namespace, &context.tool) {
-            return Ok(None);
-        }
         let Some(chat_id) = context.contribution.chat_id.as_deref() else {
             return Ok(None);
         };
+        let now = self.service.now_ms();
+        // The holder's own execution keeps its lease fresh, never a
+        // status/list/await observation.
+        self.service
+            .leases()
+            .renew(chat_id, now, self.service.config().limits.lease_ttl_ms);
+        if !mutates_workspace(&context.namespace, &context.tool) {
+            return Ok(None);
+        }
         let Some(root) = self.session_workspace(chat_id).await else {
             return Ok(None);
         };
-        let now = self.service.now_ms();
-        if let Some(holder) = self.service.leases().holder(&root, now)
-            && holder != chat_id
-        {
-            return Ok(Some(format!(
-                "workspace_locked_by_subagent: child {holder} holds an exclusive write lease on \
-                 {root}; await or cancel it before mutating the workspace from this session."
-            )));
+        let leases = self.service.leases();
+        match leases.lease_on(&root) {
+            Some((holder, generation)) if holder == chat_id => {
+                // Fencing: a run is bound to the generation it first acted
+                // under; a lease re-acquired since belongs to a newer run.
+                let bound = leases.bind_run(chat_id, &context.contribution.run_id, generation);
+                if bound != generation {
+                    return Ok(Some(lost_reason(&root)));
+                }
+            }
+            Some((holder, generation)) => {
+                // Held past its expiry still counts as held while the
+                // holder's task is not terminal.
+                let live = self.service.child_is_live(&holder).await?;
+                if !live {
+                    leases.release_generation(&holder, generation);
+                }
+                // A writing child never writes without the lease itself.
+                if self.service.is_writing_child(chat_id).await? {
+                    return Ok(Some(lost_reason(&root)));
+                }
+                if live {
+                    return Ok(Some(format!(
+                        "workspace_locked_by_subagent: child {holder} holds an exclusive write \
+                         lease on {root}; await or cancel it before mutating the workspace from \
+                         this session."
+                    )));
+                }
+            }
+            None => {
+                // A writing child with no lease lost it: fail closed.
+                if self.service.is_writing_child(chat_id).await? {
+                    return Ok(Some(lost_reason(&root)));
+                }
+            }
         }
         Ok(None)
     }
+}
+
+fn lost_reason(root: &str) -> String {
+    format!(
+        "workspace_lease_lost: this child no longer holds the exclusive write lease on {root}; \
+         its mutating tools are refused"
+    )
 }
 
 #[async_trait]

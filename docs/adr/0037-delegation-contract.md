@@ -121,3 +121,33 @@ and the other trust rules were open.
 - The digest is an unkeyed hash: a tamper check against accidental or partial
   edits, not a MAC. Integrity rests on 4.1's host-only `agentkit.*` metadata
   guard: no caller or agent path writes those keys. There is no MAC.
+
+## Review fixes: lease liveness, hard token caps, provider inheritance
+
+- **Writer lease liveness (R12).** A lease is held while its child's task is
+  non-terminal; `expires_at` only marks it stale for the reaper and never frees
+  it. A foreign (parent or sibling) mutating call is refused
+  `workspace_locked_by_subagent` while the holder is live; a holder whose turn
+  is terminal is dropped even if nobody observed it. The reaper
+  (`reap_orphans`) drops leases of terminal children and cancels, but never
+  releases, a stale live child whose turn is running; the lease goes once the
+  turn is terminal. Children parked on approval or their own children are not
+  cancelled. Renewal comes from the holder's own guarded tool calls, not from
+  status/list/await.
+- **Fencing.** A writing (exclusive) child's mutating call needs the lease
+  itself, else `workspace_lease_lost` (fail closed). A run binds to the lease
+  generation it first acts under; after the lease is re-acquired (a new
+  generation) a late call from that run is refused. The binding happens at
+  the run's first guarded mutating call, not at acquisition: a run that never
+  acted before the re-acquisition binds the new generation.
+- **Hard token caps (R13).** `SubagentTokenGate` admits a request only when
+  settled spend + outstanding sibling reservations + the request's estimate
+  (prompt + output reserve) fit under both the child and the tree cap; else it
+  is refused before dispatch (`subagent_budget_exhausted`). `UsageAuthorizer`
+  cannot lower a request's output cap, so an output reserve that does not fit
+  refuses rather than clamps. A reservation whose request ends without usage
+  (cancelled, failed, superseded retry) stays charged at its estimate.
+- **Provider inheritance (R10).** A child inherits provider and model from the
+  parent's current turn payload (`providerId`/`model`, the admitted pair);
+  the session descriptor is only the fallback when the turn carries none.
+  Role and request pins still win.

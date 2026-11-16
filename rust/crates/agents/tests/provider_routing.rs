@@ -201,6 +201,7 @@ fn role(provider: Option<&str>, model: Option<&str>) -> RoleSpec {
 fn subagent_config() -> SubagentConfig {
     let mut roles = BTreeMap::new();
     for (name, spec) in [
+        ("plain", role(None, None)),
         ("pinned", role(Some("b"), Some("model-b"))),
         ("ghost", role(Some("ghost"), Some("model-b"))),
         ("modelless", role(Some("b"), None)),
@@ -245,6 +246,12 @@ async fn rig(store: &SqliteStore, worker: bool) -> Rig {
 }
 
 async fn parent_store() -> SqliteStore {
+    parent_store_admitted(json!({})).await
+}
+
+/// A parent whose descriptor says provider `a`, with `admitted` as the
+/// running turn's payload (the provider/model it was admitted with).
+async fn parent_store_admitted(admitted: serde_json::Value) -> SqliteStore {
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let service = AgentSessionService::new(AgentSessionServiceDeps {
@@ -278,7 +285,7 @@ async fn parent_store() -> SqliteStore {
             task_id: "parent-turn".into(),
             kind: "parent.hold".into(),
             scope_id: "parent".into(),
-            payload: json!({}),
+            payload: admitted,
             priority: 0,
             now: runtime.now_ms(),
             available_at: None,
@@ -381,4 +388,45 @@ async fn restart_resume_still_routes_the_childs_turn_to_b() {
     settle(&second.subagents).await;
     assert_eq!(second.b.calls(), vec!["model-b"]);
     assert!(second.a.calls().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_inherits_the_parents_admitted_provider_not_its_stale_descriptor() {
+    // The descriptor still says provider `a` (the chat's creation-time
+    // choice); the running parent turn was admitted on `b`.
+    let store = parent_store_admitted(json!({"providerId": "b", "model": "model-b-now"})).await;
+    let rig = rig(&store, true).await;
+    rig.subagents
+        .spawn(&spawn_request("k", "plain"))
+        .await
+        .unwrap();
+    settle(&rig.subagents).await;
+    assert_eq!(rig.b.calls(), vec!["model-b-now"]);
+    assert!(rig.a.calls().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn role_pin_overrides_the_parents_admitted_provider() {
+    let store = parent_store_admitted(json!({"providerId": "a", "model": "model-a-now"})).await;
+    let rig = rig(&store, true).await;
+    rig.subagents
+        .spawn(&spawn_request("k", "pinned"))
+        .await
+        .unwrap();
+    settle(&rig.subagents).await;
+    assert_eq!(rig.b.calls(), vec!["model-b"]);
+    assert!(rig.a.calls().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_an_admitted_provider_the_descriptor_is_the_fallback() {
+    let store = parent_store().await;
+    let rig = rig(&store, true).await;
+    rig.subagents
+        .spawn(&spawn_request("k", "plain"))
+        .await
+        .unwrap();
+    settle(&rig.subagents).await;
+    assert_eq!(rig.a.calls(), vec!["model-a"]);
+    assert!(rig.b.calls().is_empty());
 }

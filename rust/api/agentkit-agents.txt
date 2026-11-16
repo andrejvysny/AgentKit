@@ -413,10 +413,12 @@ pub async fn agentkit_agents::SubagentService::await_children(&self, &str, core:
 pub async fn agentkit_agents::SubagentService::await_children_mode(&self, &str, core::option::Option<&[alloc::string::String]>, core::option::Option<u64>, agentkit_agents::AwaitMode, &tokio_util::sync::cancellation_token::CancellationToken) -> agentkit_agents::AgentsResult<agentkit_agents::AwaitOutcome>
 pub async fn agentkit_agents::SubagentService::build_envelope(&self, &agentkit_agents::SubagentView) -> agentkit_agents::AgentsResult<core::option::Option<agentkit_agents::ResultEnvelope>>
 pub async fn agentkit_agents::SubagentService::cancel(&self, &str) -> agentkit_agents::AgentsResult<agentkit_agents::SubagentView>
+pub async fn agentkit_agents::SubagentService::child_is_live(&self, &str) -> agentkit_agents::AgentsResult<bool>
 pub fn agentkit_agents::SubagentService::config(&self) -> agentkit_agents::SubagentConfig
 pub fn agentkit_agents::SubagentService::configure(&self, agentkit_agents::SubagentConfig)
 pub async fn agentkit_agents::SubagentService::effective_role_of(&self, &agentkit_store::subagents::SubagentRecord, &agentkit_agents::SubagentConfig) -> agentkit_agents::AgentsResult<core::result::Result<agentkit_agents::EffectiveRole, agentkit_agents::RoleDenial>>
 pub fn agentkit_agents::SubagentService::ensure_waker(&self)
+pub async fn agentkit_agents::SubagentService::is_writing_child(&self, &str) -> agentkit_agents::AgentsResult<bool>
 pub fn agentkit_agents::SubagentService::leases(&self) -> &agentkit_agents::WorkspaceLeaseRegistry
 pub async fn agentkit_agents::SubagentService::list(&self, &str) -> agentkit_agents::AgentsResult<alloc::vec::Vec<agentkit_agents::SubagentView>>
 pub async fn agentkit_agents::SubagentService::message(&self, &str, serde_json::value::Value, &str, &str) -> agentkit_agents::AgentsResult<agentkit_agents::MessageReceipt>
@@ -518,13 +520,18 @@ pub fn agentkit_agents::WatchdogRunHooks::call<'life0, 'life1, 'life2, 'async_tr
 pub fn agentkit_agents::WatchdogRunHooks::indexes(&self, &str) -> alloc::vec::Vec<usize>
 pub struct agentkit_agents::WorkspaceLeaseRegistry
 impl agentkit_agents::WorkspaceLeaseRegistry
+pub fn agentkit_agents::WorkspaceLeaseRegistry::bind_run(&self, &str, &str, u64) -> u64
 pub fn agentkit_agents::WorkspaceLeaseRegistry::clear(&self)
-pub fn agentkit_agents::WorkspaceLeaseRegistry::expire(&self, i64)
+pub fn agentkit_agents::WorkspaceLeaseRegistry::expire(&self, i64, &std::collections::hash::set::HashSet<alloc::string::String>)
 pub fn agentkit_agents::WorkspaceLeaseRegistry::generation_of(&self, &str) -> core::option::Option<u64>
 pub fn agentkit_agents::WorkspaceLeaseRegistry::holder(&self, &str, i64) -> core::option::Option<alloc::string::String>
+pub fn agentkit_agents::WorkspaceLeaseRegistry::holders(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agentkit_agents::WorkspaceLeaseRegistry::is_held_by(&self, &str, &str, i64) -> bool
+pub fn agentkit_agents::WorkspaceLeaseRegistry::lease_on(&self, &str) -> core::option::Option<(alloc::string::String, u64)>
 pub fn agentkit_agents::WorkspaceLeaseRegistry::release(&self, &str)
 pub fn agentkit_agents::WorkspaceLeaseRegistry::release_generation(&self, &str, u64)
+pub fn agentkit_agents::WorkspaceLeaseRegistry::renew(&self, &str, i64, i64)
+pub fn agentkit_agents::WorkspaceLeaseRegistry::stale_children(&self, i64) -> alloc::vec::Vec<alloc::string::String>
 pub fn agentkit_agents::WorkspaceLeaseRegistry::try_acquire(&self, core::option::Option<&str>, bool, &str, i64, i64) -> core::result::Result<(), agentkit_agents::LeaseHeld>
 pub const agentkit_agents::ADVISOR_TOOL_NAMES: [&str; 1]
 pub const agentkit_agents::BUILTIN_ROLES: [&str; 5]

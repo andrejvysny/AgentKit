@@ -2144,8 +2144,10 @@ async fn running_exclusive_child_sustains_its_lease_or_is_cancelled() {
         "the live holder's own refresh must succeed"
     );
 
-    // A foreign holder takes the root (the TTL lapsed and a reaper swept
-    // it — modelled by acquiring through the exposed registry).
+    // A foreign holder takes the root once the lease is gone (an expired TTL
+    // alone no longer frees it; the reaper drops it only for a terminal
+    // child — modelled by releasing, then acquiring through the registry).
+    h.subagents.leases().release(&child.child_chat_id);
     assert!(
         h.subagents
             .leases()
@@ -4461,4 +4463,262 @@ async fn standing_approvals_are_keyed_per_chat() {
         find_active_standing_grant(&h.child_metadata("p-b").await, &digest).is_none(),
         "a grant belongs to the chat that recorded it, never to a sibling chat"
     );
+}
+
+// -- writer lease liveness and fencing (R12) -----------------------------------
+
+/// The system clock plus a hand-moved offset, so a lease can outlive its
+/// TTL without sleeping.
+struct SkewedClock(std::sync::atomic::AtomicI64);
+
+impl agentkit_engine::Runtime for SkewedClock {
+    fn now_ms(&self) -> i64 {
+        SystemRuntime.now_ms() + self.0.load(Ordering::SeqCst)
+    }
+    fn id(&self) -> String {
+        SystemRuntime.id()
+    }
+}
+
+/// A service over the harness store whose clock the test advances and whose
+/// lease TTL is the 1s minimum.
+fn skewed_service(h: &Harness) -> (SubagentService, Arc<SkewedClock>) {
+    let clock = Arc::new(SkewedClock(std::sync::atomic::AtomicI64::new(0)));
+    let mut cfg = config();
+    cfg.limits.lease_ttl_ms = 1_000;
+    let service = SubagentService::new(
+        h.store.clone(),
+        h.service.clone(),
+        clock.clone() as SharedRuntime,
+        cfg.effective(),
+    );
+    (service, clock)
+}
+
+async fn spawn_writer(h: &Harness, service: &SubagentService, key: &str) -> SpawnedChild {
+    service
+        .spawn(&SpawnRequest {
+            exclusive_workspace: true,
+            ..h.spawn_request(key, "implementer", "write code")
+        })
+        .await
+        .expect("writer spawn")
+}
+
+/// Waits for the child's turn to be executing, probing the store only
+/// (never status/list/await, which would renew by observation).
+async fn child_turn_running(h: &Harness, child: &SpawnedChild) {
+    wait_until(
+        || async {
+            let Some(turn) = h
+                .store
+                .get_subagent(&child.child_chat_id)
+                .await
+                .unwrap()
+                .and_then(|row| row.turn_task_id)
+            else {
+                return false;
+            };
+            h.store
+                .get_task(&turn)
+                .await
+                .unwrap()
+                .is_some_and(|task| task.status == TaskStatus::Running)
+        },
+        "child turn running",
+    )
+    .await;
+}
+
+async fn child_turn_terminal(h: &Harness, child: &SpawnedChild) {
+    wait_until(
+        || async {
+            let turn = h
+                .store
+                .get_subagent(&child.child_chat_id)
+                .await
+                .unwrap()
+                .and_then(|row| row.turn_task_id)
+                .expect("turn");
+            h.store
+                .get_task(&turn)
+                .await
+                .unwrap()
+                .is_some_and(|task| task.status.is_terminal())
+        },
+        "child turn terminal",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_lease_of_a_running_child_still_excludes_the_parent_without_polling() {
+    let h = Harness::start().await;
+    let (service, clock) = skewed_service(&h);
+    h.hold(true);
+    let child = spawn_writer(&h, &service, "k").await;
+    child_turn_running(&h, &child).await;
+    let guard = SubagentRoleGuard::new(service.clone());
+    let parent_write = guard_context("parent".into(), "coding", "write_file", "write");
+    let child_write = guard_context(child.child_chat_id.clone(), "coding", "write_file", "write");
+
+    // Far past the 1s TTL, with no status/list/await call in between.
+    clock.0.fetch_add(3_600_000, Ordering::SeqCst);
+    match guard.can_execute(&parent_write).await.unwrap() {
+        ToolGuardVerdict::Refused(reason) => {
+            assert!(reason.contains("workspace_locked_by_subagent"), "{reason}")
+        }
+        _ => panic!("an expired lease of a running child must still exclude the parent"),
+    }
+    assert!(matches!(
+        guard.can_execute(&child_write).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+    // The holder's own guarded call renewed the lease.
+    assert!(service.leases().stale_children(service.now_ms()).is_empty());
+
+    // Terminal child: the lease is no longer held, even unobserved.
+    h.hold(false);
+    h.release();
+    child_turn_terminal(&h, &child).await;
+    clock.0.fetch_add(3_600_000, Ordering::SeqCst);
+    assert!(matches!(
+        guard.can_execute(&parent_write).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_spawn_sweep_keeps_the_expired_lease_of_a_running_child() {
+    let h = Harness::start().await;
+    let (service, clock) = skewed_service(&h);
+    h.hold(true);
+    let child = spawn_writer(&h, &service, "k").await;
+    child_turn_running(&h, &child).await;
+    let guard = SubagentRoleGuard::new(service.clone());
+    let parent_write = guard_context("parent".into(), "coding", "write_file", "write");
+
+    clock.0.fetch_add(3_600_000, Ordering::SeqCst);
+    // A spawn runs the non-cancelling sweep; it must not free a live lease.
+    service
+        .spawn(&h.spawn_request("k2", "reviewer", "two"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service.leases().holder(&h.workspace, 0).as_deref(),
+        Some(child.child_chat_id.as_str())
+    );
+    assert!(matches!(
+        guard.can_execute(&parent_write).await.unwrap(),
+        ToolGuardVerdict::Refused(_)
+    ));
+    h.hold(false);
+    h.release();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reaper_cancels_a_wedged_child_and_frees_the_lease_only_once_it_is_terminal() {
+    let h = Harness::start().await;
+    let (service, clock) = skewed_service(&h);
+    h.hold(true);
+    let child = spawn_writer(&h, &service, "k").await;
+    child_turn_running(&h, &child).await;
+    clock.0.fetch_add(3_600_000, Ordering::SeqCst);
+
+    service.reap_orphans().await.unwrap();
+    assert_eq!(
+        service.leases().holder(&h.workspace, 0).as_deref(),
+        Some(child.child_chat_id.as_str()),
+        "the reaper must not drop the lease of a child that is not terminal"
+    );
+    h.hold(false);
+    h.release();
+    child_turn_terminal(&h, &child).await;
+    service.reap_orphans().await.unwrap();
+    assert!(
+        service.leases().holder(&h.workspace, 0).is_none(),
+        "terminal child: the stale lease is dropped"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_write_from_an_old_holder_is_fenced_after_another_writer_acquires() {
+    let h = Harness::start().await;
+    let (service, _clock) = skewed_service(&h);
+    h.hold(true);
+    let old = spawn_writer(&h, &service, "old").await;
+    child_turn_running(&h, &old).await;
+    let guard = SubagentRoleGuard::new(service.clone());
+    let old_write = guard_context(old.child_chat_id.clone(), "coding", "write_file", "write");
+    assert!(matches!(
+        guard.can_execute(&old_write).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+
+    // The old holder settles; a new writer takes the workspace.
+    h.hold(false);
+    h.release();
+    child_turn_terminal(&h, &old).await;
+    h.child.released.store(false, Ordering::SeqCst);
+    h.hold(true);
+    let new = spawn_writer(&h, &service, "new").await;
+    child_turn_running(&h, &new).await;
+
+    // The old holder's straggling tool call is refused: fail closed.
+    match guard.can_execute(&old_write).await.unwrap() {
+        ToolGuardVerdict::Refused(reason) => {
+            assert!(reason.contains("workspace_lease_lost"), "{reason}")
+        }
+        _ => panic!("a late write from the previous holder must be fenced"),
+    }
+    let new_write = guard_context(new.child_chat_id.clone(), "coding", "write_file", "write");
+    assert!(matches!(
+        guard.can_execute(&new_write).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+    h.hold(false);
+    h.release();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_bound_to_an_older_generation_of_the_same_child_is_fenced() {
+    let h = Harness::start().await;
+    let (service, _clock) = skewed_service(&h);
+    h.hold(true);
+    let child = spawn_writer(&h, &service, "k").await;
+    child_turn_running(&h, &child).await;
+    let guard = SubagentRoleGuard::new(service.clone());
+    let mut first_run = guard_context(child.child_chat_id.clone(), "coding", "write_file", "write");
+    first_run.contribution.run_id = "run-1".into();
+    assert!(matches!(
+        guard.can_execute(&first_run).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+
+    // The lease is lost and re-acquired by the same child: a new generation.
+    service.leases().release(&child.child_chat_id);
+    service
+        .leases()
+        .try_acquire(
+            Some(h.workspace.as_str()),
+            true,
+            &child.child_chat_id,
+            service.now_ms(),
+            60_000,
+        )
+        .unwrap();
+    match guard.can_execute(&first_run).await.unwrap() {
+        ToolGuardVerdict::Refused(reason) => {
+            assert!(reason.contains("workspace_lease_lost"), "{reason}")
+        }
+        _ => panic!("a run bound to an older generation must be fenced"),
+    }
+    let mut second_run = first_run.clone();
+    second_run.contribution.run_id = "run-2".into();
+    assert!(matches!(
+        guard.can_execute(&second_run).await.unwrap(),
+        ToolGuardVerdict::Allowed
+    ));
+    h.hold(false);
+    h.release();
 }
