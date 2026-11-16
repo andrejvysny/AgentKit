@@ -180,10 +180,16 @@ async fn every_example_with_a_vendor_form_translates_back_to_itself() {
             };
             // Strict tools show every property; built-ins show the vendor payload.
             let translated = registry
-                .translate(&wire_name, wire_args)
+                .translate(&wire_name, wire_args.clone())
                 .expect("translates");
             assert_eq!(translated.name, name);
-            assert_eq!(&translated.args, example, "{name}");
+            if name == "edit_file" {
+                // An old/new pair is shown as a patch; the patch comes back
+                // as a patch (whole-line hunks), not as the pair.
+                assert_eq!(translated.args["patch"], wire_args["diff"], "{name}");
+            } else {
+                assert_eq!(&translated.args, example, "{name}");
+            }
             assert!(
                 registry.validate_input(&name, &translated.args).is_empty(),
                 "{name} {example}"

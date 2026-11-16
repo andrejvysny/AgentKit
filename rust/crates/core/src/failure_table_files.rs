@@ -175,6 +175,20 @@ pub(crate) static FILES: &[Spec] = &[
         "add surrounding context",
     ),
     s(
+        "invalid_context",
+        C::Precondition,
+        true,
+        "The patch hunk does not match whole lines of the file.",
+        "Read the file again and copy the context and removed lines exactly from it.",
+    ),
+    s(
+        "invalid_patch",
+        C::InvalidValue,
+        true,
+        "The patch is malformed.",
+        "Fix the patch format: @@ hunks with lines starting with a space, - or +.",
+    ),
+    s(
         "edit_overlap",
         C::InvalidValue,
         true,

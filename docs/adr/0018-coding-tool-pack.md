@@ -222,3 +222,7 @@ the mode/role a session runs under became host-owned (`CodingPermissionAuthority
 - The gate: `bun run typecheck`, `bun test`, `bun run lint`, `bun run build`, `node scripts/node-smoke.mjs`,
   `bun run build:umbrella && bun run smoke:umbrella`, `bun run smoke:pack`. The three smoke scripts each run one
   functional check (contribute ten tools, `read_file`, guard refusal).
+
+## Addendum: apply_patch hunks (review R04)
+
+`edit_file` takes an optional `patch` (bare V4A hunks or a one-file `*** Begin Patch` envelope) instead of `old_string`/`new_string`; the OpenAI `apply_patch` dialect forwards `update_file` diffs there unchanged. `src/apply_patch.rs` interprets them with reference semantics: whole-line matching (exact, end-trimmed, trimmed; never substring), `@@` anchors sought first, hunks applied in order with the search resuming after the previous match, `*** End of File` pinned to the end, pure-addition hunks appended at EOF, "Invalid Context" when nothing matches, first occurrence after the cursor when ambiguous. Untouched lines keep their terminators, written lines use the file's dominant one, and the final-newline state is preserved. Stale-read checks and the atomic write are the existing `edit_file` path. The pure module also parses Add/Delete/Move and applies a multi-file patch all-or-nothing, but no tool exposes those yet (one file per dialect call; `delete_file` stays refused).

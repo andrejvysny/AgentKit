@@ -25,9 +25,13 @@
           "replace_all": {
             "type": "boolean",
             "description": "Replace every occurrence instead of requiring a unique match. Default false."
+          },
+          "patch": {
+            "type": "string",
+            "description": "Alternative to a single replacement: apply_patch hunks for this file (@@ anchor, then lines starting with space, - or +), matched by whole lines."
           }
         },
-        "required": ["file_path", "old_string", "new_string"],
+        "required": ["file_path"],
         "additionalProperties": false
       }
     },

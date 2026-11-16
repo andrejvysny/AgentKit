@@ -4,6 +4,7 @@
 //! `packages/toolpacks-coding` (macOS-first sandbox via `sandbox-exec`).
 //! See `docs/adr/0018-coding-tool-pack.md`.
 
+pub mod apply_patch;
 pub mod args;
 pub mod command_fingerprint;
 pub mod command_policy;

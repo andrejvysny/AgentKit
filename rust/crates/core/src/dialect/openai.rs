@@ -24,10 +24,9 @@
 //! (the `operation`, the `action`).
 //!
 //! One canonical call per call. A patch operation names one file, so the
-//! multi-file question never arises; a patch that holds several hunks is
-//! refused with a message that says to send one hunk per call (a sequence of
-//! canonical calls under one result would need an adapter tool whose guard
-//! verdict is the same per hunk; ADR 0031 addendum records the choice). A
+//! multi-file question never arises; the diff goes to `edit_file` as its
+//! `patch` argument and is applied there with V4A hunk semantics (whole-line
+//! matching, anchors, in-order hunks), not as a substring replacement. A
 //! `delete_file` is refused: no canonical tool deletes. A shell call with
 //! several commands is refused for the same reason.
 //!
@@ -253,10 +252,16 @@ fn translate_patch(args: &Value) -> Result<Translated, DialectError> {
         }
         "update_file" => {
             let diff = string(tool, object, "diff")?;
-            let (old, new) = replaced_text(&diff)?;
+            // The hunks go to the edit tool whole: it matches whole lines at
+            // the hunk positions against the snapshot it read.
+            if diff.trim().is_empty() {
+                return Err(fail(
+                    "Tool apply_patch update_file needs a diff with at least one hunk: @@ then context ( ), removed (-) and added (+) lines.",
+                ));
+            }
             Ok(translated(
                 "edit_file",
-                json!({ "file_path": path, "old_string": old, "new_string": new }),
+                json!({ "file_path": path, "patch": diff }),
             ))
         }
         "delete_file" => Err(fail(
@@ -300,57 +305,6 @@ fn created_content(diff: &str) -> Result<String, DialectError> {
         out.push('\n');
     }
     Ok(out)
-}
-
-const ONE_HUNK: &str = "Tool apply_patch update_file takes one hunk per call: send each hunk as its own apply_patch call, the first one first.";
-const NEEDS_ANCHOR: &str = "Tool apply_patch update_file needs at least one context line (a space) or removed line (-) to find the place to change. Add the line next to the change.";
-
-/// The text an update diff replaces and what replaces it. One hunk only.
-fn replaced_text(diff: &str) -> Result<(String, String), DialectError> {
-    let (lines, _) = diff_lines(diff);
-    let mut old: Vec<&str> = vec![];
-    let mut new: Vec<&str> = vec![];
-    let mut content = false;
-    for line in lines {
-        if line.starts_with("@@") {
-            // A header starts a hunk; a second one after content is another hunk.
-            if content {
-                return Err(fail(ONE_HUNK));
-            }
-            continue;
-        }
-        if line == "*** End of File" {
-            continue;
-        }
-        match line.chars().next() {
-            Some('-') => old.push(&line[1..]),
-            Some('+') => new.push(&line[1..]),
-            Some(' ') => {
-                old.push(&line[1..]);
-                new.push(&line[1..]);
-            }
-            // A blank context line sent without its leading space.
-            None => {
-                old.push("");
-                new.push("");
-            }
-            Some(_) => {
-                return Err(fail(
-                    "Tool apply_patch update_file diff lines start with a space (unchanged), - (remove) or + (add); @@ starts a hunk. Fix the line prefixes.",
-                ));
-            }
-        }
-        content = true;
-    }
-    let mut old_text = old.join("\n");
-    if old_text.is_empty() {
-        return Err(fail(NEEDS_ANCHOR));
-    }
-    // A hunk that only removes lines removes their line ends too.
-    if new.is_empty() {
-        old_text.push('\n');
-    }
-    Ok((old_text, new.join("\n")))
 }
 
 fn translate_shell(args: &Value) -> Result<Translated, DialectError> {
@@ -413,6 +367,10 @@ fn wire_args(canonical: &str, args: &Value) -> Option<(String, Value)> {
                 json!({ "type": "create_file", "path": text("file_path")?, "diff": diff }),
             ))
         }
+        "edit_file" if allowed(&["file_path", "patch"]) => Some((
+            PATCH_NAME.to_owned(),
+            json!({ "type": "update_file", "path": text("file_path")?, "diff": text("patch")? }),
+        )),
         // Exact only: replace_all has no patch form, and an empty
         // replacement would come back with an added line end.
         "edit_file" if allowed(&["file_path", "old_string", "new_string"]) => {

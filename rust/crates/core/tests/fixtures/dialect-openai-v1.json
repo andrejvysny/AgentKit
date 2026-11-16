@@ -54,12 +54,13 @@
           "replace_all": {
             "type": "boolean",
             "default": false
+          },
+          "patch": {
+            "type": "string"
           }
         },
         "required": [
-          "file_path",
-          "old_string",
-          "new_string"
+          "file_path"
         ],
         "additionalProperties": false
       },
@@ -197,8 +198,7 @@
           "name": "edit_file",
           "arguments": {
             "file_path": "src/a.rs",
-            "old_string": "let n = 1;",
-            "new_string": "let n = 2;"
+            "patch": "@@\n-let n = 1;\n+let n = 2;\n"
           }
         },
         "roundTrips": true
@@ -216,11 +216,10 @@
           "name": "edit_file",
           "arguments": {
             "file_path": "src/a.rs",
-            "old_string": "fn main() {\n    let n = 1;\n}",
-            "new_string": "fn main() {\n    let n = 2;\n}"
+            "patch": "@@ fn main\n fn main() {\n-    let n = 1;\n+    let n = 2;\n }\n"
           }
         },
-        "roundTrips": false
+        "roundTrips": true
       },
       {
         "wire": {
@@ -288,28 +287,6 @@
           }
         },
         "mentions": "delete_file"
-      },
-      {
-        "wire": {
-          "name": "apply_patch",
-          "arguments": {
-            "type": "update_file",
-            "path": "a.rs",
-            "diff": "@@\n-a\n+b\n@@\n-c\n+d\n"
-          }
-        },
-        "mentions": "one hunk per call"
-      },
-      {
-        "wire": {
-          "name": "apply_patch",
-          "arguments": {
-            "type": "update_file",
-            "path": "a.rs",
-            "diff": "@@\n+b\n"
-          }
-        },
-        "mentions": "context line"
       },
       {
         "wire": {

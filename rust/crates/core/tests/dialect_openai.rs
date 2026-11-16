@@ -255,7 +255,10 @@ fn recorded_vendor_items_carry_the_payload_the_dialect_reads() {
         .translate("apply_patch", items[0]["operation"].clone())
         .expect("patch");
     assert_eq!(patch.name, "edit_file");
-    assert_eq!(patch.args["old_string"], "def fib(n):");
+    assert_eq!(
+        patch.args["patch"],
+        "@@\n-def fib(n):\n+def fibonacci(n):\n"
+    );
     let shell = dialect
         .translate("shell", items[1]["action"].clone())
         .expect("shell");
@@ -294,7 +297,7 @@ fn bad_vendor_arguments_are_refused_not_guessed() {
         ("apply_patch", json!({"type": "update_file", "path": "a"})),
         (
             "apply_patch",
-            json!({"type": "update_file", "path": "a", "diff": "@@\n?x\n"}),
+            json!({"type": "update_file", "path": "a", "diff": ""}),
         ),
         ("apply_patch", json!({"type": "rename_file", "path": "a"})),
         (
@@ -317,23 +320,18 @@ fn bad_vendor_arguments_are_refused_not_guessed() {
 }
 
 #[test]
-fn a_hunk_that_only_removes_lines_removes_their_line_ends() {
+fn an_update_diff_goes_to_the_edit_tool_whole() {
+    // Hunk semantics (whole lines, anchors, order) are the edit tool's.
+    let diff = "@@ fn a\n keep\n-drop\n";
     let translated = openai_dialect()
         .translate(
             "apply_patch",
-            json!({"type": "update_file", "path": "a", "diff": " keep\n-drop\n"}),
+            json!({"type": "update_file", "path": "a", "diff": diff}),
         )
         .expect("update");
-    assert_eq!(translated.args["old_string"], "keep\ndrop");
-    assert_eq!(translated.args["new_string"], "keep");
-    let only_removed = openai_dialect()
-        .translate(
-            "apply_patch",
-            json!({"type": "update_file", "path": "a", "diff": "@@\n-drop\n"}),
-        )
-        .expect("update");
-    assert_eq!(only_removed.args["old_string"], "drop\n");
-    assert_eq!(only_removed.args["new_string"], "");
+    assert_eq!(translated.name, "edit_file");
+    assert_eq!(translated.args, json!({"file_path": "a", "patch": diff}));
+    assert!(translated.args.get("old_string").is_none());
 }
 
 #[test]

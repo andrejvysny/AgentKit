@@ -13,11 +13,14 @@ use serde_json::{Map, Value, json};
 
 use agentkit_core::{Tool, ToolContext};
 
+use crate::apply_patch::{FileOp, Hunk, apply_hunks, parse_hunks, parse_patch};
 use crate::args::{as_record, opt_bool, opt_int, opt_string, req_string};
 use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
 use crate::coordination::{AcquireFileInput, LeaseHolder};
 use crate::diff::unified_diff;
-use crate::edit_engine::{Edit, apply_edits, apply_replace_all, split_bom};
+use crate::edit_engine::{
+    AppliedEdits, Edit, apply_edits, apply_replace_all, normalize_to_lf, split_bom,
+};
 use crate::errors::{CodingError, file_changed_error, file_not_read_error};
 use crate::fs_util::{
     atomic_write_in_root, create_if_absent_in_root, decode_utf8, looks_binary, read_regular_file,
@@ -1023,6 +1026,61 @@ fn parse_edit_request(input: &Map<String, Value>) -> Result<(Vec<Edit>, bool, bo
     Ok((vec![Edit { old_text, new_text }], replace_all, true))
 }
 
+/// The `patch` call: apply_patch hunks for `file_path`, bare or inside a
+/// `*** Begin Patch` envelope holding one in-place update of that file.
+fn parse_patch_request(input: &Map<String, Value>, path: &str) -> Result<Vec<Hunk>, CodingError> {
+    if ["old_string", "new_string", "replace_all", "edits"]
+        .iter()
+        .any(|key| input.contains_key(*key))
+    {
+        return Err(CodingError::new(
+            "invalid_arguments",
+            "pass either patch or old_string and new_string, not both",
+        ));
+    }
+    let Some(Value::String(text)) = input.get("patch") else {
+        return Err(CodingError::new(
+            "invalid_arguments",
+            "\"patch\" must be a string",
+        ));
+    };
+    if !text.trim_start().starts_with("*** Begin Patch") {
+        return parse_hunks(text);
+    }
+    let mut ops = parse_patch(text)?.ops;
+    match (ops.pop(), ops.is_empty()) {
+        (
+            Some(FileOp::Update {
+                path: named,
+                move_to: None,
+                hunks,
+            }),
+            true,
+        ) if named == path => Ok(hunks),
+        _ => Err(CodingError::new(
+            "invalid_patch",
+            format!(
+                "edit_file takes one in-place update of {path}; use write_file or the shell for other operations"
+            ),
+        )),
+    }
+}
+
+fn apply_patch_hunks(text: &str, hunks: &[Hunk], path: &str) -> Result<AppliedEdits, CodingError> {
+    let output = apply_hunks(text, hunks)?;
+    if output == text {
+        return Err(CodingError::new(
+            "edit_no_change",
+            format!("No changes made to {path}: the patch produced identical content."),
+        ));
+    }
+    Ok(AppliedEdits {
+        base_content: normalize_to_lf(text),
+        new_content: normalize_to_lf(&output),
+        output,
+    })
+}
+
 /// The engine's messages speak of the legacy `oldText`; the flat call names
 /// its parameter `old_string` and has a bulk option worth pointing at.
 fn flat_edit_error(mut error: CodingError) -> CodingError {
@@ -1071,8 +1129,12 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         "type": "boolean",
                         "description": "Replace every occurrence instead of requiring a unique match. Default false.",
                     },
+                    "patch": {
+                        "type": "string",
+                        "description": "Alternative to a single replacement: apply_patch hunks for this file (@@ anchor, then lines starting with space, - or +), matched by whole lines.",
+                    },
                 },
-                "required": ["file_path", "old_string", "new_string"],
+                "required": ["file_path"],
                 "additionalProperties": false,
             }),
             timeout_ms: env.limits.tool_timeout_ms,
@@ -1097,7 +1159,17 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             async move {
                 let input = as_record(&raw)?;
                 let path = req_string(input, "file_path", 4096)?;
-                let (edits, replace_all, flat) = parse_edit_request(input)?;
+                let (edits, replace_all, flat, hunks) = if input.contains_key("patch") {
+                    (
+                        vec![],
+                        false,
+                        false,
+                        Some(parse_patch_request(input, &path)?),
+                    )
+                } else {
+                    let (edits, replace_all, flat) = parse_edit_request(input)?;
+                    (edits, replace_all, flat, None)
+                };
                 let explicit = parse_expected_sha(input)?;
                 let root = env.root().await?;
                 let options = ConfineOptions {
@@ -1123,6 +1195,7 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     &path,
                     &edits,
                     replace_all,
+                    hunks.as_deref(),
                     &explicit,
                     &target,
                     options,
@@ -1147,6 +1220,7 @@ async fn edit_file_body(
     path: &str,
     edits: &[Edit],
     replace_all: bool,
+    hunks: Option<&[Hunk]>,
     explicit: &Option<String>,
     target: &ConfinedPath,
     options: ConfineOptions,
@@ -1188,8 +1262,11 @@ async fn edit_file_body(
         edits.to_vec(),
         path.to_owned(),
     );
+    let hunks_owned = hunks.map(<[Hunk]>::to_vec);
     let applied = tokio::task::spawn_blocking(move || {
-        if replace_all {
+        if let Some(hunks) = hunks_owned {
+            apply_patch_hunks(&text, &hunks, &path_owned)
+        } else if replace_all {
             apply_replace_all(
                 &text,
                 &edits_owned[0].old_text,
@@ -1216,6 +1293,7 @@ async fn edit_file_body(
     atomic_write_in_root(Some(&target.root), &target.path, &out, path, Some(verify)).await?;
     let after = sha256(&out);
     ledger::record_write(ctx.chat_id.as_deref(), &target.path, &after);
+    let count = hunks.map_or(edits.len(), <[Hunk]>::len);
     let patch = unified_diff(
         &target.relative_path,
         &applied.base_content,
@@ -1242,8 +1320,8 @@ async fn edit_file_body(
         text: format!(
             "Edited {} ({} edit{}, +{} -{})\nsha256: {after}\n{diff_text}",
             target.relative_path,
-            edits.len(),
-            if edits.len() == 1 { "" } else { "s" },
+            count,
+            if count == 1 { "" } else { "s" },
             patch.added,
             patch.removed
         ),
@@ -2067,6 +2145,52 @@ mod tests {
         assert!(text.contains("--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@"));
         assert!(text.contains("\n one\n-two\n+TWO\n three"));
         assert_eq!(Harness::summary(&r), "edited f.txt (+1 -1)");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_patch_matches_whole_lines_and_leaves_file_on_failure() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"prefixfoo\r\nkeep\r\n");
+        let bad = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "patch": "@@\n-foo\n+bar\n" }),
+            )
+            .await;
+        assert!(!bad.ok);
+        assert!(Harness::text(&bad).contains("Invalid Context"));
+        assert_eq!(h.contents("f.txt"), b"prefixfoo\r\nkeep\r\n");
+        let good = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "patch": "@@\n-prefixfoo\n+bar\n+baz\n keep\n" }),
+            )
+            .await;
+        assert!(good.ok, "{}", Harness::text(&good));
+        assert_eq!(h.contents("f.txt"), b"bar\r\nbaz\r\nkeep\r\n");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_patch_refuses_mixed_forms_and_foreign_envelopes() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"a\n");
+        for input in [
+            json!({ "file_path": "f.txt", "patch": "@@\n-a\n+b\n", "old_string": "a" }),
+            json!({ "file_path": "f.txt", "patch": "*** Begin Patch\n*** Update File: g.txt\n@@\n-a\n+b\n*** End Patch" }),
+            json!({ "file_path": "f.txt", "patch": "*** Begin Patch\n*** Delete File: f.txt\n*** End Patch" }),
+        ] {
+            assert!(!h.run(&h.edit_file, input).await.ok);
+        }
+        let ok = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+b\n*** End Patch" }),
+            )
+            .await;
+        assert!(ok.ok, "{}", Harness::text(&ok));
+        assert_eq!(h.contents("f.txt"), b"b\n");
         h.remove();
     }
 

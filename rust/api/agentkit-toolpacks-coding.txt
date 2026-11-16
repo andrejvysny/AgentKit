@@ -4,6 +4,32 @@ pub use agentkit_toolpacks_coding::CodingPermissionAuthority
 pub use agentkit_toolpacks_coding::CodingRole
 pub use agentkit_toolpacks_coding::PLAN_MODE_BLOCKED_HINT
 pub use agentkit_toolpacks_coding::PermissionContext
+pub mod agentkit_toolpacks_coding::apply_patch
+pub enum agentkit_toolpacks_coding::apply_patch::FileOp
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Add
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Add::content: alloc::string::String
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Add::path: alloc::string::String
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Delete
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Delete::path: alloc::string::String
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Update
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Update::hunks: alloc::vec::Vec<agentkit_toolpacks_coding::apply_patch::Hunk>
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Update::move_to: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::apply_patch::FileOp::Update::path: alloc::string::String
+pub enum agentkit_toolpacks_coding::apply_patch::HunkLine
+pub agentkit_toolpacks_coding::apply_patch::HunkLine::Add(alloc::string::String)
+pub agentkit_toolpacks_coding::apply_patch::HunkLine::Context(alloc::string::String)
+pub agentkit_toolpacks_coding::apply_patch::HunkLine::Remove(alloc::string::String)
+pub struct agentkit_toolpacks_coding::apply_patch::Hunk
+pub agentkit_toolpacks_coding::apply_patch::Hunk::anchors: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_coding::apply_patch::Hunk::eof: bool
+pub agentkit_toolpacks_coding::apply_patch::Hunk::lines: alloc::vec::Vec<agentkit_toolpacks_coding::apply_patch::HunkLine>
+pub struct agentkit_toolpacks_coding::apply_patch::Patch
+pub agentkit_toolpacks_coding::apply_patch::Patch::ops: alloc::vec::Vec<agentkit_toolpacks_coding::apply_patch::FileOp>
+pub fn agentkit_toolpacks_coding::apply_patch::apply_hunks(&str, &[agentkit_toolpacks_coding::apply_patch::Hunk]) -> core::result::Result<alloc::string::String, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::apply_patch::apply_patch(&agentkit_toolpacks_coding::apply_patch::Patch, &alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> core::result::Result<agentkit_toolpacks_coding::apply_patch::Changes, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::apply_patch::parse_hunks(&str) -> core::result::Result<alloc::vec::Vec<agentkit_toolpacks_coding::apply_patch::Hunk>, agentkit_toolpacks_coding::errors::CodingError>
+pub fn agentkit_toolpacks_coding::apply_patch::parse_patch(&str) -> core::result::Result<agentkit_toolpacks_coding::apply_patch::Patch, agentkit_toolpacks_coding::errors::CodingError>
+pub type agentkit_toolpacks_coding::apply_patch::Changes = alloc::collections::btree::map::BTreeMap<alloc::string::String, core::option::Option<alloc::string::String>>
 pub mod agentkit_toolpacks_coding::args
 pub fn agentkit_toolpacks_coding::args::as_record(&serde_json::value::Value) -> core::result::Result<&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agentkit_toolpacks_coding::errors::CodingError>
 pub fn agentkit_toolpacks_coding::args::opt_bool(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<bool>, agentkit_toolpacks_coding::errors::CodingError>
