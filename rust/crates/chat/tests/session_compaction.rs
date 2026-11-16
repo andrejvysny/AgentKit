@@ -178,7 +178,14 @@ impl Harness {
             .create_session(&CreateSessionInput {
                 session_id: Some("s1".into()),
                 title: None,
-                profile_id: "chat".into(),
+                // The `chat` profile switches project rules off; a session with a
+                // workspace is here for its rules.
+                profile_id: if setup.workspace.is_some() {
+                    "coding"
+                } else {
+                    "chat"
+                }
+                .into(),
                 profile_digest: None,
                 reasoning_effort: None,
                 content_selection: None,
