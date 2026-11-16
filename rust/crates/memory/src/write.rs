@@ -261,6 +261,9 @@ impl MemoryService {
         }
         let text = edited.map_or(record.text.as_str(), str::trim);
         gate::screen_text(text).map_err(refuse)?;
+        if let Some(target) = record.supersedes {
+            return self.approve_replacement(&record, target, text, now).await;
+        }
         if text == record.text {
             self.set_status(id, Status::Active, Actor::Owner, now)
                 .await?;
@@ -284,6 +287,99 @@ impl MemoryService {
         let mut index_tx = self.index.begin_index().await?;
         let item = index_item(new_id, &scope, &body, now, Searchability::Current, valid);
         self.index.upsert(&mut index_tx, &[item]).await?;
+        self.repository
+            .commit_with_index(tx, &*self.index, index_tx)
+            .await?;
+        self.index_hint.store(true, Ordering::Release);
+        Ok(new_id)
+    }
+
+    /// Approve a proposal that replaces `target`: a new active record
+    /// supersedes the target and the proposal is retracted, in one
+    /// transaction that revalidates the target. A target that is no longer
+    /// current and active refuses with [`MemoryError::StaleReplacement`] and
+    /// leaves the proposal pending. The pin of the target moves to the new
+    /// record, as in [`Self::edit`].
+    async fn approve_replacement(
+        &self,
+        proposal: &Record,
+        target: RecordId,
+        text: &str,
+        now: Timestamp,
+    ) -> MemoryResult<RecordId> {
+        let stale = || MemoryError::StaleReplacement {
+            proposal: proposal.id,
+            target,
+        };
+        let _gate = self.write_gate.read().await;
+        let old = self
+            .repository
+            .get(target)
+            .await?
+            .filter(current_and_active)
+            .ok_or_else(stale)?;
+        let at = Timestamp(now.0.max(old.valid_from.0));
+        let mut new = NewRecord::new(
+            proposal.scope.clone(),
+            proposal.kind,
+            text,
+            proposal.origin,
+            at,
+        );
+        new.status = Status::Active;
+        new.approved_at = Some(at);
+        new.lang = proposal.lang.clone();
+        new.created_by_task = proposal.created_by_task.clone();
+        new.rationale = Some(format!(
+            "approved replacement of {target} (proposal {})",
+            proposal.id
+        ));
+        if text == proposal.text {
+            new.evidence_quote = proposal.evidence_quote.clone();
+            new.evidence_chat_id = proposal.evidence_chat_id.clone();
+            new.evidence_msg_id = proposal.evidence_msg_id.clone();
+            new.evidence_sha256 = proposal.evidence_sha256.clone();
+        }
+        new.validate()?;
+        let (scope, body, valid_from) = (new.scope.clone(), new.text.clone(), new.valid_from);
+        let mut tx = self.repository.begin().await?;
+        let new_id = match self.repository.supersede(&mut tx, target, new).await {
+            Ok(id) => id,
+            Err(MemoryError::InvalidTransition { .. } | MemoryError::NotFound(_)) => {
+                return Err(stale());
+            }
+            Err(other) => return Err(other),
+        };
+        if old.is_core {
+            let pin = CorePin {
+                order: old.core_order,
+                max_tokens: CORE_BUDGET_TOKENS,
+            };
+            self.repository
+                .set_core(&mut tx, new_id, Some(pin), Actor::Owner, at)
+                .await?;
+        }
+        self.repository
+            .set_status(&mut tx, proposal.id, Status::Retracted, Actor::Owner, now)
+            .await?;
+        let mut index_tx = self.index.begin_index().await?;
+        let closed = index_item(
+            target,
+            &old.scope,
+            &old.text,
+            old.created_at,
+            Searchability::Superseded,
+            (old.valid_from, Some(valid_from)),
+        );
+        let opened = index_item(
+            new_id,
+            &scope,
+            &body,
+            at,
+            Searchability::Current,
+            (valid_from, None),
+        );
+        self.index.upsert(&mut index_tx, &[closed, opened]).await?;
         self.repository
             .commit_with_index(tx, &*self.index, index_tx)
             .await?;

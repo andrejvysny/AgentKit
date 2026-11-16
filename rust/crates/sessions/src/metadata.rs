@@ -38,6 +38,25 @@ pub const INPUT_ORIGIN_METADATA_KEY: &str = "agentkit.input.origin";
 /// The [`INPUT_ORIGIN_METADATA_KEY`] value of an owner `send`.
 pub const INPUT_ORIGIN_OWNER: &str = "owner";
 
+/// Envelope key of a queued input that came from an owner `send`. The
+/// envelope is the durable content of the input row; an old row without the
+/// key is unstamped (fail closed). It is not part of the idempotency digest.
+const QUEUED_OWNER_KEY: &str = "owner";
+
+/// Mark a queued input's durable envelope as an owner `send`.
+pub fn mark_queued_owner(envelope: &mut Value) {
+    if let Some(map) = envelope.as_object_mut() {
+        map.insert(QUEUED_OWNER_KEY.to_owned(), Value::Bool(true));
+    }
+}
+
+/// The user-message metadata a queued input's turn carries when its
+/// envelope was marked by [`mark_queued_owner`]; `None` for any other input.
+pub fn queued_owner_metadata(envelope: &Value) -> Option<Value> {
+    (envelope.get(QUEUED_OWNER_KEY) == Some(&Value::Bool(true)))
+        .then(|| json!({ INPUT_ORIGIN_METADATA_KEY: INPUT_ORIGIN_OWNER }))
+}
+
 /// The first host-owned (`agentkit.*`) key of caller-supplied chat
 /// `metadata` that is not in `allowed`, if any. The one rule HTTP, the napi
 /// port and session creation all apply to metadata a caller supplies.

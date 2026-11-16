@@ -43,6 +43,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
             .and_then(Value::as_object)
             .cloned()
             .filter(|frozen| !frozen.is_empty());
+        let owner = crate::queued_owner_metadata(content);
         let Some(content) = read_input_content(content) else {
             return Ok(None);
         };
@@ -89,7 +90,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 &content,
                 &user_message_id,
                 &assistant_message_id,
-                None,
+                owner,
             ),
         }))
     }
@@ -262,17 +263,21 @@ impl<R: SessionBackend> AgentSessionService<R> {
         content: &Value,
         user_message_id: &str,
         assistant_message_id: &str,
-        parent_message_id: Option<&str>,
+        user_metadata: Option<Value>,
     ) -> Vec<MessageInput> {
+        let mut user = MessageInput {
+            id: Some(user_message_id.to_owned()),
+            chat_id: session_id.to_owned(),
+            role: "user".into(),
+            content: content.clone(),
+            parent_message_id: None,
+            ..MessageInput::default()
+        };
+        if let Some(metadata) = user_metadata {
+            user.metadata = metadata;
+        }
         vec![
-            MessageInput {
-                id: Some(user_message_id.to_owned()),
-                chat_id: session_id.to_owned(),
-                role: "user".into(),
-                content: content.clone(),
-                parent_message_id: parent_message_id.map(str::to_owned),
-                ..MessageInput::default()
-            },
+            user,
             MessageInput {
                 id: Some(assistant_message_id.to_owned()),
                 chat_id: session_id.to_owned(),

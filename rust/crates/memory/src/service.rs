@@ -185,6 +185,18 @@ impl MemoryService {
         at: Timestamp,
     ) -> MemoryResult<()> {
         let _gate = self.write_gate.read().await;
+        self.set_status_held(id, to, actor, at).await
+    }
+
+    /// [`Self::set_status`] for a caller that already holds the write gate
+    /// (the gate is not reentrant).
+    pub(crate) async fn set_status_held(
+        &self,
+        id: RecordId,
+        to: Status,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
         let record = self
             .repository
             .get(id)

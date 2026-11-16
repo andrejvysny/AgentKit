@@ -487,7 +487,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
             input_id,
             turn_id,
             on_settled,
-            ..
+            owner,
         } = intent;
         let input_id = input_id
             .ok_or_else(|| SessionsError::invalid_input("inputId is required to queue."))?;
@@ -515,7 +515,15 @@ impl<R: SessionBackend> AgentSessionService<R> {
         // input stores (`queue_content` / `read_input_content` shape). The
         // frozen native stanza rides the same durable envelope: a queued
         // input flushes with the identical admission bytes it was sent with.
-        let envelope = self.admission_envelope(&content, frozen);
+        let mut envelope = self.admission_envelope(&content, frozen);
+        // The digest is over the bytes the sender submitted; the owner mark
+        // rides the durable envelope only, so every promotion path stamps the
+        // turn's user message the way an immediate `send` would, and a replay
+        // of the same input still matches.
+        let content_hash = self.hash_of(kind, &envelope);
+        if owner {
+            crate::mark_queued_owner(&mut envelope);
+        }
         let candidate = self
             .stage_candidate(
                 session_id,
@@ -525,7 +533,6 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 &envelope,
             )
             .await?;
-        let content_hash = self.hash_of(kind, &envelope);
         let admission = self
             .store()
             .queue_or_stage_turn(QueueOrStage {

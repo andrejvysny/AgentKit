@@ -500,12 +500,37 @@ fn claims(text: &str) -> Vec<Claim> {
     out
 }
 
+/// Whole-word negations (folded). The `n't` contractions are matched by
+/// suffix in [`is_negated`].
+const NEGATIONS: [&str; 14] = [
+    "never", "not", "no", "nor", "without", "cannot", "dont", "doesnt", "isnt", "arent", "wont",
+    "cant", "didnt", "wasnt",
+];
+
+/// Whether `text` holds a negation word. The coverage check compares the
+/// presence on both sides: it counts words, so a dropped or added "not"
+/// would otherwise pass it with the opposite meaning.
+fn is_negated(text: &str) -> bool {
+    let folded = fold_text(text).replace('\u{2019}', "'");
+    folded
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '\'')
+        .map(|token| token.trim_matches('\''))
+        .any(|token| {
+            token.ends_with("n't") || NEGATIONS.contains(&token.replace('\'', "").as_str())
+        })
+}
+
 /// Whether `quote` (the owner's span) covers `text` (the extractor's
 /// statement): at least [`COVERAGE_PERCENT`] of the text's content words
 /// appear in the quote, and every number, link, email and name of the text
 /// does too. A text that adds a fact or an instruction the owner did not
-/// write fails, whatever the quote proves.
+/// write fails, whatever the quote proves. A text that negates what the
+/// quote affirms, or affirms what it negates, fails too, whatever the
+/// share of shared words.
 pub fn text_covered(text: &str, quote: &str) -> bool {
+    if is_negated(text) != is_negated(quote) {
+        return false;
+    }
     let held: std::collections::HashSet<String> = claims(quote)
         .into_iter()
         .map(|claim| match claim {
@@ -733,6 +758,38 @@ mod tests {
             "pisem pre firmu acme aj dnes"
         ));
         assert!(text_covered("PÍŠE v Ruste.", "píše v ruste každý deň"));
+    }
+
+    #[test]
+    fn a_flipped_polarity_is_not_covered_whatever_the_word_overlap() {
+        let long = "I like writing Rust for backend services at Acme every single day";
+        // Added negation: nearly every word is shared, the meaning is not.
+        for added in [
+            "Does not like writing Rust for backend services at Acme every single day.",
+            "Doesn't like writing Rust for backend services at Acme every single day.",
+            "Doesn\u{2019}t like writing Rust for backend services at Acme every single day.",
+            "Never likes writing Rust for backend services at Acme every single day.",
+            "Likes writing Rust for backend services at Acme every single day without pay.",
+            "Can't write Rust for backend services at Acme every single day.",
+        ] {
+            assert!(!text_covered(added, long), "{added}");
+        }
+        // Dropped negation.
+        let negated = "I don't like writing Rust for backend services at Acme every single day";
+        assert!(!text_covered(long, negated));
+        assert!(!text_covered(
+            "Likes writing Rust for backend services at Acme every single day.",
+            negated
+        ));
+        // Same polarity on both sides is covered; "want" and "note" are no negation.
+        assert!(text_covered(
+            "Doesn't like writing Rust for backend services at Acme every single day.",
+            negated
+        ));
+        assert!(text_covered(
+            "Wants a note on Rust.",
+            "I want a note on Rust, please"
+        ));
     }
 
     #[test]

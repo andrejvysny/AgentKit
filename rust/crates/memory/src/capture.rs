@@ -476,6 +476,11 @@ impl MemoryService {
         record.created_by_task = turn.task.map(str::to_owned);
         if let Some(why) = why {
             record.status = Status::Proposed;
+            record.replaces = match &update {
+                Update::Absent => None,
+                Update::Supersede(old) => Some(old.id),
+                Update::Propose(old) | Update::Protect(old) => Some(*old),
+            };
             record.rationale = Some(why.rationale());
             let id = self.insert_held(record).await?;
             used.proposals += 1;
@@ -561,11 +566,22 @@ impl MemoryService {
     /// record is retracted and the one it replaced is current again, in
     /// one transaction.
     pub async fn undo_capture(&self, id: RecordId, now: Timestamp) -> MemoryResult<()> {
+        // Every read below happens under the write gate and is re-checked by
+        // the repository inside the committing transaction.
+        let _gate = self.write_gate.read().await;
         let record = self.get(id).await?.ok_or(MemoryError::NotFound(id))?;
         if record.origin != Origin::OwnerStatement {
             return Err(MemoryError::InvalidInput(
                 "only an auto-captured record can be undone".to_owned(),
             ));
+        }
+        // An active record that a later write already replaced is not
+        // this capture's to undo: retracting it would leave its
+        // predecessor and its successor both unrelated to the chip.
+        if record.status == Status::Active && !current_and_active(&record) {
+            return Err(MemoryError::Conflict(format!(
+                "record {id} was replaced since it was captured"
+            )));
         }
         let replaced = match record.supersedes {
             Some(old) if current_and_active(&record) => self.get(old).await?.filter(|old| {
@@ -576,15 +592,13 @@ impl MemoryService {
             _ => None,
         };
         let Some(old) = replaced else {
-            return self.retract(id, Actor::Owner, now).await;
+            return self
+                .set_status_held(id, Status::Retracted, Actor::Owner, now)
+                .await;
         };
-        let _gate = self.write_gate.read().await;
         let mut tx = self.repository.begin().await?;
         self.repository
-            .set_status(&mut tx, id, Status::Retracted, Actor::Owner, now)
-            .await?;
-        self.repository
-            .reopen(&mut tx, old.id, Actor::Owner, now)
+            .retract_replacement(&mut tx, id, Actor::Owner, now)
             .await?;
         let mut index_tx = self.index.begin_index().await?;
         self.index

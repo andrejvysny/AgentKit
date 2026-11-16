@@ -595,6 +595,90 @@ async fn supersede_refuses_non_active_replacement<T: MemoryRepository>(repo: Arc
     assert_eq!(history(&*repo).await, before);
 }
 
+async fn a_proposal_keeps_the_record_it_would_replace<T: MemoryRepository>(repo: Arc<T>) {
+    let old = put(&*repo, owner("Lives in Bratislava", 100)).await;
+    let mut proposal = rec(Scope::user(), "Lives in Kosice", Origin::AgentProposal, 200);
+    proposal.replaces = Some(old);
+    let id = put(&*repo, proposal).await;
+    let waiting = record(&*repo, id).await;
+    assert_eq!(
+        (waiting.status, waiting.supersedes, waiting.superseded_by),
+        (Status::Proposed, Some(old), None)
+    );
+    // The target stays current until the proposal is approved.
+    let target = record(&*repo, old).await;
+    assert_eq!(
+        (target.status, target.valid_to, target.superseded_by),
+        (Status::Active, None, None)
+    );
+    // Only a proposal may name a target.
+    let mut active = owner("Lives in Zilina", 300);
+    active.replaces = Some(old);
+    let mut tx = port(repo.begin().await);
+    let refused = repo.insert(&mut tx, active).await;
+    assert!(
+        matches!(refused, Err(MemoryError::InvalidInput(_))),
+        "{refused:?}"
+    );
+}
+
+async fn retract_replacement_undoes_the_whole_replacement<T: MemoryRepository>(repo: Arc<T>) {
+    let old = put(&*repo, owner("Lives in Bratislava", 100)).await;
+    let new = replace(&*repo, old, owner("Lives in Kosice", 200)).await;
+    let mut tx = port(repo.begin().await);
+    port(
+        repo.retract_replacement(&mut tx, new, Actor::Owner, Timestamp(300))
+            .await,
+    );
+    port(repo.commit(tx).await);
+    let (old_row, new_row) = (record(&*repo, old).await, record(&*repo, new).await);
+    assert_eq!(
+        (old_row.status, old_row.valid_to, old_row.superseded_by),
+        (Status::Active, None, None)
+    );
+    assert_eq!(new_row.status, Status::Retracted);
+    let last = port(repo.events(old).await).pop().expect("event");
+    assert_eq!((last.kind, last.actor), (EventKind::Edited, Actor::Owner));
+    let last = port(repo.events(new).await).pop().expect("event");
+    assert_eq!(
+        (last.kind, last.actor),
+        (EventKind::Retracted, Actor::Owner)
+    );
+}
+
+async fn retract_replacement_refuses_a_replacement_that_was_replaced<T: MemoryRepository>(
+    repo: Arc<T>,
+) {
+    let a = put(&*repo, owner("v1", 100)).await;
+    let b = replace(&*repo, a, owner("v2", 200)).await;
+    let c = replace(&*repo, b, owner("v3", 300)).await;
+    let before = history(&*repo).await;
+    let mut tx = port(repo.begin().await);
+    let refused = repo
+        .retract_replacement(&mut tx, b, Actor::Owner, Timestamp(400))
+        .await;
+    assert!(
+        matches!(refused, Err(MemoryError::Conflict(_))),
+        "{refused:?}"
+    );
+    drop(tx);
+    assert_eq!(history(&*repo).await, before);
+    // A record that replaced nothing, or a missing one, is refused too.
+    let mut tx = port(repo.begin().await);
+    let plain = repo
+        .retract_replacement(&mut tx, a, Actor::Owner, Timestamp(400))
+        .await;
+    assert!(matches!(plain, Err(MemoryError::Conflict(_))), "{plain:?}");
+    let missing = repo
+        .retract_replacement(&mut tx, RecordId::new(), Actor::Owner, Timestamp(400))
+        .await;
+    assert!(
+        matches!(missing, Err(MemoryError::NotFound(_))),
+        "{missing:?}"
+    );
+    assert_eq!(record(&*repo, c).await.superseded_by, None);
+}
+
 async fn events_are_ordered_by_seq<T: MemoryRepository>(repo: Arc<T>) {
     let id = put(&*repo, rec(Scope::user(), "p", Origin::AgentProposal, 1)).await;
     move_to(&*repo, id, Status::Active, 2).await;
@@ -646,5 +730,8 @@ suite!(
     purge_clears_links_on_neighbours,
     purge_scrubs_neighbour_event_details,
     supersede_refuses_non_active_replacement,
+    a_proposal_keeps_the_record_it_would_replace,
+    retract_replacement_undoes_the_whole_replacement,
+    retract_replacement_refuses_a_replacement_that_was_replaced,
     events_are_ordered_by_seq,
 );

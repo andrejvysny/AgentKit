@@ -645,10 +645,12 @@ pub fn agentkit_sessions::is_hex64(&str) -> bool
 pub fn agentkit_sessions::is_valid_session_turn_kind(&str) -> bool
 pub async fn agentkit_sessions::list_turn_tasks<R: agentkit_sessions::SessionBackend>(&R, &str, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<agentkit_engine::model::TaskRecord>, agentkit_sessions::SessionFault<R>>
 pub fn agentkit_sessions::make_room(alloc::vec::Vec<serde_json::value::Value>) -> core::option::Option<alloc::vec::Vec<serde_json::value::Value>>
+pub fn agentkit_sessions::mark_queued_owner(&mut serde_json::value::Value)
 pub fn agentkit_sessions::merge_caller_metadata(&serde_json::value::Value, &serde_json::value::Value) -> core::result::Result<serde_json::value::Value, alloc::string::String>
 pub fn agentkit_sessions::parse_answer_expiry(&str) -> core::option::Option<i64>
 pub fn agentkit_sessions::parse_iso_millis(&str) -> core::option::Option<i64>
 pub fn agentkit_sessions::plan_request_of(&serde_json::value::Value, &[alloc::string::String]) -> core::option::Option<serde_json::value::Value>
+pub fn agentkit_sessions::queued_owner_metadata(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
 pub fn agentkit_sessions::read_decision(&serde_json::value::Value) -> core::result::Result<agentkit_sessions::Decision, alloc::string::String>
 pub fn agentkit_sessions::read_execution_state(&serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
 pub fn agentkit_sessions::read_model_profile(&serde_json::value::Value) -> core::option::Option<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>

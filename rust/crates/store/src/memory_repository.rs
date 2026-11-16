@@ -48,6 +48,14 @@ enum Op {
         actor: Actor,
         at: Timestamp,
     },
+    /// Retract a replacement and reopen the record it closed, only while
+    /// the replacement is still current.
+    Undo {
+        id: RecordId,
+        old: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    },
     Status {
         id: RecordId,
         from: Status,
@@ -77,7 +85,7 @@ pub(crate) struct Staged {
 impl Staged {
     fn stage_insert(&mut self, id: RecordId, rec: NewRecord, supersedes: Option<RecordId>) {
         let mut record = rec.clone().into_record(id);
-        record.supersedes = supersedes;
+        record.supersedes = supersedes.or(record.supersedes);
         self.overlay.insert(id, record);
         self.ops.push(Op::Insert {
             id,
@@ -155,6 +163,7 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                 rec,
                 supersedes,
             } => {
+                let supersedes = supersedes.or(rec.replaces);
                 if let Some(old) = supersedes {
                     let alive: bool = conn.query_row(
                         "SELECT EXISTS(SELECT 1 FROM memory_records WHERE id=?)",
@@ -191,6 +200,40 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                 }
                 let detail = json!({ "reopenedAfter": by.to_string() });
                 append_event(conn, id, EventKind::Edited, actor, Some(&detail), at)?;
+            }
+            Op::Undo { id, old, actor, at } => {
+                let rows = conn.execute(
+                    "UPDATE memory_records SET status='retracted', valid_to=?1 \
+                     WHERE id=?2 AND status='active' AND valid_to IS NULL \
+                     AND superseded_by IS NULL AND supersedes=?3",
+                    params![at.0, id.to_string(), old.to_string()],
+                )?;
+                if rows == 0 {
+                    return Err(conflict("was replaced or retracted", id).into());
+                }
+                let rows = conn.execute(
+                    "UPDATE memory_records SET valid_to=NULL, superseded_by=NULL \
+                     WHERE id=?1 AND status='active' AND valid_to IS NOT NULL AND superseded_by=?2",
+                    params![old.to_string(), id.to_string()],
+                )?;
+                if rows == 0 {
+                    return Err(conflict("was reopened or its replacement changed", old).into());
+                }
+                crate::memory_vectors::delete_item(conn, &id.to_string())?;
+                conn.execute(
+                    "DELETE FROM memory_index_items WHERE item_id=?",
+                    [id.to_string()],
+                )?;
+                append_event(
+                    conn,
+                    id,
+                    Status::event_into(Status::Retracted),
+                    actor,
+                    None,
+                    at,
+                )?;
+                let detail = json!({ "reopenedAfter": id.to_string() });
+                append_event(conn, old, EventKind::Edited, actor, Some(&detail), at)?;
             }
             Op::Status {
                 id,
@@ -515,6 +558,47 @@ impl MemoryRepository for SqliteMemoryRepository {
         record.superseded_by = None;
         staged.overlay.insert(id, record);
         staged.ops.push(Op::Reopen { id, by, actor, at });
+        Ok(())
+    }
+
+    async fn retract_replacement(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
+        let staged = staged(tx)?;
+        let mut record = self
+            .visible(staged, id)
+            .await?
+            .ok_or(MemoryError::NotFound(id))?;
+        if record.status != Status::Active
+            || record.valid_to.is_some()
+            || record.superseded_by.is_some()
+        {
+            return Err(conflict("was replaced or retracted", id));
+        }
+        let old = record
+            .supersedes
+            .ok_or_else(|| conflict("replaced no record", id))?;
+        let mut closed = self
+            .visible(staged, old)
+            .await?
+            .ok_or(MemoryError::NotFound(old))?;
+        if closed.status != Status::Active
+            || closed.valid_to.is_none()
+            || closed.superseded_by != Some(id)
+        {
+            return Err(conflict("was reopened or its replacement changed", old));
+        }
+        record.status = Status::Retracted;
+        record.valid_to = Some(at);
+        closed.valid_to = None;
+        closed.superseded_by = None;
+        staged.overlay.insert(id, record);
+        staged.overlay.insert(old, closed);
+        staged.ops.push(Op::Undo { id, old, actor, at });
         Ok(())
     }
 

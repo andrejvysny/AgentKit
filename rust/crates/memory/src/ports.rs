@@ -115,6 +115,22 @@ pub trait MemoryRepository: Send + Sync {
         at: Timestamp,
     ) -> MemoryResult<()>;
 
+    /// Undo a capture that replaced a record, as one conditional step:
+    /// `id` must be active, current (`valid_to` and `superseded_by` unset)
+    /// and carry a `supersedes` link to a record that is active and closed
+    /// by `id` (`superseded_by == id`). `id` is then retracted and that
+    /// record reopened. [`MemoryError::NotFound`] for a missing record;
+    /// [`MemoryError::Conflict`] when any condition fails (for example `id`
+    /// was itself replaced since the capture), with nothing changed, here or
+    /// at commit.
+    async fn retract_replacement(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()>;
+
     /// Move a record along [`Status::can_transition_to`]. Approval stamps
     /// `approved_at`; retraction closes validity at `at` when still open.
     async fn set_status(

@@ -73,6 +73,9 @@ pub agentkit_memory::MemoryError::InvalidTransition
 pub agentkit_memory::MemoryError::InvalidTransition::from: agentkit_memory::Status
 pub agentkit_memory::MemoryError::InvalidTransition::to: agentkit_memory::Status
 pub agentkit_memory::MemoryError::NotFound(agentkit_memory::RecordId)
+pub agentkit_memory::MemoryError::StaleReplacement
+pub agentkit_memory::MemoryError::StaleReplacement::proposal: agentkit_memory::RecordId
+pub agentkit_memory::MemoryError::StaleReplacement::target: agentkit_memory::RecordId
 pub agentkit_memory::MemoryError::UnknownModel(agentkit_memory::ModelId)
 pub enum agentkit_memory::ModelState
 pub agentkit_memory::ModelState::Active
@@ -328,6 +331,7 @@ pub agentkit_memory::NewRecord::kind: agentkit_memory::Kind
 pub agentkit_memory::NewRecord::lang: core::option::Option<alloc::string::String>
 pub agentkit_memory::NewRecord::origin: agentkit_memory::Origin
 pub agentkit_memory::NewRecord::rationale: core::option::Option<alloc::string::String>
+pub agentkit_memory::NewRecord::replaces: core::option::Option<agentkit_memory::RecordId>
 pub agentkit_memory::NewRecord::scope: agentkit_memory::Scope
 pub agentkit_memory::NewRecord::status: agentkit_memory::Status
 pub agentkit_memory::NewRecord::text: alloc::string::String
@@ -488,6 +492,7 @@ pub fn agentkit_memory::MemoryRepository::list<'life0, 'async_trait>(&'life0 sel
 pub fn agentkit_memory::MemoryRepository::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::RecordId], agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::record_use<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::RecordId], agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::reopen<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::MemoryRepository::retract_replacement<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::set_core<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, core::option::Option<agentkit_memory::CorePin>, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::set_status<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::Status, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::supersede<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait

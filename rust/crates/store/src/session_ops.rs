@@ -1373,6 +1373,9 @@ fn stage_missed(staging: &TurnStaging, record: &AgentInputRecord, now: i64) -> R
                 role: "user".into(),
                 content,
                 parent_message_id: None,
+                // An owner `send` queued behind a live turn keeps its mark.
+                metadata: agentkit_sessions::queued_owner_metadata(&record.content)
+                    .unwrap_or_default(),
                 ..Default::default()
             },
             MessageInput {

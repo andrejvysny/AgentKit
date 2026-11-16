@@ -872,3 +872,130 @@ fn a_version_21_database_gains_the_vector_tables_on_open() {
     assert_eq!(version, agentkit_store::SCHEMA_VERSION);
     assert_eq!(vector_rows(&path), 0);
 }
+
+fn proposal_replacing(old: agentkit_memory::RecordId, text: &str, at: i64) -> NewRecord {
+    let mut proposal = NewRecord::new(
+        Scope::user(),
+        Kind::Fact,
+        text,
+        Origin::OwnerStatement,
+        Timestamp(at),
+    );
+    proposal.status = Status::Proposed;
+    proposal.replaces = Some(old);
+    proposal
+}
+
+#[tokio::test]
+async fn approving_a_proposed_replacement_supersedes_its_target_with_the_index() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = service(&store);
+    let old = service
+        .insert(statement("Lives in Bratislava", 100))
+        .await
+        .expect("insert");
+    let proposal = service
+        .insert(proposal_replacing(old, "Lives in Kosice", 200))
+        .await
+        .expect("proposal");
+    let waiting = service.get(proposal).await.expect("get").expect("row");
+    assert_eq!(waiting.supersedes, Some(old));
+    assert_eq!(found(&service, "kosice", false).await, Vec::<String>::new());
+
+    let new = service
+        .approve(proposal, None, Timestamp(300))
+        .await
+        .expect("approve");
+    let old_row = service.get(old).await.expect("get").expect("old");
+    let new_row = service.get(new).await.expect("get").expect("new");
+    let proposal_row = service.get(proposal).await.expect("get").expect("proposal");
+    assert_eq!(old_row.superseded_by, Some(new));
+    assert_eq!(
+        (new_row.status, new_row.supersedes),
+        (Status::Active, Some(old))
+    );
+    assert_eq!(proposal_row.status, Status::Retracted);
+    assert_eq!(found(&service, "lives", false).await, vec![new.to_string()]);
+}
+
+#[tokio::test]
+async fn approving_a_replacement_whose_target_moved_is_stale_and_stays_pending() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = service(&store);
+    let old = service
+        .insert(statement("Lives in Bratislava", 100))
+        .await
+        .expect("insert");
+    let proposal = service
+        .insert(proposal_replacing(old, "Lives in Kosice", 200))
+        .await
+        .expect("proposal");
+    // Another write replaces the target before the owner approves.
+    let other = service
+        .supersede(old, statement("Lives in Zilina", 250))
+        .await
+        .expect("supersede");
+    let refused = service.approve(proposal, None, Timestamp(300)).await;
+    assert!(
+        matches!(&refused, Err(MemoryError::StaleReplacement { target, .. }) if *target == old),
+        "{refused:?}"
+    );
+    let waiting = service.get(proposal).await.expect("get").expect("row");
+    assert_eq!(waiting.status, Status::Proposed);
+    assert_eq!(
+        found(&service, "lives", false).await,
+        vec![other.to_string()]
+    );
+}
+
+#[tokio::test]
+async fn undo_of_a_capture_that_was_replaced_since_is_refused_and_changes_nothing() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = service(&store);
+    let mut captured = statement("Lives in Bratislava", 100);
+    captured.origin = Origin::OwnerStatement;
+    let a = service.insert(captured).await.expect("a");
+    let mut replacement = statement("Lives in Kosice", 200);
+    replacement.origin = Origin::OwnerStatement;
+    let b = service.supersede(a, replacement).await.expect("b");
+    let c = service
+        .supersede(b, statement("Lives in Zilina", 300))
+        .await
+        .expect("c");
+    let before = service
+        .repository()
+        .list(
+            RecordFilter {
+                include_superseded: true,
+                ..Default::default()
+            },
+            Page::all(),
+        )
+        .await
+        .expect("list");
+    let refused = service.undo_capture(b, Timestamp(400)).await;
+    assert!(
+        matches!(refused, Err(MemoryError::Conflict(_))),
+        "{refused:?}"
+    );
+    let after = service
+        .repository()
+        .list(
+            RecordFilter {
+                include_superseded: true,
+                ..Default::default()
+            },
+            Page::all(),
+        )
+        .await
+        .expect("list");
+    assert_eq!(after, before);
+    assert_eq!(found(&service, "lives", false).await, vec![c.to_string()]);
+
+    // The undoable case still works: the chip of the newest capture.
+    let mut newest = statement("Lives in Presov", 500);
+    newest.origin = Origin::OwnerStatement;
+    let d = service.supersede(c, newest).await.expect("d");
+    service.undo_capture(d, Timestamp(600)).await.expect("undo");
+    assert_eq!(found(&service, "lives", false).await, vec![c.to_string()]);
+}

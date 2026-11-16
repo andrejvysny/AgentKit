@@ -31,10 +31,11 @@ pub use metadata::{
     SESSION_PREFIX_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY, SessionMutation, SessionRefusal,
     apply_session_mutation, approval_answer_refusal, execution_state_for_grant,
     execution_state_for_mode, find_active_standing_grant, host_owned_metadata_key,
-    inspect_execution_state, is_approval_request, is_hex64, make_room, merge_caller_metadata,
-    parse_answer_expiry, plan_request_of, read_decision, read_execution_state, read_model_profile,
-    read_session_prefix, read_standing_key, standing_grants, with_execution, with_model_profile,
-    with_session_prefix, with_standing, writable_standing_grants,
+    inspect_execution_state, is_approval_request, is_hex64, make_room, mark_queued_owner,
+    merge_caller_metadata, parse_answer_expiry, plan_request_of, queued_owner_metadata,
+    read_decision, read_execution_state, read_model_profile, read_session_prefix,
+    read_standing_key, standing_grants, with_execution, with_model_profile, with_session_prefix,
+    with_standing, writable_standing_grants,
 };
 pub use model::{
     AgentBudgets, AgentDefinition, AgentInputKind, AgentInputPatch, AgentInputQuery,

@@ -219,6 +219,11 @@ pub struct NewRecord {
     /// Why the agent proposes it. Not a column: the adapter writes it to the
     /// `detail` of the record's first audit event, so a purge scrubs it.
     pub rationale: Option<String>,
+    /// For a proposal only: the current record it would replace once the
+    /// owner approves it. Stored as the record's `supersedes` link; the
+    /// target stays current until approval.
+    #[serde(default)]
+    pub replaces: Option<RecordId>,
 }
 
 impl NewRecord {
@@ -248,6 +253,7 @@ impl NewRecord {
             created_at: at,
             created_by_task: None,
             rationale: None,
+            replaces: None,
         }
     }
 
@@ -270,11 +276,17 @@ impl NewRecord {
                 "a record starts active or proposed".to_owned(),
             ));
         }
+        if self.replaces.is_some() && self.status != Status::Proposed {
+            return Err(crate::MemoryError::InvalidInput(
+                "only a proposal names a record it would replace".to_owned(),
+            ));
+        }
         Ok(())
     }
 
     /// The stored form under `id`, with links and counters empty.
     pub fn into_record(self, id: RecordId) -> Record {
+        let replaces = self.replaces;
         Record {
             id,
             scope: self.scope,
@@ -290,7 +302,7 @@ impl NewRecord {
             approved_at: self.approved_at,
             valid_from: self.valid_from,
             valid_to: None,
-            supersedes: None,
+            supersedes: replaces,
             superseded_by: None,
             is_core: self.is_core,
             core_order: self.core_order,

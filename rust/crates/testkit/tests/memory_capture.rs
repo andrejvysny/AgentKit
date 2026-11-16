@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use agentkit_memory::{
     Actor, CaptureConfig, CaptureOutcome, CaptureTurn, Corpus, EXTRACTION_PROMPT, EventKind,
-    ExtractedCandidate, IndexFilter, Kind, MAX_CANDIDATES, MemoryRepository, MemoryService,
-    NewRecord, Origin, Page, ProposalReason, Record, RecordFilter, RecordId, Rejection, Scope,
-    ScopeKind, Status, Timestamp, extraction_prompt, parse_candidates, restrict_updates,
+    ExtractedCandidate, IndexFilter, Kind, MAX_CANDIDATES, MemoryError, MemoryRepository,
+    MemoryService, NewRecord, Origin, Page, ProposalReason, Record, RecordFilter, RecordId,
+    Rejection, Scope, ScopeKind, Status, Timestamp, extraction_prompt, parse_candidates,
+    restrict_updates,
 };
 use agentkit_testkit::{InMemoryMemoryRepository, InMemoryRetrievalIndex};
 
@@ -1044,4 +1045,191 @@ async fn undo_of_a_superseding_capture_reopens_the_record_it_replaced() {
     let found = service.search("colleagues", &filter, 10).await.unwrap();
     let ids: Vec<_> = found.hits.iter().map(|hit| hit.id.to_string()).collect();
     assert_eq!(ids, vec![old.to_string()]);
+}
+
+#[tokio::test]
+async fn an_added_or_dropped_negation_waits_for_review_whatever_the_overlap() {
+    let (service, repository) = service();
+    let eligible = "I write long documents in English for colleagues every day. \
+                    I don't write long documents in German for colleagues every day.";
+    // Nearly every word is shared; only the polarity differs.
+    let added = candidate(
+        "Does not write long documents in English for colleagues every day.",
+        "I write long documents in English for colleagues every day",
+    );
+    let dropped = candidate(
+        "Writes long documents in German for colleagues every day.",
+        "I don't write long documents in German for colleagues every day",
+    );
+    let same = candidate(
+        "Doesn't write long documents in German for colleagues every day.",
+        "I don't write long documents in German for colleagues every day",
+    );
+    let outcomes = capture(
+        &service,
+        eligible,
+        &[Scope::user()],
+        "m1",
+        vec![added, dropped, same],
+        &CaptureConfig::default(),
+    )
+    .await;
+    for outcome in &outcomes[..2] {
+        assert!(
+            matches!(
+                outcome,
+                CaptureOutcome::Proposed {
+                    why: ProposalReason::NotCoveredByQuote,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+    }
+    assert!(
+        matches!(outcomes[2], CaptureOutcome::Captured { .. }),
+        "{outcomes:?}"
+    );
+    let active = all(&repository)
+        .await
+        .into_iter()
+        .filter(|r| r.status == Status::Active)
+        .count();
+    assert_eq!(active, 1);
+}
+
+/// An owner-stated record, and a capture that would replace it but waits
+/// (the record is protected, so the owner decides).
+async fn waiting_replacement(service: &MemoryService) -> (RecordId, RecordId) {
+    let old = service
+        .insert(owner_record(
+            "Writes to colleagues in German.",
+            Origin::OwnerExplicit,
+            Scope::user(),
+        ))
+        .await
+        .unwrap();
+    let mut update = good();
+    update.updates = Some(old);
+    let outcomes = run(service, vec![update]).await;
+    let CaptureOutcome::Proposed { id, .. } = outcomes[0] else {
+        panic!("{outcomes:?}");
+    };
+    (old, id)
+}
+
+#[tokio::test]
+async fn a_proposed_update_remembers_its_target_and_approval_replaces_it() {
+    let (service, repository) = service();
+    let (old, proposal) = waiting_replacement(&service).await;
+    let waiting = repository.get(proposal).await.unwrap().unwrap();
+    assert_eq!(
+        (waiting.status, waiting.supersedes),
+        (Status::Proposed, Some(old))
+    );
+    let target = repository.get(old).await.unwrap().unwrap();
+    assert_eq!((target.valid_to, target.superseded_by), (None, None));
+
+    let new = service
+        .approve(proposal, None, Timestamp(NOW + 5))
+        .await
+        .unwrap();
+    let (old_row, new_row, proposal_row) = (
+        repository.get(old).await.unwrap().unwrap(),
+        repository.get(new).await.unwrap().unwrap(),
+        repository.get(proposal).await.unwrap().unwrap(),
+    );
+    assert_eq!(old_row.superseded_by, Some(new));
+    assert!(old_row.valid_to.is_some());
+    assert_eq!(
+        (new_row.status, new_row.supersedes, new_row.valid_to),
+        (Status::Active, Some(old), None)
+    );
+    assert_eq!(new_row.evidence_quote, waiting.evidence_quote);
+    assert_eq!(proposal_row.status, Status::Retracted);
+    let filter = IndexFilter {
+        corpora: vec![Corpus::Memory],
+        scope_keys: vec![Scope::user().key()],
+        ..Default::default()
+    };
+    let found = service.search("colleagues", &filter, 10).await.unwrap();
+    let ids: Vec<_> = found.hits.iter().map(|hit| hit.id.to_string()).collect();
+    assert_eq!(ids, vec![new.to_string()]);
+}
+
+#[tokio::test]
+async fn approving_a_replacement_whose_target_moved_is_refused_and_stays_pending() {
+    let (service, repository) = service();
+    let (old, proposal) = waiting_replacement(&service).await;
+    service
+        .retract(old, Actor::Owner, Timestamp(NOW + 1))
+        .await
+        .unwrap();
+    let refused = service.approve(proposal, None, Timestamp(NOW + 2)).await;
+    assert!(
+        matches!(&refused, Err(MemoryError::StaleReplacement { target, .. }) if *target == old),
+        "{refused:?}"
+    );
+    assert!(
+        refused
+            .unwrap_err()
+            .to_string()
+            .starts_with("stale_replacement")
+    );
+    let waiting = repository.get(proposal).await.unwrap().unwrap();
+    assert_eq!(waiting.status, Status::Proposed);
+    let rows = all(&repository).await;
+    assert_eq!(
+        rows.iter().filter(|r| r.status == Status::Active).count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn undo_is_refused_once_the_captured_record_was_itself_replaced() {
+    let (service, repository) = service();
+    let old = service
+        .insert(owner_record(
+            "Writes to colleagues in German.",
+            Origin::OwnerStatement,
+            Scope::user(),
+        ))
+        .await
+        .unwrap();
+    let mut update = good();
+    update.updates = Some(old);
+    let outcomes = run(&service, vec![update]).await;
+    let CaptureOutcome::Captured { id: b, .. } = outcomes[0] else {
+        panic!("{outcomes:?}");
+    };
+    let c = service
+        .supersede(
+            b,
+            NewRecord::new(
+                Scope::user(),
+                Kind::Fact,
+                "Writes to colleagues in Czech.",
+                Origin::OwnerExplicit,
+                Timestamp(NOW + 5),
+            ),
+        )
+        .await
+        .unwrap();
+    let before = all(&repository).await;
+    let refused = service.undo_capture(b, Timestamp(NOW + 9)).await;
+    assert!(
+        matches!(refused, Err(MemoryError::Conflict(_))),
+        "{refused:?}"
+    );
+    assert_eq!(all(&repository).await, before);
+    let current: Vec<_> = repository
+        .list(RecordFilter::default(), Page::all())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(current, vec![c]);
+    let a = repository.get(old).await.unwrap().unwrap();
+    assert_eq!(a.superseded_by, Some(b));
 }

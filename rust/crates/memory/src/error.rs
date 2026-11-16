@@ -10,6 +10,15 @@ pub type MemoryResult<T> = Result<T, MemoryError>;
 pub enum MemoryError {
     #[error("memory record {0} not found")]
     NotFound(RecordId),
+    /// The record a proposal would replace is no longer current and active;
+    /// the proposal stays pending.
+    #[error(
+        "stale_replacement: memory record {target} was replaced or retracted; proposal {proposal} stays pending"
+    )]
+    StaleReplacement {
+        proposal: RecordId,
+        target: RecordId,
+    },
     #[error("memory record transition {from:?} -> {to:?} is not allowed")]
     InvalidTransition { from: Status, to: Status },
     #[error("invalid memory input: {0}")]

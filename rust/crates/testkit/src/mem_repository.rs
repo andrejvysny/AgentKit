@@ -44,6 +44,7 @@ impl State {
 
     fn insert(&mut self, rec: NewRecord, supersedes: Option<RecordId>) -> MemoryResult<RecordId> {
         rec.validate()?;
+        let supersedes = supersedes.or(rec.replaces);
         let id = RecordId::new();
         let kind = if rec.status == Status::Active {
             EventKind::Captured
@@ -189,6 +190,46 @@ impl MemoryRepository for InMemoryMemoryRepository {
         }
         let detail = json!({ "reopenedAfter": by.to_string() });
         state.push_event(id, EventKind::Edited, actor, Some(detail), at);
+        Ok(())
+    }
+
+    async fn retract_replacement(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
+        let state = &mut staged(tx)?.state;
+        let record = state.records.get(&id).ok_or(MemoryError::NotFound(id))?;
+        let moved = || MemoryError::Conflict(format!("record {id} was replaced or retracted"));
+        if record.status != Status::Active
+            || record.valid_to.is_some()
+            || record.superseded_by.is_some()
+        {
+            return Err(moved());
+        }
+        let old = record.supersedes.ok_or_else(moved)?;
+        let closed = state.records.get(&old).ok_or(MemoryError::NotFound(old))?;
+        if closed.status != Status::Active
+            || closed.valid_to.is_none()
+            || closed.superseded_by != Some(id)
+        {
+            return Err(MemoryError::Conflict(format!(
+                "record {old} was reopened or replaced by another record"
+            )));
+        }
+        if let Some(record) = state.records.get_mut(&id) {
+            record.status = Status::Retracted;
+            record.valid_to = Some(at);
+        }
+        if let Some(record) = state.records.get_mut(&old) {
+            record.valid_to = None;
+            record.superseded_by = None;
+        }
+        state.push_event(id, Status::event_into(Status::Retracted), actor, None, at);
+        let detail = json!({ "reopenedAfter": id.to_string() });
+        state.push_event(old, EventKind::Edited, actor, Some(detail), at);
         Ok(())
     }
 
