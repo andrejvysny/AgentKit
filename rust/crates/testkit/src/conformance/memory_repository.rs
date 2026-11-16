@@ -325,6 +325,74 @@ async fn refused_supersede_changes_nothing<T: MemoryRepository>(repo: Arc<T>) {
     assert_eq!(port(repo.events(old).await).len(), 1);
 }
 
+async fn reopen_clears_the_supersession_when_the_replacement_is_retracted<T: MemoryRepository>(
+    repo: Arc<T>,
+) {
+    let old = put(&*repo, owner("Lives in Bratislava", 100)).await;
+    let new = replace(&*repo, old, owner("Lives in Kosice", 200)).await;
+    // Retract and reopen in one transaction: the reopen sees the retraction.
+    let mut tx = port(repo.begin().await);
+    port(
+        repo.set_status(
+            &mut tx,
+            new,
+            Status::Retracted,
+            Actor::Owner,
+            Timestamp(300),
+        )
+        .await,
+    );
+    port(
+        repo.reopen(&mut tx, old, Actor::Owner, Timestamp(300))
+            .await,
+    );
+    port(repo.commit(tx).await);
+    let (old_row, new_row) = (record(&*repo, old).await, record(&*repo, new).await);
+    assert_eq!(
+        (old_row.status, old_row.valid_to, old_row.superseded_by),
+        (Status::Active, None, None)
+    );
+    assert_eq!(new_row.status, Status::Retracted);
+    assert_eq!(new_row.supersedes, Some(old));
+    let last = port(repo.events(old).await).pop().expect("event");
+    assert_eq!((last.kind, last.actor), (EventKind::Edited, Actor::Owner));
+    // The record is current again, so it can be superseded again.
+    let again = replace(&*repo, old, owner("Lives in Zilina", 400)).await;
+    assert_eq!(record(&*repo, old).await.superseded_by, Some(again));
+}
+
+async fn reopen_refuses_an_active_replacement_or_a_record_never_closed<T: MemoryRepository>(
+    repo: Arc<T>,
+) {
+    let old = put(&*repo, owner("v1", 1)).await;
+    replace(&*repo, old, owner("v2", 2)).await;
+    let mut tx = port(repo.begin().await);
+    let live = repo.reopen(&mut tx, old, Actor::Owner, Timestamp(3)).await;
+    assert!(
+        matches!(live, Err(MemoryError::InvalidInput(_))),
+        "{live:?}"
+    );
+    drop(tx);
+    let current = put(&*repo, owner("never replaced", 1)).await;
+    let mut tx = port(repo.begin().await);
+    let open = repo
+        .reopen(&mut tx, current, Actor::Owner, Timestamp(3))
+        .await;
+    assert!(
+        matches!(open, Err(MemoryError::InvalidTransition { .. })),
+        "{open:?}"
+    );
+    let unknown = repo
+        .reopen(&mut tx, RecordId::new(), Actor::Owner, Timestamp(3))
+        .await;
+    assert!(
+        matches!(unknown, Err(MemoryError::NotFound(_))),
+        "{unknown:?}"
+    );
+    drop(tx);
+    assert_eq!(record(&*repo, old).await.valid_to, Some(Timestamp(2)));
+}
+
 async fn default_listing_hides_superseded<T: MemoryRepository>(repo: Arc<T>) {
     let old = put(&*repo, owner("v1", 1)).await;
     let new = replace(&*repo, old, owner("v2", 2)).await;
@@ -565,6 +633,8 @@ suite!(
     supersede_refuses_non_current_old,
     supersede_refuses_cross_scope_and_backdating,
     refused_supersede_changes_nothing,
+    reopen_clears_the_supersession_when_the_replacement_is_retracted,
+    reopen_refuses_an_active_replacement_or_a_record_never_closed,
     default_listing_hides_superseded,
     as_of_listing_returns_value_at_that_time,
     listing_filters_by_scope_kind_status,

@@ -26,7 +26,8 @@ pub use error::{
 };
 pub use metadata::{
     APPROVE_MARKER, COMPACT_REQUESTED_METADATA_KEY, Decision, EXECUTION_METADATA_KEY,
-    ExecutionStateRead, HOST_METADATA_PREFIX, MAX_STANDING_APPROVALS, MODEL_PROFILE_METADATA_KEY,
+    ExecutionStateRead, HOST_METADATA_PREFIX, INPUT_ORIGIN_METADATA_KEY, INPUT_ORIGIN_OWNER,
+    MAX_STANDING_APPROVALS, MODEL_PROFILE_METADATA_KEY,
     SESSION_METADATA_KEY, SESSION_PREFIX_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY,
     SessionMutation, SessionRefusal, apply_session_mutation, approval_answer_refusal,
     execution_state_for_grant, execution_state_for_mode, find_active_standing_grant,

@@ -22,7 +22,7 @@ use agentkit_memory::{
     EmbeddingStatus, MEMORY_FORGET, MemoryService, MemoryToolEnv, OwnerMessage, OwnerTurnSource,
     RecordId, Scope, SessionScopes, Timestamp, memory_tools, scope_label, short_id,
 };
-use agentkit_sessions::read_session_descriptor;
+use agentkit_sessions::{INPUT_ORIGIN_METADATA_KEY, INPUT_ORIGIN_OWNER, read_session_descriptor};
 use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -192,7 +192,7 @@ impl SessionScopes for StoreSessionScopes {
 
 /// Marks a removed stretch in eligible text, so words either side of it can
 /// never be read as one contiguous span the owner typed.
-const REMOVED: char = '\u{FFFC}';
+pub(crate) const REMOVED: char = '\u{FFFC}';
 /// A paragraph longer than this was pasted, not typed.
 const MAX_TYPED_PARAGRAPH_CHARS: usize = 600;
 
@@ -267,7 +267,7 @@ fn flush_paragraph(paragraph: &mut Vec<&str>, out: &mut String) {
 /// What the owner typed in a user message: its text parts, and nothing else
 /// (not the turn-context part, an attachment or a tool part), less anything
 /// that looks pasted.
-fn typed_text(content: &Value) -> String {
+pub(crate) fn typed_text(content: &Value) -> String {
     match content {
         Value::String(text) => eligible_text(text, &[]),
         Value::Array(parts) => parts
@@ -282,6 +282,15 @@ fn typed_text(content: &Value) -> String {
             .join("\n"),
         _ => String::new(),
     }
+}
+
+/// Whether a user message was submitted by the owner through `send`: the
+/// session service stamps that on the messages it creates for an owner turn.
+/// A message without the stamp (a follow-up, a steer, an agent-authored
+/// input, anything written another way) is not the owner's words: capture
+/// fails closed.
+pub(crate) fn owner_submitted(metadata: &Value) -> bool {
+    metadata[INPUT_ORIGIN_METADATA_KEY] == INPUT_ORIGIN_OWNER
 }
 
 /// The user message a run answers, read from the chat: the parent of the
@@ -308,7 +317,7 @@ impl OwnerTurnSource for StoreOwnerTurn {
         let user = messages
             .iter()
             .find(|m| m.id == parent && m.role == "user" && m.chat_id == chat_id)?;
-        if user.metadata.get(SUBAGENT_METADATA_KEY).is_some() {
+        if user.metadata.get(SUBAGENT_METADATA_KEY).is_some() || !owner_submitted(&user.metadata) {
             return None;
         }
         let text = typed_text(&user.content);
@@ -572,6 +581,7 @@ mod tests {
                         chat_id: chat.into(),
                         role: "user".into(),
                         content: json!("Remember that I like tea."),
+                        metadata: json!({INPUT_ORIGIN_METADATA_KEY: INPUT_ORIGIN_OWNER}),
                         ..Default::default()
                     },
                     None,

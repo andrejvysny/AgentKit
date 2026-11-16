@@ -159,6 +159,39 @@ impl MemoryRepository for InMemoryMemoryRepository {
         Ok(new_id)
     }
 
+    async fn reopen(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
+        let state = &mut staged(tx)?.state;
+        let record = state.records.get(&id).ok_or(MemoryError::NotFound(id))?;
+        let by = match record.superseded_by {
+            Some(by) if record.status == Status::Active && record.valid_to.is_some() => by,
+            _ => {
+                return Err(MemoryError::InvalidTransition {
+                    from: record.status,
+                    to: Status::Active,
+                });
+            }
+        };
+        let replacement = state.records.get(&by).ok_or(MemoryError::NotFound(by))?;
+        if replacement.status == Status::Active {
+            return Err(MemoryError::InvalidInput(
+                "the replacement is still active; retract it before reopening".to_owned(),
+            ));
+        }
+        if let Some(record) = state.records.get_mut(&id) {
+            record.valid_to = None;
+            record.superseded_by = None;
+        }
+        let detail = json!({ "reopenedAfter": by.to_string() });
+        state.push_event(id, EventKind::Edited, actor, Some(detail), at);
+        Ok(())
+    }
+
     async fn set_status(
         &self,
         tx: &mut MemoryTx,

@@ -98,6 +98,23 @@ pub trait MemoryRepository: Send + Sync {
         new: NewRecord,
     ) -> MemoryResult<RecordId>;
 
+    /// Undo a supersession whose replacement is no longer active: `id` must
+    /// be an active record closed by a replacement (`valid_to` and
+    /// `superseded_by` set) and that replacement, as this transaction sees
+    /// it, must not be active (retract it first, in the same transaction).
+    /// Clears `valid_to` and `superseded_by` (the replacement keeps its
+    /// `supersedes` link as history) and appends an `edited` event whose
+    /// detail names the replacement. [`MemoryError::InvalidTransition`] when
+    /// `id` is not a closed active record, [`MemoryError::InvalidInput`]
+    /// when the replacement is still active.
+    async fn reopen(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()>;
+
     /// Move a record along [`Status::can_transition_to`]. Approval stamps
     /// `approved_at`; retraction closes validity at `at` when still open.
     async fn set_status(

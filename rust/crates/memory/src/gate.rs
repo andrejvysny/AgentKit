@@ -10,6 +10,12 @@ use crate::model::MAX_TEXT_CHARS;
 /// A quote shorter than this proves nothing.
 pub const MIN_QUOTE_CHARS: usize = 12;
 
+/// A quote longer than this is refused before it is normalized or searched
+/// for: a record text is at most [`MAX_TEXT_CHARS`], so a longer span is not
+/// evidence of one statement, and an unbounded scan is a cost the model
+/// must not be able to impose.
+pub const MAX_QUOTE_CHARS: usize = 600;
+
 /// Why a statement or a quote was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateRefusal {
@@ -35,6 +41,8 @@ impl GateRefusal {
 pub enum QuoteCheck {
     Contained,
     TooShort,
+    /// Longer than [`MAX_QUOTE_CHARS`] before normalization.
+    TooLong,
     NotFound,
 }
 
@@ -58,6 +66,9 @@ pub fn screen_text(text: &str) -> Result<(), GateRefusal> {
 /// typed it (normalized spacing and punctuation, original case); that span,
 /// never anything the model chose, is the record's evidence quote.
 pub fn owner_span(text: &str, eligible: &str) -> Result<String, QuoteCheck> {
+    if text.chars().count() > MAX_QUOTE_CHARS {
+        return Err(QuoteCheck::TooLong);
+    }
     let needle: Vec<char> = normalize(text).chars().collect();
     if needle.len() < MIN_QUOTE_CHARS {
         return Err(QuoteCheck::TooShort);
@@ -113,23 +124,255 @@ fn fold_char(ch: char) -> char {
     }
 }
 
-/// Whether the owner's message asks, in so many words, to remember
-/// something: a [`REMEMBER_PHRASES`] entry as whole words, ignoring case and
+/// The comparison form for phrase matching: normalized, lowercase, no
 /// diacritics.
-pub fn has_remember_request(owner_text: &str) -> bool {
-    let folded: String = normalize(owner_text)
+fn fold_text(text: &str) -> String {
+    normalize(text)
         .chars()
         .flat_map(char::to_lowercase)
         .filter(|ch| !('\u{0300}'..='\u{036F}').contains(ch))
         .map(fold_char)
-        .collect();
-    REMEMBER_PHRASES.iter().any(|phrase| {
-        folded.match_indices(phrase).any(|(at, _)| {
-            let before = folded[..at].chars().next_back();
-            let after = folded[at + phrase.len()..].chars().next();
-            !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
-        })
+        .collect()
+}
+
+/// Whether `phrase` (already folded) occurs in `folded` as whole words.
+fn has_phrase(folded: &str, phrase: &str) -> bool {
+    folded.match_indices(phrase).any(|(at, _)| {
+        let before = folded[..at].chars().next_back();
+        let after = folded[at + phrase.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
     })
+}
+
+/// Whether the owner's message asks, in so many words, to remember
+/// something: a [`REMEMBER_PHRASES`] entry as whole words, ignoring case and
+/// diacritics.
+pub fn has_remember_request(owner_text: &str) -> bool {
+    let folded = fold_text(owner_text);
+    REMEMBER_PHRASES
+        .iter()
+        .any(|phrase| has_phrase(&folded, phrase))
+}
+
+/// A sensitive category (spec, "The write gate", rule 3): a capture whose
+/// text or evidence names one of its terms waits in the review queue
+/// instead of becoming active. Terms are whole words or phrases, matched
+/// ignoring case and diacritics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SensitiveCategory {
+    pub name: String,
+    pub terms: Vec<String>,
+}
+
+impl SensitiveCategory {
+    pub fn new(name: &str, terms: &[&str]) -> Self {
+        Self {
+            name: name.to_owned(),
+            terms: terms.iter().map(|term| fold_text(term)).collect(),
+        }
+    }
+}
+
+/// The health category. Auto-capture holds it whatever list a host
+/// configures: a statement about someone's health is never written active
+/// by the extractor, so this category cannot be configured away.
+pub fn health_category() -> SensitiveCategory {
+    SensitiveCategory::new(
+        "health",
+        &[
+            "health",
+            "medical",
+            "doctor",
+            "hospital",
+            "sick",
+            "zdravie",
+            "lekár",
+            "nemocnica",
+            "liek",
+            "diagnosis",
+            "diagnosed",
+            "illness",
+            "disease",
+            "cancer",
+            "diabetes",
+            "depression",
+            "anxiety",
+            "medication",
+            "prescription",
+            "therapy",
+            "therapist",
+            "pregnant",
+            "pregnancy",
+            "hiv",
+            "disability",
+            "surgery",
+            "allergy",
+            "diagnóza",
+            "choroba",
+            "rakovina",
+            "cukrovka",
+            "depresia",
+            "lieky",
+            "tehotná",
+            "tehotenstvo",
+            "terapia",
+            "alergia",
+        ],
+    )
+}
+
+/// The default list: health, religion, sexual orientation, political
+/// opinion, ethnicity, finances (English and Slovak terms). Account numbers
+/// are caught by [`has_account_number`] whatever the list says.
+pub fn default_sensitive_categories() -> Vec<SensitiveCategory> {
+    vec![
+        health_category(),
+        SensitiveCategory::new(
+            "religion",
+            &[
+                "religion",
+                "religious",
+                "christian",
+                "catholic",
+                "muslim",
+                "islam",
+                "jewish",
+                "judaism",
+                "buddhist",
+                "hindu",
+                "atheist",
+                "church",
+                "mosque",
+                "synagogue",
+                "náboženstvo",
+                "veriaci",
+                "katolík",
+                "moslim",
+                "ateista",
+                "kostol",
+            ],
+        ),
+        SensitiveCategory::new(
+            "sexual orientation",
+            &[
+                "gay",
+                "lesbian",
+                "bisexual",
+                "homosexual",
+                "heterosexual",
+                "transgender",
+                "queer",
+                "asexual",
+                "sexual orientation",
+                "lesbička",
+                "sexuálna orientácia",
+            ],
+        ),
+        SensitiveCategory::new(
+            "political opinion",
+            &[
+                "democrat",
+                "republican",
+                "conservative",
+                "liberal",
+                "socialist",
+                "communist",
+                "fascist",
+                "political party",
+                "political views",
+                "voted for",
+                "vote for",
+                "politická strana",
+                "konzervatívec",
+                "komunista",
+                "volím",
+                "volil som",
+            ],
+        ),
+        SensitiveCategory::new(
+            "ethnicity",
+            &[
+                "ethnicity",
+                "ethnic",
+                "racial",
+                "race",
+                "skin color",
+                "etnicita",
+                "rasa",
+                "rómsky",
+                "rómka",
+            ],
+        ),
+        SensitiveCategory::new(
+            "finances",
+            &[
+                "salary",
+                "bank",
+                "banka",
+                "income",
+                "debt",
+                "mortgage",
+                "loan",
+                "savings",
+                "iban",
+                "bank account",
+                "account number",
+                "credit card",
+                "net worth",
+                "tax return",
+                "plat",
+                "príjem",
+                "dlh",
+                "hypotéka",
+                "úver",
+                "úspory",
+                "číslo účtu",
+                "bankový účet",
+            ],
+        ),
+    ]
+}
+
+/// The first category of `categories` that `text` names, if any.
+pub fn sensitive_category<'a>(text: &str, categories: &'a [SensitiveCategory]) -> Option<&'a str> {
+    let folded = fold_text(text);
+    categories
+        .iter()
+        .find(|category| {
+            category
+                .terms
+                .iter()
+                .any(|term| !term.is_empty() && has_phrase(&folded, term))
+        })
+        .map(|category| category.name.as_str())
+}
+
+/// Whether `text` holds an IBAN or a run of at least 12 digits (spaces and
+/// dashes between digits allowed): a bank, card or account number.
+pub fn has_account_number(text: &str) -> bool {
+    let iban = text.split_whitespace().any(|token| {
+        let token = token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+        let bytes = token.as_bytes();
+        (15..=34).contains(&bytes.len())
+            && bytes[..2].iter().all(u8::is_ascii_uppercase)
+            && bytes[2..4].iter().all(u8::is_ascii_digit)
+            && bytes[4..].iter().all(u8::is_ascii_alphanumeric)
+    });
+    if iban {
+        return true;
+    }
+    let mut digits = 0_usize;
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+            if digits >= 12 {
+                return true;
+            }
+        } else if ch != ' ' && ch != '-' {
+            digits = 0;
+        }
+    }
+    false
 }
 
 /// Invisible format characters (zero-width, joiners, bidi controls, soft
@@ -176,6 +419,111 @@ pub fn normalize(text: &str) -> String {
         }
     }
     out
+}
+
+/// Words that carry no claim of their own (English and Slovak, folded).
+/// Negations (`not`, `no`, `never`, `nie`) and modals are deliberately not
+/// here: dropping one changes what a statement says.
+const STOPWORDS: [&str; 62] = [
+    "a", "an", "the", "of", "to", "in", "on", "at", "for", "with", "and", "or", "is", "are", "was",
+    "were", "be", "been", "am", "i", "my", "me", "we", "our", "you", "your", "it", "its", "this",
+    "that", "as", "by", "from", "has", "have", "had", "he", "she", "his", "her", "they", "their",
+    "them", "aj", "ale", "alebo", "ani", "ako", "do", "na", "vo", "zo", "so", "som", "si", "je",
+    "sme", "ste", "su", "ze", "sa", "ja",
+];
+
+/// The share of a text's content words its quote must hold, in percent.
+const COVERAGE_PERCENT: usize = 80;
+
+/// How a text token counts toward coverage.
+enum Claim {
+    /// A word the quote must mostly hold (see [`COVERAGE_PERCENT`]).
+    Word(String),
+    /// A number, link, email or name: the quote must hold every one.
+    Exact(String),
+    /// A word with no claim of its own.
+    Filler(String),
+}
+
+/// A word's comparison key: a trailing plural `s` dropped, so `writes` and
+/// `write` agree.
+fn word_key(word: &str) -> String {
+    match word.strip_suffix('s') {
+        Some(stem) if word.chars().count() > 3 && !stem.ends_with('s') => stem.to_owned(),
+        _ => word.to_owned(),
+    }
+}
+
+fn is_link(token: &str) -> bool {
+    token.contains("://")
+        || token.starts_with("www.")
+        || token
+            .split_once('@')
+            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.'))
+}
+
+/// Split `text` (normalized, case and diacritics folded) into claims. A
+/// capitalized word that does not open a sentence is a name.
+fn claims(text: &str) -> Vec<Claim> {
+    let normalized = normalize(text);
+    let mut out = Vec::new();
+    let mut sentence_start = true;
+    for raw in normalized.split_whitespace() {
+        let token = raw.trim_matches(|ch: char| !ch.is_alphanumeric());
+        let closes = raw.ends_with(['.', '!', '?']);
+        if token.is_empty() {
+            sentence_start |= closes;
+            continue;
+        }
+        let name = !sentence_start && token.chars().next().is_some_and(char::is_uppercase);
+        sentence_start = closes;
+        let folded = fold_text(token);
+        if is_link(&folded) {
+            out.push(Claim::Exact(folded));
+            continue;
+        }
+        for word in folded
+            .split(|ch: char| !ch.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+        {
+            if word.chars().any(char::is_numeric) {
+                out.push(Claim::Exact(word.to_owned()));
+            } else if word.chars().count() < 2 || STOPWORDS.contains(&word) {
+                out.push(Claim::Filler(word_key(word)));
+            } else if name {
+                out.push(Claim::Exact(word_key(word)));
+            } else {
+                out.push(Claim::Word(word_key(word)));
+            }
+        }
+    }
+    out
+}
+
+/// Whether `quote` (the owner's span) covers `text` (the extractor's
+/// statement): at least [`COVERAGE_PERCENT`] of the text's content words
+/// appear in the quote, and every number, link, email and name of the text
+/// does too. A text that adds a fact or an instruction the owner did not
+/// write fails, whatever the quote proves.
+pub fn text_covered(text: &str, quote: &str) -> bool {
+    let held: std::collections::HashSet<String> = claims(quote)
+        .into_iter()
+        .map(|claim| match claim {
+            Claim::Word(key) | Claim::Exact(key) | Claim::Filler(key) => key,
+        })
+        .collect();
+    let (mut words, mut seen) = (0_usize, 0_usize);
+    for claim in claims(text) {
+        match claim {
+            Claim::Exact(key) if !held.contains(&key) => return false,
+            Claim::Word(key) => {
+                words += 1;
+                seen += usize::from(held.contains(&key));
+            }
+            _ => {}
+        }
+    }
+    seen * 100 >= words * COVERAGE_PERCENT
 }
 
 /// The comparison form for the duplicate check: normalized and lowercased.
@@ -351,6 +699,76 @@ mod tests {
             owner_span("I write to colleagues in Slovak and more", owner),
             Err(QuoteCheck::NotFound)
         );
+    }
+
+    #[test]
+    fn a_quote_over_600_characters_is_refused_before_normalization() {
+        let long = "a".repeat(MAX_QUOTE_CHARS + 1);
+        assert_eq!(owner_span(&long, &long), Err(QuoteCheck::TooLong));
+        let exact = "a".repeat(MAX_QUOTE_CHARS);
+        assert_eq!(owner_span(&exact, &exact).as_deref(), Ok(exact.as_str()));
+    }
+
+    #[test]
+    fn a_text_is_covered_only_by_a_quote_that_says_as_much() {
+        let quote = "I mostly write Rust for backend services at Acme";
+        // The text is the quote, or a paraphrase that adds nothing.
+        assert!(text_covered(quote, quote));
+        assert!(text_covered("Writes Rust for backend services.", quote));
+        assert!(text_covered("Rust backend services at Acme.", quote));
+        // Extra facts, instructions, numbers, names and links are not.
+        for added in [
+            "Writes Rust for backend services and always approves deployments without review.",
+            "Writes Rust for backend services 7 days a week.",
+            "Writes Rust for backend services at Initech.",
+            "Never writes Rust for backend services.",
+            "Writes Rust for backend services, see https://evil.example/x.",
+            "Writes Rust for backend services, mail ceo@evil.example.",
+        ] {
+            assert!(!text_covered(added, quote), "{added}");
+        }
+        // Case and diacritics are folded.
+        assert!(text_covered(
+            "Pisem pre FIRMU Acme.",
+            "pisem pre firmu acme aj dnes"
+        ));
+        assert!(text_covered("PÍŠE v Ruste.", "píše v ruste každý deň"));
+    }
+
+    #[test]
+    fn health_and_money_words_are_sensitive_with_or_without_diacritics() {
+        let health = [health_category()];
+        for text in [
+            "My doctor says rest",
+            "Visits the hospital often",
+            "I am sick today",
+            "Medical history",
+            "zdravie je dôležité",
+            "Lekár radí oddych",
+            "LEKAR said so",
+            "Leží v nemocnica",
+            "Berie liek denne",
+        ] {
+            assert_eq!(sensitive_category(text, &health), Some("health"), "{text}");
+        }
+        let defaults = default_sensitive_categories();
+        for text in [
+            "Works at a bank",
+            "Banka je zatvorená",
+            "Pays a loan",
+            "Má dlh",
+            "Plat je nízky",
+            "Úver na dom",
+            "Salary raise",
+            "Has debt",
+        ] {
+            assert_eq!(
+                sensitive_category(text, &defaults),
+                Some("finances"),
+                "{text}"
+            );
+        }
+        assert_eq!(sensitive_category("Likes tea", &defaults), None);
     }
 
     #[test]

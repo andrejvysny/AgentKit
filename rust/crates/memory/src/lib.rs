@@ -5,6 +5,7 @@
 //! store. Adapters live in layer 4, twins and conformance suites in
 //! `agentkit-testkit`.
 
+mod capture;
 mod core_block;
 mod embedding;
 mod error;
@@ -18,6 +19,12 @@ mod service;
 mod tools;
 mod write;
 
+pub use capture::{
+    CAPTURES_PER_DAY, CAPTURES_PER_TURN, CaptureConfig, CaptureOutcome, CaptureTurn,
+    EXTRACTION_PROMPT, ExtractedCandidate, KnownRecord, MAX_CANDIDATES, PROPOSALS_PER_DAY,
+    ProposalReason, Rejection, UPDATE_CONTEXT_RECORDS, extraction_prompt, parse_candidates,
+    restrict_updates,
+};
 pub use core_block::{
     CORE_BUDGET_TOKENS, CoreBlock, CoreEntry, civil_date, core_tokens, entry_tokens,
     estimate_tokens, parse_date, render_core_block, scope_label, short_id, single_line,
@@ -25,8 +32,10 @@ pub use core_block::{
 pub use embedding::EmbeddingStatus;
 pub use error::{MemoryError, MemoryResult};
 pub use gate::{
-    GateRefusal, MIN_QUOTE_CHARS, QuoteCheck, REMEMBER_PHRASES, contains_secret,
-    has_remember_request, normalize, normalized_key, owner_span, screen_text, strip_invisible,
+    GateRefusal, MAX_QUOTE_CHARS, MIN_QUOTE_CHARS, QuoteCheck, REMEMBER_PHRASES, SensitiveCategory,
+    contains_secret, default_sensitive_categories, has_account_number, has_remember_request,
+    health_category, normalize, normalized_key, owner_span, screen_text, sensitive_category,
+    strip_invisible, text_covered,
 };
 pub use ids::{ItemId, ModelId, RecordId, Timestamp};
 pub use model::{

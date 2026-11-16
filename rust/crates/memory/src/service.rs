@@ -145,8 +145,14 @@ impl MemoryService {
     /// Insert one record in its own transaction. An active record is
     /// indexed in the same write path; a proposal is not.
     pub async fn insert(&self, rec: NewRecord) -> MemoryResult<RecordId> {
-        rec.validate()?;
         let _gate = self.write_gate.read().await;
+        self.insert_held(rec).await
+    }
+
+    /// [`Self::insert`] for a caller that already holds the write gate (the
+    /// gate is not reentrant).
+    pub(crate) async fn insert_held(&self, rec: NewRecord) -> MemoryResult<RecordId> {
+        rec.validate()?;
         let item = (rec.status == Status::Active).then(|| {
             (
                 rec.scope.clone(),
@@ -229,13 +235,24 @@ impl MemoryService {
         new: NewRecord,
         pin: Option<CorePin>,
     ) -> MemoryResult<RecordId> {
+        let _gate = self.write_gate.read().await;
+        self.supersede_held(old, new, pin).await
+    }
+
+    /// [`Self::supersede_pinned`] for a caller that already holds the write
+    /// gate (the gate is not reentrant).
+    pub(crate) async fn supersede_held(
+        &self,
+        old: RecordId,
+        new: NewRecord,
+        pin: Option<CorePin>,
+    ) -> MemoryResult<RecordId> {
         new.validate()?;
         if new.status != Status::Active {
             return Err(MemoryError::InvalidInput(
                 "a replacement record must be active".to_owned(),
             ));
         }
-        let _gate = self.write_gate.read().await;
         let previous = self
             .repository
             .get(old)

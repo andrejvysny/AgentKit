@@ -263,6 +263,10 @@ struct QueueIntent {
     input_id: Option<String>,
     turn_id: Option<String>,
     on_settled: Option<OnSettled>,
+    /// The input came from the owner through `send`; the turn's user
+    /// message then carries [`crate::INPUT_ORIGIN_METADATA_KEY`]. Anything
+    /// else (follow-up, steer, agent-authored) leaves it unmarked.
+    owner: bool,
 }
 
 fn turn_id_for(input_id: &str) -> String {

@@ -90,7 +90,7 @@ pub enum ProposeOutcome {
     Suppressed,
 }
 
-fn sha256_hex(text: &str) -> String {
+pub(crate) fn sha256_hex(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
@@ -98,7 +98,7 @@ fn refuse(refusal: gate::GateRefusal) -> MemoryError {
     MemoryError::InvalidInput(refusal.message())
 }
 
-fn current_and_active(record: &Record) -> bool {
+pub(crate) fn current_and_active(record: &Record) -> bool {
     record.status == Status::Active && record.valid_to.is_none()
 }
 
@@ -178,8 +178,10 @@ impl MemoryService {
 
     /// The duplicate and repeat-suppression rules for a candidate: the same
     /// normalized statement already active or waiting in the scope, or
-    /// rejected by the owner within [`REJECTED_RETENTION_MS`].
-    async fn already_known(
+    /// rejected or retracted by the owner within [`REJECTED_RETENTION_MS`]
+    /// (a retraction by anyone else, such as a supersession cleanup, does
+    /// not suppress).
+    pub(crate) async fn already_known(
         &self,
         scope: &Scope,
         text: &str,
@@ -188,7 +190,12 @@ impl MemoryService {
         let key = gate::normalized_key(text);
         let filter = RecordFilter {
             scopes: vec![scope.clone()],
-            statuses: vec![Status::Active, Status::Proposed, Status::Rejected],
+            statuses: vec![
+                Status::Active,
+                Status::Proposed,
+                Status::Rejected,
+                Status::Retracted,
+            ],
             ..Default::default()
         };
         for record in self.repository.list(filter, Page::all()).await? {
@@ -211,7 +218,19 @@ impl MemoryService {
                         return Ok(Some(ProposeOutcome::Suppressed));
                     }
                 }
-                Status::Retracted => {}
+                Status::Retracted => {
+                    let events = self.repository.events(record.id).await?;
+                    let by_owner = events
+                        .iter()
+                        .rev()
+                        .find(|event| event.kind == EventKind::Retracted)
+                        .filter(|event| event.actor == Actor::Owner);
+                    if by_owner.is_some_and(|event| {
+                        now.0.saturating_sub(event.at.0) < REJECTED_RETENTION_MS
+                    }) {
+                        return Ok(Some(ProposeOutcome::Suppressed));
+                    }
+                }
             }
         }
         Ok(None)

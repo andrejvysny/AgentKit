@@ -30,6 +30,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
+futures.workspace = true
 
 [dev-dependencies]
 uuid.workspace = true
@@ -43,7 +44,6 @@ agentkit-connections = { workspace = true, features = ["http"] }
 axum.workspace = true
 http.workspace = true
 chrono = { workspace = true, features = ["clock"] }
-futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }

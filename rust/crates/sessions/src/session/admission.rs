@@ -3,8 +3,9 @@
 //! submission, and the host's settlement flush planner.
 
 use crate::{
-    AgentInputRecord, AgentInputStatus, CreateAgentInput, MessageInput, SESSION_METADATA_KEY,
-    SessionBackend, SessionFault, SessionSettle, SessionsError, SessionsResult, StagedCandidate,
+    AgentInputRecord, AgentInputStatus, CreateAgentInput, INPUT_ORIGIN_METADATA_KEY,
+    INPUT_ORIGIN_OWNER, MessageInput, SESSION_METADATA_KEY, SessionBackend, SessionFault,
+    SessionSettle, SessionsError, SessionsResult, StagedCandidate,
 };
 use agentkit_engine::{SubmitTask, TaskRecord};
 use agentkit_kernel::sha256_hex;
@@ -12,7 +13,8 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use super::{
-    AgentSendResult, AgentSessionService, QueueKind, session_turn_kind, turn_id_for, turn_result,
+    AgentSendResult, AgentSessionService, QueueIntent, QueueKind, session_turn_kind, turn_id_for,
+    turn_result,
 };
 
 impl<R: SessionBackend> AgentSessionService<R> {
@@ -214,10 +216,11 @@ impl<R: SessionBackend> AgentSessionService<R> {
         session_id: &str,
         descriptor: &Value,
         content: &Value,
-        input_id: Option<&str>,
+        intent: &QueueIntent,
         frozen: Option<&Map<String, Value>>,
         kind: QueueKind,
     ) -> SessionsResult<AgentSendResult, SessionFault<R>> {
+        let input_id = intent.input_id.as_deref();
         // Native admission is validated BEFORE the first mint: a malformed
         // or incomplete stanza is refused at send time, never discovered
         // after the task was queued and claimed (AGENTKIT-112).
@@ -268,14 +271,18 @@ impl<R: SessionBackend> AgentSessionService<R> {
             parent_task_id: None,
             exclusive_scope: true,
         };
+        let mut user = MessageInput {
+            id: Some(user_message_id.clone()),
+            chat_id: session_id.to_owned(),
+            role: "user".into(),
+            content: content.clone(),
+            ..MessageInput::default()
+        };
+        if intent.owner {
+            user.metadata = json!({ INPUT_ORIGIN_METADATA_KEY: INPUT_ORIGIN_OWNER });
+        }
         let messages = vec![
-            MessageInput {
-                id: Some(user_message_id.clone()),
-                chat_id: session_id.to_owned(),
-                role: "user".into(),
-                content: content.clone(),
-                ..MessageInput::default()
-            },
+            user,
             MessageInput {
                 id: Some(assistant_message_id.clone()),
                 chat_id: session_id.to_owned(),

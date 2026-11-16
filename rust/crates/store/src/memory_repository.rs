@@ -41,6 +41,13 @@ enum Op {
         by: RecordId,
         actor: Actor,
     },
+    /// Clear the closure of a record whose replacement was retracted.
+    Reopen {
+        id: RecordId,
+        by: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    },
     Status {
         id: RecordId,
         from: Status,
@@ -171,6 +178,19 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                 }
                 let detail = json!({ "by": by.to_string() });
                 append_event(conn, id, EventKind::Superseded, actor, Some(&detail), at)?;
+            }
+            Op::Reopen { id, by, actor, at } => {
+                let rows = conn.execute(
+                    "UPDATE memory_records SET valid_to=NULL, superseded_by=NULL \
+                     WHERE id=?1 AND status='active' AND valid_to IS NOT NULL AND superseded_by=?2 \
+                     AND NOT EXISTS(SELECT 1 FROM memory_records WHERE id=?2 AND status='active')",
+                    params![id.to_string(), by.to_string()],
+                )?;
+                if rows == 0 {
+                    return Err(conflict("was reopened or its replacement changed", id).into());
+                }
+                let detail = json!({ "reopenedAfter": by.to_string() });
+                append_event(conn, id, EventKind::Edited, actor, Some(&detail), at)?;
             }
             Op::Status {
                 id,
@@ -459,6 +479,43 @@ impl MemoryRepository for SqliteMemoryRepository {
             actor,
         });
         Ok(new_id)
+    }
+
+    async fn reopen(
+        &self,
+        tx: &mut MemoryTx,
+        id: RecordId,
+        actor: Actor,
+        at: Timestamp,
+    ) -> MemoryResult<()> {
+        let staged = staged(tx)?;
+        let mut record = self
+            .visible(staged, id)
+            .await?
+            .ok_or(MemoryError::NotFound(id))?;
+        let by = match record.superseded_by {
+            Some(by) if record.status == Status::Active && record.valid_to.is_some() => by,
+            _ => {
+                return Err(MemoryError::InvalidTransition {
+                    from: record.status,
+                    to: Status::Active,
+                });
+            }
+        };
+        let replacement = self
+            .visible(staged, by)
+            .await?
+            .ok_or(MemoryError::NotFound(by))?;
+        if replacement.status == Status::Active {
+            return Err(MemoryError::InvalidInput(
+                "the replacement is still active; retract it before reopening".to_owned(),
+            ));
+        }
+        record.valid_to = None;
+        record.superseded_by = None;
+        staged.overlay.insert(id, record);
+        staged.ops.push(Op::Reopen { id, by, actor, at });
+        Ok(())
     }
 
     async fn set_status(

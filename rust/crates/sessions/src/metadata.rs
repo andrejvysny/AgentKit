@@ -29,6 +29,15 @@ pub const MODEL_PROFILE_METADATA_KEY: &str = "agentkit.session.modelProfile";
 /// API) never writes a key under it.
 pub const HOST_METADATA_PREFIX: &str = "agentkit.";
 
+/// User-message metadata key naming who submitted the input. The session
+/// service sets it, to [`INPUT_ORIGIN_OWNER`], only on a turn the owner
+/// started through `send`; a message without it is never treated as the
+/// owner's words by memory capture (fail closed).
+pub const INPUT_ORIGIN_METADATA_KEY: &str = "agentkit.input.origin";
+
+/// The [`INPUT_ORIGIN_METADATA_KEY`] value of an owner `send`.
+pub const INPUT_ORIGIN_OWNER: &str = "owner";
+
 /// The first host-owned (`agentkit.*`) key of caller-supplied chat
 /// `metadata` that is not in `allowed`, if any. The one rule HTTP, the napi
 /// port and session creation all apply to metadata a caller supplies.

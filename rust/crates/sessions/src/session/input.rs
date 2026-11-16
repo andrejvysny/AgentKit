@@ -55,7 +55,11 @@ impl<R: SessionBackend> AgentSessionService<R> {
                     session_id,
                     &descriptor,
                     &input.content,
-                    input.input_id.as_deref(),
+                    &QueueIntent {
+                        input_id: input.input_id.clone(),
+                        owner: true,
+                        ..QueueIntent::default()
+                    },
                     input.frozen_payload.as_ref(),
                     // A direct (reject) turn is a follow-up in admission
                     // terms: the replay digest must be computed under the
@@ -78,6 +82,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 input_id: input.input_id.clone(),
                 turn_id: input.turn_id.clone(),
                 on_settled: input.on_settled,
+                owner: true,
             },
             input.frozen_payload.as_ref(),
         )
@@ -100,6 +105,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 input_id: input.input_id.clone(),
                 turn_id: None,
                 on_settled: None,
+                owner: false,
             },
             input.frozen_payload.as_ref(),
         )
@@ -123,6 +129,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
                 input_id: input.input_id.clone(),
                 turn_id: input.turn_id.clone(),
                 on_settled: input.on_settled,
+                owner: false,
             },
             input.frozen_payload.as_ref(),
         )
@@ -440,14 +447,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
             return Ok(prior);
         }
         match self
-            .submit_turn(
-                session_id,
-                descriptor,
-                &content,
-                intent.input_id.as_deref(),
-                frozen,
-                kind,
-            )
+            .submit_turn(session_id, descriptor, &content, &intent, frozen, kind)
             .await
         {
             Ok(result) => {
@@ -487,6 +487,7 @@ impl<R: SessionBackend> AgentSessionService<R> {
             input_id,
             turn_id,
             on_settled,
+            ..
         } = intent;
         let input_id = input_id
             .ok_or_else(|| SessionsError::invalid_input("inputId is required to queue."))?;

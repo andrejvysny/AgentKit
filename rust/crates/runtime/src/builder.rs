@@ -48,6 +48,7 @@ use crate::lanes::lsp::{LspLane, LspLaneContributor};
 use crate::lanes::memory::{
     MemoryLane, spawn_memory_indexer, spawn_memory_sweeper, spawn_usage_flusher,
 };
+use crate::lanes::memory_capture::{MEMORY_EXTRACT_TASK_KIND, MemoryCaptureLane};
 use crate::lanes::native::NativeLane;
 use crate::lanes::output::{OutputLaneContributor, spawn_sweeper};
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
@@ -87,6 +88,7 @@ pub struct AgentRuntimeBuilder {
     memory_sweep: bool,
     embedder: Option<Arc<dyn Embedder>>,
     reranker: Option<Arc<dyn Reranker>>,
+    memory_extractor: Option<(Arc<dyn ChatProvider>, String)>,
     output: Option<OutputConfig>,
 }
 
@@ -127,6 +129,7 @@ impl AgentRuntimeBuilder {
             memory_sweep: false,
             embedder: None,
             reranker: None,
+            memory_extractor: None,
             output: None,
         }
     }
@@ -290,6 +293,18 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    /// The background provider and model of memory auto-capture (roadmap
+    /// 3.4, spec W2). Optional: without it no extraction task is ever
+    /// queued. Refused at `build()` unless `memory(..)` is also set.
+    pub fn memory_extractor_provider(
+        mut self,
+        provider: Arc<dyn ChatProvider>,
+        model: impl Into<String>,
+    ) -> Self {
+        self.memory_extractor = Some((provider, model.into()));
+        self
+    }
+
     /// Turn the output store on (roadmap 2.1, ADR 0034): a tool result larger
     /// than the inline limit is stored before the model first sees it, the
     /// model reads a preview with a handle, and `read_output` and
@@ -367,6 +382,7 @@ impl AgentRuntimeBuilder {
             memory_sweep,
             embedder,
             reranker,
+            memory_extractor,
             output,
         } = self;
         let memory = match memory {
@@ -446,6 +462,24 @@ impl AgentRuntimeBuilder {
         let memory_lane = memory
             .as_ref()
             .map(|service| MemoryLane::new(service.clone(), store.clone(), runtime.clone()));
+        // Auto-capture (roadmap 3.4): needs the service and a background
+        // provider; the executor serves one task kind and the observer queues
+        // it when an owner turn settles.
+        let memory_capture = match (&memory, memory_extractor) {
+            (Some(service), Some((provider, model))) => Some(MemoryCaptureLane::new(
+                service.clone(),
+                store.clone(),
+                runtime.clone(),
+                provider,
+                model,
+            )),
+            (None, Some(_)) => {
+                return Err(RuntimeError::invalid(
+                    "`memory_extractor_provider` needs a memory service: call `memory(repository, index)`",
+                ));
+            }
+            _ => None,
+        };
         let memory_flusher = memory
             .as_ref()
             .map(|service| spawn_usage_flusher(service.clone()));
@@ -622,6 +656,12 @@ impl AgentRuntimeBuilder {
         for kind in turn_kinds {
             executors.insert(kind, Arc::clone(&turn));
         }
+        if let Some(capture) = &memory_capture {
+            executors.insert(
+                MEMORY_EXTRACT_TASK_KIND.to_owned(),
+                Arc::clone(&capture.executor),
+            );
+        }
         for (kind, executor) in extra_executors {
             // One execution owner per kind: a collision is a build-time
             // refusal, never a silent shadow — except where the builder's
@@ -656,10 +696,13 @@ impl AgentRuntimeBuilder {
                 // Orphan reaping on parent settlement (subagents) and
                 // turn-failure tracking (watchdog). Failures never unwind
                 // the settlement; the startup sweep is the same computation.
-                settled_observers: vec![
+                settled_observers: [
                     Arc::clone(&subagent_lane) as Arc<dyn agentkit_engine::TaskSettledObserver>,
                     Arc::clone(&advisor_lane) as Arc<dyn agentkit_engine::TaskSettledObserver>,
-                ],
+                ]
+                .into_iter()
+                .chain(memory_capture.as_ref().map(|lane| lane.observer.clone()))
+                .collect(),
                 ..Default::default()
             },
         )?;
