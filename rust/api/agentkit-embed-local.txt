@@ -1,4 +1,7 @@
 pub mod agentkit_embed_local
+pub enum agentkit_embed_local::Pooling
+pub agentkit_embed_local::Pooling::Cls
+pub agentkit_embed_local::Pooling::Mean
 pub struct agentkit_embed_local::LocalEmbedder
 impl agentkit_embed_local::LocalEmbedder
 pub fn agentkit_embed_local::LocalEmbedder::load(agentkit_embed_local::LocalModel) -> agentkit_memory::error::MemoryResult<Self>
@@ -9,7 +12,16 @@ pub fn agentkit_embed_local::LocalEmbedder::spec(&self) -> &agentkit_memory::ret
 pub struct agentkit_embed_local::LocalModel
 pub agentkit_embed_local::LocalModel::model_path: std::path::PathBuf
 pub agentkit_embed_local::LocalModel::model_sha256: alloc::string::String
+pub agentkit_embed_local::LocalModel::pooling: agentkit_embed_local::PoolingConfig
 pub agentkit_embed_local::LocalModel::spec: agentkit_memory::retrieval::ModelSpec
 pub agentkit_embed_local::LocalModel::tokenizer_path: std::path::PathBuf
 pub agentkit_embed_local::LocalModel::tokenizer_sha256: alloc::string::String
+pub struct agentkit_embed_local::PoolingConfig
+pub agentkit_embed_local::PoolingConfig::normalize: bool
+pub agentkit_embed_local::PoolingConfig::output: core::option::Option<alloc::string::String>
+pub agentkit_embed_local::PoolingConfig::pooling: agentkit_embed_local::Pooling
+impl agentkit_embed_local::PoolingConfig
+pub fn agentkit_embed_local::PoolingConfig::bge_m3() -> Self
+pub fn agentkit_embed_local::PoolingConfig::mean_normalized() -> Self
+pub fn agentkit_embed_local::bge_m3_spec() -> agentkit_memory::retrieval::ModelSpec
 pub fn agentkit_embed_local::read_verified(&std::path::Path, &str) -> agentkit_memory::error::MemoryResult<alloc::vec::Vec<u8>>

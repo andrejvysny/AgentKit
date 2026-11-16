@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 
 #[cfg(feature = "onnx")]
 mod onnx;
+mod pooling;
+
+pub use pooling::{Pooling, PoolingConfig, bge_m3_spec};
 
 /// What the owner supplies: the model's identity and shape, where its files
 /// are, and the sha-256 (lowercase hex) of the model and tokenizer files they
@@ -20,6 +23,8 @@ mod onnx;
 #[derive(Debug, Clone)]
 pub struct LocalModel {
     pub spec: ModelSpec,
+    /// Pooling, normalisation and output selection for this model.
+    pub pooling: PoolingConfig,
     pub model_path: PathBuf,
     pub model_sha256: String,
     /// The tokenizer file (`tokenizer.json`) shipped with the model.
@@ -63,7 +68,8 @@ impl LocalEmbedder {
         let tokenizer_bytes = read_verified(&model.tokenizer_path, &model.tokenizer_sha256)?;
         #[cfg(feature = "onnx")]
         {
-            let engine = onnx::Engine::open(&model.spec, &model_bytes, &tokenizer_bytes)?;
+            let engine =
+                onnx::Engine::open(&model.spec, &model.pooling, &model_bytes, &tokenizer_bytes)?;
             Ok(Self {
                 spec: model.spec,
                 engine: std::sync::Arc::new(engine),
@@ -140,6 +146,7 @@ mod tests {
                 query_prefix: "query: ".to_owned(),
                 passage_prefix: "passage: ".to_owned(),
             },
+            pooling: PoolingConfig::mean_normalized(),
             model_path: path.to_owned(),
             model_sha256: sha.to_owned(),
             tokenizer_path: path.to_owned(),

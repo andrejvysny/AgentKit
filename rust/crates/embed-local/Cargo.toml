@@ -31,3 +31,5 @@ onnx = ["dep:ort", "dep:tokenizers", "dep:tokio"]
 
 [dev-dependencies]
 tempfile.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
