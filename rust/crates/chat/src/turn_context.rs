@@ -8,6 +8,7 @@
 //! `state` records what the history already carries and queues delta notes.
 pub(crate) mod attach;
 mod render;
+pub(crate) mod repair;
 mod state;
 
 pub use render::{OversizedItemSink, TURN_CONTEXT_BUDGET_TOKENS, TurnItem, TurnItemKind};

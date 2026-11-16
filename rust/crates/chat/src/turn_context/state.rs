@@ -13,6 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Chat metadata key holding the turn-context record.
 pub const TURN_CONTEXT_METADATA_KEY: &str = "agentkit.session.turnContext";
 
+/// Message metadata key holding what that turn context wrote (a [`Delta`]).
+/// What a request carries is read from the messages it is built from, never
+/// from the chat-level record.
+pub(crate) const DELTA_METADATA_KEY: &str = "agentkit.turnContext";
+
 /// What a delta note reports. The wire name is the `kind` attribute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,10 +92,105 @@ pub(crate) struct Pinned {
     pub revision: String,
 }
 
+/// What one turn context wrote into its user message: the bodies it sent and
+/// the (de)activation notes. Stored on that message, so it travels with the
+/// message through forks and edits and is covered by a compaction with it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Delta {
+    /// Skill id to the revision whose body the message carries.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skills: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub deactivated: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub reactivated: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<Pinned>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub template_deactivated: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub template_reactivated: bool,
+}
+
+impl Delta {
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub(crate) fn read(metadata: &Value) -> Option<Self> {
+        serde_json::from_value(metadata.get(DELTA_METADATA_KEY)?.clone()).ok()
+    }
+
+    /// `metadata` with this delta merged over the one it already holds.
+    pub(crate) fn write_into(&self, metadata: &Value) -> Value {
+        let mut merged = Self::read(metadata).unwrap_or_default();
+        merged.skills.extend(self.skills.clone());
+        merged.deactivated.extend(self.deactivated.clone());
+        merged.reactivated.extend(self.reactivated.clone());
+        merged.template = self.template.clone().or(merged.template);
+        merged.template_deactivated |= self.template_deactivated;
+        merged.template_reactivated |= self.template_reactivated;
+        let mut next = if metadata.is_object() {
+            metadata.clone()
+        } else {
+            serde_json::json!({})
+        };
+        next[DELTA_METADATA_KEY] = serde_json::to_value(merged).expect("delta serializes");
+        next
+    }
+}
+
+/// What a history carries: the deltas of its turn-context messages, folded in
+/// order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Carried {
+    pub skills: BTreeMap<String, String>,
+    pub inactive: BTreeSet<String>,
+    pub template: Option<Pinned>,
+    pub template_inactive: bool,
+}
+
+impl Carried {
+    pub(crate) fn apply(&mut self, delta: &Delta) {
+        for (id, revision) in &delta.skills {
+            self.skills.insert(id.clone(), revision.clone());
+            self.inactive.remove(id);
+        }
+        self.inactive.extend(delta.deactivated.iter().cloned());
+        for id in &delta.reactivated {
+            self.inactive.remove(id);
+        }
+        if let Some(template) = &delta.template {
+            self.template = Some(template.clone());
+            self.template_inactive = false;
+        }
+        if delta.template_deactivated {
+            self.template_inactive = true;
+        }
+        if delta.template_reactivated {
+            self.template_inactive = false;
+        }
+    }
+
+    /// The ledger's view, used by the unit tests to chain plans.
+    #[cfg(test)]
+    pub(crate) fn of(state: &TurnState) -> Self {
+        Self {
+            skills: state.skills.clone(),
+            inactive: state.inactive.clone(),
+            template: state.template.clone(),
+            template_inactive: state.template_inactive,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TurnState {
-    /// Skill id to the revision whose text is already in the history.
+    /// A cache of what the history carried when the last turn context was
+    /// written (skill id to revision). Never read to decide what to send: the
+    /// request's own history is ([`Carried`]).
     #[serde(default)]
     pub skills: BTreeMap<String, String>,
     /// Skills in `skills` that were deselected: their text stays in the

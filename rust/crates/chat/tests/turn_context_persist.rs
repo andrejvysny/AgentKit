@@ -456,5 +456,270 @@ async fn an_oversized_skill_is_not_carried_so_the_next_turn_tries_again() {
     turn(&host, &store, &service, "q1", "in1").await;
     turn(&host, &store, &service, "q2", "in2").await;
     let requests = seen.lock().unwrap().clone();
-    assert_eq!(mentions(&requests[1].messages, "[omitted:"), 2);
+    // No sink: the notice says the item could not be supplied in full.
+    assert_eq!(
+        mentions(&requests[1].messages, "could not be supplied in full"),
+        2
+    );
+}
+
+// ---- ADR 0036: what a request carries is read from its own history ----
+
+const WINDOW: &str =
+    r#"{"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1,"autoCompaction":true}"#;
+
+/// The requests the session's own turns sent: summarizer calls left out.
+fn mains(seen: &Seen) -> Vec<ChatRequest> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|request| mentions(&request.messages, "<conversation>") == 0)
+        .cloned()
+        .collect()
+}
+
+async fn turn_in(
+    host: &AgentHost,
+    store: &SqliteStore,
+    service: &AgentSessionService<SqliteStore>,
+    session: &str,
+    text: &str,
+) {
+    let sent = service
+        .send(
+            session,
+            &SendInput {
+                frozen_payload: None,
+                content: json!(text),
+                input_id: None,
+                when_busy: WhenBusy::Reject,
+                turn_id: None,
+                on_settled: None,
+            },
+        )
+        .await
+        .unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = sent else {
+        panic!("an idle session starts the turn");
+    };
+    host.run_once().await.expect("run");
+    let task = store.get_task(&turn_id).await.unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Completed, "{task:?}");
+}
+
+#[tokio::test]
+async fn a_selected_skill_survives_compaction_and_a_restart_exactly_once() {
+    let store = SqliteStore::memory(64).expect("store");
+    let seen: Seen = Arc::default();
+    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    create(&service, Some(skill_selection(&store, SKILL).await)).await;
+    service
+        .configure(
+            "s1",
+            None,
+            Some(serde_json::from_str(WINDOW).unwrap()),
+            None,
+        )
+        .await
+        .unwrap();
+    turn_in(&host, &store, &service, "s1", &"a".repeat(7000)).await;
+    // The second turn overflows: the summary replaces the first turn, whose
+    // message carried the instruction. The request still holds it once.
+    turn_in(&host, &store, &service, "s1", &"b".repeat(7000)).await;
+    assert_eq!(store.list_context_summaries("s1").await.unwrap().len(), 1);
+    let requests = mains(&seen);
+    assert_eq!(mentions(&requests[0].messages, "original instruction"), 1);
+    assert_eq!(mentions(&requests[1].messages, "original instruction"), 1);
+    assert!(
+        requests[1]
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .to_string()
+            .contains("original instruction"),
+        "re-sent in the turn's own message"
+    );
+    // The next request: history is summary + the repaired message.
+    turn_in(&host, &store, &service, "s1", "c").await;
+    assert_eq!(
+        mentions(&mains(&seen)[2].messages, "original instruction"),
+        1
+    );
+    // A restart builds the same request.
+    let after: Seen = Arc::default();
+    let (host, service) = runtime(&store, after.clone(), ChatExecutorOptions::default());
+    turn_in(&host, &store, &service, "s1", "d").await;
+    assert_eq!(
+        mentions(&mains(&after)[0].messages, "original instruction"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_fork_from_before_the_selection_does_not_inherit_it_as_carried() {
+    let store = SqliteStore::memory(64).expect("store");
+    let seen: Seen = Arc::default();
+    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    create(&service, None).await;
+    turn_in(&host, &store, &service, "s1", "q1").await;
+    service
+        .configure("s1", Some(skill_selection(&store, SKILL).await), None, None)
+        .await
+        .unwrap();
+    turn_in(&host, &store, &service, "s1", "q2").await;
+    assert_eq!(
+        mentions(&mains(&seen)[1].messages, "original instruction"),
+        1
+    );
+    // Fork at the first answer: the branch holds no turn that sent the skill.
+    let first_answer = store
+        .messages("s1", true)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| m.role == "assistant" && m.metadata["placeholder"] != true)
+        .unwrap();
+    let forked = service.fork("s1", &first_answer.id).await.unwrap();
+    // The fork keeps the session's current selection, so its next turn sends
+    // the instruction: the chat-level record copied by the fork said it was
+    // already carried.
+    turn_in(&host, &store, &service, &forked.session_id, "q3").await;
+    let requests = mains(&seen);
+    assert_eq!(mentions(&requests[2].messages, "original instruction"), 1);
+    assert_eq!(requests[2].messages.last().unwrap().role, "user");
+}
+
+#[tokio::test]
+async fn editing_an_earlier_message_resends_what_only_the_old_branch_carried() {
+    let store = SqliteStore::memory(64).expect("store");
+    let seen: Seen = Arc::default();
+    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    create(&service, None).await;
+    turn_in(&host, &store, &service, "s1", "q1").await;
+    service
+        .configure("s1", Some(skill_selection(&store, SKILL).await), None, None)
+        .await
+        .unwrap();
+    turn_in(&host, &store, &service, "s1", "q2").await;
+    let first_answer = store
+        .messages("s1", true)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| m.role == "assistant" && m.metadata["placeholder"] != true)
+        .unwrap();
+    // The edited second message: a sibling of the one that sent the skill.
+    store
+        .append_message(
+            agentkit_store::MessageInput {
+                chat_id: "s1".into(),
+                role: "user".into(),
+                content: json!("q2 edited"),
+                parent_message_id: Some(first_answer.id),
+                activate: true,
+                ..Default::default()
+            },
+            None,
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    turn_in(&host, &store, &service, "s1", "q3").await;
+    let request = mains(&seen).pop().unwrap();
+    assert_eq!(mentions(&request.messages, "q2 edited"), 1);
+    assert_eq!(mentions(&request.messages, "original instruction"), 1);
+    assert_eq!(
+        mentions(&request.messages, "\"q2\""),
+        0,
+        "old branch is out"
+    );
+}
+
+#[tokio::test]
+async fn deselecting_and_reselecting_sends_notes_not_a_second_copy() {
+    let store = SqliteStore::memory(64).expect("store");
+    let seen: Seen = Arc::default();
+    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let selection = skill_selection(&store, SKILL).await;
+    create(&service, Some(selection.clone())).await;
+    turn_in(&host, &store, &service, "s1", "q1").await;
+    service
+        .configure("s1", Some(vec![]), None, None)
+        .await
+        .unwrap();
+    turn_in(&host, &store, &service, "s1", "q2").await;
+    service
+        .configure("s1", Some(selection), None, None)
+        .await
+        .unwrap();
+    turn_in(&host, &store, &service, "s1", "q3").await;
+    let last = mains(&seen).pop().unwrap();
+    assert_eq!(mentions(&last.messages, "original instruction"), 1);
+    assert_eq!(mentions(&last.messages, "skill_deactivated"), 1);
+    assert_eq!(mentions(&last.messages, "skill_reactivated"), 1);
+}
+
+#[tokio::test]
+async fn an_oversized_guide_is_stored_and_its_handle_reads_back_exactly() {
+    use agentkit_core::{ByteOrLineRange, OutputGate, OutputHandle, OutputStore};
+    use agentkit_testkit::{InMemoryOutputStore, ManualClock};
+    let outputs = Arc::new(InMemoryOutputStore::new(ManualClock::new(
+        1_700_000_000_000,
+    )));
+    let options = ChatExecutorOptions {
+        output: Some(Arc::new(OutputGate::new(outputs.clone()))),
+        ..Default::default()
+    };
+    let store = SqliteStore::memory(64).expect("store");
+    let seen: Seen = Arc::default();
+    let (host, service) = runtime(&store, seen.clone(), options);
+    let body = "x".repeat(30_000);
+    let guide = format!("---\nname: guide\ndescription: guide\n---\n{body}\n");
+    create(&service, Some(skill_selection(&store, &guide).await)).await;
+    turn_in(&host, &store, &service, "s1", "q1").await;
+    let user = mains(&seen)[0].messages.last().unwrap().content.to_string();
+    assert!(
+        user.contains("read_output(handle, start_line, max_lines)"),
+        "{user:.300}"
+    );
+    assert!(!user.contains(&"x".repeat(100)), "the body is not inline");
+    let at = user.find("out_").expect("a handle");
+    let handle = OutputHandle::parse(&user[at..at + 36]).expect("a valid handle");
+    assert_eq!(outputs.stored("s1"), 1);
+    let slice = outputs
+        .read(
+            &handle,
+            ByteOrLineRange::Lines {
+                start_line: 1,
+                max_lines: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!slice.has_more);
+    assert_eq!(slice.text.trim(), body, "exact text round trip");
+}
+
+#[tokio::test]
+async fn an_oversized_guide_without_a_store_says_it_was_not_supplied_in_full() {
+    let store = SqliteStore::memory(64).expect("store");
+    let seen: Seen = Arc::default();
+    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let guide = format!(
+        "---\nname: guide\ndescription: guide\n---\n{}\n",
+        "x".repeat(30_000)
+    );
+    create(&service, Some(skill_selection(&store, &guide).await)).await;
+    turn_in(&host, &store, &service, "s1", "q1").await;
+    let user = mains(&seen)[0].messages.last().unwrap().content.to_string();
+    assert!(
+        user.contains("could not be supplied in full"),
+        "{user:.300}"
+    );
+    assert!(user.contains("docs:guide"));
+    assert!(
+        !user.contains(&"x".repeat(2_001)),
+        "only a bounded first part"
+    );
 }

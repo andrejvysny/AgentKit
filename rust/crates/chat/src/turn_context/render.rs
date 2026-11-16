@@ -8,9 +8,10 @@ use agentkit_core::{TURN_CONTEXT_CLOSE, TURN_CONTEXT_OPEN, escape_turn_context};
 /// Estimated tokens (characters divided by four) one turn context may carry.
 pub const TURN_CONTEXT_BUDGET_TOKENS: usize = 4_000;
 
-/// Package 2.1 hook: where an item over the budget is kept so the model can
-/// read it later. Until an output store implements it the placeholder names no
-/// handle and the full text is not kept.
+/// Where an item over the budget is kept so the model can read it later. The
+/// chat executor spills into the host's output store (`read_output` serves the
+/// handle) when no sink is configured; with neither, the notice says the item
+/// could not be supplied in full.
 ///
 /// A turn that loses a race or is retried builds its context again and calls
 /// `keep` again with the same arguments: an implementation must key what it
@@ -118,18 +119,40 @@ fn note_text(note: &TurnNote) -> String {
     format!("{tag}>\n{}\n</note>", escape_turn_context(&note.text))
 }
 
+/// Characters of an item's own text a notice may still show when nothing
+/// keeps the full text.
+const UNSTORED_PREVIEW_CHARS: usize = 2_000;
+
+/// What stands in for an item that does not fit. With a handle the full text
+/// is readable (`read_output`); without one the notice says so and shows the
+/// first part (at most `room` tokens, not counted against it), never a silent
+/// marker. `room` is the budget left, in tokens.
 fn placeholder(
     item: &TurnItem,
     tokens: usize,
     budget: usize,
+    room: usize,
     sink: Option<&dyn OversizedItemSink>,
 ) -> String {
     match sink.and_then(|sink| sink.keep(item.kind.as_str(), &item.name, &item.text)) {
         Some(handle) => format!(
-            "[omitted: about {tokens} tokens, over the {budget}-token turn budget; full text at handle {}]",
+            "[omitted: about {tokens} tokens, over the {budget}-token turn budget; full text at handle {}; read it with read_output(handle, start_line, max_lines)]",
             escape_turn_context(&handle)
         ),
-        None => format!("[omitted: about {tokens} tokens, over the {budget}-token turn budget]"),
+        None => {
+            let shown: String = item
+                .text
+                .chars()
+                .take(UNSTORED_PREVIEW_CHARS.min(room.saturating_mul(4)))
+                .collect();
+            format!(
+                "[Selected {} {} ({} bytes) could not be supplied in full: over the {budget}-token turn budget and no output store keeps it. Only its first part follows.]\n{}",
+                item.kind.as_str(),
+                escape_turn_context(&item.name),
+                item.text.len(),
+                escape_turn_context(&shown)
+            )
+        }
     }
 }
 
@@ -176,7 +199,7 @@ pub(crate) fn render(
             escape_turn_context(&item.text)
         } else {
             omitted.push(index);
-            placeholder(item, tokens, budget, sink)
+            placeholder(item, tokens, budget, remaining, sink)
         };
         lines.push(format!(
             "{}\n{body}\n</{}>",
@@ -303,11 +326,11 @@ mod tests {
             ..Default::default()
         };
         let text = render(&draft, 2, None).unwrap().text;
-        assert!(text.contains("[omitted: about 3 tokens, over the 2-token turn budget]"));
-        assert!(!text.contains("12345678901"));
+        assert!(text.contains("Selected skill big (11 bytes) could not be supplied in full"));
         assert!(text.contains("\nabcd\n"));
         let kept = render(&draft, 2, Some(&Keeps)).unwrap().text;
-        assert!(kept.contains("full text at handle out:skill:big]"));
+        assert!(kept.contains("[omitted: about 3 tokens, over the 2-token turn budget; full text at handle out:skill:big; read it with read_output"));
+        assert!(!kept.contains("12345678901"));
     }
 
     #[test]
@@ -326,7 +349,21 @@ mod tests {
         let text = render(&draft, 0, None).unwrap().text;
         assert!(text.contains("<date>2026-11-14</date>"));
         assert!(text.contains("<note kind=\"core_memory_changed\">\nmemory edited\n</note>"));
-        assert!(text.contains("[omitted:"));
+        assert!(text.contains("could not be supplied in full"));
+        assert!(!text.contains("\nbody\n"), "no room: no first part");
+    }
+
+    #[test]
+    fn an_unstored_item_shows_a_bounded_first_part() {
+        let long = "y".repeat(30_039);
+        let draft = Draft {
+            items: &[skill("guide", &long)],
+            ..Default::default()
+        };
+        let text = render(&draft, 4_000, None).unwrap().text;
+        assert!(text.contains("(30039 bytes) could not be supplied in full"));
+        assert!(text.contains(&"y".repeat(UNSTORED_PREVIEW_CHARS)));
+        assert!(!text.contains(&"y".repeat(UNSTORED_PREVIEW_CHARS + 1)));
     }
 
     #[test]

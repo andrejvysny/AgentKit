@@ -451,6 +451,7 @@ impl ChatExecutor {
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
         let records = context.store.messages(chat_id, true).await?;
+        let turn_deltas = crate::turn_context::repair::deltas_of(&records);
         // What the provider-facing history is built from (ADR 0017 part 1):
         // the session's anchored-history policy and its masking thresholds,
         // both from the turn's staged context snapshot. A non-session chat
@@ -603,6 +604,19 @@ impl ChatExecutor {
             summary_id = applied_summary(&entries);
             entries
         };
+        // A rewrite of this very request (a summary, a trim) may have removed
+        // the message that carried a selected instruction: re-send it in this
+        // turn's own message rather than trust that it is still there.
+        let mut entries = entries;
+        crate::turn_context::repair::repair(
+            &context,
+            chat_id,
+            &anchor,
+            &selected_content,
+            &turn_deltas,
+            &mut entries,
+        )
+        .await?;
         // Reads the final view still shows whole, derived from what was
         // persisted. The continuation lane replays its own durable branch, so
         // no read there is known to be in the provider's view.

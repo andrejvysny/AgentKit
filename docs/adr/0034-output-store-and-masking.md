@@ -140,6 +140,11 @@ its retention ends.
     is never dropped, a rule fault returns the raw text with a warning, and a
     rule that drops lines checks no failure line was lost.
 
+12. **Turn-context spill.** A selected skill, template or source too large for
+    the turn-context budget (ADR 0036) is written through this port under the
+    chat's scope (tool `turn_context`, call id `turn-context:<kind>:<name>`)
+    and the turn context names its handle and `read_output`.
+
 ## Consequences
 
 - A command that prints 1 MiB costs the context about 5 KiB, and the model

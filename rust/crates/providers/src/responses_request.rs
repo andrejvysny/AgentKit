@@ -9,6 +9,8 @@ use agentkit_kernel::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 const MAX_BYTES: usize = 1024 * 1024;
+/// Stable code of the warning that records a dropped continuation (a cache break).
+const CONTINUATION_RESET_HISTORY: &str = "continuation_reset:history_rewritten";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
@@ -69,23 +71,33 @@ pub fn build_responses_request_notes(
     }
     let mut items = vec![];
     let mut offset = 0;
+    let mut notes: Vec<ProfileNote> = vec![];
     if let Some(state) = &input.continuation {
         bounded(state)?;
         let state: State = serde_json::from_value(state.clone())
             .map_err(|_| CoreError::responses("invalid_continuation"))?;
         check_state(&state, input, identity)?;
+        let intact = history_intact(&state, input)?;
         let digest = selected_digest(input)?;
         let previous = state.run_content.as_ref();
-        if previous.is_some_and(|binding| binding.run_id == input.run_id)
-            && previous.map(|binding| binding.digest.as_str()) != digest.as_deref()
+        let same_run = previous.is_some_and(|binding| binding.run_id == input.run_id);
+        // Inside one run nothing may change under the checkpoint.
+        if same_run
+            && (!intact || previous.map(|binding| binding.digest.as_str()) != digest.as_deref())
         {
             return Err(CoreError::responses("continuation_history_mismatch"));
         }
-        // A different selection on a later turn starts from canonical history.
-        // Private state may encode reasoning about the old selection.
-        if previous.map(|binding| binding.digest.as_str()) == digest.as_deref() {
+        // On a later run a changed selection is appended content: the prior
+        // provider-native items stay valid, so they are kept. Only a history
+        // that was rewritten under the checkpoint drops it, and says so.
+        if intact {
             offset = state.message_count;
             items = state.input_items;
+        } else {
+            notes.push(ProfileNote {
+                code: CONTINUATION_RESET_HISTORY,
+                message: "The provider continuation was dropped because the history before it changed; the request replays the canonical history and the provider cache restarts.".into(),
+            });
         }
     } else if input.continuation_required {
         return Err(CoreError::responses("continuation_required"));
@@ -116,7 +128,7 @@ pub fn build_responses_request_notes(
     // precede the history.
     let wire_items = items;
     let mut body = json!({"model":input.model});
-    let mut notes: Vec<ProfileNote> = sanitized_note(&replaced).into_iter().collect();
+    notes.extend(sanitized_note(&replaced));
     if !tools.is_empty() {
         let (choice, mut downgraded) = match &input.profile {
             Some(profile) => policy_tool_choice(profile, &input.tool_choice),
@@ -215,11 +227,6 @@ fn check_state(
     {
         return Err(CoreError::responses("continuation_scope_mismatch"));
     }
-    if state.message_count > input.messages.len()
-        || state.message_digest != message_digest(&input.messages[..state.message_count])?
-    {
-        return Err(CoreError::responses("continuation_history_mismatch"));
-    }
     for item in &state.input_items {
         match item["type"].as_str() {
             Some(
@@ -240,6 +247,11 @@ fn check_state(
         }
     }
     Ok(())
+}
+/// Whether the messages the checkpoint covered are still the same bytes.
+fn history_intact(state: &State, input: &ChatRequest) -> Result<bool, CoreError> {
+    Ok(state.message_count <= input.messages.len()
+        && state.message_digest == message_digest(&input.messages[..state.message_count])?)
 }
 pub(crate) fn make_continuation(
     input: &ChatRequest,
@@ -689,7 +701,7 @@ mod selected_content_tests {
     use agentkit_core::{ContinuationScope, ReasoningEffort};
 
     #[test]
-    fn content_binding_fences_same_run_and_changed_next_turn_replays_canonical_history() {
+    fn content_binding_fences_same_run_and_changed_next_turn_keeps_the_checkpoint() {
         let identity = ConnectionIdentity {
             provider_id: "p".into(),
             protocol: "responses".into(),
@@ -740,11 +752,132 @@ mod selected_content_tests {
             "continuation_history_mismatch"
         );
         input.run_id = "run-2".into();
-        let replay = build_responses_request(&input, &identity, false).unwrap();
-        assert!(!replay["input"].to_string().contains("opaque"));
-        assert!(!replay["input"].to_string().contains("selected first"));
+        // A later run keeps the checkpoint: the new selection is appended
+        // and the provider-native items before it are replayed unchanged.
+        let (replay, _, notes) = build_responses_request_notes(&input, &identity, false).unwrap();
+        assert!(notes.is_empty());
+        assert!(replay["input"].to_string().contains("opaque"));
+        assert!(replay["input"].to_string().contains("selected first"));
         assert!(replay["input"].to_string().contains("selected second"));
-        assert!(replay["input"].to_string().contains("canonical"));
+        assert_eq!(
+            replay["input"].as_array().unwrap()[..3],
+            state["inputItems"].as_array().unwrap()[..]
+        );
+    }
+    #[test]
+    fn a_later_run_whose_history_was_rewritten_drops_the_checkpoint_and_says_so() {
+        let identity = ConnectionIdentity {
+            provider_id: "p".into(),
+            protocol: "responses".into(),
+            connection_id: "c".into(),
+            generation: 1,
+        };
+        let mut input = ChatRequest {
+            run_id: "run-1".into(),
+            model: "model".into(),
+            messages: vec![ChatMessage::text("user", "first")],
+            continuation_scope: Some(ContinuationScope {
+                chat_id: "chat".into(),
+                branch_id: "branch".into(),
+            }),
+            ..Default::default()
+        };
+        let body = build_responses_request(&input, &identity, false).unwrap();
+        let state = make_continuation(&input, &identity, &body, &[], "answer", &[])
+            .unwrap()
+            .unwrap();
+        input.messages = vec![
+            ChatMessage::text("user", "edited"),
+            ChatMessage::text("assistant", "answer"),
+            ChatMessage::text("user", "next"),
+        ];
+        input.continuation = Some(state);
+        assert_eq!(
+            build_responses_request(&input, &identity, false)
+                .unwrap_err()
+                .code,
+            "continuation_history_mismatch"
+        );
+        input.run_id = "run-2".into();
+        let (body, _, notes) = build_responses_request_notes(&input, &identity, false).unwrap();
+        assert_eq!(body["input"].as_array().unwrap().len(), 3);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].code, "continuation_reset:history_rewritten");
+    }
+    #[test]
+    fn selecting_a_skill_on_turn_two_replays_turn_one_items_byte_for_byte() {
+        let identity = ConnectionIdentity {
+            provider_id: "p".into(),
+            protocol: "responses".into(),
+            connection_id: "c".into(),
+            generation: 1,
+        };
+        let scope = ContinuationScope {
+            chat_id: "chat".into(),
+            branch_id: "branch".into(),
+        };
+        let call = ToolCall {
+            id: "call_1".into(),
+            name: "lookup".into(),
+            arguments_json: "{\"q\":1}".into(),
+        };
+        let mut turn_one = ChatRequest {
+            run_id: "run-1".into(),
+            model: "model".into(),
+            messages: vec![ChatMessage::text("user", "q1")],
+            content_binding_digest: Some("a".repeat(64)),
+            continuation_scope: Some(scope.clone()),
+            ..Default::default()
+        };
+        let body = build_responses_request(&turn_one, &identity, false).unwrap();
+        // The provider's own function_call item: a private id the canonical
+        // history cannot rebuild.
+        let output = vec![
+            json!({"type":"reasoning","encrypted_content":"opaque"}),
+            json!({"type":"function_call","id":"fc_private","call_id":"call_1","name":"lookup","namespace":"agentkit","arguments":"{\"q\":1}"}),
+        ];
+        let state = make_continuation(
+            &turn_one,
+            &identity,
+            &body,
+            &output,
+            "",
+            std::slice::from_ref(&call),
+        )
+        .unwrap()
+        .unwrap();
+        let mut assistant = ChatMessage::text("assistant", "");
+        assistant.tool_calls = vec![call];
+        let mut result = ChatMessage::text("tool", "found");
+        result.tool_call_id = Some("call_1".into());
+        turn_one.messages.extend([
+            assistant,
+            result,
+            ChatMessage::text("assistant", "done"),
+            ChatMessage::text(
+                "user",
+                "q2\n\n<turn_context>\n<skill name=\"s\">body</skill>\n</turn_context>",
+            ),
+        ]);
+        let turn_two = ChatRequest {
+            run_id: "run-2".into(),
+            content_binding_digest: Some("b".repeat(64)),
+            continuation: Some(state.clone()),
+            ..turn_one
+        };
+        let (second, _, notes) =
+            build_responses_request_notes(&turn_two, &identity, false).unwrap();
+        assert!(notes.is_empty());
+        let before = state["inputItems"].as_array().unwrap();
+        assert_eq!(
+            second["input"].as_array().unwrap()[..before.len()],
+            before[..]
+        );
+        assert!(
+            second["input"]
+                .to_string()
+                .contains("\"id\":\"fc_private\"")
+        );
     }
     #[test]
     fn empty_selection_is_bound_within_the_same_run() {

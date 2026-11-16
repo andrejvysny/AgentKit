@@ -30,7 +30,20 @@ request could not be replayed (INV-2).
    - Skill revisions are written as `sha256:<hex>` when they are a content
      hash. Names are skill ids.
    - A skill or template already in the history is not sent again; a new
-     revision is.
+     revision is. "In the history" means the history the request is built from:
+     each turn-context message records what it wrote (message metadata
+     `agentkit.turnContext`: bodies sent, de/reactivation notes), and the turn
+     folds those records along the user message's ancestry, leaving out what
+     the newest stored summary covers. The chat-level record below is a cache
+     and is never read for this decision. A fork, an edit or a compaction
+     therefore carries exactly what its own path still holds; a message
+     written before this rule has no record and counts as carrying nothing
+     (its instruction is sent once more). After the request's own rewrite (a
+     summary or trim written by this very request), the executor checks the
+     final messages again and re-sends a selected body they no longer hold as
+     one more turn-context part of the turn's user message. A fork keeps the
+     session's current selection, so its first turn sends a body its path does
+     not hold.
    - Deselecting a skill or template keeps its pin, marked inactive, and
      appends a `skill_deactivated` / `template_deactivated` note. The earlier
      body stays in the history. Selecting the same revision again appends a
@@ -66,12 +79,19 @@ request could not be replayed (INV-2).
 6. **Budget.** 4,000 estimated tokens (characters / 4) per turn. The date and
    notes (counted in the budget) are always written; items fill the rest in
    order. An item that does
-   not fit becomes `[omitted: about N tokens, over the B-token turn budget]`.
-   `OversizedItemSink` (`ChatExecutorOptions::turn_oversize`) is the hook the
-   output store (package 2.1) fills: it returns the handle the placeholder
-   names. Until then the full text of an omitted item is not kept. A retried
-   turn calls the sink again with the same arguments, so an implementation
-   keys what it stores by content hash and returns the same handle.
+   not fit is never dropped silently. With a handle the placeholder reads
+   `[omitted: about N tokens, over the B-token turn budget; full text at handle
+   H; read it with read_output(handle, start_line, max_lines)]`. The handle
+   comes from `OversizedItemSink` (`ChatExecutorOptions::turn_oversize`) when
+   the host sets one; otherwise, when the executor has an output store
+   (`ChatExecutorOptions::output`), the full text is stored under the chat's
+   scope before the transaction opens and `read_output` serves the handle
+   (ADR 0034). A retry that loses the race stores the text again (an orphan
+   until retention). With neither, or when the store refuses (run warning
+   `turn_context_spill_failed`), the item renders `[Selected <kind> <name> (N
+   bytes) could not be supplied in full: ...]` followed by at most its first
+   2,000 characters. Such an item is not carried, so a later turn that still
+   selects it tries again.
 7. **Session record.** Chat metadata `agentkit.session.turnContext` holds the
    skills (id to revision) and template the history carries, the last date sent
    and the queued notes.
@@ -108,11 +128,10 @@ request could not be replayed (INV-2).
 
 - Selecting a skill no longer changes any byte before the new turn. The skill
   stays in history from the turn it was selected and costs cached input.
-- The recorded part is history: compaction and masking reclaim it, and the
-  session record then still lists the skill as carried. Re-selecting after a
-  compaction needs a new revision or an explicit re-add (follow-up).
-- Editing an earlier user message starts a branch whose history may lack a
-  skill the record says is carried (follow-up: per-branch record).
+- The recorded part is history: compaction and masking reclaim it. What a
+  request carries is derived from its own messages, so a compaction, a fork or
+  an edit re-sends a selected skill whose message is gone (tests:
+  `chat/tests/turn_context_persist.rs`).
 - The `T4.4` recommender line is a `toolset_recommendation` note written into
   the turn context when the turn starts, so continuation inputs replay it
   unchanged (INV-2). Nothing is appended to the request per attempt.
