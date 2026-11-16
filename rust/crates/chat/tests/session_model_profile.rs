@@ -70,8 +70,10 @@ async fn create(h: &Harness, id: &str, metadata: Option<serde_json::Value>) {
     h.host
         .set_session_flush_planner(Arc::new(h.service.clone()))
         .await;
+    // The frozen profile is host-owned metadata, which only the host path
+    // may seed (4.1 guard on `create_session_chat`).
     h.service
-        .create_session(&CreateSessionInput {
+        .create_session_with_host_metadata(&CreateSessionInput {
             session_id: Some(id.into()),
             profile_id: "coding".into(),
             model: Some("model".into()),

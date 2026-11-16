@@ -3831,17 +3831,19 @@ async fn images_older_than_six_turns_mask_to_a_placeholder_when_the_context_fill
         f.store.get_task(&turn_id).await.unwrap().unwrap().status,
         TaskStatus::Completed
     );
-    let requests = f.requests.lock().unwrap();
-    let request = requests.first().unwrap();
-    let user = request
-        .messages
-        .iter()
-        .find(|message| message.content.to_string().contains("pppp"))
-        .expect("the first user message is replayed");
-    assert_eq!(
-        user.content[1],
-        json!({"type":"text","text":"[image omitted to save context · attachment shot.png]"})
-    );
+    {
+        let requests = f.requests.lock().unwrap();
+        let request = requests.first().unwrap();
+        let user = request
+            .messages
+            .iter()
+            .find(|message| message.content.to_string().contains("pppp"))
+            .expect("the first user message is replayed");
+        assert_eq!(
+            user.content[1],
+            json!({"type":"text","text":"[image omitted to save context · attachment shot.png]"})
+        );
+    }
     let masks = f.store.list_context_masks("s1").await.unwrap();
     assert_eq!(masks.len(), 1);
     assert_eq!(masks[0]["images"][0]["messageId"], "u0");

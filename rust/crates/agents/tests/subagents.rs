@@ -74,7 +74,7 @@ impl ChatProvider for Child {
                         gate.notified().await;
                     }
                     Ok(ProviderEvent::Completed {
-                        content: answer.into(),
+                        content: answer,
                         finish_reason: "stop".into(),
                         tool_calls: vec![],
                     })
@@ -83,7 +83,7 @@ impl ChatProvider for Child {
             );
         }
         Box::pin(futures::stream::iter([Ok(ProviderEvent::Completed {
-            content: answer.into(),
+            content: answer,
             finish_reason: "stop".into(),
             tool_calls: vec![],
         })]))
@@ -3782,8 +3782,16 @@ impl Harness {
         extra: Option<(&str, Value)>,
     ) {
         let mut metadata = manifest_metadata(tools);
-        if let Some((key, value)) = extra {
-            metadata[key] = value;
+        // Session creation refuses standing approvals even on the host
+        // path (only an answered approval writes them), so they are
+        // seeded straight into the store after the session exists.
+        let mut standing = None;
+        match extra {
+            Some((key, value)) if key == STANDING_APPROVALS_METADATA_KEY => {
+                standing = Some((key, value));
+            }
+            Some((key, value)) => metadata[key] = value,
+            None => {}
         }
         // What the role guard learns while the parent stages its tools.
         for definition in tools {
@@ -3811,6 +3819,14 @@ impl Harness {
             })
             .await
             .unwrap();
+        if let Some((key, value)) = standing {
+            let mut chat_metadata = self.child_metadata(id).await;
+            chat_metadata[key] = value;
+            self.store
+                .update_chat(id, None, Some(chat_metadata), None, 0)
+                .await
+                .unwrap();
+        }
         self.store
             .submit(SubmitTask {
                 task_id: format!("{id}-turn"),
@@ -3984,6 +4000,9 @@ async fn children_never_get_memory_propose_or_forget() {
     for denied in ["memory_propose", "memory_forget"] {
         assert!(!effective.contains(&format!("memory:{denied}")));
     }
+    // A writer child holds the workspace lease until it settles (4.4), so
+    // the first one finishes before the legacy writer is spawned.
+    h.await_parent("p-mem").await;
     // The same denial holds for a legacy child with no recorded set.
     let legacy = h.spawn("legacy", "general", "no manifest").await;
     let guard = SubagentRoleGuard::new(h.subagents.clone());

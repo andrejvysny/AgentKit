@@ -15,13 +15,6 @@ pub(crate) fn encode(vector: &[f32]) -> Vec<u8> {
     vector.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-fn decode(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
 /// Unit length (a zero vector stays zero), so a dot product is the cosine.
 fn normalized(vector: &[f32]) -> Vec<f32> {
     let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();

@@ -196,7 +196,10 @@ fn a_record_over_changed_history_is_skipped_whole() {
     assert!(!apply_one(&mut entries, &record));
     assert_eq!(entries, before);
     // The caller learns which record was dropped, to report the break.
-    assert_eq!(apply_all(&mut entries, &[record.clone()]), vec!["m1"]);
+    assert_eq!(
+        apply_all(&mut entries, std::slice::from_ref(&record)),
+        vec!["m1"]
+    );
     assert_eq!(entries, before);
     let mut missing = session(1, |_| "read_file");
     assert!(!apply_one(&mut missing, &record));

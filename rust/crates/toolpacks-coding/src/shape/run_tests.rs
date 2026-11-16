@@ -79,11 +79,11 @@ fn detect(text: &str) -> Option<Runner> {
 
 fn drop_pattern(runner: Runner) -> &'static Regex {
     match runner {
-        Runner::Cargo => &*CARGO_DROP,
-        Runner::Pytest => &*PYTEST_DROP,
-        Runner::Jest => &*JEST_DROP,
-        Runner::Vitest => &*VITEST_DROP,
-        Runner::Go => &*GO_DROP,
+        Runner::Cargo => &CARGO_DROP,
+        Runner::Pytest => &PYTEST_DROP,
+        Runner::Jest => &JEST_DROP,
+        Runner::Vitest => &VITEST_DROP,
+        Runner::Go => &GO_DROP,
     }
 }
 
@@ -99,11 +99,11 @@ static GO_PASS: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*--- (PASS|SKIP): .*$
 
 fn pass_pattern(runner: Runner) -> &'static Regex {
     match runner {
-        Runner::Cargo => &*CARGO_PASS,
-        Runner::Pytest => &*PYTEST_PASS,
-        Runner::Jest => &*JEST_DROP,
-        Runner::Vitest => &*VITEST_DROP,
-        Runner::Go => &*GO_PASS,
+        Runner::Cargo => &CARGO_PASS,
+        Runner::Pytest => &PYTEST_PASS,
+        Runner::Jest => &JEST_DROP,
+        Runner::Vitest => &VITEST_DROP,
+        Runner::Go => &GO_PASS,
     }
 }
 

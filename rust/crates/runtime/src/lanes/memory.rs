@@ -720,8 +720,8 @@ mod tests {
             Arc::new(SystemRuntime),
         );
         let staged = stage_tools(
-            &[lane.contributor.clone()],
-            &[lane.guard.clone()],
+            std::slice::from_ref(&lane.contributor),
+            std::slice::from_ref(&lane.guard),
             contribution(),
         )
         .await

@@ -31,7 +31,7 @@ use std::collections::HashMap;
 enum Op {
     Insert {
         id: RecordId,
-        rec: NewRecord,
+        rec: Box<NewRecord>,
         supersedes: Option<RecordId>,
     },
     /// Close the replaced record of a supersession.
@@ -74,7 +74,7 @@ impl Staged {
         self.overlay.insert(id, record);
         self.ops.push(Op::Insert {
             id,
-            rec,
+            rec: Box::new(rec),
             supersedes,
         });
     }

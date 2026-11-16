@@ -10,8 +10,8 @@ use agentkit_agents::{
     SubagentConfig, SubagentRoleGuard, SubagentRoleLimits, SubagentService, SubagentTokenGate,
 };
 use agentkit_chat::{
-    AgentHost, CHAT_TURN_TASK_KIND, ChatExecutor, ChatExecutorOptions, ChatResult, HostOptions,
-    UsageAuthorizer, WorkerHandle,
+    AgentHost, ChatExecutor, ChatExecutorOptions, ChatResult, HostOptions, UsageAuthorizer,
+    WorkerHandle,
 };
 use agentkit_core::{
     ChatProvider, ChatRequest, CoreError, ProviderEvent, ProviderStream, Tool, ToolCall,
@@ -19,7 +19,9 @@ use agentkit_core::{
 };
 use agentkit_engine::{RetryBackoff, SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_governance::{ToolContributionContext, ToolGuard, ToolGuardContext, ToolGuardVerdict};
-use agentkit_sessions::{AgentSessionService, AgentSessionServiceDeps, CreateSessionInput};
+use agentkit_sessions::{
+    AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, CreateSessionInput,
+};
 use agentkit_store::{SqliteStore, SubmitTask};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -268,6 +270,15 @@ impl Rig {
         host.set_session_flush_planner(Arc::new(service.clone()))
             .await;
         if fresh {
+            // The `general` role writes, so the parent needs a workspace
+            // (authority 4.4: `workspace_required`).
+            let workspace = std::env::temp_dir().join(format!(
+                "agentkit-budget-ws-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            ));
+            std::fs::create_dir_all(&workspace).unwrap();
             service
                 .create_session(&CreateSessionInput {
                     session_id: Some("parent".into()),
@@ -278,7 +289,10 @@ impl Rig {
                     content_selection: None,
                     provider_id: None,
                     model: Some("model".into()),
-                    workspace: None,
+                    workspace: Some(json!({
+                        "root": workspace.to_string_lossy(),
+                        "trusted": true
+                    })),
                     context: None,
                     skills: None,
                     turn_kind: None,
@@ -874,9 +888,10 @@ async fn a_reservation_counts_against_siblings_and_is_keyed_by_the_turn() {
         rig.provider
             .script(marker, vec![reply("done", false, json!({"output": 10}))]);
     }
+    // A writer child holds the workspace lease until it settles (4.4).
     let first = rig.spawn("a", "RESERVE-A", None).await;
-    let second = rig.spawn("b", "RESERVE-B", None).await;
     rig.settle(&first).await;
+    let second = rig.spawn("b", "RESERVE-B", None).await;
     rig.settle(&second).await;
     rig.subagents.configure(config(Some(1_000)));
 
