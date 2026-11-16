@@ -557,7 +557,9 @@ mod tests {
         }
         let claim = || agentkit_store::ClaimInput {
             owner_id: "worker".into(),
-            now: 10,
+            // The observer queues with the wall clock, so the claim must be
+            // later than any real instant.
+            now: 4_000_000_000_000,
             ttl_ms: 60_000,
             kinds: vec![MEMORY_EXTRACT_TASK_KIND.into()],
             busy_scopes: vec![],

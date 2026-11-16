@@ -298,7 +298,7 @@ pub enum CaptureOutcome {
 /// What an update candidate may do to the record it names.
 enum Update {
     Absent,
-    Supersede(Record),
+    Supersede(Box<Record>),
     /// The record is not the owner's statement.
     Propose(RecordId),
     /// The owner wrote it or pinned it.
@@ -519,7 +519,7 @@ impl MemoryService {
         Ok(if old.is_core || old.origin == Origin::OwnerExplicit {
             Update::Protect(old.id)
         } else if old.origin == Origin::OwnerStatement {
-            Update::Supersede(old)
+            Update::Supersede(Box::new(old))
         } else {
             Update::Propose(old.id)
         })

@@ -121,12 +121,27 @@ impl ChatProvider for Warm {
         };
         let seen = Arc::clone(&self.seen);
         let inner = self.sim.stream_chat(input, cancel).map(move |event| {
-            if let Ok(ProviderEvent::Usage(data)) = &event
-                && let Ok(record) = serde_json::from_value::<UsageRecord>(data.clone())
-            {
-                seen.lock().unwrap()[index].cache_read = record.cache_read;
+            match event {
+                Ok(ProviderEvent::Usage(data)) => {
+                    if let Ok(record) = serde_json::from_value::<UsageRecord>(data.clone()) {
+                        seen.lock().unwrap()[index].cache_read = record.cache_read;
+                    }
+                    Ok(ProviderEvent::Usage(data))
+                }
+                // The simulator answers with nothing, which the executor
+                // re-asks once; a real child answers, so one request is one
+                // child turn.
+                Ok(ProviderEvent::Completed {
+                    content,
+                    tool_calls,
+                    finish_reason,
+                }) if content.is_empty() => Ok(ProviderEvent::Completed {
+                    content: "done".into(),
+                    tool_calls,
+                    finish_reason,
+                }),
+                other => other,
             }
-            event
         });
         if !is_lead {
             return Box::pin(inner);
@@ -422,14 +437,15 @@ async fn siblings_wait_for_the_first_child_then_read_its_cache() {
     assert_eq!(seed, child_cache_seed("parent", "explorer", &tools));
     assert_ne!(seed, child_cache_seed("parent", "explorer", &[]));
     let expected = child_cache_key(&seed, 1);
-    let seen = f.provider.seen.lock().unwrap();
-    assert_eq!(seen.len(), 4);
-    assert!(
-        seen.iter()
-            .all(|request| request.key.as_deref() == Some(expected.as_str())),
-        "every sibling carries the shared prompt_cache_key"
-    );
-    drop(seen);
+    {
+        let seen = f.provider.seen.lock().unwrap();
+        assert_eq!(seen.len(), 4);
+        assert!(
+            seen.iter()
+                .all(|request| request.key.as_deref() == Some(expected.as_str())),
+            "every sibling carries the shared prompt_cache_key"
+        );
+    }
     // Each held child's own task reports its hold; the first child has none.
     assert!(f.released(&first.child_chat_id).await.is_none());
     for child in &held {

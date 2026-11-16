@@ -196,10 +196,17 @@ impl MemoryService {
                 Status::Rejected,
                 Status::Retracted,
             ],
+            // A retraction closes the record's validity, so the default
+            // current-only view never lists it.
+            include_superseded: true,
             ..Default::default()
         };
         for record in self.repository.list(filter, Page::all()).await? {
             if gate::normalized_key(&record.text) != key {
+                continue;
+            }
+            // A superseded record is history, not a duplicate.
+            if record.status == Status::Active && record.valid_to.is_some() {
                 continue;
             }
             match record.status {
