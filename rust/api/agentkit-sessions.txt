@@ -35,6 +35,10 @@ pub agentkit_sessions::AgentSendResult::Turn
 pub agentkit_sessions::AgentSendResult::Turn::assistant_message_id: alloc::string::String
 pub agentkit_sessions::AgentSendResult::Turn::turn_id: alloc::string::String
 pub agentkit_sessions::AgentSendResult::Turn::user_message_id: alloc::string::String
+pub enum agentkit_sessions::AnswerActor
+pub agentkit_sessions::AnswerActor::Agent(alloc::string::String)
+pub agentkit_sessions::AnswerActor::Owner
+pub agentkit_sessions::AnswerActor::Waker
 pub enum agentkit_sessions::ArgsHashProvenance
 pub agentkit_sessions::ArgsHashProvenance::Canonical
 pub agentkit_sessions::ArgsHashProvenance::TsCanonical
@@ -240,6 +244,7 @@ pub agentkit_sessions::AgentResources::skills: alloc::vec::Vec<agentkit_sessions
 pub struct agentkit_sessions::AgentSessionService<R: agentkit_sessions::SessionBackend>
 impl<R: agentkit_sessions::SessionBackend> agentkit_sessions::AgentSessionService<R>
 pub async fn agentkit_sessions::AgentSessionService<R>::answer(&self, &agentkit_sessions::AnswerInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::answer_with_actor(&self, &agentkit_sessions::AnswerInput, agentkit_sessions::AnswerActor) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::approve(&self, &str, &str, core::option::Option<&str>, core::option::Option<bool>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::deny(&self, &str, &str, core::option::Option<&str>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AnswerReceipt, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::list_approval_grants(&self, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<serde_json::value::Value>, agentkit_sessions::SessionFault<R>>
@@ -261,6 +266,7 @@ pub async fn agentkit_sessions::AgentSessionService<R>::compact(&self, &str) -> 
 pub async fn agentkit_sessions::AgentSessionService<R>::configure(&self, &str, core::option::Option<alloc::vec::Vec<serde_json::value::Value>>, core::option::Option<serde_json::value::Value>, core::option::Option<bool>) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::create_session(&self, &agentkit_sessions::CreateSessionInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::create_session_chat(&self, &agentkit_sessions::CreateSessionInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::ChatRecord, agentkit_sessions::SessionFault<R>>
+pub async fn agentkit_sessions::AgentSessionService<R>::create_session_with_host_metadata(&self, &agentkit_sessions::CreateSessionInput) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::export_session(&self, &str) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::fork(&self, &str, &str) -> agentkit_sessions::SessionsResult<agentkit_sessions::AgentSessionState, agentkit_sessions::SessionFault<R>>
 pub async fn agentkit_sessions::AgentSessionService<R>::get_execution(&self, &str) -> agentkit_sessions::SessionsResult<core::option::Option<serde_json::value::Value>, agentkit_sessions::SessionFault<R>>
@@ -303,6 +309,7 @@ pub struct agentkit_sessions::AgentSkillSelection
 pub agentkit_sessions::AgentSkillSelection::id: alloc::string::String
 pub agentkit_sessions::AgentSkillSelection::revision: alloc::string::String
 pub struct agentkit_sessions::AnswerHumanRequest
+pub agentkit_sessions::AnswerHumanRequest::actor: agentkit_sessions::AnswerActor
 pub agentkit_sessions::AnswerHumanRequest::answer_id: alloc::string::String
 pub agentkit_sessions::AnswerHumanRequest::granted_mode: core::option::Option<alloc::string::String>
 pub agentkit_sessions::AnswerHumanRequest::message_id: alloc::string::String
@@ -567,6 +574,7 @@ pub const agentkit_sessions::COMPACT_REQUESTED_METADATA_KEY: &str
 pub const agentkit_sessions::CONTENT_UNSUPPORTED_MESSAGE: &str
 pub const agentkit_sessions::EXECUTION_METADATA_KEY: &str
 pub const agentkit_sessions::FALLBACK_CONTEXT_WINDOW_TOKENS: i64
+pub const agentkit_sessions::HOST_METADATA_PREFIX: &str
 pub const agentkit_sessions::MAX_STANDING_APPROVALS: usize
 pub const agentkit_sessions::MODEL_PROFILE_METADATA_KEY: &str
 pub const agentkit_sessions::PROVIDER_MODELS_NAMESPACE: &str
@@ -628,12 +636,14 @@ pub fn agentkit_sessions::execution_state_for_grant(&serde_json::value::Value, &
 pub fn agentkit_sessions::execution_state_for_mode(&str, &str, core::option::Option<&serde_json::value::Value>) -> core::option::Option<serde_json::value::Value>
 pub fn agentkit_sessions::find_active_standing_grant(&serde_json::value::Value, &str) -> core::option::Option<serde_json::value::Value>
 pub async fn agentkit_sessions::freeze_run_content<R: agentkit_sessions::SessionBackend>(&R, serde_json::value::Value, &str, core::option::Option<&alloc::rcs::arc::Arc<dyn agentkit_sessions::ContentAuthority<agentkit_sessions::SessionFault<R>>>>) -> agentkit_sessions::SessionsResult<serde_json::value::Value, agentkit_sessions::SessionFault<R>>
+pub fn agentkit_sessions::host_owned_metadata_key<'a>(&'a serde_json::value::Value, &[&str]) -> core::option::Option<&'a str>
 pub fn agentkit_sessions::inspect_execution_state(&serde_json::value::Value) -> agentkit_sessions::ExecutionStateRead
 pub fn agentkit_sessions::is_approval_request(&serde_json::value::Value) -> bool
 pub fn agentkit_sessions::is_hex64(&str) -> bool
 pub fn agentkit_sessions::is_valid_session_turn_kind(&str) -> bool
 pub async fn agentkit_sessions::list_turn_tasks<R: agentkit_sessions::SessionBackend>(&R, &str, &str) -> agentkit_sessions::SessionsResult<alloc::vec::Vec<agentkit_engine::model::TaskRecord>, agentkit_sessions::SessionFault<R>>
 pub fn agentkit_sessions::make_room(alloc::vec::Vec<serde_json::value::Value>) -> core::option::Option<alloc::vec::Vec<serde_json::value::Value>>
+pub fn agentkit_sessions::merge_caller_metadata(&serde_json::value::Value, &serde_json::value::Value) -> core::result::Result<serde_json::value::Value, alloc::string::String>
 pub fn agentkit_sessions::parse_answer_expiry(&str) -> core::option::Option<i64>
 pub fn agentkit_sessions::parse_iso_millis(&str) -> core::option::Option<i64>
 pub fn agentkit_sessions::plan_request_of(&serde_json::value::Value, &[alloc::string::String]) -> core::option::Option<serde_json::value::Value>

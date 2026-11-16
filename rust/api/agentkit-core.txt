@@ -369,6 +369,7 @@ pub agentkit_core::DispatchFence::task_id: alloc::string::String
 pub struct agentkit_core::ExactSession
 impl agentkit_core::SessionTree for agentkit_core::ExactSession
 pub fn agentkit_core::ExactSession::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_core::ExactSession::may_read_handle<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, &'life3 agentkit_core::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub struct agentkit_core::ExecutionBudget
 pub agentkit_core::ExecutionBudget::limits: agentkit_core::BudgetLimits
 impl agentkit_core::ExecutionBudget
@@ -817,6 +818,7 @@ pub const agentkit_core::COMMON_DIALECT_ID: &str
 pub const agentkit_core::COMMON_DIALECT_VERSION: &str
 pub const agentkit_core::DEFAULT_INLINE_LIMIT: usize
 pub const agentkit_core::GENERIC_PROFILE_ID: &str
+pub const agentkit_core::LIVE_READS_METADATA_KEY: &str
 pub const agentkit_core::MAX_STORED_BYTES: usize
 pub const agentkit_core::META_TOOLS: [&str; 4]
 pub const agentkit_core::META_TOOLSET: &str
@@ -826,17 +828,22 @@ pub const agentkit_core::OPENAI_DIALECT_ID: &str
 pub const agentkit_core::OPENAI_PATCH_NAME: &str
 pub const agentkit_core::OPENAI_PROFILE_ID: &str
 pub const agentkit_core::OPENAI_SHELL_NAME: &str
+pub const agentkit_core::OUTPUT_GRANTS_METADATA_KEY: &str
 pub const agentkit_core::OUTPUT_INLINE_LIMIT_METADATA_KEY: &str
 pub const agentkit_core::OUTPUT_RETENTION_MS: i64
 pub const agentkit_core::OUTPUT_STORE_METADATA_KEY: &str
 pub const agentkit_core::QWEN_EFFORT_TEMPLATE_KEY: &str
 pub const agentkit_core::QWEN_PROFILE_ID: &str
+pub const agentkit_core::READ_DETAILS_METADATA_KEY: &str
 pub const agentkit_core::READ_OUTPUT: &str
 pub const agentkit_core::REASONING_HISTORY_FIELD: &str
 pub const agentkit_core::REASONING_METADATA_KEY: &str
 pub const agentkit_core::RECOMMENDER_TOP_K: usize
 pub const agentkit_core::SEARCH_OUTPUT: &str
 pub const agentkit_core::SEGMENT_METADATA_KEY: &str
+pub const agentkit_core::SHAPED_HIDDEN_KEY: &str
+pub const agentkit_core::SHAPED_TEXT_KEY: &str
+pub const agentkit_core::SUBAGENT_METADATA_KEY: &str
 pub const agentkit_core::THINKING_TEMPLATE_KEY: &str
 pub const agentkit_core::TOOLSET_LOAD: &str
 pub const agentkit_core::TOOL_CALL: &str
@@ -907,8 +914,10 @@ pub fn agentkit_core::RunHooks::call<'life0, 'life1, 'life2, 'async_trait>(&'lif
 pub fn agentkit_core::RunHooks::indexes(&self, &str) -> alloc::vec::Vec<usize>
 pub trait agentkit_core::SessionTree: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::SessionTree::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_core::SessionTree::may_read_handle<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, &'life3 agentkit_core::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 impl agentkit_core::SessionTree for agentkit_core::ExactSession
 pub fn agentkit_core::ExactSession::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_core::ExactSession::may_read_handle<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, &'life3 agentkit_core::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub trait agentkit_core::SteeringSource: core::marker::Send + core::marker::Sync
 pub fn agentkit_core::SteeringSource::pending<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_core::SteeringItem>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_core::SteeringSource::pending_context<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::SteeringItem>, agentkit_core::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -970,6 +979,7 @@ pub fn agentkit_core::meta_definitions() -> alloc::vec::Vec<agentkit_core::ToolD
 pub fn agentkit_core::meta_toolset() -> agentkit_core::Toolset
 pub fn agentkit_core::model_profile_digest(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> alloc::string::String
 pub fn agentkit_core::namespace_of(&agentkit_core::ToolDefinition) -> alloc::string::String
+pub fn agentkit_core::neutralize_subagent_tags(&str) -> alloc::string::String
 pub fn agentkit_core::normalise(&agentkit_core::AliasTable, &str, &serde_json::value::Value, serde_json::value::Value) -> agentkit_core::Normalised
 pub fn agentkit_core::nudge_after_announced_call(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, &str) -> core::option::Option<alloc::string::String>
 pub fn agentkit_core::openai_chat_dialect() -> agentkit_core::Dialect
@@ -981,6 +991,7 @@ pub fn agentkit_core::present_history(&agentkit_core::Dialect, alloc::vec::Vec<a
 pub fn agentkit_core::presented_description(&agentkit_core::ToolDefinition, agentkit_core::ExampleLane) -> alloc::string::String
 pub fn agentkit_core::read_output_definition() -> agentkit_core::ToolDefinition
 pub fn agentkit_core::record_usage(&dyn agentkit_core::UsageStore, &str, &agentkit_contracts::dto::ai_run_tool_record_event::AiRunToolRecordEventData) -> bool
+pub fn agentkit_core::recorded_tools(&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix) -> core::option::Option<alloc::vec::Vec<agentkit_core::ToolDefinition>>
 pub fn agentkit_core::redact_value(&mut serde_json::value::Value)
 pub fn agentkit_core::render_dialect_text(core::option::Option<&agentkit_core::Dialect>, &str) -> alloc::string::String
 pub fn agentkit_core::render_examples(&agentkit_core::ToolDefinition, agentkit_core::ExampleLane) -> agentkit_core::RenderedExamples
@@ -995,6 +1006,7 @@ pub fn agentkit_core::search_bytes(&[u8], &str, u32) -> core::result::Result<all
 pub fn agentkit_core::search_output_definition() -> agentkit_core::ToolDefinition
 pub fn agentkit_core::segment_of(&agentkit_core::ChatMessage) -> core::option::Option<agentkit_core::Segment>
 pub fn agentkit_core::session_dialect(core::option::Option<&agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix>, core::option::Option<&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile>, agentkit_core::ToolLane) -> core::option::Option<agentkit_core::Dialect>
+pub fn agentkit_core::shaped_value(&str, &str, u64, &str, core::option::Option<&str>) -> serde_json::value::Value
 pub fn agentkit_core::slice_bytes(&[u8], agentkit_core::ByteOrLineRange) -> agentkit_core::OutputSlice
 pub fn agentkit_core::stamp_model_profile(&mut agentkit_contracts::dto::ai_session_prefix::AiSessionPrefix, &agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> bool
 pub fn agentkit_core::strict_dialect(&str) -> bool
@@ -1008,6 +1020,7 @@ pub fn agentkit_core::tools_digest(&[agentkit_core::ToolDefinition]) -> alloc::s
 pub fn agentkit_core::toolset_index(&[agentkit_core::ToolDefinition], &[agentkit_core::ToolDefinition], &agentkit_core::ToolsetView) -> core::option::Option<alloc::string::String>
 pub fn agentkit_core::toolset_load_definition() -> agentkit_core::ToolDefinition
 pub fn agentkit_core::turn_context_part(&str) -> serde_json::value::Value
+pub fn agentkit_core::untrusted_subagent_block(&str, &str, &str) -> alloc::string::String
 pub fn agentkit_core::unwrap_tool_call(&agentkit_core::ToolCall) -> core::option::Option<agentkit_core::ToolCall>
 pub fn agentkit_core::validate_profile(&agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile) -> core::result::Result<(), agentkit_core::ProfileError>
 pub fn agentkit_core::validate_profile_json(&serde_json::value::Value) -> core::result::Result<agentkit_contracts::dto::ai_model_tool_profile::AiModelToolProfile, agentkit_core::ProfileError>

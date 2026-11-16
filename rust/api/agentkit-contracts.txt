@@ -176,6 +176,7 @@ pub fn agentkit_contracts::AiRunContextAdmittedEventType::from_json(serde_json::
 pub enum agentkit_contracts::AiRunContextCacheBreakEventDataReason
 pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Compact
 pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Mask
+pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::MaskInvalidated
 pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Params
 pub agentkit_contracts::AiRunContextCacheBreakEventDataReason::Refreeze
 impl agentkit_contracts::JsonDeserialize for agentkit_contracts::AiRunContextCacheBreakEventDataReason

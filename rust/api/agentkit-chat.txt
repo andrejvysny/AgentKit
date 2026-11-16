@@ -117,6 +117,7 @@ pub agentkit_chat::ChatExecutorOptions::attachments: core::option::Option<alloc:
 pub agentkit_chat::ChatExecutorOptions::auto_compaction: bool
 pub agentkit_chat::ChatExecutorOptions::content_authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>>
 pub agentkit_chat::ChatExecutorOptions::context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ContextProvider>>
+pub agentkit_chat::ChatExecutorOptions::core_memory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemorySource>>
 pub agentkit_chat::ChatExecutorOptions::core_memory_refreeze: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemoryRefreeze>>
 pub agentkit_chat::ChatExecutorOptions::correction: core::option::Option<agentkit_chat::CorrectionConfig>
 pub agentkit_chat::ChatExecutorOptions::default_tool_timeout_ms: core::option::Option<u64>
@@ -153,6 +154,14 @@ pub agentkit_chat::ChatHookTimeouts::usage_ms: u64
 pub agentkit_chat::ChatHookTimeouts::verify_ms: u64
 impl core::default::Default for agentkit_chat::ChatHookTimeouts
 pub fn agentkit_chat::ChatHookTimeouts::default() -> Self
+pub struct agentkit_chat::CoreMemoryBlock
+pub agentkit_chat::CoreMemoryBlock::entries: alloc::vec::Vec<agentkit_chat::CoreMemoryEntry>
+pub agentkit_chat::CoreMemoryBlock::text: alloc::string::String
+pub struct agentkit_chat::CoreMemoryEntry
+pub agentkit_chat::CoreMemoryEntry::id: alloc::string::String
+pub agentkit_chat::CoreMemoryEntry::replaces: core::option::Option<alloc::string::String>
+pub agentkit_chat::CoreMemoryEntry::scope: alloc::string::String
+pub agentkit_chat::CoreMemoryEntry::text: alloc::string::String
 pub struct agentkit_chat::CorrectionConfig
 pub agentkit_chat::CorrectionConfig::include_user_request: bool
 pub agentkit_chat::CorrectionConfig::max_passes: u32
@@ -161,9 +170,13 @@ pub fn agentkit_chat::CorrectionConfig::default() -> Self
 pub struct agentkit_chat::FileProjectInstructions
 impl agentkit_chat::ProjectInstructionsSource for agentkit_chat::FileProjectInstructions
 pub fn agentkit_chat::FileProjectInstructions::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_chat::FileProjectInstructions::stat<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_chat::ProjectInstructionsStat>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct agentkit_chat::ProjectInstructionsBlock
 pub agentkit_chat::ProjectInstructionsBlock::text: alloc::string::String
 pub agentkit_chat::ProjectInstructionsBlock::warnings: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_chat::ProjectInstructionsStat
+pub agentkit_chat::ProjectInstructionsStat::mtime_ns: i64
+pub agentkit_chat::ProjectInstructionsStat::size: u64
 pub struct agentkit_chat::ProjectInstructionsText
 pub agentkit_chat::ProjectInstructionsText::text: alloc::string::String
 pub agentkit_chat::ProjectInstructionsText::truncated: bool
@@ -210,9 +223,12 @@ pub agentkit_chat::TurnNote::subject: core::option::Option<alloc::string::String
 pub agentkit_chat::TurnNote::text: alloc::string::String
 impl agentkit_chat::TurnNote
 pub fn agentkit_chat::TurnNote::new(agentkit_chat::TurnNoteKind, core::option::Option<&str>, &str) -> Self
+pub const agentkit_chat::CORE_MEMORY_METADATA_KEY: &str
 pub const agentkit_chat::EMULATED_TOOL_CALL_MESSAGE: &str
 pub const agentkit_chat::MAX_INSTRUCTION_BYTES: usize
 pub const agentkit_chat::PROJECT_INSTRUCTION_FILES: [&str; 2]
+pub const agentkit_chat::PROJECT_RULES_METADATA_KEY: &str
+pub const agentkit_chat::REFREEZE_DIFF_BYTES: usize
 pub const agentkit_chat::TURN_CONTEXT_BUDGET_TOKENS: usize
 pub const agentkit_chat::TURN_CONTEXT_METADATA_KEY: &str
 pub trait agentkit_chat::AttachmentResolver: core::marker::Send + core::marker::Sync
@@ -227,14 +243,18 @@ pub trait agentkit_chat::ContextProvider: core::marker::Send + core::marker::Syn
 pub fn agentkit_chat::ContextProvider::resolve<'life0, 'async_trait>(&'life0 self, serde_json::value::Value, tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<serde_json::value::Value>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait agentkit_chat::CoreMemoryRefreeze: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::CoreMemoryRefreeze::refreeze<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_chat::CoreMemorySource: core::marker::Send + core::marker::Sync
+pub fn agentkit_chat::CoreMemorySource::current<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_chat::CoreMemoryBlock, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_chat::DelegationGuidance: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::DelegationGuidance::guidance<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agentkit_chat::OversizedItemSink: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::OversizedItemSink::keep(&self, &str, &str, &str) -> core::option::Option<alloc::string::String>
 pub trait agentkit_chat::ProjectInstructionsSource: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::ProjectInstructionsSource::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_chat::ProjectInstructionsSource::stat<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_chat::ProjectInstructionsStat>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl agentkit_chat::ProjectInstructionsSource for agentkit_chat::FileProjectInstructions
 pub fn agentkit_chat::FileProjectInstructions::read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_chat::ChatResult<core::option::Option<agentkit_chat::ProjectInstructionsText>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_chat::FileProjectInstructions::stat<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_chat::ProjectInstructionsStat>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agentkit_chat::TurnContextHook: core::marker::Send + core::marker::Sync
 pub fn agentkit_chat::TurnContextHook::line<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_chat::TurnContextInput<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn agentkit_chat::TurnContextHook::observe_tool_record(&self, &str, &agentkit_contracts::dto::ai_run_tool_record_event::AiRunToolRecordEventData)
@@ -250,6 +270,8 @@ pub fn agentkit_chat::is_mutating_subagent_tool(&str) -> bool
 pub async fn agentkit_chat::load_project_instructions(&dyn agentkit_chat::ProjectInstructionsSource, &str, bool) -> core::option::Option<agentkit_chat::ProjectInstructionsBlock>
 pub fn agentkit_chat::looks_like_emulated_tool_call(&str, &std::collections::hash::set::HashSet<alloc::string::String>) -> bool
 pub fn agentkit_chat::parse_budget_limits(core::option::Option<&serde_json::value::Value>) -> agentkit_chat::ChatResult<agentkit_core::budget::BudgetLimits>
+pub async fn agentkit_chat::refreeze_core_memory(&dyn agentkit_chat::CoreMemorySource, &agentkit_store::actor::SqliteStore, &str, i64) -> agentkit_chat::ChatResult<bool>
+pub async fn agentkit_chat::refreeze_project_rules(&agentkit_chat::ChatExecutorOptions, &agentkit_store::actor::SqliteStore, &str, i64) -> agentkit_chat::ChatResult<bool>
 pub async fn agentkit_chat::restore_execution_budget(&agentkit_chat::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
 pub async fn agentkit_chat::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_chat::ChatResult<agentkit_chat::RoleTaskOverrides>
 pub fn agentkit_chat::with_turn_note(&serde_json::value::Value, agentkit_chat::TurnNote) -> serde_json::value::Value

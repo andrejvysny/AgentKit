@@ -623,6 +623,45 @@ pub mod agentkit_toolpacks_coding::search_tools
 pub fn agentkit_toolpacks_coding::search_tools::code_search_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
 pub fn agentkit_toolpacks_coding::search_tools::find_files_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
 pub fn agentkit_toolpacks_coding::search_tools::repo_map_tool(&alloc::rcs::arc::Arc<agentkit_toolpacks_coding::context::PackEnv>) -> alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>
+pub mod agentkit_toolpacks_coding::shape
+pub mod agentkit_toolpacks_coding::shape::code_search
+pub fn agentkit_toolpacks_coding::shape::code_search::shape(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub mod agentkit_toolpacks_coding::shape::edit_file
+pub fn agentkit_toolpacks_coding::shape::edit_file::shape(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub mod agentkit_toolpacks_coding::shape::git_inspect
+pub fn agentkit_toolpacks_coding::shape::git_inspect::shape(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub mod agentkit_toolpacks_coding::shape::list_dir
+pub fn agentkit_toolpacks_coding::shape::list_dir::shape_find_files(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub fn agentkit_toolpacks_coding::shape::list_dir::shape_list_dir(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub mod agentkit_toolpacks_coding::shape::read_file
+pub fn agentkit_toolpacks_coding::shape::read_file::shape(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub mod agentkit_toolpacks_coding::shape::run_command
+pub fn agentkit_toolpacks_coding::shape::run_command::shape(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub mod agentkit_toolpacks_coding::shape::run_tests
+pub fn agentkit_toolpacks_coding::shape::run_tests::shape(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub struct agentkit_toolpacks_coding::shape::ShapeInput<'a>
+pub agentkit_toolpacks_coding::shape::ShapeInput::args: &'a serde_json::value::Value
+pub agentkit_toolpacks_coding::shape::ShapeInput::inline_limit: usize
+pub agentkit_toolpacks_coding::shape::ShapeInput::ok: bool
+pub agentkit_toolpacks_coding::shape::ShapeInput::text: &'a str
+pub agentkit_toolpacks_coding::shape::ShapeInput::tool: &'a str
+pub struct agentkit_toolpacks_coding::shape::Shaped
+pub agentkit_toolpacks_coding::shape::Shaped::hidden: u64
+pub agentkit_toolpacks_coding::shape::Shaped::note: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_coding::shape::Shaped::text: alloc::string::String
+pub agentkit_toolpacks_coding::shape::Shaped::what: alloc::string::String
+impl agentkit_toolpacks_coding::shape::Shaped
+pub fn agentkit_toolpacks_coding::shape::Shaped::cost(&self) -> usize
+pub fn agentkit_toolpacks_coding::shape::Shaped::new(alloc::string::String, u64, &str) -> Self
+pub fn agentkit_toolpacks_coding::shape::Shaped::with_note(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_toolpacks_coding::shape::StoreShape
+pub agentkit_toolpacks_coding::shape::StoreShape::raw: alloc::string::String
+pub agentkit_toolpacks_coding::shape::StoreShape::shaped: agentkit_toolpacks_coding::shape::Shaped
+pub const agentkit_toolpacks_coding::shape::DEFAULT_INLINE_LIMIT: usize
+pub fn agentkit_toolpacks_coding::shape::shape_for_store(&str, &serde_json::value::Value, &mut agentkit_toolpacks_coding::context::Outcome, usize, core::option::Option<alloc::string::String>) -> core::option::Option<agentkit_toolpacks_coding::shape::StoreShape>
+pub fn agentkit_toolpacks_coding::shape::shape_outcome(&str, &serde_json::value::Value, &mut agentkit_toolpacks_coding::context::Outcome, usize) -> core::option::Option<agentkit_toolpacks_coding::shape::Shaped>
+pub fn agentkit_toolpacks_coding::shape::shape_text(&agentkit_toolpacks_coding::shape::ShapeInput<'_>) -> core::result::Result<core::option::Option<agentkit_toolpacks_coding::shape::Shaped>, alloc::string::String>
+pub fn agentkit_toolpacks_coding::shape::worthwhile(&str, &agentkit_toolpacks_coding::shape::Shaped) -> bool
 pub mod agentkit_toolpacks_coding::toolsets
 pub const agentkit_toolpacks_coding::toolsets::FILES_TOOLSET: &str
 pub const agentkit_toolpacks_coding::toolsets::GIT_TOOLSET: &str
@@ -688,6 +727,7 @@ pub agentkit_toolpacks_coding::version_ledger::LedgerEntry::full: bool
 pub agentkit_toolpacks_coding::version_ledger::LedgerEntry::sha256: alloc::string::String
 pub fn agentkit_toolpacks_coding::version_ledger::clear_version_ledger()
 pub fn agentkit_toolpacks_coding::version_ledger::expected(core::option::Option<&str>, &str) -> core::option::Option<agentkit_toolpacks_coding::version_ledger::LedgerEntry>
+pub fn agentkit_toolpacks_coding::version_ledger::mark_partial(core::option::Option<&str>, &str)
 pub fn agentkit_toolpacks_coding::version_ledger::record_read(core::option::Option<&str>, &str, &str, bool)
 pub fn agentkit_toolpacks_coding::version_ledger::record_write(core::option::Option<&str>, &str, &str)
 pub enum agentkit_toolpacks_coding::CommandClass

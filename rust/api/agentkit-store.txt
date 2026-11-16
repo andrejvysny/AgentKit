@@ -11,6 +11,7 @@ pub use agentkit_store::AgentInputStatus
 pub use agentkit_store::AgentLifecycle
 pub use agentkit_store::AgentRecord
 pub use agentkit_store::AgentSkillSelection
+pub use agentkit_store::AnswerActor
 pub use agentkit_store::AnswerHumanRequest
 pub use agentkit_store::AnswerOutcome
 pub use agentkit_store::AnswerReceipt
@@ -456,6 +457,25 @@ pub agentkit_store::SetAgentModel::expected_revision: i64
 pub agentkit_store::SetAgentModel::model: core::option::Option<alloc::string::String>
 pub agentkit_store::SetAgentModel::now: i64
 pub agentkit_store::SetAgentModel::reasoning_effort: core::option::Option<alloc::string::String>
+pub struct agentkit_store::SqliteMemoryRepository
+impl agentkit_store::SqliteMemoryRepository
+pub fn agentkit_store::SqliteMemoryRepository::new(agentkit_store::SqliteStore) -> Self
+impl agentkit_memory::ports::MemoryRepository for agentkit_store::SqliteMemoryRepository
+pub fn agentkit_store::SqliteMemoryRepository::begin<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ports::MemoryTx>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::commit<'life0, 'async_trait>(&'life0 self, agentkit_memory::ports::MemoryTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::commit_with_index<'life0, 'life1, 'async_trait>(&'life0 self, agentkit_memory::ports::MemoryTx, &'life1 dyn agentkit_memory::ports::RetrievalIndex, agentkit_memory::ports::IndexTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::core_block<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::model::Scope]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::model::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::events<'life0, 'async_trait>(&'life0 self, agentkit_memory::ids::RecordId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::model::MemoryEvent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::get<'life0, 'async_trait>(&'life0 self, agentkit_memory::ids::RecordId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<core::option::Option<agentkit_memory::model::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::insert<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::model::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ids::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::list<'life0, 'async_trait>(&'life0 self, agentkit_memory::model::RecordFilter, agentkit_memory::model::Page) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::model::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::ids::RecordId], agentkit_memory::model::Actor, agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::model::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::record_use<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::ids::RecordId], agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::set_core<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::ids::RecordId, core::option::Option<agentkit_memory::ports::CorePin>, agentkit_memory::model::Actor, agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::set_status<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::ids::RecordId, agentkit_memory::model::Status, agentkit_memory::model::Actor, agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteMemoryRepository::supersede<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::MemoryTx, agentkit_memory::ids::RecordId, agentkit_memory::model::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ids::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::fmt::Debug for agentkit_store::SqliteMemoryRepository
+pub fn agentkit_store::SqliteMemoryRepository::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct agentkit_store::SqliteOutputStore
 impl agentkit_store::SqliteOutputStore
 pub fn agentkit_store::SqliteOutputStore::new(agentkit_store::SqliteStore, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> core::result::Result<Self, agentkit_core::output::OutputError>
@@ -468,6 +488,27 @@ pub fn agentkit_store::SqliteOutputStore::read<'life0, 'life1, 'async_trait>(&'l
 pub fn agentkit_store::SqliteOutputStore::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_core::output::OutputHandle, &'life2 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_core::output::Match>, agentkit_core::output::OutputError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl agentkit_core::output::SessionTree for agentkit_store::SqliteOutputStore
 pub fn agentkit_store::SqliteOutputStore::may_read<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteOutputStore::may_read_handle<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 str, &'life2 str, &'life3 agentkit_core::output::OutputHandle) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub struct agentkit_store::SqliteRetrievalIndex
+impl agentkit_store::SqliteRetrievalIndex
+pub fn agentkit_store::SqliteRetrievalIndex::new(agentkit_store::SqliteStore) -> Self
+impl agentkit_memory::ports::RetrievalIndex for agentkit_store::SqliteRetrievalIndex
+pub fn agentkit_store::SqliteRetrievalIndex::active_model<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<core::option::Option<agentkit_memory::ids::ModelId>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::begin_index<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::ports::IndexTx>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::begin_reembed<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::retrieval::ModelSpec) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::commit_index<'life0, 'async_trait>(&'life0 self, agentkit_memory::ports::IndexTx) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::commit_reembed<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId, agentkit_memory::ids::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::delete<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::IndexTx, &'life2 [agentkit_memory::ids::ItemId]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::drop_model<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::knn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId, &'life2 [f32], &'life3 agentkit_memory::retrieval::IndexFilter, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::retrieval::Hit>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::lexical<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_memory::retrieval::LexicalQuery, &'life2 agentkit_memory::retrieval::IndexFilter, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::retrieval::Hit>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::ids::ItemId]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::model::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::put_vectors<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId, &'life2 [agentkit_memory::retrieval::ItemVector]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::stats<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<agentkit_memory::retrieval::IndexStats>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::unembedded<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_memory::ids::ModelId, core::option::Option<&'life2 agentkit_memory::ids::ItemId>, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<alloc::vec::Vec<agentkit_memory::ids::ItemId>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_store::SqliteRetrievalIndex::upsert<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::ports::IndexTx, &'life2 [agentkit_memory::retrieval::IndexItem]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::error::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl core::fmt::Debug for agentkit_store::SqliteRetrievalIndex
+pub fn agentkit_store::SqliteRetrievalIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct agentkit_store::SqliteStore
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::acquire_lease(&self, &str, &str, &str, i64, i64) -> agentkit_store::Result<agentkit_engine::model::Lease>
@@ -703,10 +744,11 @@ pub async fn agentkit_store::SqliteStore::save_provider_capabilities(&self, &str
 pub async fn agentkit_store::SqliteStore::upsert_provider(&self, serde_json::value::Value) -> agentkit_store::Result<serde_json::value::Value>
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::delete_session_context_masks(&self, &str) -> agentkit_store::Result<usize>
-pub async fn agentkit_store::SqliteStore::delete_session_context_summaries(&self, &str) -> agentkit_store::Result<usize>
 pub async fn agentkit_store::SqliteStore::list_context_masks(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
-pub async fn agentkit_store::SqliteStore::list_context_summaries(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
 pub async fn agentkit_store::SqliteStore::save_context_mask(&self, serde_json::value::Value) -> agentkit_store::Result<()>
+impl agentkit_store::SqliteStore
+pub async fn agentkit_store::SqliteStore::delete_session_context_summaries(&self, &str) -> agentkit_store::Result<usize>
+pub async fn agentkit_store::SqliteStore::list_context_summaries(&self, &str) -> agentkit_store::Result<alloc::vec::Vec<serde_json::value::Value>>
 pub async fn agentkit_store::SqliteStore::save_context_summary(&self, serde_json::value::Value) -> agentkit_store::Result<()>
 impl agentkit_store::SqliteStore
 pub async fn agentkit_store::SqliteStore::events(&self, &str, core::option::Option<u64>, usize) -> agentkit_store::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>>
@@ -895,6 +937,9 @@ pub const agentkit_store::MAX_RESOLUTION_RESULT_BYTES: usize
 pub const agentkit_store::MAX_TOOL_TEXT_BYTES: usize
 pub const agentkit_store::MCP_CONFIG_NAMESPACE: &str
 pub const agentkit_store::MCP_SERVERS_NAMESPACE: &str
+pub const agentkit_store::OWNER_TEXT_KEY: &str
+pub const agentkit_store::PROVENANCE_CHILD_AGENT: &str
+pub const agentkit_store::PROVENANCE_KEY: &str
 pub const agentkit_store::PROVIDERS_NAMESPACE: &str
 pub const agentkit_store::PROVIDER_CAPABILITIES_NAMESPACE: &str
 pub const agentkit_store::SCHEMA_VERSION: i64
@@ -911,9 +956,11 @@ pub fn agentkit_store::derive_agent_display_state(&[agentkit_engine::model::Task
 pub fn agentkit_store::derive_task_projection(&agentkit_engine::model::TaskRecord, core::option::Option<&str>, &[agentkit_engine::model::EventRecord]) -> agentkit_store::TaskProjection
 pub fn agentkit_store::id() -> alloc::string::String
 pub fn agentkit_store::insert_barrier(&rusqlite::Connection, &agentkit_store::UncertaintyBarrierRecord) -> core::result::Result<bool, agentkit_store::StoreError>
+pub fn agentkit_store::is_child_derived_message(&serde_json::value::Value) -> bool
 pub fn agentkit_store::normalize_server_alias(&str) -> agentkit_store::Result<alloc::string::String>
 pub fn agentkit_store::order_messages_for_provider(alloc::vec::Vec<agentkit_sessions::model::MessageRecord>) -> alloc::vec::Vec<agentkit_sessions::model::MessageRecord>
 pub fn agentkit_store::parse_skill_document(&str) -> agentkit_store::Result<serde_json::value::Value>
+pub fn agentkit_store::present_child_results(&mut serde_json::value::Value)
 pub fn agentkit_store::provider_connection_identity(&str) -> alloc::string::String
 pub fn agentkit_store::read_execution_receipt(serde_json::value::Value, &str, &str, core::option::Option<core::option::Option<&str>>) -> core::result::Result<agentkit_sessions::model::ExecutionReceiptRecord, agentkit_store::StoreError>
 pub fn agentkit_store::redact_connection(&mut serde_json::value::Value)
