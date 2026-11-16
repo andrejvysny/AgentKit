@@ -1466,7 +1466,7 @@ export interface NativeManagedOAuthOptions {
 }
 
 // @public
-export interface NativeMaskingOptions {
+interface NativeMaskingOptions {
     enabled?: boolean;
     // (undocumented)
     imageMaxAgeTurns?: number;

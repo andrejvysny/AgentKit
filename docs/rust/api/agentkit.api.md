@@ -807,7 +807,7 @@ export type AiRunContextCacheBreakEvent = Static<typeof AiRunContextCacheBreakEv
 // @public
 export const AiRunContextCacheBreakEventSchema: TObject<    {
 data: TObject<    {
-reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">]>;
+reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">, TLiteral<"mask_invalidated">]>;
 tokens_before: TOptional<TInteger>;
 tokens_after: TOptional<TInteger>;
 }>;
@@ -1111,7 +1111,7 @@ attemptId: TOptional<TString>;
 type: TLiteral<"run.context.admitted">;
 }>, TObject<    {
 data: TObject<    {
-reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">]>;
+reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">, TLiteral<"mask_invalidated">]>;
 tokens_before: TOptional<TInteger>;
 tokens_after: TOptional<TInteger>;
 }>;
@@ -1168,7 +1168,7 @@ toolName: TString;
 step: TNumber;
 prompt: TString;
 expiresAt: TOptional<TString>;
-kind: TOptional<TUnion<[TLiteral<"input">, TLiteral<"approval">]>>;
+kind: TOptional<TUnion<[TLiteral<"input">, TLiteral<"approval">, TLiteral<"child_wait">]>>;
 argsSha256: TOptional<TString>;
 approvalGeneration: TOptional<TString>;
 contextSha256: TOptional<TString>;
@@ -1582,7 +1582,7 @@ toolName: TString;
 step: TNumber;
 prompt: TString;
 expiresAt: TOptional<TString>;
-kind: TOptional<TUnion<[TLiteral<"input">, TLiteral<"approval">]>>;
+kind: TOptional<TUnion<[TLiteral<"input">, TLiteral<"approval">, TLiteral<"child_wait">]>>;
 argsSha256: TOptional<TString>;
 approvalGeneration: TOptional<TString>;
 contextSha256: TOptional<TString>;
@@ -3065,7 +3065,7 @@ attemptId: TOptional<TString>;
 type: TLiteral<"run.context.admitted">;
 }>, TObject<    {
 data: TObject<    {
-reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">]>;
+reason: TUnion<[TLiteral<"params">, TLiteral<"mask">, TLiteral<"compact">, TLiteral<"refreeze">, TLiteral<"mask_invalidated">]>;
 tokens_before: TOptional<TInteger>;
 tokens_after: TOptional<TInteger>;
 }>;
@@ -3122,7 +3122,7 @@ toolName: TString;
 step: TNumber;
 prompt: TString;
 expiresAt: TOptional<TString>;
-kind: TOptional<TUnion<[TLiteral<"input">, TLiteral<"approval">]>>;
+kind: TOptional<TUnion<[TLiteral<"input">, TLiteral<"approval">, TLiteral<"child_wait">]>>;
 argsSha256: TOptional<TString>;
 approvalGeneration: TOptional<TString>;
 contextSha256: TOptional<TString>;
