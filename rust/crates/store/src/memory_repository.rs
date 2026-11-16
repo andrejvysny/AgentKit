@@ -62,6 +62,7 @@ enum Op {
         to: Status,
         actor: Actor,
         at: Timestamp,
+        detail: Option<serde_json::Value>,
     },
     /// Pin or unpin a current active record.
     Core {
@@ -241,6 +242,7 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                 to,
                 actor,
                 at,
+                detail,
             } => {
                 let rows = conn.execute(
                     "UPDATE memory_records SET status=?1, \
@@ -261,7 +263,7 @@ fn replay(conn: &Connection, ops: Vec<Op>) -> Work<()> {
                         [id.to_string()],
                     )?;
                 }
-                append_event(conn, id, Status::event_into(to), actor, None, at)?;
+                append_event(conn, id, Status::event_into(to), actor, detail.as_ref(), at)?;
             }
             Op::Core {
                 id,
@@ -609,6 +611,7 @@ impl MemoryRepository for SqliteMemoryRepository {
         to: Status,
         actor: Actor,
         at: Timestamp,
+        detail: Option<serde_json::Value>,
     ) -> MemoryResult<()> {
         let staged = staged(tx)?;
         let mut record = self
@@ -641,6 +644,7 @@ impl MemoryRepository for SqliteMemoryRepository {
             to,
             actor,
             at,
+            detail,
         });
         Ok(())
     }

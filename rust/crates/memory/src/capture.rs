@@ -217,6 +217,8 @@ pub enum Rejection {
     Secret,
     /// The scope already queued its day's proposals; this one is dropped.
     ProposalLimit,
+    /// The owner's sentence asks not to remember this (or to forget it).
+    OwnerRefused,
 }
 
 impl Rejection {
@@ -233,6 +235,7 @@ impl Rejection {
             Self::TooLong => "the text is longer than 600 characters",
             Self::Secret => "the text or its evidence looks like a secret",
             Self::ProposalLimit => "the scope's daily proposal limit was reached",
+            Self::OwnerRefused => "the owner asked not to remember this",
         }
     }
 }
@@ -250,6 +253,9 @@ pub enum ProposalReason {
     /// The text says more than the owner's quote does (a fact, number,
     /// name or instruction the quote lacks).
     NotCoveredByQuote,
+    /// The text is covered by the owner's words but is not one complete
+    /// sentence of them (a paraphrase, a clause, a changed subject).
+    Rewritten,
     /// The per-turn or per-day capture cap was reached.
     RateLimited,
 }
@@ -268,6 +274,9 @@ impl ProposalReason {
             }
             Self::NotCoveredByQuote => {
                 "auto-captured; the text says more than the owner's words".to_owned()
+            }
+            Self::Rewritten => {
+                "auto-captured; the text is not the owner's complete statement".to_owned()
             }
             Self::RateLimited => "auto-captured; capture limit reached".to_owned(),
         }
@@ -428,6 +437,13 @@ impl MemoryService {
         if gate::contains_secret(&span) {
             return Ok(CaptureOutcome::Rejected(Rejection::Secret));
         }
+        // The owner's own sentence may refuse: "do not remember that ...".
+        if [text.as_str(), span.as_str()]
+            .iter()
+            .any(|part| gate::consent_for(part, turn.eligible_text) == gate::Consent::Refused)
+        {
+            return Ok(CaptureOutcome::Rejected(Rejection::OwnerRefused));
+        }
         // Rule 4: the same statement is already known; drop it (the lookup
         // notes the use of the existing record).
         if let Some(seen) = self.already_known(scope, &text, now).await? {
@@ -444,6 +460,10 @@ impl MemoryService {
         let used = usage.entry(scope.clone()).or_default();
         // The text may say no more than the owner's own words do.
         let covered = gate::text_covered(&text, &span);
+        // W2 meaning: only the owner's complete sentence, or what the owner
+        // asked to remember (W1), goes active.
+        let verbatim = gate::is_full_statement(&text, turn.eligible_text)
+            || gate::consent_for(&text, turn.eligible_text) == gate::Consent::Granted;
         let why = if let Some(category) = sensitive {
             Some(ProposalReason::Sensitive(category))
         } else if let Update::Propose(old) = &update {
@@ -452,6 +472,8 @@ impl MemoryService {
             Some(ProposalReason::UpdateNeedsApproval(*old))
         } else if !covered {
             Some(ProposalReason::NotCoveredByQuote)
+        } else if !verbatim {
+            Some(ProposalReason::Rewritten)
         } else if *in_turn >= config.per_turn || used.captured >= config.per_day {
             // Rule 6.
             Some(ProposalReason::RateLimited)
@@ -593,7 +615,7 @@ impl MemoryService {
         };
         let Some(old) = replaced else {
             return self
-                .set_status_held(id, Status::Retracted, Actor::Owner, now)
+                .set_status_held(id, Status::Retracted, Actor::Owner, now, None)
                 .await;
         };
         let mut tx = self.repository.begin().await?;

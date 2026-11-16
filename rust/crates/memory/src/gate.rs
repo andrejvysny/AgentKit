@@ -69,7 +69,13 @@ pub fn owner_span(text: &str, eligible: &str) -> Result<String, QuoteCheck> {
     if text.chars().count() > MAX_QUOTE_CHARS {
         return Err(QuoteCheck::TooLong);
     }
-    let needle: Vec<char> = normalize(text).chars().collect();
+    // A closing `.`, `!` or `?` is the sentence end, not part of the words:
+    // the owner may have followed the sentence with a comma instead.
+    let normalized = normalize(text);
+    let needle: Vec<char> = normalized
+        .trim_end_matches(['.', '!', '?', ' '])
+        .chars()
+        .collect();
     if needle.len() < MIN_QUOTE_CHARS {
         return Err(QuoteCheck::TooShort);
     }
@@ -78,7 +84,15 @@ pub fn owner_span(text: &str, eligible: &str) -> Result<String, QuoteCheck> {
         for start in 0..=hay.len() - needle.len() {
             let window = &hay[start..start + needle.len()];
             if window.iter().zip(&needle).all(|(a, b)| same_char(*a, *b)) {
-                return Ok(window.iter().collect());
+                let mut span: String = window.iter().collect();
+                // The model closed the sentence: keep the owner's own mark.
+                if normalized.trim_end().ends_with(['.', '!', '?']) {
+                    let closing = hay
+                        .get(start + needle.len())
+                        .filter(|c| matches!(c, '.' | '!' | '?'));
+                    span.extend(closing);
+                }
+                return Ok(span);
             }
         }
     }
@@ -89,20 +103,31 @@ fn same_char(a: char, b: char) -> bool {
     a == b || a.to_lowercase().eq(b.to_lowercase())
 }
 
-/// Phrases that make a message an explicit request to remember, in their
-/// folded form (lowercase, no diacritics): English and Slovak. This is the
-/// one list; the model's own `owner_requested` flag is never consulted.
-pub const REMEMBER_PHRASES: [&str; 9] = [
+/// Phrases that open an explicit request to remember, in their folded form
+/// (lowercase, no diacritics): English, Slovak and Czech. This is the one
+/// list; the model's own `owner_requested` flag is never consulted. A phrase
+/// anywhere in a message is not consent: [`consent_for`] binds it to one
+/// statement.
+pub const REMEMBER_PHRASES: [&str; 16] = [
     "remember",
     "don't forget",
     "dont forget",
+    "do not forget",
     "note that",
     "keep in mind",
     "zapamataj",
+    "zapamataj si",
     "pamataj si",
     "nezabudni",
     "poznac si",
+    "zapamatuj si",
+    "pamatuj si",
+    "nezapomen",
+    "poznamenej si",
+    "mej na pameti",
 ];
+
+pub use crate::consent::{Consent, consent_for, is_full_statement};
 
 fn fold_char(ch: char) -> char {
     match ch {
@@ -126,7 +151,7 @@ fn fold_char(ch: char) -> char {
 
 /// The comparison form for phrase matching: normalized, lowercase, no
 /// diacritics.
-fn fold_text(text: &str) -> String {
+pub(crate) fn fold_text(text: &str) -> String {
     normalize(text)
         .chars()
         .flat_map(char::to_lowercase)
@@ -144,9 +169,10 @@ fn has_phrase(folded: &str, phrase: &str) -> bool {
     })
 }
 
-/// Whether the owner's message asks, in so many words, to remember
-/// something: a [`REMEMBER_PHRASES`] entry as whole words, ignoring case and
-/// diacritics.
+/// Whether the message holds a [`REMEMBER_PHRASES`] entry as whole words,
+/// ignoring case and diacritics. This is NOT a consent check: it also matches
+/// "do not remember", questions and quotes. Use [`consent_for`] to decide
+/// whether the owner asked to remember a statement.
 pub fn has_remember_request(owner_text: &str) -> bool {
     let folded = fold_text(owner_text);
     REMEMBER_PHRASES
@@ -722,6 +748,15 @@ mod tests {
         let owner = "Please remember that I write to colleagues  in Slovak.";
         assert_eq!(
             owner_span("i WRITE to colleagues in slovak", owner).as_deref(),
+            Ok("I write to colleagues in Slovak")
+        );
+        // A closing mark of the model's quote is not required of the owner.
+        assert_eq!(
+            owner_span(
+                "I write to colleagues in Slovak.",
+                "I write to colleagues in Slovak, ok"
+            )
+            .as_deref(),
             Ok("I write to colleagues in Slovak")
         );
         assert_eq!(owner_span("in Slovak", owner), Err(QuoteCheck::TooShort));

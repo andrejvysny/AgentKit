@@ -514,7 +514,8 @@ async fn editing_a_pinned_record_keeps_the_pin_and_forget_retracts() {
     let record = harness.service.get(next).await.unwrap().unwrap();
     assert_eq!(record.status, Status::Retracted);
     let events = harness.repository.events(next).await.unwrap();
-    assert!(events.iter().any(|e| e.actor == Actor::Agent));
+    // The forget tool is owner-approved, so the retraction is the owner's.
+    assert!(events.iter().any(|e| e.actor == Actor::Owner));
     let gone = call(&harness, MEMORY_GET, json!({"id": next.to_string()})).await;
     assert!(!gone.ok);
 }

@@ -185,7 +185,7 @@ impl MemoryService {
         at: Timestamp,
     ) -> MemoryResult<()> {
         let _gate = self.write_gate.read().await;
-        self.set_status_held(id, to, actor, at).await
+        self.set_status_held(id, to, actor, at, None).await
     }
 
     /// [`Self::set_status`] for a caller that already holds the write gate
@@ -196,6 +196,7 @@ impl MemoryService {
         to: Status,
         actor: Actor,
         at: Timestamp,
+        detail: Option<serde_json::Value>,
     ) -> MemoryResult<()> {
         let record = self
             .repository
@@ -210,7 +211,7 @@ impl MemoryService {
         }
         let mut tx = self.repository.begin().await?;
         self.repository
-            .set_status(&mut tx, id, to, actor, at)
+            .set_status(&mut tx, id, to, actor, at, detail)
             .await?;
         let mut index_tx = self.index.begin_index().await?;
         if to == Status::Active {

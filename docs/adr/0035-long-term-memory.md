@@ -149,6 +149,16 @@ store must be able to replace the adapter without changing ranking.
   supplies libonnxruntime via `ORT_DYLIB_PATH` and nothing is downloaded at
   build time; `tokenizers` `=0.23.2`): the model and tokenizer sha-256 are
   pinned, the bytes are read once, hashed, and loaded from that buffer.
+  Pooling is per model (`LocalModel::pooling`: `Pooling::Cls` or `Mean`,
+  `normalize`, optional output name; `PoolingConfig::bge_m3()` is CLS +
+  normalised, `bge_m3_spec()` has no prefixes): BGE-M3 is CLS-pooled, never
+  mean-pooled. Output defaults to `last_hidden_state`, then
+  `token_embeddings`, `sentence_embedding`, `dense_vecs`, else the first
+  output; a rank-2 output is taken as already pooled. Batches are padded with
+  the attention mask. The gated test `tests/bge_m3_parity.rs` checks cosine
+  >= 0.999 against sentence-transformers (`AGENTKIT_EMBED_MODEL_DIR`). The
+  session loads from memory, so ONNX exports with external `*.onnx_data`
+  (BAAI's own `onnx/model.onnx`) are not loadable; use a single-file export.
 
 ## Addendum: explicit writes, tools and the core block (roadmap 3.3)
 
@@ -162,7 +172,16 @@ store must be able to replace the adapter without changing ranking.
   the owner typed it; (b) that owner text asks to remember, by a whole-word
   match (case and diacritics ignored) against one list, `REMEMBER_PHRASES` in
   `gate.rs` (English: remember, don't forget, note that, keep in mind; Slovak:
-  zapamataj, pamataj si, nezabudni, poznac si). The evidence also carries the
+  zapamataj, pamataj si, nezabudni, poznac si; Czech: zapamatuj si, pamatuj si,
+  nezapomen, poznamenej si, mej na pameti), **bound to the statement**:
+  `consent_for` (`consent.rs`) grants only when the phrase opens an imperative
+  clause outside a question or a quote and the record text equals what it
+  governs (the rest of that sentence, the part before a trailing "..., remember
+  that", or the whole next sentence after a bare "remember this"). A negated or
+  "forget" request ("do not remember that ...", "nepamätaj si, že ...") makes
+  `propose` return `ProposeOutcome::Refused` and write nothing; any other
+  case is a proposal. `has_remember_request` is only a phrase scan, not
+  consent. The evidence also carries the
   chat id, message id and SHA-256 of that text, and is secret-screened like the
   text. Anything else is a proposal (`agent_proposal`), and the tool result
   says why it was not written directly. The owner-typed text comes from the
@@ -220,4 +239,17 @@ store must be able to replace the adapter without changing ranking.
   first turn that sees it (one `cache_break`, reason `refreeze`): a removed
   entry's text must leave the context, and a note never repeats it (removed
   entries are named by id only).
+- W2 meaning: auto-capture goes active only when the candidate text is one
+  complete, non-question, non-refusing sentence of the owner's eligible text
+  (`is_full_statement`) or exactly the proposition the owner asked to remember
+  (`consent_for` = Granted); a closing `.!?` of the quote is ignored when
+  matching. A covered paraphrase or clause waits as
+  `ProposalReason::Rewritten`, and a candidate inside an owner refusal is
+  `Rejection::OwnerRefused`. `memory_forget` retracts through
+  `retract_approved`, recording the owner as actor (the tool is always
+  owner-approved), so the 90-day repeat suppression applies as for the UI;
+  the requesting actor is kept in the event detail
+  (`{"requested_by":..., "via":"memory_forget"}`, port `set_status` `detail`).
+  A `kind` filter on memory_search runs inside `MemoryService::search_kinds`
+  before ranking, with retriever pools raised to `KIND_FILTER_TOP_K`.
 - Search: the memory_search tool calls `MemoryService::search` (hybrid, scope required, limit 1..=8) and reports its `mode` (`hybrid` or `lexical_only`).

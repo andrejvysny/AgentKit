@@ -174,6 +174,7 @@ async fn conflicting_commit_applies_neither_record_nor_index_entry() {
             Status::Retracted,
             Actor::Owner,
             Timestamp(3),
+            None,
         )
         .await
         .expect("retract");
@@ -408,7 +409,14 @@ async fn the_repository_keeps_only_active_records_indexed() {
     );
     let mut tx = repository.begin().await.expect("begin");
     repository
-        .set_status(&mut tx, live, Status::Retracted, Actor::Owner, Timestamp(2))
+        .set_status(
+            &mut tx,
+            live,
+            Status::Retracted,
+            Actor::Owner,
+            Timestamp(2),
+            None,
+        )
         .await
         .expect("stage");
     repository.commit(tx).await.expect("commit");
@@ -751,6 +759,7 @@ async fn a_vector_write_never_resurrects_a_purged_or_inactive_record() {
             Status::Retracted,
             Actor::Owner,
             Timestamp(4),
+            None,
         )
         .await
         .expect("retract");

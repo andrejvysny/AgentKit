@@ -4,7 +4,8 @@
 //! [`crate::gate`] first; the model's own judgment is never the check. W1
 //! (an active record from the owner's own words) needs two facts found in
 //! code: the record text is a verbatim span of the owner's typed words of the
-//! turn, and those words ask to remember. The model's `owner_requested` flag
+//! turn, and those words ask, in the imperative, to remember exactly that
+//! statement ([`gate::consent_for`]). The model's `owner_requested` flag
 //! and any quote it offers are not consulted; the evidence is the span.
 
 use std::sync::atomic::Ordering;
@@ -44,7 +45,7 @@ pub struct Proposal {
     pub text: String,
     pub rationale: String,
     /// The agent says the owner asked for it in this turn. Advisory: W1 is
-    /// decided by [`gate::owner_span`] and [`gate::has_remember_request`].
+    /// decided by [`gate::owner_span`] and [`gate::consent_for`].
     pub owner_requested: bool,
     /// The turn's owner message, when the host could find it.
     pub owner_turn: Option<OwnerMessage>,
@@ -69,7 +70,9 @@ impl Downgrade {
             Self::TextNotOwnerWords => {
                 "the text is not a verbatim span of the owner's message of this turn"
             }
-            Self::NoRememberRequest => "the owner's message does not ask to remember anything",
+            Self::NoRememberRequest => {
+                "the owner's message does not ask to remember this statement"
+            }
         }
     }
 }
@@ -88,6 +91,8 @@ pub enum ProposeOutcome {
     Duplicate(RecordId),
     /// The owner rejected the same statement less than 90 days ago.
     Suppressed,
+    /// The owner asked not to remember this (or to forget it); nothing was saved.
+    Refused,
 }
 
 pub(crate) fn sha256_hex(text: &str) -> String {
@@ -131,11 +136,11 @@ impl MemoryService {
         let (span, why) = match &proposal.owner_turn {
             None => (None, Some(Downgrade::NoOwnerMessage)),
             Some(turn) => match gate::owner_span(&proposal.text, &turn.text) {
-                Ok(span) => {
-                    let why = (!gate::has_remember_request(&turn.text))
-                        .then_some(Downgrade::NoRememberRequest);
-                    (Some(span), why)
-                }
+                Ok(span) => match gate::consent_for(proposal.text.trim(), &turn.text) {
+                    gate::Consent::Refused => return Ok(ProposeOutcome::Refused),
+                    gate::Consent::Granted => (Some(span), None),
+                    gate::Consent::Absent => (Some(span), Some(Downgrade::NoRememberRequest)),
+                },
                 Err(QuoteCheck::TooShort) => (None, Some(Downgrade::TextTooShort)),
                 Err(_) => (None, Some(Downgrade::TextNotOwnerWords)),
             },
@@ -282,7 +287,7 @@ impl MemoryService {
         let mut tx = self.repository.begin().await?;
         let new_id = self.repository.insert(&mut tx, new).await?;
         self.repository
-            .set_status(&mut tx, id, Status::Retracted, Actor::Owner, now)
+            .set_status(&mut tx, id, Status::Retracted, Actor::Owner, now, None)
             .await?;
         let mut index_tx = self.index.begin_index().await?;
         let item = index_item(new_id, &scope, &body, now, Searchability::Current, valid);
@@ -360,7 +365,14 @@ impl MemoryService {
                 .await?;
         }
         self.repository
-            .set_status(&mut tx, proposal.id, Status::Retracted, Actor::Owner, now)
+            .set_status(
+                &mut tx,
+                proposal.id,
+                Status::Retracted,
+                Actor::Owner,
+                now,
+                None,
+            )
             .await?;
         let mut index_tx = self.index.begin_index().await?;
         let closed = index_item(
@@ -391,6 +403,23 @@ impl MemoryService {
     /// days.
     pub async fn reject(&self, id: RecordId, now: Timestamp) -> MemoryResult<()> {
         self.set_status(id, Status::Rejected, Actor::Owner, now)
+            .await
+    }
+
+    /// Retract a record the owner approved forgetting through a tool
+    /// (`memory_forget` is always routed to an owner approval). The audit
+    /// actor is the owner, so repeat suppression treats it like the UI's
+    /// retraction; `requested_by` is the actor that asked, kept in the
+    /// event detail.
+    pub async fn retract_approved(
+        &self,
+        id: RecordId,
+        requested_by: Actor,
+        now: Timestamp,
+    ) -> MemoryResult<()> {
+        let detail = serde_json::json!({"requested_by": requested_by, "via": "memory_forget"});
+        let _gate = self.write_gate.read().await;
+        self.set_status_held(id, Status::Retracted, Actor::Owner, now, Some(detail))
             .await
     }
 

@@ -6,6 +6,7 @@
 //! `agentkit-testkit`.
 
 mod capture;
+mod consent;
 mod core_block;
 mod embedding;
 mod error;
@@ -32,10 +33,10 @@ pub use core_block::{
 pub use embedding::EmbeddingStatus;
 pub use error::{MemoryError, MemoryResult};
 pub use gate::{
-    GateRefusal, MAX_QUOTE_CHARS, MIN_QUOTE_CHARS, QuoteCheck, REMEMBER_PHRASES, SensitiveCategory,
-    contains_secret, default_sensitive_categories, has_account_number, has_remember_request,
-    health_category, normalize, normalized_key, owner_span, screen_text, sensitive_category,
-    strip_invisible, text_covered,
+    Consent, GateRefusal, MAX_QUOTE_CHARS, MIN_QUOTE_CHARS, QuoteCheck, REMEMBER_PHRASES,
+    SensitiveCategory, consent_for, contains_secret, default_sensitive_categories,
+    has_account_number, has_remember_request, health_category, is_full_statement, normalize,
+    normalized_key, owner_span, screen_text, sensitive_category, strip_invisible, text_covered,
 };
 pub use ids::{ItemId, ModelId, RecordId, Timestamp};
 pub use model::{
@@ -47,9 +48,9 @@ pub use ports::{
 };
 pub use retrieval::{
     Candidate, DEFAULT_SEARCH_LIMIT, Hit, IndexFilter, IndexItem, IndexStats, ItemVector,
-    LEXICAL_TOP_K, LexicalQuery, MAX_SEARCH_LIMIT, MatchKind, ModelSpec, ModelState, ModelStats,
-    REEMBED_GRACE_MS, RERANK_TOP_K, RRF_K, SearchHit, SearchMode, SearchResults, Searchability,
-    VECTOR_TOP_K,
+    KIND_FILTER_TOP_K, LEXICAL_TOP_K, LexicalQuery, MAX_SEARCH_LIMIT, MatchKind, ModelSpec,
+    ModelState, ModelStats, REEMBED_GRACE_MS, RERANK_TOP_K, RRF_K, SearchHit, SearchMode,
+    SearchResults, Searchability, VECTOR_TOP_K,
 };
 pub use service::{MemoryService, REJECTED_RETENTION_MS, RETRACTED_RETENTION_MS};
 pub use tools::{

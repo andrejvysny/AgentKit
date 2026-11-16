@@ -133,6 +133,7 @@ pub trait MemoryRepository: Send + Sync {
 
     /// Move a record along [`Status::can_transition_to`]. Approval stamps
     /// `approved_at`; retraction closes validity at `at` when still open.
+    /// `detail` is stored on the audit event (never record text).
     async fn set_status(
         &self,
         tx: &mut MemoryTx,
@@ -140,6 +141,7 @@ pub trait MemoryRepository: Send + Sync {
         to: Status,
         actor: Actor,
         at: Timestamp,
+        detail: Option<serde_json::Value>,
     ) -> MemoryResult<()>;
 
     /// Pin (`Some`) or unpin (`None`) an active, current record. A pin's

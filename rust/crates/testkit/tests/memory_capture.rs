@@ -16,8 +16,10 @@ use agentkit_memory::{
 use agentkit_testkit::{InMemoryMemoryRepository, InMemoryRetrievalIndex};
 
 const NOW: i64 = 1_761_868_800_000;
+// W2 meaning: only a complete owner sentence goes active, so each fixture
+// sentence is its own candidate text.
 const OWNER: &str =
-    "I write to colleagues in Slovak and documents in English. My cat is called Mica.";
+    "I write to colleagues in Slovak. I write documents in English. My cat is called Mica.";
 
 fn service() -> (MemoryService, Arc<InMemoryMemoryRepository>) {
     let repository = Arc::new(InMemoryMemoryRepository::new());
@@ -40,7 +42,7 @@ fn candidate(text: &str, quote: &str) -> ExtractedCandidate {
 
 fn good() -> ExtractedCandidate {
     candidate(
-        "Writes to colleagues in Slovak.",
+        "I write to colleagues in Slovak.",
         "I write to colleagues in Slovak",
     )
 }
@@ -164,7 +166,10 @@ async fn mem_03_rule_1_the_evidence_is_the_matched_span_not_the_models_quote() {
     let (service, repository) = service();
     // Case and spacing differ from what the owner typed; the stored quote is
     // the owner's span.
-    let loose = candidate("Writes in Slovak.", "i WRITE to colleagues   in slovak");
+    let loose = candidate(
+        "I write to colleagues in Slovak.",
+        "i WRITE to colleagues   in slovak",
+    );
     let outcomes = run(&service, vec![loose]).await;
     let CaptureOutcome::Captured { id, .. } = outcomes[0] else {
         panic!("{outcomes:?}");
@@ -181,15 +186,54 @@ async fn mem_03_rule_2_text_is_at_most_600_characters() {
     let (service, repository) = service();
     let long = candidate(&"a".repeat(601), "I write to colleagues in Slovak");
     let empty = candidate("   ", "I write to colleagues in Slovak");
-    let exact = candidate(
-        "slovak ".repeat(85).trim(),
-        "I write to colleagues in Slovak",
-    );
-    let outcomes = run(&service, vec![long, empty, exact]).await;
+    let outcomes = run(&service, vec![long, empty]).await;
     assert_eq!(outcomes[0], CaptureOutcome::Rejected(Rejection::TooLong));
     assert_eq!(outcomes[1], CaptureOutcome::Rejected(Rejection::Empty));
-    assert!(matches!(outcomes[2], CaptureOutcome::Captured { .. }));
+    // Exactly 600 characters: one complete owner sentence, so it goes active.
+    let sentence = format!("I write {}", "a".repeat(592));
+    assert_eq!(sentence.chars().count(), 600);
+    let outcomes = capture(
+        &service,
+        &sentence,
+        &[Scope::user()],
+        "m2",
+        vec![candidate(&sentence, &sentence)],
+        &CaptureConfig::default(),
+    )
+    .await;
+    assert!(matches!(outcomes[0], CaptureOutcome::Captured { .. }));
     assert_eq!(all(&repository).await.len(), 1);
+}
+
+#[tokio::test]
+async fn w2_goes_active_for_the_proposition_the_owner_asked_to_remember() {
+    // The sentence is "Remember that ...", the candidate is what it governs;
+    // and a trailing "remember that" leaves the statement before a comma.
+    for (eligible, text) in [
+        (
+            "Remember that I live in Bratislava.",
+            "I live in Bratislava.",
+        ),
+        (
+            "I live in Bratislava, remember that.",
+            "I live in Bratislava.",
+        ),
+    ] {
+        let (service, _) = service();
+        let outcomes = capture(
+            &service,
+            eligible,
+            &[Scope::user()],
+            "m1",
+            vec![candidate(text, "I live in Bratislava.")],
+            &CaptureConfig::default(),
+        )
+        .await;
+        assert!(
+            matches!(outcomes[0], CaptureOutcome::Captured { .. }),
+            "{eligible}: {outcomes:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -277,7 +321,7 @@ async fn mem_03_rule_3_sensitive_categories_downgrade_to_a_proposal() {
         sensitive: vec![],
         ..Default::default()
     };
-    let plain = candidate("Votes for the green party.", "I vote for the green party");
+    let plain = candidate("I vote for the green party.", "I vote for the green party");
     let outcomes = capture(
         &service,
         eligible,
@@ -351,17 +395,35 @@ async fn mem_03_rule_3_health_and_money_words_wait_whatever_the_configured_list(
 async fn mem_03_rule_3_text_must_be_covered_by_the_owners_quote() {
     let (service, repository) = service();
     let quote = "I write to colleagues in Slovak and documents in English";
-    // The text is the quote; a paraphrase of it: both go active.
+    let eligible = "I write to colleagues in Slovak and documents in English.";
+    // The text is the owner's sentence: active. A covered paraphrase of it
+    // is not the owner's sentence: it waits as rewritten.
     let same = candidate(quote, quote);
     let paraphrase = candidate(
         "Writes documents in English and colleagues in Slovak.",
         quote,
     );
-    let outcomes = run(&service, vec![same, paraphrase]).await;
+    let outcomes = capture(
+        &service,
+        eligible,
+        &[Scope::user()],
+        "m1",
+        vec![same, paraphrase],
+        &CaptureConfig::default(),
+    )
+    .await;
     assert!(
-        outcomes
-            .iter()
-            .all(|o| matches!(o, CaptureOutcome::Captured { .. })),
+        matches!(outcomes[0], CaptureOutcome::Captured { .. }),
+        "{outcomes:?}"
+    );
+    assert!(
+        matches!(
+            outcomes[1],
+            CaptureOutcome::Proposed {
+                why: ProposalReason::Rewritten,
+                ..
+            }
+        ),
         "{outcomes:?}"
     );
     // Text that adds a fact, an instruction, a number or a name waits.
@@ -374,7 +436,7 @@ async fn mem_03_rule_3_text_must_be_covered_by_the_owners_quote() {
     let negated = candidate("Does not write to colleagues in Slovak.", quote);
     let outcomes = capture(
         &service,
-        OWNER,
+        eligible,
         &[Scope::user()],
         "m2",
         vec![fact, number, name],
@@ -393,7 +455,15 @@ async fn mem_03_rule_3_text_must_be_covered_by_the_owners_quote() {
             "{outcome:?}"
         );
     }
-    let outcomes = run(&service, vec![negated]).await;
+    let outcomes = capture(
+        &service,
+        eligible,
+        &[Scope::user()],
+        "m4",
+        vec![negated],
+        &CaptureConfig::default(),
+    )
+    .await;
     assert!(
         matches!(
             outcomes[0],
@@ -431,7 +501,7 @@ async fn mem_03_rule_3_text_must_be_covered_by_the_owners_quote() {
         .into_iter()
         .filter(|r| r.status == Status::Proposed)
         .count();
-    assert_eq!(waiting, 5);
+    assert_eq!(waiting, 6);
 }
 
 #[tokio::test]
@@ -443,7 +513,7 @@ async fn mem_03_rule_4_an_exact_normalized_duplicate_is_dropped_and_bumps_last_u
     };
     // Same statement, different case and spacing, another message.
     let again = candidate(
-        "  WRITES to colleagues   in slovak. ",
+        "  I WRITE to colleagues   in slovak. ",
         "I write to colleagues in Slovak",
     );
     let second = capture(
@@ -640,7 +710,7 @@ async fn mem_03_rule_5_an_update_naming_another_scope_or_nothing_is_a_plain_capt
         .unwrap();
     let mut crossing = good();
     crossing.updates = Some(other_scope);
-    let mut missing = candidate("Cat is Mica.", "My cat is called Mica");
+    let mut missing = candidate("My cat is called Mica.", "My cat is called Mica");
     missing.updates = Some(RecordId::new());
     let outcomes = run(&service, vec![crossing, missing]).await;
     for outcome in &outcomes {
@@ -662,13 +732,10 @@ async fn mem_03_rule_5_an_update_naming_another_scope_or_nothing_is_a_plain_capt
 #[tokio::test]
 async fn mem_03_rule_6_at_most_three_per_turn_the_rest_are_proposals() {
     let (service, _) = service();
-    let one = candidate(
-        "Writes to colleagues in Slovak.",
-        "I write to colleagues in Slovak",
-    );
+    let one = good();
     let two = candidate(
-        "Writes documents in English.",
-        "I write to colleagues in Slovak and documents in English",
+        "I write documents in English.",
+        "I write documents in English",
     );
     let outcomes = run(&service, vec![one, two]).await;
     assert!(
@@ -677,11 +744,11 @@ async fn mem_03_rule_6_at_most_three_per_turn_the_rest_are_proposals() {
             .all(|o| matches!(o, CaptureOutcome::Captured { .. }))
     );
     // A retried or later pass over the same message counts the first two.
-    let eligible = "I write to colleagues in Slovak and documents in English. My cat is called Mica. I like green tea. I run every morning.";
+    let eligible = "I write to colleagues in Slovak. I write documents in English. My cat is called Mica. I like green tea. I run every morning.";
     let more = vec![
-        candidate("Cat is called Mica.", "My cat is called Mica"),
-        candidate("Likes green tea.", "I like green tea"),
-        candidate("Runs every morning.", "I run every morning"),
+        candidate("My cat is called Mica.", "My cat is called Mica"),
+        candidate("I like green tea.", "I like green tea"),
+        candidate("I run every morning.", "I run every morning"),
     ];
     let outcomes = capture(
         &service,
@@ -760,7 +827,7 @@ async fn mem_03_rule_7_the_record_carries_its_evidence_event_and_index_entry() {
     };
     assert_eq!(
         (text.as_str(), superseded),
-        ("Writes to colleagues in Slovak.", None)
+        ("I write to colleagues in Slovak.", None)
     );
     let record = repository.get(id).await.unwrap().unwrap();
     assert_eq!(record.status, Status::Active);
@@ -932,7 +999,7 @@ async fn mem_03_rule_4_a_statement_the_owner_retracted_is_not_captured_again_for
 #[tokio::test]
 async fn mem_03_rule_4_an_agents_retraction_does_not_suppress() {
     let (service, repository) = service();
-    let other = candidate("Cat is called Mica.", "My cat is called Mica");
+    let other = candidate("My cat is called Mica.", "My cat is called Mica");
     let outcomes = run(&service, vec![other.clone()]).await;
     let CaptureOutcome::Captured { id, .. } = outcomes[0] else {
         panic!("{outcomes:?}");
@@ -1062,7 +1129,7 @@ async fn an_added_or_dropped_negation_waits_for_review_whatever_the_overlap() {
         "I don't write long documents in German for colleagues every day",
     );
     let same = candidate(
-        "Doesn't write long documents in German for colleagues every day.",
+        "I don't write long documents in German for colleagues every day.",
         "I don't write long documents in German for colleagues every day",
     );
     let outcomes = capture(

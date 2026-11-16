@@ -38,7 +38,7 @@ async fn replace<T: MemoryRepository>(repo: &T, old: RecordId, new: NewRecord) -
 async fn move_to<T: MemoryRepository>(repo: &T, id: RecordId, to: Status, at: i64) {
     let mut tx = port(repo.begin().await);
     port(
-        repo.set_status(&mut tx, id, to, Actor::Owner, Timestamp(at))
+        repo.set_status(&mut tx, id, to, Actor::Owner, Timestamp(at), None)
             .await,
     );
     port(repo.commit(tx).await);
@@ -176,6 +176,30 @@ async fn reject_proposal_records_event<T: MemoryRepository>(repo: Arc<T>) {
     assert_eq!(events.last().map(|e| e.kind), Some(EventKind::Rejected));
 }
 
+async fn set_status_detail_round_trips_on_the_event<T: MemoryRepository>(repo: Arc<T>) {
+    let id = put(&*repo, owner("to forget", 1)).await;
+    let detail = serde_json::json!({"requested_by": "agent", "via": "memory_forget"});
+    let mut tx = port(repo.begin().await);
+    port(
+        repo.set_status(
+            &mut tx,
+            id,
+            Status::Retracted,
+            Actor::Owner,
+            Timestamp(5),
+            Some(detail.clone()),
+        )
+        .await,
+    );
+    port(repo.commit(tx).await);
+    let events = port(repo.events(id).await);
+    let last = events.last().expect("event");
+    assert_eq!(
+        (last.kind, last.actor, last.detail.as_ref()),
+        (EventKind::Retracted, Actor::Owner, Some(&detail))
+    );
+}
+
 async fn retract_closes_validity<T: MemoryRepository>(repo: Arc<T>) {
     let id = put(&*repo, owner("to forget", 1)).await;
     move_to(&*repo, id, Status::Retracted, 77).await;
@@ -202,7 +226,7 @@ async fn invalid_transitions_are_refused<T: MemoryRepository>(repo: Arc<T>) {
     ] {
         let mut tx = port(repo.begin().await);
         let outcome = repo
-            .set_status(&mut tx, id, to, Actor::Owner, Timestamp(9))
+            .set_status(&mut tx, id, to, Actor::Owner, Timestamp(9), None)
             .await;
         assert!(
             matches!(outcome, Err(MemoryError::InvalidTransition { .. })),
@@ -220,6 +244,7 @@ async fn set_status_unknown_is_not_found<T: MemoryRepository>(repo: Arc<T>) {
             Status::Retracted,
             Actor::Owner,
             Timestamp(1),
+            None,
         )
         .await;
     assert!(
@@ -339,6 +364,7 @@ async fn reopen_clears_the_supersession_when_the_replacement_is_retracted<T: Mem
             Status::Retracted,
             Actor::Owner,
             Timestamp(300),
+            None,
         )
         .await,
     );
@@ -709,6 +735,7 @@ suite!(
     get_unknown_is_none,
     approve_stamps_time_and_event,
     reject_proposal_records_event,
+    set_status_detail_round_trips_on_the_event,
     retract_closes_validity,
     invalid_transitions_are_refused,
     set_status_unknown_is_not_found,

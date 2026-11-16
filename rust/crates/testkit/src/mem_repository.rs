@@ -240,6 +240,7 @@ impl MemoryRepository for InMemoryMemoryRepository {
         to: Status,
         actor: Actor,
         at: Timestamp,
+        detail: Option<serde_json::Value>,
     ) -> MemoryResult<()> {
         let state = &mut staged(tx)?.state;
         let record = state
@@ -264,7 +265,7 @@ impl MemoryRepository for InMemoryMemoryRepository {
             Status::Retracted if record.valid_to.is_none() => record.valid_to = Some(at),
             _ => {}
         }
-        state.push_event(id, Status::event_into(to), actor, None, at);
+        state.push_event(id, Status::event_into(to), actor, detail, at);
         Ok(())
     }
 

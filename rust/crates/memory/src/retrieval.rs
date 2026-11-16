@@ -147,6 +147,10 @@ impl IndexStats {
 /// Candidates each retriever contributes to fusion (spec, "Hybrid search").
 pub const LEXICAL_TOP_K: u32 = 50;
 pub const VECTOR_TOP_K: u32 = 50;
+/// Candidates each retriever contributes when a kind filter is set: the
+/// index knows no record kind, so a wider pool keeps a kind from being
+/// starved by stronger records of other kinds.
+pub const KIND_FILTER_TOP_K: u32 = 500;
 /// Hits a memory search returns by default and at most (spec, "Hybrid search").
 pub const DEFAULT_SEARCH_LIMIT: u32 = 5;
 pub const MAX_SEARCH_LIMIT: u32 = 8;

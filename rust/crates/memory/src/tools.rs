@@ -343,30 +343,24 @@ impl MemoryTool {
             ..Default::default()
         };
         // The service's search is the one retrieval path (hybrid when an
-        // embedder is live). It knows no record kind, so a kind filter is
-        // applied here to a full-size page.
-        let asked = if kinds.is_empty() {
-            limit as u32
-        } else {
-            MAX_SEARCH_LIMIT
-        };
-        let found = match self.env.service.search(text, &filter, asked).await {
+        // embedder is live); the kind filter runs inside it, before ranking.
+        let found = match self
+            .env
+            .service
+            .search_kinds(text, &filter, &kinds, limit as u32)
+            .await
+        {
             Ok(found) => found,
             Err(error) => return from_error(&error, limits),
         };
         let mut hits = Vec::new();
         for hit in found.hits {
-            if hits.len() == limit {
-                break;
-            }
             let Some(id) = record_of(&hit.id) else {
                 continue;
             };
             match self.env.service.get(id).await {
-                Ok(Some(record)) if kinds.is_empty() || kinds.contains(&record.kind) => {
-                    hits.push((record, hit.score, hit.matched));
-                }
-                Ok(_) => {}
+                Ok(Some(record)) => hits.push((record, hit.score, hit.matched)),
+                Ok(None) => {}
                 Err(error) => return from_error(&error, limits),
             }
         }
@@ -534,6 +528,11 @@ impl MemoryTool {
                 "Suppressed.".to_owned(),
                 limits,
             ),
+            Ok(ProposeOutcome::Refused) => done(
+                json!({"status": "refused", "message": "The owner asked not to remember this; nothing was saved."}),
+                "Refused.".to_owned(),
+                limits,
+            ),
             Err(error) => from_error(&error, limits),
         }
     }
@@ -547,7 +546,7 @@ impl MemoryTool {
         match self
             .env
             .service
-            .retract(record.id, Actor::Agent, self.now())
+            .retract_approved(record.id, Actor::Agent, self.now())
             .await
         {
             Ok(()) => done(

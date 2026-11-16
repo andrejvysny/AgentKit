@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 use crate::error::{MemoryError, MemoryResult};
 use crate::ids::{ItemId, RecordId};
-use crate::model::{Corpus, Status};
+use crate::model::{Corpus, Kind, Status};
 use crate::retrieval::{
-    Candidate, DEFAULT_SEARCH_LIMIT, Hit, IndexFilter, LEXICAL_TOP_K, LexicalQuery,
-    MAX_SEARCH_LIMIT, MatchKind, RERANK_TOP_K, RRF_K, SearchHit, SearchMode, SearchResults,
-    VECTOR_TOP_K,
+    Candidate, DEFAULT_SEARCH_LIMIT, Hit, IndexFilter, KIND_FILTER_TOP_K, LEXICAL_TOP_K,
+    LexicalQuery, MAX_SEARCH_LIMIT, MatchKind, RERANK_TOP_K, RRF_K, SearchHit, SearchMode,
+    SearchResults, VECTOR_TOP_K,
 };
 use crate::service::MemoryService;
 
@@ -46,10 +46,11 @@ fn fuse(lexical: &[Hit], vector: &[Hit]) -> Vec<(ItemId, Fused)> {
     fused
 }
 
-/// The record-store check every hit passes: active, not superseded unless
-/// asked, and valid at `as_of`.
-fn visible(record: &crate::model::Record, filter: &IndexFilter) -> bool {
+/// The record-store check every hit passes: active, of one of `kinds` (any
+/// when empty), not superseded unless asked, and valid at `as_of`.
+fn visible(record: &crate::model::Record, filter: &IndexFilter, kinds: &[Kind]) -> bool {
     record.status == Status::Active
+        && (kinds.is_empty() || kinds.contains(&record.kind))
         && (filter.include_superseded || record.superseded_by.is_none())
         && filter
             .as_of
@@ -72,6 +73,21 @@ impl MemoryService {
         filter: &IndexFilter,
         limit: u32,
     ) -> MemoryResult<SearchResults> {
+        self.search_kinds(query, filter, &[], limit).await
+    }
+
+    /// [`Self::search`] restricted to records of `kinds` (any when empty).
+    /// The restriction is applied when the candidates are re-read, before
+    /// the rerank cut and the `limit`, so records of another kind never use
+    /// up a slot; the retrievers draw a larger pool
+    /// ([`KIND_FILTER_TOP_K`]) because they know no kind.
+    pub async fn search_kinds(
+        &self,
+        query: &str,
+        filter: &IndexFilter,
+        kinds: &[Kind],
+        limit: u32,
+    ) -> MemoryResult<SearchResults> {
         if filter.scope_keys.is_empty() {
             return Err(MemoryError::EmptyScope);
         }
@@ -80,11 +96,16 @@ impl MemoryService {
         } else {
             limit.min(MAX_SEARCH_LIMIT)
         };
+        let (lexical_k, vector_k) = if kinds.is_empty() {
+            (LEXICAL_TOP_K, VECTOR_TOP_K)
+        } else {
+            (KIND_FILTER_TOP_K, KIND_FILTER_TOP_K)
+        };
         let lexical = self
             .index
-            .lexical(&LexicalQuery::new(query), filter, LEXICAL_TOP_K)
+            .lexical(&LexicalQuery::new(query), filter, lexical_k)
             .await?;
-        let vector = self.vector_hits(query, filter).await;
+        let vector = self.vector_hits(query, filter, vector_k).await;
         let mode = if vector.is_some() {
             SearchMode::Hybrid
         } else {
@@ -99,7 +120,7 @@ impl MemoryService {
             }
             let text = match id.as_str().parse::<RecordId>() {
                 Ok(record_id) => match self.repository.get(record_id).await? {
-                    Some(record) if visible(&record, filter) => record.text,
+                    Some(record) if visible(&record, filter, kinds) => record.text,
                     // Purged or changed between the index read and now.
                     _ => continue,
                 },
@@ -138,16 +159,13 @@ impl MemoryService {
 
     /// Nearest neighbours under the active model, embedding the query with
     /// that same model. `None` means "no vector side" (see [`Self::search`]).
-    async fn vector_hits(&self, query: &str, filter: &IndexFilter) -> Option<Vec<Hit>> {
+    async fn vector_hits(&self, query: &str, filter: &IndexFilter, k: u32) -> Option<Vec<Hit>> {
         let embedder = self.embedder()?;
         let active = self.index.active_model().await.ok()??;
         if active != embedder.spec().id {
             return None;
         }
         let vector = embedder.embed_query(query).await.ok()?;
-        self.index
-            .knn(&active, &vector, filter, VECTOR_TOP_K)
-            .await
-            .ok()
+        self.index.knn(&active, &vector, filter, k).await.ok()
     }
 }
