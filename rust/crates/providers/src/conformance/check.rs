@@ -164,7 +164,7 @@ fn parse_args(spec: &ToolSpec, raw: &str) -> Result<Map<String, Value>, (Class, 
     Ok(map)
 }
 
-fn args_match(expected: &ExpectedCall, actual: &Map<String, Value>) -> bool {
+pub(crate) fn args_match(expected: &ExpectedCall, actual: &Map<String, Value>) -> bool {
     expected
         .args
         .iter()

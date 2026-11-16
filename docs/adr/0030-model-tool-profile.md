@@ -59,3 +59,15 @@ change a session in flight.
   probe (P-checks, G3) and T2.2 decide it. The profile only says the channel is
   `template_option`.
 - Adding an allow-listed field is a contract change (schema, Rust, TypeBox).
+
+## Qualification (R21)
+
+`qualifiedToolsets` is filled only from a qualification record
+(`agentkit.tool-use-qualification/1`) produced by the production driver
+(`rust/crates/runtime/tests/tool_use_qualification.rs`): real tool
+definitions, the frozen profile and dialect, and the durable run loop, with
+only external effects mocked behind their ports. A record is valid only for
+the exact tuple of model, provider, server, profile id/version/digest, tool
+schema digest, prompt digest and toolsets it measured. The older
+`conformance --live` runner uses substitute tools and is smoke only. See
+`docs/qualification/tool-use-qualification.md`.

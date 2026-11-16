@@ -1,5 +1,9 @@
 //! Live endpoint model. Refuses to exist unless the caller passes the explicit
 //! live flag. The key is a [`Secret`]: never printed, scrubbed from every error.
+//!
+//! Endpoint smoke only: it sends string-only schemas with generic descriptions
+//! and temperature 0 through its own loop, so its results are not qualification
+//! evidence (R21). Qualify through the production driver in `agentkit-runtime`.
 use super::runner::{Model, ModelCall, ModelTurn, RunCtx};
 use super::task::Task;
 use crate::probe::{Endpoint, Secret};

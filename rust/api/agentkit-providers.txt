@@ -34,6 +34,21 @@ pub agentkit_providers::conformance::Predicate::EntryEquals::key: alloc::string:
 pub agentkit_providers::conformance::Predicate::EntryEquals::value: alloc::string::String
 pub agentkit_providers::conformance::Predicate::EntryExists
 pub agentkit_providers::conformance::Predicate::EntryExists::key: alloc::string::String
+pub enum agentkit_providers::conformance::StateCheck
+pub agentkit_providers::conformance::StateCheck::FileAbsent
+pub agentkit_providers::conformance::StateCheck::FileAbsent::path: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::FileContains
+pub agentkit_providers::conformance::StateCheck::FileContains::path: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::FileContains::text: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::FileEquals
+pub agentkit_providers::conformance::StateCheck::FileEquals::path: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::FileEquals::value: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::FileUnchanged
+pub agentkit_providers::conformance::StateCheck::FileUnchanged::path: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::MemoryEmpty
+pub agentkit_providers::conformance::StateCheck::MemoryHas
+pub agentkit_providers::conformance::StateCheck::MemoryHas::status: alloc::string::String
+pub agentkit_providers::conformance::StateCheck::MemoryHas::text: alloc::string::String
 pub struct agentkit_providers::conformance::CallRecord
 pub agentkit_providers::conformance::CallRecord::class: agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass
 pub agentkit_providers::conformance::CallRecord::step: u32
@@ -51,6 +66,11 @@ pub agentkit_providers::conformance::Cell::success_rate: f64
 pub agentkit_providers::conformance::Cell::successes: u32
 pub agentkit_providers::conformance::Cell::tasks: u32
 pub agentkit_providers::conformance::Cell::toolset: alloc::string::String
+pub struct agentkit_providers::conformance::Checks
+pub agentkit_providers::conformance::Checks::answer_contains: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::Checks::calls: alloc::vec::Vec<agentkit_providers::conformance::ExpectedCall>
+pub agentkit_providers::conformance::Checks::forbid_success: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::Checks::state: alloc::vec::Vec<agentkit_providers::conformance::StateCheck>
 pub struct agentkit_providers::conformance::Expect
 pub agentkit_providers::conformance::Expect::answer_contains: alloc::vec::Vec<alloc::string::String>
 pub agentkit_providers::conformance::Expect::calls: alloc::vec::Vec<agentkit_providers::conformance::ExpectedCall>
@@ -89,6 +109,44 @@ pub agentkit_providers::conformance::ModelCall::name: alloc::string::String
 pub struct agentkit_providers::conformance::ModelTurn
 pub agentkit_providers::conformance::ModelTurn::calls: alloc::vec::Vec<agentkit_providers::conformance::ModelCall>
 pub agentkit_providers::conformance::ModelTurn::text: alloc::string::String
+pub struct agentkit_providers::conformance::Observed
+pub agentkit_providers::conformance::Observed::answer: alloc::string::String
+pub agentkit_providers::conformance::Observed::calls: alloc::vec::Vec<agentkit_providers::conformance::ObservedCall>
+pub agentkit_providers::conformance::Observed::files: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub agentkit_providers::conformance::Observed::memory: alloc::vec::Vec<agentkit_providers::conformance::ObservedMemory>
+pub agentkit_providers::conformance::Observed::offered: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::Observed::settled: bool
+pub struct agentkit_providers::conformance::ObservedCall
+pub agentkit_providers::conformance::ObservedCall::args: serde_json::value::Value
+pub agentkit_providers::conformance::ObservedCall::class: agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass
+pub agentkit_providers::conformance::ObservedCall::emitted: alloc::string::String
+pub agentkit_providers::conformance::ObservedCall::tool: alloc::string::String
+pub struct agentkit_providers::conformance::ObservedMemory
+pub agentkit_providers::conformance::ObservedMemory::status: alloc::string::String
+pub agentkit_providers::conformance::ObservedMemory::text: alloc::string::String
+pub struct agentkit_providers::conformance::QualificationKey
+pub agentkit_providers::conformance::QualificationKey::model: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::profile_digest: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::profile_id: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::profile_version: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::prompt_digest: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::provider: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::schema_digest: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::server: alloc::string::String
+pub agentkit_providers::conformance::QualificationKey::toolsets: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_providers::conformance::QualificationRecord
+pub agentkit_providers::conformance::QualificationRecord::agentkit_commit: alloc::string::String
+pub agentkit_providers::conformance::QualificationRecord::key: agentkit_providers::conformance::QualificationKey
+pub agentkit_providers::conformance::QualificationRecord::qualified_toolsets: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::QualificationRecord::record_version: alloc::string::String
+pub agentkit_providers::conformance::QualificationRecord::scenarios: alloc::vec::Vec<agentkit_providers::conformance::ScenarioResult>
+pub agentkit_providers::conformance::QualificationRecord::thresholds: agentkit_providers::conformance::Thresholds
+pub agentkit_providers::conformance::QualificationRecord::timestamp: alloc::string::String
+pub agentkit_providers::conformance::QualificationRecord::toolset_results: alloc::vec::Vec<agentkit_providers::conformance::ToolsetResult>
+impl agentkit_providers::conformance::QualificationRecord
+pub fn agentkit_providers::conformance::QualificationRecord::build(agentkit_providers::conformance::QualificationKey, agentkit_providers::conformance::Thresholds, alloc::vec::Vec<agentkit_providers::conformance::ScenarioResult>, alloc::string::String, alloc::string::String) -> Self
+pub fn agentkit_providers::conformance::QualificationRecord::qualifies(&self, &agentkit_providers::conformance::QualificationKey, &str) -> bool
+pub fn agentkit_providers::conformance::QualificationRecord::to_json(&self) -> alloc::string::String
 pub struct agentkit_providers::conformance::RunCtx
 pub agentkit_providers::conformance::RunCtx::run: u32
 pub agentkit_providers::conformance::RunCtx::seq: usize
@@ -101,6 +159,30 @@ pub agentkit_providers::conformance::RunOutcome::success: bool
 pub agentkit_providers::conformance::RunOutcome::task_id: alloc::string::String
 pub agentkit_providers::conformance::RunOutcome::toolset: alloc::string::String
 pub agentkit_providers::conformance::RunOutcome::turns: u32
+pub struct agentkit_providers::conformance::Scenario
+pub agentkit_providers::conformance::Scenario::execution_mode: alloc::string::String
+pub agentkit_providers::conformance::Scenario::files: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub agentkit_providers::conformance::Scenario::id: alloc::string::String
+pub agentkit_providers::conformance::Scenario::toolset: alloc::string::String
+pub agentkit_providers::conformance::Scenario::variants: alloc::vec::Vec<agentkit_providers::conformance::Variant>
+impl agentkit_providers::conformance::Scenario
+pub fn agentkit_providers::conformance::Scenario::judge(&self, &agentkit_providers::conformance::Variant, &agentkit_providers::conformance::Observed) -> agentkit_providers::conformance::Verdict
+pub struct agentkit_providers::conformance::ScenarioResult
+pub agentkit_providers::conformance::ScenarioResult::calls: u32
+pub agentkit_providers::conformance::ScenarioResult::failures: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::ScenarioResult::invalid_calls: u32
+pub agentkit_providers::conformance::ScenarioResult::lang: alloc::string::String
+pub agentkit_providers::conformance::ScenarioResult::passed: bool
+pub agentkit_providers::conformance::ScenarioResult::scenario: alloc::string::String
+pub agentkit_providers::conformance::ScenarioResult::toolset: alloc::string::String
+impl agentkit_providers::conformance::ScenarioResult
+pub fn agentkit_providers::conformance::ScenarioResult::new(&str, &str, &str, agentkit_providers::conformance::Verdict) -> Self
+pub struct agentkit_providers::conformance::Script
+pub agentkit_providers::conformance::Script::answer: alloc::string::String
+pub agentkit_providers::conformance::Script::turns: alloc::vec::Vec<alloc::vec::Vec<agentkit_providers::conformance::ScriptedCall>>
+pub struct agentkit_providers::conformance::ScriptedCall
+pub agentkit_providers::conformance::ScriptedCall::args: serde_json::value::Value
+pub agentkit_providers::conformance::ScriptedCall::tool: alloc::string::String
 pub struct agentkit_providers::conformance::Task
 pub agentkit_providers::conformance::Task::allowed_tools: alloc::vec::Vec<agentkit_providers::conformance::ToolSpec>
 pub agentkit_providers::conformance::Task::expect: agentkit_providers::conformance::Expect
@@ -123,6 +205,24 @@ pub agentkit_providers::conformance::ToolSpec::effect: agentkit_providers::confo
 pub agentkit_providers::conformance::ToolSpec::name: alloc::string::String
 pub agentkit_providers::conformance::ToolSpec::optional: alloc::vec::Vec<alloc::string::String>
 pub agentkit_providers::conformance::ToolSpec::required: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_providers::conformance::ToolsetResult
+pub agentkit_providers::conformance::ToolsetResult::invalid_rate: f64
+pub agentkit_providers::conformance::ToolsetResult::passed: u32
+pub agentkit_providers::conformance::ToolsetResult::qualified: bool
+pub agentkit_providers::conformance::ToolsetResult::scenarios: u32
+pub agentkit_providers::conformance::ToolsetResult::success_rate: f64
+pub agentkit_providers::conformance::ToolsetResult::toolset: alloc::string::String
+pub struct agentkit_providers::conformance::Variant
+pub agentkit_providers::conformance::Variant::checks: agentkit_providers::conformance::Checks
+pub agentkit_providers::conformance::Variant::lang: alloc::string::String
+pub agentkit_providers::conformance::Variant::prompt: alloc::string::String
+pub agentkit_providers::conformance::Variant::script: agentkit_providers::conformance::Script
+pub struct agentkit_providers::conformance::Verdict
+pub agentkit_providers::conformance::Verdict::calls: u32
+pub agentkit_providers::conformance::Verdict::failures: alloc::vec::Vec<alloc::string::String>
+pub agentkit_providers::conformance::Verdict::invalid_calls: u32
+pub agentkit_providers::conformance::Verdict::passed: bool
+pub const agentkit_providers::conformance::QUALIFICATION_RECORD_VERSION: &str
 pub trait agentkit_providers::conformance::Model: core::marker::Send + core::marker::Sync
 pub fn agentkit_providers::conformance::Model::name(&self) -> &str
 pub fn agentkit_providers::conformance::Model::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
@@ -134,10 +234,12 @@ pub fn agentkit_providers::conformance::MockModel::name(&self) -> &str
 pub fn agentkit_providers::conformance::MockModel::turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_providers::conformance::Task, &'life2 agentkit_providers::conformance::RunCtx, &'life3 [serde_json::value::Value]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_providers::conformance::ModelTurn, alloc::string::String>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn agentkit_providers::conformance::build_matrix(alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<agentkit_providers::conformance::RunOutcome>)>, u32, agentkit_providers::conformance::Thresholds) -> agentkit_providers::conformance::Matrix
 pub fn agentkit_providers::conformance::class_name(agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass) -> alloc::string::String
+pub fn agentkit_providers::conformance::digest_json(&serde_json::value::Value) -> alloc::string::String
 pub fn agentkit_providers::conformance::is_invalid(agentkit_contracts::dto::ai_run_tool_record_event::AiToolOutcomeClass) -> bool
 pub fn agentkit_providers::conformance::live_model(agentkit_providers::conformance::LiveConfig, bool) -> core::result::Result<agentkit_providers::conformance::LiveModel, alloc::string::String>
 pub fn agentkit_providers::conformance::load_dir(&std::path::Path) -> core::result::Result<alloc::vec::Vec<agentkit_providers::conformance::Task>, alloc::string::String>
 pub fn agentkit_providers::conformance::parse_task_file(&str) -> core::result::Result<alloc::vec::Vec<agentkit_providers::conformance::Task>, alloc::string::String>
+pub fn agentkit_providers::conformance::production_scenarios() -> alloc::vec::Vec<agentkit_providers::conformance::Scenario>
 pub async fn agentkit_providers::conformance::run_matrix(&[&dyn agentkit_providers::conformance::Model], &[agentkit_providers::conformance::Task], u32, agentkit_providers::conformance::Thresholds) -> agentkit_providers::conformance::Matrix
 pub async fn agentkit_providers::conformance::run_task(&dyn agentkit_providers::conformance::Model, &agentkit_providers::conformance::Task, u32, usize) -> agentkit_providers::conformance::RunOutcome
 pub mod agentkit_providers::probe

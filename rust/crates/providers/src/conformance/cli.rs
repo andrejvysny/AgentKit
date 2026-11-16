@@ -14,6 +14,10 @@ fn models(args: &[String]) -> Result<Vec<Box<dyn Model>>, String> {
     let live = args.iter().any(|a| a == "--live");
     match (live, flag(args, "--base-url"), flag(args, "--model")) {
         (true, Some(base_url), Some(model)) => {
+            eprintln!(
+                "note: this live run uses substitute tools and is not qualification evidence; \
+                 qualify with the production driver (docs/qualification/tool-use-qualification.md)"
+            );
             let key = Secret::new(std::env::var("CONFORMANCE_API_KEY").unwrap_or_default());
             let config = LiveConfig {
                 base_url,
