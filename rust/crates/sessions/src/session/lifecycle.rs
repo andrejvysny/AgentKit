@@ -4,9 +4,9 @@
 
 use crate::{
     AgentInputKind, AgentInputQuery, AgentInputRecord, AgentInputStatus, ChatRecord,
-    ExecutionStateRead, SESSION_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY, SessionBackend,
-    SessionFault, SessionMutation, SessionsError, SessionsResult, execution_state_for_mode,
-    host_owned_metadata_key, inspect_execution_state, read_execution_state, with_execution,
+    ExecutionStateRead, SESSION_METADATA_KEY, SessionBackend, SessionFault, SessionMutation,
+    SessionsError, SessionsResult, execution_state_for_mode, host_owned_metadata_key,
+    inspect_execution_state, read_execution_state, with_execution,
 };
 use agentkit_engine::is_child_wait;
 use serde_json::{Map, Value, json};
@@ -73,14 +73,13 @@ impl<R: SessionBackend> AgentSessionService<R> {
         // native fields). Grammar (record, non-empty, never turnInput) is
         // enforced by the descriptor reader below.
         let native_execution = metadata.remove("agentkit.nativeExecution");
-        for key in [SESSION_METADATA_KEY, STANDING_APPROVALS_METADATA_KEY] {
-            if metadata.contains_key(key) {
-                // Grants are written only by an answered approval; a
-                // caller-supplied one would be a standing approval no human gave.
-                return Err(SessionsError::invalid_input(format!(
-                    "metadata must not contain {key}."
-                )));
-            }
+        // The descriptor is built below, never supplied. Standing approvals
+        // may only arrive on the host path: the caller path already refused
+        // every `agentkit.*` key in `create_session_chat`.
+        if metadata.contains_key(SESSION_METADATA_KEY) {
+            return Err(SessionsError::invalid_input(format!(
+                "metadata must not contain {SESSION_METADATA_KEY}."
+            )));
         }
         if let Some(kind) = &input.turn_kind
             && !is_valid_session_turn_kind(kind)

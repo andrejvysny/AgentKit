@@ -124,7 +124,7 @@ fn a_batch_masks_oldest_first_until_the_target() {
     };
     // B = 7000: E is about 6030, target 3500, so three results (about 2930
     // tokens) bring it low enough and the fourth is left alone.
-    let planned = plan(&entries, 0, &settings, 7000, true);
+    let planned = plan(&entries, entries_tokens(&entries), 0, &settings, 7000, true);
     assert!(!planned.compact);
     assert_eq!(indexes(&planned.picks), vec![2, 6, 10]);
 }
@@ -133,11 +133,25 @@ fn a_batch_masks_oldest_first_until_the_target() {
 fn too_little_to_free_signals_compaction_instead() {
     let entries = session(6, |_| "read_file");
     // The three maskable results free about 2930 tokens, under 0.20 of 20000.
-    let planned = plan(&entries, 0, &MaskSettings::default(), 20_000, true);
+    let planned = plan(
+        &entries,
+        entries_tokens(&entries),
+        0,
+        &MaskSettings::default(),
+        20_000,
+        true,
+    );
     assert!(planned.compact);
     assert!(planned.picks.is_empty());
     // Without an output store no result may be masked at all.
-    let planned = plan(&entries, 0, &MaskSettings::default(), 7000, false);
+    let planned = plan(
+        &entries,
+        entries_tokens(&entries),
+        0,
+        &MaskSettings::default(),
+        7000,
+        false,
+    );
     assert!(planned.compact);
 }
 

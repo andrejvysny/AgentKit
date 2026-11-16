@@ -312,7 +312,9 @@ async fn usage_request_names_the_turn_and_counts_tools_and_an_output_reserve() {
     let seen = seen.lock().unwrap();
     let (_, request) = seen.first().expect("one authorized request");
     assert_eq!(request["taskId"], "spied-turn");
-    assert_eq!(request["estimatedOutputTokens"], 1_024);
+    // The admitted request is the transmitted one: the reserve is the
+    // output cap the provider call actually carries.
+    assert_eq!(request["estimatedOutputTokens"], 16_384);
     assert!(
         request["estimatedPromptTokens"].as_u64().unwrap() >= 1_000,
         "the 4000-character tool definition is counted: {request}"

@@ -3224,7 +3224,9 @@ async fn oversized_summary_input_fails_without_claiming_unseen_history() {
         .configure(
             "s1",
             None,
-            Some(json!({"windowTokens":2048,"reserveTokens":512,"keepRecentTokens":1})),
+            // Auto compaction would summarize the history while it still
+            // fits the summarizer; only the explicit compact sees it oversized.
+            Some(json!({"windowTokens":2048,"reserveTokens":512,"keepRecentTokens":1,"autoCompaction":false})),
             None,
         )
         .await

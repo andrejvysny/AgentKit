@@ -236,7 +236,7 @@ async fn knn_orders_by_similarity<T: RetrievalIndex>(idx: Arc<T>) {
     index(
         &*idx,
         &[
-            with_vector(item("far", 1, "far"), id, &[0.0, 1.0, 0.0]),
+            with_vector(item("far", 1, "far"), id, &[0.1, 1.0, 0.0]),
             with_vector(item("exact", 1, "exact"), id, &[1.0, 0.0, 0.0]),
             with_vector(item("near", 1, "near"), id, &[0.9, 0.1, 0.0]),
             item("novector", 1, "novector"),
@@ -251,6 +251,22 @@ async fn knn_orders_by_similarity<T: RetrievalIndex>(idx: Arc<T>) {
         nearest(&*idx, id, &[1.0, 0.0, 0.0], 2).await,
         vec!["exact", "near"]
     );
+}
+
+async fn knn_drops_non_positive_cosine<T: RetrievalIndex>(idx: Arc<T>) {
+    let model = spec("m", 2);
+    activate(&*idx, &model).await;
+    let id = &model.id;
+    index(
+        &*idx,
+        &[
+            with_vector(item("same", 1, "same"), id, &[1.0, 0.0]),
+            with_vector(item("orthogonal", 1, "orthogonal"), id, &[0.0, 1.0]),
+            with_vector(item("opposite", 1, "opposite"), id, &[-1.0, 0.0]),
+        ],
+    )
+    .await;
+    assert_eq!(nearest(&*idx, id, &[1.0, 0.0], 10).await, vec!["same"]);
 }
 
 async fn knn_applies_filter<T: RetrievalIndex>(idx: Arc<T>) {
@@ -702,6 +718,7 @@ suite!(
     delete_removes_from_lexical_and_knn,
     dropped_transaction_leaves_nothing,
     knn_orders_by_similarity,
+    knn_drops_non_positive_cosine,
     knn_applies_filter,
     knn_refuses_unknown_model_and_wrong_dims,
     upsert_refuses_vector_for_unknown_model,

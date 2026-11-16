@@ -202,7 +202,7 @@
     {
       "name": "read_file",
       "effect": "read",
-      "description": "Read one text file in the workspace and return its lines numbered \"<n>\\t<line>\". Use it before edit or write_file; to locate code first use grep_search or glob. Returns at most 2000 lines or 50.0KB per call and ends with a continuation notice (offset=N) when more remains; offset is 1-based. Read several files with several calls. Prefer the native tools (read_file, list_directory, glob, grep_search, repo_map) over shell commands for exploring code.\n\nExample: read_file({\"file_path\":\"src/main.rs\"})\nExample: read_file({\"file_path\":\"src/main.rs\",\"offset\":120,\"limit\":80})",
+      "description": "Read one text file in the workspace and return its lines numbered \"<n>\\t<line>\". Use it before edit or write_file; to locate code first use grep_search or glob. Returns at most 2000 lines or 50.0KB per call and ends with a continuation notice (offset=N) when more remains; offset is 1-based. A file unchanged since an earlier read in this chat whose result is still in context returns the one-line stub \"[unchanged since call <id> ...]\" instead of its text; pass force=true to get the text. Read several files with several calls. Prefer the native tools (read_file, list_directory, glob, grep_search, repo_map) over shell commands for exploring code.\n\nExample: read_file({\"file_path\":\"src/main.rs\"})\nExample: read_file({\"file_path\":\"src/main.rs\",\"offset\":120,\"limit\":80})",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -221,6 +221,10 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "Maximum number of lines to return."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Return the text even when the file is unchanged since an earlier read still in context. Default false."
           }
         },
         "required": ["file_path"],

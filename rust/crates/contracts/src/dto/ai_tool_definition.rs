@@ -1,6 +1,6 @@
 use crate::{AiJsonSchemaObject, AiToolEffect, Optional};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -35,7 +35,7 @@ pub struct AiToolDefinition {
         default,
         skip_serializing_if = "Optional::is_absent"
     )]
-    pub examples: Optional<Vec<BTreeMap<String, Value>>>,
+    pub examples: Optional<Vec<Map<String, Value>>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

@@ -197,6 +197,10 @@ fn scan(
             ))
             .into());
         };
+        // An orthogonal or opposite vector is not a neighbour.
+        if score <= 0.0 {
+            continue;
+        }
         heap.push(Scored { score, id, corpus });
         if heap.len() > k as usize {
             heap.pop();

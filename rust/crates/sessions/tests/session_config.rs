@@ -137,6 +137,40 @@ async fn create_rejects_malformed_present_descriptor_values() {
 }
 
 #[tokio::test]
+async fn standing_approvals_seed_only_on_the_host_path() {
+    let key = agentkit_sessions::STANDING_APPROVALS_METADATA_KEY;
+    let input = CreateSessionInput {
+        metadata: Some(json!({ key: {"version": 1, "grants": []} })),
+        ..create_input()
+    };
+    // Caller path: every agentkit.* key is refused, grants included.
+    let error = fixture()
+        .service
+        .create_session(&input)
+        .await
+        .expect_err("caller seeded standing approvals");
+    assert_eq!(error.failure_event_code(), "invalid_input");
+    // Host path may seed them; the descriptor key stays refused.
+    let f = fixture();
+    f.service
+        .create_session_with_host_metadata(&input)
+        .await
+        .unwrap();
+    let chat = f.store.get_chat("s1").await.unwrap().unwrap();
+    assert_eq!(chat.metadata[key], json!({"version": 1, "grants": []}));
+    let descriptor = CreateSessionInput {
+        metadata: Some(json!({ "agentkit.session": {"version": 1} })),
+        ..create_input()
+    };
+    let error = fixture()
+        .service
+        .create_session_with_host_metadata(&descriptor)
+        .await
+        .expect_err("host supplied descriptor");
+    assert_eq!(error.failure_event_code(), "invalid_input");
+}
+
+#[tokio::test]
 async fn create_accepts_legal_descriptors_including_host_kinds() {
     for kind in ["project.1", "project._worker", "project.worker"] {
         let input = CreateSessionInput {

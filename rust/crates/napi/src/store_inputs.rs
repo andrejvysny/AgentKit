@@ -99,8 +99,10 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                 // A human request settles in the answer transaction (actor,
                 // approval and answer record), never by a bare transition.
                 if existing.kind == AgentInputKind::HumanRequest {
-                    return Err(errors::invalid(
+                    return Err(errors::stable(
+                        "input_transition_invalid",
                         "human requests cannot be transitioned through inputs; answer them",
+                        None,
                     ));
                 }
             }
@@ -245,7 +247,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(code(error), "invalid_input");
+        assert_eq!(code(error), "input_transition_invalid");
         assert_eq!(
             call(&store, "inputs.getInput", json!({"inputId":"req1"}))
                 .await

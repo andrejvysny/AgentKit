@@ -172,10 +172,15 @@ fn partition_knn(
                 .query_row(params_from_iter(args), |row| Ok((row.get(0)?, row.get(1)?)))
                 .optional()?;
             if let Some((id, corpus)) = row {
+                let score = (1.0 - distance) as f32;
+                // An orthogonal or opposite vector is not a neighbour.
+                if score <= 0.0 {
+                    continue;
+                }
                 hits.push(Hit {
                     id: ItemId::new(id),
                     corpus: unwire::<Corpus>(&corpus)?,
-                    score: (1.0 - distance) as f32,
+                    score,
                 });
             }
         }

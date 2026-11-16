@@ -130,6 +130,10 @@ async fn the_prefix_is_recorded_once_kept_while_unchanged_and_refrozen_on_edit()
     let dir = workspace();
     let store = SqliteStore::memory(64).expect("store");
     let requests = Arc::new(Mutex::new(vec![]));
+    let options = ChatExecutorOptions {
+        project_instructions: Some(Arc::new(FileProjectInstructions)),
+        ..Default::default()
+    };
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
         ChatExecutor::new(
             Arc::new(Capturing {
@@ -138,10 +142,7 @@ async fn the_prefix_is_recorded_once_kept_while_unchanged_and_refrozen_on_edit()
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
-            project_instructions: Some(Arc::new(FileProjectInstructions)),
-            ..Default::default()
-        }),
+        .with_options(options.clone()),
     );
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let host = AgentHost::new(
@@ -203,16 +204,39 @@ async fn the_prefix_is_recorded_once_kept_while_unchanged_and_refrozen_on_edit()
     std::fs::write(dir.path().join("CLAUDE.md"), b"rule two\n").expect("edit rules");
     let third = send(&service, "in3").await;
     assert_eq!(drive(&host, &store, &third).await, TaskStatus::Completed);
+    assert_eq!(
+        prefix_of(&store).await.expect("kept"),
+        frozen,
+        "an edit alone never moves the prefix (1.4): it reaches the model as a note"
+    );
+
+    // Only an explicit refreeze (reload or compaction) adopts the edit.
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    assert!(
+        refreeze_project_rules(&options, &store, "s1", now)
+            .await
+            .unwrap(),
+        "the edited rules are adopted"
+    );
+    let fourth = send(&service, "in4").await;
+    assert_eq!(drive(&host, &store, &fourth).await, TaskStatus::Completed);
     let refrozen = prefix_of(&store).await.expect("refrozen");
     assert_eq!(refrozen.revision, 2.0);
-    assert_eq!(refrozen.frozen_at_task, third);
+    assert_eq!(refrozen.frozen_at_task, fourth);
     assert_ne!(refrozen.rules_digest, frozen.rules_digest);
     assert_eq!(refrozen.system_digest, frozen.system_digest);
     assert_ne!(refrozen.cache_key, frozen.cache_key);
 
     assert!(refreeze_warnings(&store, &first).await.is_empty());
     assert!(refreeze_warnings(&store, &second).await.is_empty());
-    let report = refreeze_warnings(&store, &third).await;
+    assert!(refreeze_warnings(&store, &third).await.is_empty());
+    let report = refreeze_warnings(&store, &fourth).await;
     assert_eq!(report.len(), 1, "a re-freeze is a durable event");
     assert_eq!(report[0].event["data"]["changed"], json!(["rules"]));
     assert_eq!(report[0].event["data"]["revision"], 2);
@@ -238,8 +262,13 @@ async fn the_prefix_is_recorded_once_kept_while_unchanged_and_refrozen_on_edit()
         leading_system(&requests[1]),
         "the head is byte-identical across unchanged turns"
     );
+    assert_eq!(
+        leading_system(&requests[0]),
+        leading_system(&requests[2]),
+        "the head stays byte-identical after an edit without a refreeze"
+    );
     // Rules is the last segment block (CE-01), no longer the only one.
-    let refrozen_blocks = leading_system(&requests[2]);
+    let refrozen_blocks = leading_system(&requests[3]);
     let (rules_segment, rules_text) = refrozen_blocks.last().expect("a rules block");
     assert_eq!(*rules_segment, Some(Rules));
     assert!(rules_text.contains("rule two"));

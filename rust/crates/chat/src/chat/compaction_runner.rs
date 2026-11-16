@@ -125,14 +125,22 @@ fn make_plan(input: &Input, snapshot: &Snapshot) -> Plan {
     let mut triggered = snapshot.manual() || tokens > budget;
     let mut force_skipped = false;
     if !triggered && input.force {
-        // Hysteresis: a compaction leaves about its summary plus `keep` tokens
-        // of recent history. Until the view has grown by 0.20 B beyond that,
-        // another forced one would only repeat the last.
+        // Hysteresis: until the view has grown by 0.20 B beyond what the last
+        // compaction left (its summary plus the recent turns it kept, which
+        // can exceed `keep`), another forced one would only repeat it.
         force_skipped = previous.as_ref().is_some_and(|record| {
-            let left = record["tokensAfter"]
+            let system = entries_tokens(&input.entries[..body_start]);
+            let left = record["viewTokensAfter"]
                 .as_u64()
-                .unwrap_or(0)
-                .saturating_add(keep);
+                .unwrap_or_else(|| {
+                    // Records from before the field existed: the summary
+                    // alone is known, so assume it kept `keep` more.
+                    record["tokensAfter"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .saturating_add(keep)
+                })
+                .saturating_add(system);
             tokens < left.saturating_add(budget / 5)
         });
         triggered = !force_skipped;
@@ -397,8 +405,12 @@ fn record(
             "The conversation history before this point was compacted into the following summary:\n<summary>\n{summary}\n</summary>"
         ),
     ));
+    // What the view weighs right after this compaction: the summary plus
+    // every turn it kept. The hysteresis of the next forced one measures
+    // growth from here.
+    let view_after = after.saturating_add(entries_tokens(&body[cut..]));
     Ok(
-        json!({"summaryId":id,"sessionId":input.chat_id,"coversThroughMessageId":through,"firstKeptMessageId":kept,"summary":summary,"sourceHash":hash,"tokensBefore":before,"tokensAfter":after,"providerId":input.provider.id(),"model":input.model,"summarizerRevision":compaction::REVISION,"details":details,"createdAt":timestamp}),
+        json!({"summaryId":id,"sessionId":input.chat_id,"coversThroughMessageId":through,"firstKeptMessageId":kept,"summary":summary,"sourceHash":hash,"tokensBefore":before,"tokensAfter":after,"viewTokensAfter":view_after,"providerId":input.provider.id(),"model":input.model,"summarizerRevision":compaction::REVISION,"details":details,"createdAt":timestamp}),
     )
 }
 

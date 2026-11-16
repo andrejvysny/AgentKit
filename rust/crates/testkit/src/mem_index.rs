@@ -260,6 +260,8 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
                     score: cosine(v, vector),
                 })
             })
+            // An orthogonal or opposite vector is not a neighbour.
+            .filter(|hit| hit.score > 0.0)
             .collect();
         Ok(best_first(hits, k))
     }

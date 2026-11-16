@@ -1650,7 +1650,7 @@ pub struct agentkit_contracts::AiToolDefinition
 pub agentkit_contracts::AiToolDefinition::capability: alloc::string::String
 pub agentkit_contracts::AiToolDefinition::description: alloc::string::String
 pub agentkit_contracts::AiToolDefinition::effect: agentkit_contracts::AiToolEffect
-pub agentkit_contracts::AiToolDefinition::examples: agentkit_contracts::Optional<alloc::vec::Vec<alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>>>
+pub agentkit_contracts::AiToolDefinition::examples: agentkit_contracts::Optional<alloc::vec::Vec<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>>
 pub agentkit_contracts::AiToolDefinition::extra: alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
 pub agentkit_contracts::AiToolDefinition::input_schema: agentkit_contracts::AiJsonSchemaObject
 pub agentkit_contracts::AiToolDefinition::name: alloc::string::String

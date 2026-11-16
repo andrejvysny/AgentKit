@@ -175,6 +175,27 @@ fn the_manifest_round_trips_timeouts_and_examples_with_the_same_hash() {
     assert_eq!(got.output_schema, rich.output_schema);
 }
 
+#[test]
+fn example_key_order_survives_the_prefix_round_trip_byte_for_byte() {
+    let mut rich = definition("spawn", "read");
+    // Neither alphabetical nor reverse: a sorted map would reorder it.
+    rich.examples = vec![json!({"role": "general", "prompt": "go", "n": 2, "a": {"z": 1, "b": 2}})];
+    let turn_one = ToolManifest::build(&[rich]);
+    let stored = frozen_prefix(turn_one.definitions());
+    let turn_two = ToolManifest::from_prefix(&stored).expect("recorded manifest reads back");
+    assert_eq!(
+        s1_bytes(turn_one.definitions()),
+        s1_bytes(turn_two.definitions()),
+        "the S1 bytes are identical on the next turn"
+    );
+    let recorded = serde_json::to_string(&stored.tool_manifest).unwrap();
+    assert!(
+        recorded.find("\"role\"").unwrap() < recorded.find("\"prompt\"").unwrap()
+            && recorded.find("\"prompt\"").unwrap() < recorded.find("\"n\"").unwrap(),
+        "{recorded}"
+    );
+}
+
 struct Script {
     calls: Vec<ToolCall>,
     tools_seen: Mutex<Vec<Vec<String>>>,

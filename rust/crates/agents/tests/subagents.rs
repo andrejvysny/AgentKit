@@ -3782,16 +3782,8 @@ impl Harness {
         extra: Option<(&str, Value)>,
     ) {
         let mut metadata = manifest_metadata(tools);
-        // Session creation refuses standing approvals even on the host
-        // path (only an answered approval writes them), so they are
-        // seeded straight into the store after the session exists.
-        let mut standing = None;
-        match extra {
-            Some((key, value)) if key == STANDING_APPROVALS_METADATA_KEY => {
-                standing = Some((key, value));
-            }
-            Some((key, value)) => metadata[key] = value,
-            None => {}
+        if let Some((key, value)) = extra {
+            metadata[key] = value;
         }
         // What the role guard learns while the parent stages its tools.
         for definition in tools {
@@ -3819,14 +3811,6 @@ impl Harness {
             })
             .await
             .unwrap();
-        if let Some((key, value)) = standing {
-            let mut chat_metadata = self.child_metadata(id).await;
-            chat_metadata[key] = value;
-            self.store
-                .update_chat(id, None, Some(chat_metadata), None, 0)
-                .await
-                .unwrap();
-        }
         self.store
             .submit(SubmitTask {
                 task_id: format!("{id}-turn"),

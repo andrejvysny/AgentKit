@@ -498,12 +498,12 @@ fn candidates(
 /// down to the target, and whether the whole batch is worth running.
 fn plan(
     entries: &[Entry],
+    before: u64,
     floor: usize,
     settings: &MaskSettings,
     budget: u64,
     with_store: bool,
 ) -> Plan {
-    let before = entries_tokens(entries);
     let mut found = candidates(entries, floor, settings, with_store);
     let potential: u64 = found.iter().map(|candidate| candidate.saved).sum();
     if potential < scaled(budget, settings.min_gain_ratio) {
@@ -527,6 +527,15 @@ fn plan(
         picks: found,
         compact: false,
     }
+}
+
+/// Tokens of the provider-facing history: `entries` with the newest
+/// applicable summary standing in for what it replaced.
+fn view_tokens(entries: &[Entry], summaries: &[Value]) -> u64 {
+    summaries
+        .iter()
+        .find_map(|record| compaction::apply_summary(entries, record))
+        .map_or_else(|| entries_tokens(entries), |view| entries_tokens(&view))
 }
 
 fn index_of(entries: &[Entry]) -> Positions {
@@ -720,14 +729,17 @@ async fn batch(
     else {
         return Ok(Outcome::default());
     };
-    let before = entries_tokens(entries);
+    let summaries = context.store.list_context_summaries(input.chat_id).await?;
+    // What the provider gets is the view with the stored summary applied:
+    // the summarized bytes no longer count towards the trigger.
+    let before = view_tokens(entries, &summaries);
     if before <= scaled(budget, input.settings.trigger_ratio) {
         return Ok(Outcome::default());
     }
-    let summaries = context.store.list_context_summaries(input.chat_id).await?;
     let floor = summary_floor(entries, &summaries);
     let plan = plan(
         entries,
+        before,
         floor,
         &input.settings,
         budget,
@@ -739,7 +751,15 @@ async fn batch(
             ..Outcome::default()
         });
     }
-    run_batch(input, entries, &plan.picks, budget, positions, hashes).await
+    run_batch(
+        input,
+        entries,
+        &plan.picks,
+        (budget, before),
+        positions,
+        hashes,
+    )
+    .await
 }
 
 /// Chat metadata key: the mask ids whose removal was already reported.
@@ -809,12 +829,12 @@ async fn run_batch(
     input: &Input<'_>,
     entries: &mut [Entry],
     picks: &[Candidate],
-    budget: u64,
+    (budget, before): (u64, u64),
     positions: &Positions,
     hashes: &mut Hashes,
 ) -> ChatResult<Outcome> {
     let context = input.context;
-    let before = entries_tokens(entries);
+    let full_before = entries_tokens(entries);
     let timestamp =
         agentkit_store::ConversationTimestamp::from_epoch_millis(context.runtime.now_ms())
             .and_then(|value| value.wire_text().map(|text| text.into_owned()))
@@ -874,7 +894,9 @@ async fn run_batch(
             ..Outcome::default()
         });
     }
-    let after = entries_tokens(&masked);
+    // Masks only touch entries after the summary, so the whole saving comes
+    // off the summary-applied view.
+    let after = before.saturating_sub(full_before.saturating_sub(entries_tokens(&masked)));
     record["tokensAfter"] = after.into();
     commit(input, record.clone()).await?;
     entries.clone_from_slice(&masked);

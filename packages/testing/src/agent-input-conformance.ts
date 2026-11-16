@@ -208,15 +208,31 @@ export function describeAgentInputStoreConformance(
         expect(applied.appliedMessageId).toBe("msg-9");
         expect(await inputs.getInput(steered.inputId)).toEqual(applied);
 
-        const request = (await inputs.createInput(humanRequest())).record;
-        const answered = await inputs.transitionInput(
-          request.inputId,
+        const queued = (await inputs.createInput(steer({ kind: "follow_up" })))
+          .record;
+        const converted = await inputs.transitionInput(
+          queued.inputId,
           ["pending"],
-          "answered",
-          { answerId: "answer-1" },
+          "converted",
+          { appliedTaskId: "task-10" },
         );
-        expect(answered.status).toBe("answered");
-        expect(answered.answerId).toBe("answer-1");
+        expect(converted.status).toBe("converted");
+        expect(converted.appliedTaskId).toBe("task-10");
+        expect(await inputs.getInput(queued.inputId)).toEqual(converted);
+      });
+    });
+
+    it("refuses to transition a human request: it settles only by an answer", async () => {
+      await withStore(async (inputs) => {
+        const { record } = await inputs.createInput(humanRequest());
+        await expectRejectsWithCode(
+          inputs.transitionInput(record.inputId, ["pending"], "answered", {
+            answerId: "answer-1",
+          }),
+          "input_transition_invalid",
+          expect,
+        );
+        expect(await inputs.getInput(record.inputId)).toEqual(record);
       });
     });
 
