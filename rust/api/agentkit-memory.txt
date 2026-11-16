@@ -4,6 +4,17 @@ pub agentkit_memory::Actor::Agent
 pub agentkit_memory::Actor::Extractor
 pub agentkit_memory::Actor::Owner
 pub agentkit_memory::Actor::System
+pub enum agentkit_memory::CaptureOutcome
+pub agentkit_memory::CaptureOutcome::Captured
+pub agentkit_memory::CaptureOutcome::Captured::id: agentkit_memory::RecordId
+pub agentkit_memory::CaptureOutcome::Captured::superseded: core::option::Option<agentkit_memory::RecordId>
+pub agentkit_memory::CaptureOutcome::Captured::text: alloc::string::String
+pub agentkit_memory::CaptureOutcome::Duplicate(agentkit_memory::RecordId)
+pub agentkit_memory::CaptureOutcome::Proposed
+pub agentkit_memory::CaptureOutcome::Proposed::id: agentkit_memory::RecordId
+pub agentkit_memory::CaptureOutcome::Proposed::why: agentkit_memory::ProposalReason
+pub agentkit_memory::CaptureOutcome::Rejected(agentkit_memory::Rejection)
+pub agentkit_memory::CaptureOutcome::Suppressed
 pub enum agentkit_memory::Corpus
 pub agentkit_memory::Corpus::Chat
 pub agentkit_memory::Corpus::Mail
@@ -76,6 +87,12 @@ pub agentkit_memory::Origin::OwnerStatement
 impl agentkit_memory::Origin
 pub fn agentkit_memory::Origin::actor(self) -> agentkit_memory::Actor
 pub fn agentkit_memory::Origin::default_status(self) -> agentkit_memory::Status
+pub enum agentkit_memory::ProposalReason
+pub agentkit_memory::ProposalReason::NotCoveredByQuote
+pub agentkit_memory::ProposalReason::RateLimited
+pub agentkit_memory::ProposalReason::Sensitive(alloc::string::String)
+pub agentkit_memory::ProposalReason::UpdateNeedsApproval(agentkit_memory::RecordId)
+pub agentkit_memory::ProposalReason::UpdateOfNotOwnerStated(agentkit_memory::RecordId)
 pub enum agentkit_memory::ProposeOutcome
 pub agentkit_memory::ProposeOutcome::Active(agentkit_memory::RecordId)
 pub agentkit_memory::ProposeOutcome::Duplicate(agentkit_memory::RecordId)
@@ -86,7 +103,20 @@ pub agentkit_memory::ProposeOutcome::Suppressed
 pub enum agentkit_memory::QuoteCheck
 pub agentkit_memory::QuoteCheck::Contained
 pub agentkit_memory::QuoteCheck::NotFound
+pub agentkit_memory::QuoteCheck::TooLong
 pub agentkit_memory::QuoteCheck::TooShort
+pub enum agentkit_memory::Rejection
+pub agentkit_memory::Rejection::Empty
+pub agentkit_memory::Rejection::KindNotCapturable
+pub agentkit_memory::Rejection::ProposalLimit
+pub agentkit_memory::Rejection::QuoteNotInOwnerText
+pub agentkit_memory::Rejection::QuoteTooLong
+pub agentkit_memory::Rejection::QuoteTooShort
+pub agentkit_memory::Rejection::ScopeOff
+pub agentkit_memory::Rejection::Secret
+pub agentkit_memory::Rejection::TooLong
+impl agentkit_memory::Rejection
+pub fn agentkit_memory::Rejection::message(self) -> &'static str
 pub enum agentkit_memory::ScopeKind
 pub agentkit_memory::ScopeKind::Agent
 pub agentkit_memory::ScopeKind::Project
@@ -110,6 +140,20 @@ pub agentkit_memory::Candidate::corpus: agentkit_memory::Corpus
 pub agentkit_memory::Candidate::id: agentkit_memory::ItemId
 pub agentkit_memory::Candidate::score: f32
 pub agentkit_memory::Candidate::text: alloc::string::String
+pub struct agentkit_memory::CaptureConfig
+pub agentkit_memory::CaptureConfig::per_day: usize
+pub agentkit_memory::CaptureConfig::per_turn: usize
+pub agentkit_memory::CaptureConfig::proposals_per_day: usize
+pub agentkit_memory::CaptureConfig::sensitive: alloc::vec::Vec<agentkit_memory::SensitiveCategory>
+impl core::default::Default for agentkit_memory::CaptureConfig
+pub fn agentkit_memory::CaptureConfig::default() -> Self
+pub struct agentkit_memory::CaptureTurn<'a>
+pub agentkit_memory::CaptureTurn::chat_id: &'a str
+pub agentkit_memory::CaptureTurn::content: &'a str
+pub agentkit_memory::CaptureTurn::eligible_text: &'a str
+pub agentkit_memory::CaptureTurn::message_id: &'a str
+pub agentkit_memory::CaptureTurn::scopes: &'a [agentkit_memory::Scope]
+pub agentkit_memory::CaptureTurn::task: core::option::Option<&'a str>
 pub struct agentkit_memory::CoreBlock
 pub agentkit_memory::CoreBlock::entries: alloc::vec::Vec<agentkit_memory::CoreEntry>
 pub agentkit_memory::CoreBlock::omitted: usize
@@ -125,6 +169,12 @@ pub agentkit_memory::CoreEntry::text: alloc::string::String
 pub struct agentkit_memory::CorePin
 pub agentkit_memory::CorePin::max_tokens: usize
 pub agentkit_memory::CorePin::order: core::option::Option<i64>
+pub struct agentkit_memory::ExtractedCandidate
+pub agentkit_memory::ExtractedCandidate::kind: agentkit_memory::Kind
+pub agentkit_memory::ExtractedCandidate::quote: alloc::string::String
+pub agentkit_memory::ExtractedCandidate::scope_kind: agentkit_memory::ScopeKind
+pub agentkit_memory::ExtractedCandidate::text: alloc::string::String
+pub agentkit_memory::ExtractedCandidate::updates: core::option::Option<agentkit_memory::RecordId>
 pub struct agentkit_memory::Hit
 pub agentkit_memory::Hit::corpus: agentkit_memory::Corpus
 pub agentkit_memory::Hit::id: agentkit_memory::ItemId
@@ -171,6 +221,9 @@ pub struct agentkit_memory::ItemVector
 pub agentkit_memory::ItemVector::id: agentkit_memory::ItemId
 pub agentkit_memory::ItemVector::text_sha256: [u8; 32]
 pub agentkit_memory::ItemVector::vector: alloc::vec::Vec<f32>
+pub struct agentkit_memory::KnownRecord
+pub agentkit_memory::KnownRecord::id: agentkit_memory::RecordId
+pub agentkit_memory::KnownRecord::text: alloc::string::String
 pub struct agentkit_memory::LexicalQuery
 pub agentkit_memory::LexicalQuery::prefix_min_chars: u32
 pub agentkit_memory::LexicalQuery::text: alloc::string::String
@@ -208,6 +261,10 @@ pub async fn agentkit_memory::MemoryService::propose(&self, agentkit_memory::Pro
 pub async fn agentkit_memory::MemoryService::reject(&self, agentkit_memory::RecordId, agentkit_memory::Timestamp) -> agentkit_memory::MemoryResult<()>
 pub async fn agentkit_memory::MemoryService::retract(&self, agentkit_memory::RecordId, agentkit_memory::Actor, agentkit_memory::Timestamp) -> agentkit_memory::MemoryResult<()>
 pub async fn agentkit_memory::MemoryService::unpin(&self, agentkit_memory::RecordId, agentkit_memory::Timestamp) -> agentkit_memory::MemoryResult<()>
+impl agentkit_memory::MemoryService
+pub async fn agentkit_memory::MemoryService::capture(&self, &agentkit_memory::CaptureTurn<'_>, alloc::vec::Vec<agentkit_memory::ExtractedCandidate>, &agentkit_memory::CaptureConfig, agentkit_memory::Timestamp) -> agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::CaptureOutcome>>
+pub async fn agentkit_memory::MemoryService::known_records(&self, &[agentkit_memory::Scope], &str) -> agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::KnownRecord>>
+pub async fn agentkit_memory::MemoryService::undo_capture(&self, agentkit_memory::RecordId, agentkit_memory::Timestamp) -> agentkit_memory::MemoryResult<()>
 impl agentkit_memory::MemoryService
 pub fn agentkit_memory::MemoryService::embedder(&self) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_memory::Embedder>>
 pub async fn agentkit_memory::MemoryService::flush_usage(&self) -> agentkit_memory::MemoryResult<usize>
@@ -379,10 +436,20 @@ pub agentkit_memory::SearchHit::text: alloc::string::String
 pub struct agentkit_memory::SearchResults
 pub agentkit_memory::SearchResults::hits: alloc::vec::Vec<agentkit_memory::SearchHit>
 pub agentkit_memory::SearchResults::mode: agentkit_memory::SearchMode
+pub struct agentkit_memory::SensitiveCategory
+pub agentkit_memory::SensitiveCategory::name: alloc::string::String
+pub agentkit_memory::SensitiveCategory::terms: alloc::vec::Vec<alloc::string::String>
+impl agentkit_memory::SensitiveCategory
+pub fn agentkit_memory::SensitiveCategory::new(&str, &[&str]) -> Self
 pub struct agentkit_memory::Timestamp(pub i64)
+pub const agentkit_memory::CAPTURES_PER_DAY: usize
+pub const agentkit_memory::CAPTURES_PER_TURN: usize
 pub const agentkit_memory::CORE_BUDGET_TOKENS: usize
 pub const agentkit_memory::DEFAULT_SEARCH_LIMIT: u32
+pub const agentkit_memory::EXTRACTION_PROMPT: &str
 pub const agentkit_memory::LEXICAL_TOP_K: u32
+pub const agentkit_memory::MAX_CANDIDATES: usize
+pub const agentkit_memory::MAX_QUOTE_CHARS: usize
 pub const agentkit_memory::MAX_RATIONALE_CHARS: usize
 pub const agentkit_memory::MAX_SEARCH_LIMIT: u32
 pub const agentkit_memory::MAX_TEXT_CHARS: usize
@@ -396,12 +463,14 @@ pub const agentkit_memory::MEMORY_TOOL_NAMES: [&str; 4]
 pub const agentkit_memory::MEMORY_WRITE_CAPABILITY: &str
 pub const agentkit_memory::MEMORY_WRITE_TOOLS: [&str; 2]
 pub const agentkit_memory::MIN_QUOTE_CHARS: usize
+pub const agentkit_memory::PROPOSALS_PER_DAY: usize
 pub const agentkit_memory::REEMBED_GRACE_MS: i64
 pub const agentkit_memory::REJECTED_RETENTION_MS: i64
 pub const agentkit_memory::REMEMBER_PHRASES: [&str; 9]
 pub const agentkit_memory::RERANK_TOP_K: usize
 pub const agentkit_memory::RETRACTED_RETENTION_MS: i64
 pub const agentkit_memory::RRF_K: f32
+pub const agentkit_memory::UPDATE_CONTEXT_RECORDS: u32
 pub const agentkit_memory::VECTOR_TOP_K: u32
 pub trait agentkit_memory::Embedder: core::marker::Send + core::marker::Sync
 pub fn agentkit_memory::Embedder::embed_documents<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<alloc::vec::Vec<f32>>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -418,6 +487,7 @@ pub fn agentkit_memory::MemoryRepository::insert<'life0, 'life1, 'async_trait>(&
 pub fn agentkit_memory::MemoryRepository::list<'life0, 'async_trait>(&'life0 self, agentkit_memory::RecordFilter, agentkit_memory::Page) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::Record>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_memory::MemoryRepository::purge<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::RecordId], agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::PurgeReport>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::record_use<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 [agentkit_memory::RecordId], agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_memory::MemoryRepository::reopen<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::set_core<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, core::option::Option<agentkit_memory::CorePin>, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::set_status<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::Status, agentkit_memory::Actor, agentkit_memory::Timestamp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_memory::MemoryRepository::supersede<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut agentkit_memory::MemoryTx, agentkit_memory::RecordId, agentkit_memory::NewRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_memory::MemoryResult<agentkit_memory::RecordId>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -447,20 +517,28 @@ pub fn agentkit_memory::SessionScopes::scopes<'life0, 'life1, 'async_trait>(&'li
 pub fn agentkit_memory::civil_date(i64) -> alloc::string::String
 pub fn agentkit_memory::contains_secret(&str) -> bool
 pub fn agentkit_memory::core_tokens(&[agentkit_memory::Record]) -> usize
+pub fn agentkit_memory::default_sensitive_categories() -> alloc::vec::Vec<agentkit_memory::SensitiveCategory>
 pub fn agentkit_memory::entry_tokens(&agentkit_memory::Record) -> usize
 pub fn agentkit_memory::estimate_tokens(&str) -> usize
+pub fn agentkit_memory::extraction_prompt(&[agentkit_memory::KnownRecord]) -> alloc::string::String
+pub fn agentkit_memory::has_account_number(&str) -> bool
 pub fn agentkit_memory::has_remember_request(&str) -> bool
+pub fn agentkit_memory::health_category() -> agentkit_memory::SensitiveCategory
 pub fn agentkit_memory::is_memory_write_tool(&str) -> bool
 pub fn agentkit_memory::memory_tool_definitions() -> alloc::vec::Vec<agentkit_core::types::ToolDefinition>
 pub fn agentkit_memory::memory_tools(agentkit_memory::MemoryToolEnv) -> alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>>
 pub fn agentkit_memory::normalize(&str) -> alloc::string::String
 pub fn agentkit_memory::normalized_key(&str) -> alloc::string::String
 pub fn agentkit_memory::owner_span(&str, &str) -> core::result::Result<alloc::string::String, agentkit_memory::QuoteCheck>
+pub fn agentkit_memory::parse_candidates(&str) -> agentkit_memory::MemoryResult<alloc::vec::Vec<agentkit_memory::ExtractedCandidate>>
 pub fn agentkit_memory::parse_date(&str) -> core::option::Option<i64>
 pub fn agentkit_memory::render_core_block(&[agentkit_memory::Record]) -> agentkit_memory::CoreBlock
+pub fn agentkit_memory::restrict_updates(&mut [agentkit_memory::ExtractedCandidate], &[agentkit_memory::KnownRecord])
 pub fn agentkit_memory::scope_label(agentkit_memory::ScopeKind) -> &'static str
 pub fn agentkit_memory::screen_text(&str) -> core::result::Result<(), agentkit_memory::GateRefusal>
+pub fn agentkit_memory::sensitive_category<'a>(&str, &'a [agentkit_memory::SensitiveCategory]) -> core::option::Option<&'a str>
 pub fn agentkit_memory::short_id(agentkit_memory::RecordId) -> alloc::string::String
 pub fn agentkit_memory::single_line(&str) -> alloc::string::String
 pub fn agentkit_memory::strip_invisible(&str) -> alloc::string::String
+pub fn agentkit_memory::text_covered(&str, &str) -> bool
 pub type agentkit_memory::MemoryResult<T> = core::result::Result<T, agentkit_memory::MemoryError>

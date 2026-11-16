@@ -49,6 +49,7 @@ pub fn agentkit_runtime::AgentRuntimeBuilder::external_tools(self, agentkit_runt
 pub fn agentkit_runtime::AgentRuntimeBuilder::extra_contributors(self, alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::lease_ttl_ms(self, i64) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::memory(self, alloc::rcs::arc::Arc<dyn agentkit_memory::ports::MemoryRepository>, alloc::rcs::arc::Arc<dyn agentkit_memory::ports::RetrievalIndex>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::memory_extractor_provider(self, alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::native_lane(self, agentkit_runtime::NativeLane) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::output_inline_limit(self, usize) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::output_store(self, impl core::convert::Into<std::path::PathBuf>) -> Self

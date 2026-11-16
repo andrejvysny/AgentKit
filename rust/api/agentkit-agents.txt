@@ -18,6 +18,7 @@ pub agentkit_agents::AgentsError::Chat(agentkit_chat::error::ChatError)
 pub agentkit_agents::AgentsError::ChatIdRequired
 pub agentkit_agents::AgentsError::ChildCancelledAfterParent
 pub agentkit_agents::AgentsError::ChildCannotAnswer(alloc::string::String)
+pub agentkit_agents::AgentsError::ChildHeld
 pub agentkit_agents::AgentsError::ChildSessionConflict(alloc::string::String)
 pub agentkit_agents::AgentsError::ContextRefRefused(alloc::string::String)
 pub agentkit_agents::AgentsError::Core(agentkit_core::types::CoreError)
@@ -228,6 +229,7 @@ impl agentkit_agents::Brief
 pub fn agentkit_agents::Brief::digest(&self) -> alloc::string::String
 pub fn agentkit_agents::Brief::from_input(&serde_json::value::Value) -> core::result::Result<Self, agentkit_agents::BriefError>
 pub fn agentkit_agents::Brief::new(&str, &str, &str, agentkit_agents::OutputFormat, &str) -> Self
+pub fn agentkit_agents::Brief::to_input(&self) -> serde_json::value::Value
 pub fn agentkit_agents::Brief::validate(&self) -> core::result::Result<(), agentkit_agents::BriefError>
 pub struct agentkit_agents::BriefBudget
 pub agentkit_agents::BriefBudget::max_iterations: core::option::Option<u32>
@@ -401,6 +403,7 @@ pub agentkit_agents::SubagentRoleLimits::max_depth: i64
 pub agentkit_agents::SubagentRoleLimits::max_per_parent: i64
 pub agentkit_agents::SubagentRoleLimits::max_tree_provider_requests: core::option::Option<u64>
 pub agentkit_agents::SubagentRoleLimits::max_tree_tokens: core::option::Option<u64>
+pub agentkit_agents::SubagentRoleLimits::warm_hold_ms: u64
 impl core::default::Default for agentkit_agents::SubagentRoleLimits
 pub fn agentkit_agents::SubagentRoleLimits::default() -> Self
 pub struct agentkit_agents::SubagentService

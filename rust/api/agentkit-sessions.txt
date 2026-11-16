@@ -575,6 +575,8 @@ pub const agentkit_sessions::CONTENT_UNSUPPORTED_MESSAGE: &str
 pub const agentkit_sessions::EXECUTION_METADATA_KEY: &str
 pub const agentkit_sessions::FALLBACK_CONTEXT_WINDOW_TOKENS: i64
 pub const agentkit_sessions::HOST_METADATA_PREFIX: &str
+pub const agentkit_sessions::INPUT_ORIGIN_METADATA_KEY: &str
+pub const agentkit_sessions::INPUT_ORIGIN_OWNER: &str
 pub const agentkit_sessions::MAX_STANDING_APPROVALS: usize
 pub const agentkit_sessions::MODEL_PROFILE_METADATA_KEY: &str
 pub const agentkit_sessions::PROVIDER_MODELS_NAMESPACE: &str

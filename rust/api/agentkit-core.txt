@@ -814,6 +814,7 @@ pub const agentkit_core::ANTHROPIC_TEXT_EDITOR_NAME: &str
 pub const agentkit_core::ANTHROPIC_TEXT_EDITOR_TYPE: &str
 pub const agentkit_core::BODY_EXTRA_ALLOW_LIST: [&str; 2]
 pub const agentkit_core::BUILTIN_TOOL_KEY: &str
+pub const agentkit_core::CHILD_CACHE_SEED_KEY: &str
 pub const agentkit_core::COMMON_DIALECT_ID: &str
 pub const agentkit_core::COMMON_DIALECT_VERSION: &str
 pub const agentkit_core::DEFAULT_INLINE_LIMIT: usize
@@ -955,6 +956,8 @@ pub fn agentkit_core::builtin_profile(&str) -> core::option::Option<agentkit_con
 pub fn agentkit_core::builtin_tool_type(&agentkit_core::ToolDefinition) -> core::option::Option<&str>
 pub fn agentkit_core::cache_key(&str, &str, u64) -> alloc::string::String
 pub fn agentkit_core::catalog_index(&[agentkit_core::ToolDefinition]) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::child_cache_key(&str, u64) -> alloc::string::String
+pub fn agentkit_core::child_cache_seed(&str, &str, &[alloc::string::String]) -> alloc::string::String
 pub fn agentkit_core::closest_names(&str, &[alloc::string::String], usize) -> alloc::vec::Vec<alloc::string::String>
 pub fn agentkit_core::common_dialect() -> agentkit_core::Dialect
 pub fn agentkit_core::content_for_wire(&serde_json::value::Value) -> serde_json::value::Value
