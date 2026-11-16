@@ -188,7 +188,11 @@ pub async fn stage_tools(
                 return Err(GovernanceError::ToolNameCollision);
             }
             owners.insert(name.clone(), index);
-            collected.push((contributor.namespace().to_owned(), tool));
+            collected.push((
+                contributor.namespace().to_owned(),
+                tool,
+                contributor.privileged(),
+            ));
         }
     }
     let allowed = unbound_names(contributors, context.has_primary_binding);
@@ -248,7 +252,7 @@ fn unbound_names(
 }
 
 async fn register_tools(
-    collected: Vec<(String, Arc<dyn Tool>)>,
+    collected: Vec<(String, Arc<dyn Tool>, bool)>,
     guards: &[Arc<dyn ToolGuard>],
     context: &ToolContributionContext,
     allowed: Option<BTreeSet<String>>,
@@ -263,9 +267,12 @@ async fn register_tools(
     let mut namespaces = BTreeMap::new();
     let mut skipped = vec![];
     let mut withheld = vec![];
-    for (namespace, tool) in collected {
+    for (namespace, tool, privileged) in collected {
         let name = tool.definition().name.clone();
-        if allowed.as_ref().is_some_and(|names| !names.contains(&name)) {
+        // A privileged host contributor's tools are dynamic per turn and need
+        // no bound target, so they cannot be declared up front; unbound
+        // narrowing never prunes them (their guards still decide each call).
+        if !privileged && allowed.as_ref().is_some_and(|names| !names.contains(&name)) {
             withheld.push(WithheldTool {
                 definition: tool.definition().clone(),
                 reason: "this session has no bound target for it".into(),

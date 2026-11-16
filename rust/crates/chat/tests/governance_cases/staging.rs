@@ -47,6 +47,7 @@ struct Contributor {
     name: String,
     tools: Vec<ContributedTool>,
     unbound: Option<BTreeSet<String>>,
+    privileged: bool,
     fail: bool,
     hang: bool,
     calls: AtomicUsize,
@@ -59,6 +60,9 @@ impl ToolContributor for Contributor {
     }
     fn unbound_tool_names(&self) -> Option<BTreeSet<String>> {
         self.unbound.clone()
+    }
+    fn privileged(&self) -> bool {
+        self.privileged
     }
     async fn contribute(
         &self,
@@ -80,6 +84,7 @@ fn contributor(name: &str, tools: Vec<ContributedTool>) -> Contributor {
         name: name.into(),
         tools,
         unbound: None,
+        privileged: false,
         fail: false,
         hang: false,
         calls: AtomicUsize::new(0),
@@ -175,6 +180,28 @@ async fn unbound_pruning_matches_declared_union_and_duplicates_stay_per_tool() {
     assert_eq!(staged.registry.len(), 1);
     assert_eq!(staged.skipped, vec!["read_document"]);
     assert!(staged.registry.get("target_only").is_none());
+}
+
+#[tokio::test]
+async fn unbound_pruning_spares_privileged_dynamic_contributors() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut declared = contributor("document", vec![read("read_document", &calls)]);
+    declared.unbound = Some(BTreeSet::from(["read_document".into()]));
+    let mut host = contributor("mcp", vec![read("mcp__server__lookup", &calls)]);
+    host.privileged = true;
+    let plain = contributor("other", vec![read("needs_target", &calls)]);
+    let mut context = contribution();
+    context.has_primary_binding = false;
+    let staged = stage_tools(
+        &[Arc::new(declared), Arc::new(host), Arc::new(plain)],
+        &[],
+        context,
+    )
+    .await
+    .unwrap();
+    assert!(staged.registry.get("read_document").is_some());
+    assert!(staged.registry.get("mcp__server__lookup").is_some());
+    assert!(staged.registry.get("needs_target").is_none());
 }
 
 #[tokio::test]
