@@ -999,3 +999,32 @@ async fn undo_of_a_capture_that_was_replaced_since_is_refused_and_changes_nothin
     service.undo_capture(d, Timestamp(600)).await.expect("undo");
     assert_eq!(found(&service, "lives", false).await, vec![c.to_string()]);
 }
+
+#[tokio::test]
+async fn a_proposal_with_a_target_activates_only_through_approve() {
+    let store = SqliteStore::memory(16).expect("store");
+    let service = service(&store);
+    let old = service
+        .insert(statement("Lives in Bratislava", 100))
+        .await
+        .expect("insert");
+    let proposal = service
+        .insert(proposal_replacing(old, "Lives in Kosice", 200))
+        .await
+        .expect("proposal");
+    let refused = service
+        .set_status(proposal, Status::Active, Actor::Owner, Timestamp(300))
+        .await;
+    assert!(
+        matches!(&refused, Err(MemoryError::InvalidInput(m)) if m.contains("approve")),
+        "{refused:?}"
+    );
+    let row = service.get(proposal).await.expect("get").expect("row");
+    assert_eq!(row.status, Status::Proposed);
+    let events = service.repository().events(proposal).await.expect("events");
+    assert_eq!(events.len(), 1, "the refusal appends nothing");
+    assert_eq!(
+        events[0].detail.as_ref().expect("detail")["supersedes"],
+        old.to_string()
+    );
+}

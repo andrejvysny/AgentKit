@@ -202,6 +202,12 @@ impl MemoryService {
             .get(id)
             .await?
             .ok_or(MemoryError::NotFound(id))?;
+        if record.status == Status::Proposed && to == Status::Active && record.supersedes.is_some()
+        {
+            return Err(MemoryError::InvalidInput(
+                "a proposal with a replacement target activates only through approve".to_owned(),
+            ));
+        }
         let mut tx = self.repository.begin().await?;
         self.repository
             .set_status(&mut tx, id, to, actor, at)

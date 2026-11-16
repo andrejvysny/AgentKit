@@ -621,6 +621,12 @@ impl MemoryRepository for SqliteMemoryRepository {
                 to,
             });
         }
+        if record.status == Status::Proposed && to == Status::Active && record.supersedes.is_some()
+        {
+            return Err(MemoryError::InvalidInput(
+                "a proposal with a replacement target activates only through approve".to_owned(),
+            ));
+        }
         let from = record.status;
         record.status = to;
         match to {

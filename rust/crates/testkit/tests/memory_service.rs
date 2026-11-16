@@ -511,3 +511,28 @@ async fn an_interrupted_reembed_is_resumed_or_aborted_and_a_mismatch_is_reported
         Some(next.spec().id.clone())
     );
 }
+
+#[tokio::test]
+async fn a_proposal_with_a_target_activates_only_through_approve() {
+    let service = MemoryService::new(
+        Arc::new(InMemoryMemoryRepository::new()),
+        Arc::new(InMemoryRetrievalIndex::new()),
+    );
+    let old = service
+        .insert(statement("Lives in Bratislava", 1))
+        .await
+        .expect("insert");
+    let mut proposal = statement("Lives in Kosice", 2);
+    proposal.status = Status::Proposed;
+    proposal.replaces = Some(old);
+    let id = service.insert(proposal).await.expect("proposal");
+    let refused = service
+        .set_status(id, Status::Active, Actor::Owner, Timestamp(3))
+        .await;
+    assert!(
+        matches!(&refused, Err(MemoryError::InvalidInput(m)) if m.contains("approve")),
+        "{refused:?}"
+    );
+    let row = service.get(id).await.expect("get").expect("row");
+    assert_eq!(row.status, Status::Proposed);
+}

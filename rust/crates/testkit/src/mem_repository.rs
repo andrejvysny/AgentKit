@@ -252,6 +252,12 @@ impl MemoryRepository for InMemoryMemoryRepository {
                 to,
             });
         }
+        if record.status == Status::Proposed && to == Status::Active && record.supersedes.is_some()
+        {
+            return Err(MemoryError::InvalidInput(
+                "a proposal with a replacement target activates only through approve".to_owned(),
+            ));
+        }
         record.status = to;
         match to {
             Status::Active => record.approved_at = Some(at),
