@@ -28,6 +28,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
+  bunScope,
   compareWithKnown,
   loadKnownFailures,
   parseBunTest,
@@ -89,7 +90,7 @@ const steps = [
   {
     name: "clientreact",
     cmd: ["bun", "test", "packages/client/tests", "packages/react/tests"],
-    audit: auditBunTest,
+    audit: auditBunTest(["packages/client/tests", "packages/react/tests"]),
   },
   { name: "contracts", cmd: ["bun", "run", "contracts:check"] },
   { name: "typecheck", cmd: ["bun", "run", "typecheck"] },
@@ -113,14 +114,14 @@ const steps = [
       "60000",
     ],
     env: { AGENTKIT_REQUIRE_NATIVE: "1" },
-    audit: auditBunTest,
+    audit: auditBunTest(["packages/native", "packages/core"]),
   },
   // The whole Bun suite, examples and scripts included, against the list.
   {
     name: "buntest",
     cmd: ["bun", "test", "--timeout", "60000"],
     env: { AGENTKIT_REQUIRE_NATIVE: "1" },
-    audit: auditBunTest,
+    audit: auditBunTest([]),
   },
   // Keep these last: both consume what `build` emits.
   { name: "checkapi", cmd: ["bun", "run", "check:api"] },
@@ -169,12 +170,15 @@ function auditCargoTest(output, floor) {
   };
 }
 
-// Bun steps: every failure must be on the known list. Entries in files this
-// step did not run are out of scope, so a subset run never calls them stale.
-function auditBunTest(output) {
+// Bun steps: every failure must be on the known list. Entries outside the
+// paths a step runs are out of scope, so a subset run never calls them stale.
+function auditBunTest(paths) {
+  return (output) => auditBunOutput(output, bunScope(paths));
+}
+
+function auditBunOutput(output, inScope) {
   const parsed = parseBunTest(output);
-  const ran = (id) => parsed.files.has(id.split(" > ")[0]);
-  const problems = compareWithKnown(parsed.failures, KNOWN.bun, ran);
+  const problems = compareWithKnown(parsed.failures, KNOWN.bun, inScope);
   if (parsed.errorCount > 0)
     problems.push(
       `bun reported ${parsed.errorCount} error(s) outside a named test`,

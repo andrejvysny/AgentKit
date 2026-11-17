@@ -4,7 +4,7 @@
     {
       "id": "session_runtime::a_mid_run_interrupt_parks_and_the_resumed_turn_finishes_without_replay",
       "intermittent": true,
-      "reason": "Intermittent. The slow tool body sometimes never starts within the 5 s wait (crates/chat/tests/session_runtime.rs:779). Failed 3 of 4 runs on 17 Nov while another build loaded the machine; passed in the 16 Nov review-fix run. Race or load not yet determined."
+      "reason": "Intermittent, suspected race. The slow tool body either starts within milliseconds or never starts within the 5 s wait (crates/chat/tests/session_runtime.rs:779). Run alone 20 times on 17 Nov (load average about 3.9): 15 passed, 5 failed. Also failed in the full workspace runs that day; passed in the 16 Nov review-fix run. Covers park and resume in agentkit-chat; to be investigated with H1.1, which changes that path."
     }
   ],
   "bun": [

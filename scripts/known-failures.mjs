@@ -118,6 +118,21 @@ export function parseBunTest(output) {
 }
 
 /**
+ * Which listed Bun tests a step ran, from the paths it passed to `bun test`.
+ * Bun prints a file only when something in it fails, so the printed files
+ * cannot tell a passing file from one that never ran. No paths: the whole
+ * suite ran, and every entry is in scope.
+ */
+export function bunScope(paths) {
+  if (paths.length === 0) return () => true;
+  const roots = paths.map((path) => path.replace(/\/+$/, ""));
+  return (id) => {
+    const file = id.split(" > ")[0];
+    return roots.some((root) => file === root || file.startsWith(`${root}/`));
+  };
+}
+
+/**
  * Compare found failures with the list. `inScope(id)` says whether this run
  * executed the listed test, so a subset run does not call other entries stale.
  */

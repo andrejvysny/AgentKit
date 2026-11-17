@@ -1,6 +1,7 @@
 import { expect, it } from "bun:test";
 import { join, resolve } from "node:path";
 import {
+  bunScope,
   compareWithKnown,
   loadKnownFailures,
   parseBunTest,
@@ -86,6 +87,25 @@ it("fails on a new failure and on a stale entry, but not on an intermittent one"
     "stale known-failures entry, the test passes now; remove it: a::fixed",
   ]);
   expect(compareWithKnown(new Set(["a::listed"]), [entries[0]])).toEqual([]);
+});
+
+it("a listed Bun test in a file that now passes completely is stale", () => {
+  // Bun prints no header for a file with no failures, so scope must come from
+  // the step's paths, not from the printed files.
+  const entries = [
+    {
+      id: "scripts/tests/export-rust-fixtures.test.ts > exporter > is frozen",
+      reason: "r",
+    },
+  ];
+  const parsed = parseBunTest(" 10 pass\n 0 fail\n");
+  expect(compareWithKnown(parsed.failures, entries, bunScope([]))).toEqual([
+    "stale known-failures entry, the test passes now; remove it: scripts/tests/export-rust-fixtures.test.ts > exporter > is frozen",
+  ]);
+  expect(
+    compareWithKnown(parsed.failures, entries, bunScope(["packages/core"])),
+  ).toEqual([]);
+  expect(bunScope(["scripts/tests/"])(entries[0]!.id)).toBe(true);
 });
 
 it("the checked-in list is valid and every entry gives a reason", () => {
