@@ -8,6 +8,11 @@ use futures::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use std::{collections::HashMap, future::Future, time::Duration};
 
+/// Default model requests per chat turn (hardening H1.2, decision D3). The
+/// earlier 4 ended multi-step turns without an answer and also capped every
+/// session profile that asked for more.
+const CHAT_REQUEST_LIMIT: u32 = 24;
+
 #[derive(Clone)]
 pub struct ChatExecutorOptions {
     pub context: Option<Arc<dyn ContextProvider>>,
@@ -70,6 +75,8 @@ pub struct ChatExecutorOptions {
     /// adopted there.
     pub core_memory_refreeze: Option<Arc<dyn crate::CoreMemoryRefreeze>>,
     pub execution_budgets: BudgetLimits,
+    /// Model requests one turn may make; a session profile can only lower
+    /// it. Default 24.
     pub max_tool_iterations: u32,
     pub max_output_tokens: Option<u64>,
     pub max_tool_calls_per_iteration: usize,
@@ -117,7 +124,7 @@ impl Default for ChatExecutorOptions {
             auto_compaction: false,
             core_memory_refreeze: None,
             execution_budgets: BudgetLimits::default(),
-            max_tool_iterations: 4,
+            max_tool_iterations: CHAT_REQUEST_LIMIT,
             max_output_tokens: None,
             max_tool_calls_per_iteration: 8,
             default_tool_timeout_ms: None,
