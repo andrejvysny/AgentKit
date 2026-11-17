@@ -651,3 +651,18 @@ async fn a_pin_racing_an_edit_of_the_same_record_loses_cleanly() {
     let record = harness.service.get(id).await.unwrap().unwrap();
     assert!(record.is_core && record.valid_to.is_none() && record.superseded_by.is_none());
 }
+
+/// A proposal for a scope the chat lacks names the scopes it can use, so the
+/// model fixes the call in one retry (hardening, live OpenAI evaluation: 12
+/// rejected `scope: "project"` proposals in chats that had no project).
+#[tokio::test]
+async fn a_missing_scope_error_lists_the_scopes_this_chat_can_write() {
+    let harness = harness(None);
+    let mut input = propose_input(false, None);
+    input["scope"] = json!("agent");
+    let result = call(&harness, MEMORY_PROPOSE, input).await;
+    assert!(!result.ok);
+    let text = serde_json::to_string(&result).expect("serialize");
+    assert!(text.contains("no agent scope"), "{text}");
+    assert!(text.contains("user, project"), "{text}");
+}

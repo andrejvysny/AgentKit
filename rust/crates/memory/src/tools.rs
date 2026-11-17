@@ -469,15 +469,23 @@ impl MemoryTool {
                 limits,
             );
         };
-        let Some(scope) = self
-            .session_scopes(context)
-            .await
-            .into_iter()
+        let scopes = self.session_scopes(context).await;
+        let Some(scope) = scopes
+            .iter()
             .find(|scope| scope.kind == scope_name)
+            .cloned()
         else {
+            // Name what the chat can use, so the model fixes the call in one retry.
+            let mut available: Vec<&str> =
+                scopes.iter().map(|scope| scope_label(scope.kind)).collect();
+            available.dedup();
             return fail(
                 "invalid_arguments",
-                "This session has no such scope to write to; use user, or the project or agent the session belongs to.",
+                &format!(
+                    "This chat has no {} scope to write to. Scopes available here: {}. Retry with one of them.",
+                    scope_label(scope_name),
+                    available.join(", ")
+                ),
                 limits,
             );
         };
