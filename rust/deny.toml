@@ -10,6 +10,11 @@ ignore = [
   # through tokenizers 0.23.2 in agentkit-embed-local (3.5), which has no
   # released replacement.
   { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro pulled by tokenizers; no advisory of exploitability" },
+  # `chrono` is marked unmaintained (no vulnerability). rmcp, oauth2 and
+  # schemars depend on it as well, so replacing AgentKit's own uses (provider
+  # timestamps, store import) would not remove it. Owner-approved 17 Nov 2026
+  # (hardening); revisit when rmcp drops chrono or a fixed release exists.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no vulnerability; also pulled by rmcp, oauth2 and schemars; owner-approved 17 Nov 2026" },
 ]
 
 [licenses]
