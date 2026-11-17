@@ -233,6 +233,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-eval"
+version = "0.1.0"
+dependencies = [
+ "agentkit-agents",
+ "agentkit-chat",
+ "agentkit-contracts",
+ "agentkit-core",
+ "agentkit-engine",
+ "agentkit-governance",
+ "agentkit-memory",
+ "agentkit-providers",
+ "agentkit-runtime",
+ "agentkit-sessions",
+ "agentkit-store",
+ "agentkit-testkit",
+ "async-trait",
+ "futures",
+ "futures-util",
+ "http",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "agentkit-governance"
 version = "0.1.0"
 dependencies = [

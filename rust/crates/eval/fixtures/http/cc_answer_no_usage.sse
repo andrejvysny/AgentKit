@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-eval","object":"chat.completion.chunk","model":"eval-model","choices":[{"index":0,"delta":{"role":"assistant","content":"No usage here."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-eval","object":"chat.completion.chunk","model":"eval-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

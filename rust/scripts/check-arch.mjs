@@ -40,6 +40,7 @@ const LAYERS = {
   "agentkit-http": 6,
   "agentkit-client": 6,
   "agentkit-rust": 6,
+  "agentkit-eval": 6,
 };
 const TESTKIT = "agentkit-testkit";
 const BANNED_INNER = new Set([

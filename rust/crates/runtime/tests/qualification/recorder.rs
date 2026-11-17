@@ -99,16 +99,28 @@ impl ChatProvider for Recorder {
         let capture = Arc::clone(&self.capture);
         let stream = futures::StreamExt::inspect(
             self.inner.stream_chat(input, cancellation),
-            move |event| {
-                if let Ok(ProviderEvent::Completed {
+            move |event| match event {
+                // Scripted models end a turn with `Completed`.
+                Ok(ProviderEvent::Completed {
                     content,
                     tool_calls,
                     ..
-                }) = event
-                    && tool_calls.is_empty()
-                {
+                }) if tool_calls.is_empty() => {
                     capture.lock().expect("capture lock").answer = content.clone();
                 }
+                // Live Chat Completions and Responses providers end a turn with
+                // a `run.message.completed` event instead; without this arm a
+                // live run never records an answer and every scenario reports
+                // "did not settle" regardless of what the model did.
+                Ok(ProviderEvent::Event { kind, data })
+                    if kind == "run.message.completed"
+                        && data["toolCallCount"].as_u64().unwrap_or(0) == 0 =>
+                {
+                    if let Some(content) = data["content"].as_str() {
+                        capture.lock().expect("capture lock").answer = content.to_owned();
+                    }
+                }
+                _ => {}
             },
         );
         Box::pin(stream)

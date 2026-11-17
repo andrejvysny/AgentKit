@@ -1,0 +1,42 @@
+[package]
+name = "agentkit-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Layer A deterministic harness-correctness evaluation: invariant suites and a three-valued trace grader (test-only, no model, no network)"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[lints]
+workspace = true
+
+# The library holds only helpers that no suite can own alone: the raw-bytes
+# provider transport and the trace grader. It must never depend on
+# agentkit-testkit (R3); the suites under tests/ do, as dev-dependencies.
+[dependencies]
+agentkit-core = { workspace = true }
+agentkit-providers = { workspace = true }
+async-trait.workspace = true
+futures-util.workspace = true
+http.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+agentkit-agents = { workspace = true }
+agentkit-chat = { workspace = true }
+agentkit-contracts = { workspace = true }
+agentkit-engine = { workspace = true }
+agentkit-governance = { workspace = true }
+agentkit-memory = { workspace = true }
+agentkit-runtime = { workspace = true }
+agentkit-sessions = { workspace = true }
+agentkit-store = { workspace = true }
+agentkit-testkit = { workspace = true }
+futures.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }

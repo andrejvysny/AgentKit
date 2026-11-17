@@ -1,0 +1,18 @@
+data: {"type":"response.created","response":{"id":"resp_eval","status":"in_progress"}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}
+
+data: {"type":"response.content_part.added","output_index":0,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":""}}
+
+data: {"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"Prompt only."}
+
+data: {"type":"response.output_text.done","output_index":0,"item_id":"msg_1","content_index":0,"text":"Prompt only."}
+
+data: {"type":"response.content_part.done","output_index":0,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":"Prompt only."}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Prompt only."}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_eval","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Prompt only."}]}],"usage":{"input_tokens":50}}}
+
+data: [DONE]
+

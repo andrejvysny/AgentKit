@@ -1,0 +1,14 @@
+data: {"type":"response.created","response":{"id":"resp_eval","status":"in_progress"}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_0","type":"function_call","call_id":"call_unknown","name":"no_such_tool","namespace":"agentkit","arguments":""}}
+
+data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_0","delta":"{}"}
+
+data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_0","arguments":"{}"}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_0","type":"function_call","status":"completed","call_id":"call_unknown","name":"no_such_tool","namespace":"agentkit","arguments":"{}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_eval","status":"completed","output":[{"id":"fc_0","type":"function_call","status":"completed","call_id":"call_unknown","name":"no_such_tool","namespace":"agentkit","arguments":"{}"}]}}
+
+data: [DONE]
+

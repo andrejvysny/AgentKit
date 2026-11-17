@@ -241,3 +241,42 @@ async fn live_qualification() {
         path.display()
     );
 }
+
+/// Live Chat Completions and Responses providers end a turn with a
+/// `run.message.completed` event, not `Completed`. The recorder must read the
+/// answer from it, or every live scenario reports "did not settle" (F1).
+#[tokio::test]
+async fn recorder_reads_the_answer_from_a_live_completed_event() {
+    use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream};
+    use futures::StreamExt;
+    use qualification::recorder::Recorder;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    struct LiveShaped;
+    #[async_trait::async_trait]
+    impl ChatProvider for LiveShaped {
+        fn id(&self) -> &str {
+            "live-shaped"
+        }
+        fn stream_chat(&self, _input: ChatRequest, _c: CancellationToken) -> ProviderStream {
+            Box::pin(futures::stream::iter([Ok(ProviderEvent::Event {
+                kind: "run.message.completed".into(),
+                data: serde_json::json!({
+                    "content": "Heron",
+                    "toolCallCount": 0,
+                    "toolCalls": [],
+                    "finishReason": "stop",
+                }),
+            })]))
+        }
+    }
+
+    let (recorder, capture) = Recorder::new(Arc::new(LiveShaped));
+    let events: Vec<_> = recorder
+        .stream_chat(ChatRequest::default(), CancellationToken::new())
+        .collect()
+        .await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(capture.lock().expect("capture lock").answer, "Heron");
+}

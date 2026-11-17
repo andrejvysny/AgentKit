@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-eval","object":"chat.completion.chunk","model":"eval-model","choices":[{"index":0,"delta":{"role":"assistant","content":"All five calls are answered."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-eval","object":"chat.completion.chunk","model":"eval-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-eval","object":"chat.completion.chunk","model":"eval-model","choices":[],"usage":{"prompt_tokens":200,"completion_tokens":8,"total_tokens":208}}
+
+data: [DONE]
+
