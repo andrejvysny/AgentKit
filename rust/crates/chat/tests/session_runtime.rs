@@ -660,6 +660,12 @@ async fn fixture_slow(
     hits: Arc<AtomicUsize>,
     turn: Arc<Mutex<String>>,
 ) -> Fixture {
+    // The first schema validation in a process compiles the whole embedded
+    // contract bundle (a `OnceLock`), about 140 ms of synchronous work in a
+    // debug build. Left to the turn, it runs inside the attempt, where it
+    // blocks the heartbeat past this fixture's 150 ms lease and the attempt
+    // ends `LeaseLost` before the tool body starts. Pay it up front.
+    let _ = agentkit_contracts::validate_schema("AiSessionPrefixSchema", &json!({}));
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let requests = Arc::new(Mutex::new(vec![]));

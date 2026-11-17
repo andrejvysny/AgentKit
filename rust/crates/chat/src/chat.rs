@@ -265,9 +265,8 @@ impl ChatExecutor {
         )
         .await?;
         let resolved = hooks::resolve_context(&options, &context, chat_id).await?;
-        // A session turn steers at tool boundaries and runs the exact calls
-        // its answered approvals authorized (ADR 0016 §3, ADR 0019 §2).
-        let (approvals, resume_calls) = if session {
+        // A session turn steers at tool boundaries (ADR 0016 §3).
+        if session {
             // Steer-event reconciliation (ADR 0016 §3): the placement
             // transaction is the unit of record and the
             // `run.input.applied` event is its projection, so a crash
@@ -276,10 +275,14 @@ impl ChatExecutor {
             // announcements strictly ahead of this attempt's sequence in
             // the log. See `session_run::backfill_applied_steers`.
             session_run::backfill_applied_steers(&context, chat_id).await?;
-            session_run::resolve_approved_calls(&context, chat_id, &anchor).await?
-        } else {
-            (std::collections::HashMap::new(), vec![])
-        };
+        }
+        // Every turn, session or plain chat, runs the exact calls its
+        // answered approvals authorized (ADR 0019 §2). A plain chat parks on
+        // the same request record (`ParkSink` keys it by the task's scope,
+        // which is the chat), so skipping this left an approved call
+        // answered by a synthetic `tool_result_missing` (hardening B1).
+        let (approvals, resume_calls) =
+            session_run::resolve_approved_calls(&context, chat_id, &anchor).await?;
         // `AssistantSettings.toolCalling` gate (TS reference turn-runner.ts):
         // "off" stages no tools at all; "auto" (the default) follows the
         // provider's recorded capability — a provider saved as
