@@ -32,28 +32,11 @@ fn request_order_and_raw_arguments_are_preserved() {
     );
 }
 
-#[tokio::test]
-async fn immutable_corpus_reassembles_ten_scripted_sessions() {
-    let source = corpus();
-    assert_eq!(source.len(), 10);
-    assert_eq!(
-        source
-            .iter()
-            .filter(|session| session["kind"] == "chat")
-            .count(),
-        5
-    );
-    assert_eq!(
-        source
-            .iter()
-            .filter(|session| session["kind"] == "code")
-            .count(),
-        5
-    );
-    for session in source {
-        replay::verify(&session).await.unwrap();
-    }
-}
+// The 0.4 corpus is the frozen baseline recorded at 38eacd71. Context
+// packages 1.x and 2.x change the request layout on purpose, so today's
+// runtime no longer reassembles it byte for byte. The test that asserted it
+// was removed in hardening H0.2 (owner-approved); a new corpus is recorded
+// for the "after" bill (H5.4) instead of rewriting the baseline.
 
 #[tokio::test]
 async fn outcome_and_request_tampering_are_rejected_without_input_writes() {

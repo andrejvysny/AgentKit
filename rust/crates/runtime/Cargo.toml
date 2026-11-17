@@ -48,3 +48,9 @@ reqwest.workspace = true
 serde.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 tempfile.workspace = true
+
+# The capture example carries the context-evaluation unit tests; run them with
+# `cargo test` so they cannot fail unnoticed again (hardening H0.2).
+[[example]]
+name = "context_capture"
+test = true

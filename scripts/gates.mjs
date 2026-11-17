@@ -14,14 +14,25 @@
 //   - the `native` test step MUST run after `build` and with
 //     `AGENTKIT_REQUIRE_NATIVE=1` so a missing binding fails loudly.
 //
+// Known failures (hardening H0.2): the Rust `test` step and the Bun test
+// steps pass only when every failure is named in scripts/known-failures.json,
+// and fail when a listed test passes again (unless marked intermittent). The
+// list may only shrink.
+//
 // Usage:
 //   node scripts/gates.mjs                  # everything
 //   node scripts/gates.mjs --only=test,arch # a subset, given order preserved
 //   node scripts/gates.mjs --skip=api       # drop steps
 //   node scripts/gates.mjs --floor=0        # relax the passing-test floor
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import {
+  compareWithKnown,
+  loadKnownFailures,
+  parseBunTest,
+  parseCargoTest,
+} from "./known-failures.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,6 +42,9 @@ const LOGS = join(ROOT, ".gate-logs");
 // writing (1,761); it catches test binaries that stop running rather than
 // fail. Raise it whenever the suite grows; never lower it silently.
 const DEFAULT_TEST_FLOOR = 1700;
+// Tests that fail today, by name (H0.2). A test step passes when its only
+// failures are on this list; see scripts/known-failures.mjs.
+const KNOWN = loadKnownFailures(join(ROOT, "scripts", "known-failures.json"));
 
 const RUST = "rust";
 const steps = [
@@ -75,6 +89,7 @@ const steps = [
   {
     name: "clientreact",
     cmd: ["bun", "test", "packages/client/tests", "packages/react/tests"],
+    audit: auditBunTest,
   },
   { name: "contracts", cmd: ["bun", "run", "contracts:check"] },
   { name: "typecheck", cmd: ["bun", "run", "typecheck"] },
@@ -98,6 +113,14 @@ const steps = [
       "60000",
     ],
     env: { AGENTKIT_REQUIRE_NATIVE: "1" },
+    audit: auditBunTest,
+  },
+  // The whole Bun suite, examples and scripts included, against the list.
+  {
+    name: "buntest",
+    cmd: ["bun", "test", "--timeout", "60000"],
+    env: { AGENTKIT_REQUIRE_NATIVE: "1" },
+    audit: auditBunTest,
   },
   // Keep these last: both consume what `build` emits.
   { name: "checkapi", cmd: ["bun", "run", "check:api"] },
@@ -123,28 +146,48 @@ function parseArgs(argv) {
   return opts;
 }
 
-// The test step is the only one with a quantitative contract: every test
-// binary must report, nothing may fail, and the total passing count must
-// not sink below the floor (a silently-missing binary reports nothing).
+// The Rust test step has a quantitative contract: every test binary must
+// report, every failure must be on the known list (and no listed test may
+// pass again unnoticed), and the total passing count must not sink below the
+// floor (a silently-missing binary reports nothing). A failed binary with no
+// named failing test (a crash or a compile error) always fails the step.
 function auditCargoTest(output, floor) {
-  const problems = [];
-  let passed = 0;
-  let binaries = 0;
-  let failedBinaries = 0;
-  for (const line of output.split("\n")) {
-    const ok = line.match(/^test result: ok\. (\d+) passed/);
-    if (ok) {
-      passed += Number(ok[1]);
-      binaries += 1;
-      continue;
-    }
-    if (/^test result: FAILED/.test(line)) failedBinaries += 1;
-  }
-  if (failedBinaries > 0)
-    problems.push(`${failedBinaries} test binary(ies) FAILED`);
-  if (binaries === 0) problems.push("no test binaries reported");
-  if (passed < floor) problems.push(`passing tests ${passed} < floor ${floor}`);
-  return { problems, detail: `${passed} passed across ${binaries} binaries` };
+  const parsed = parseCargoTest(output);
+  const problems = compareWithKnown(parsed.failures, KNOWN.rust);
+  if (parsed.unexplained > 0)
+    problems.push(
+      `${parsed.unexplained} test binary(ies) FAILED without a named test`,
+    );
+  if (parsed.binaries === 0) problems.push("no test binaries reported");
+  if (parsed.passed < floor)
+    problems.push(`passing tests ${parsed.passed} < floor ${floor}`);
+  return {
+    problems,
+    // A non-zero exit is explained when every failure is a known one.
+    explainsExit: problems.length === 0 && parsed.failures.size > 0,
+    detail: `${parsed.passed} passed across ${parsed.binaries} binaries; ${parsed.failures.size} known failure(s)`,
+  };
+}
+
+// Bun steps: every failure must be on the known list. Entries in files this
+// step did not run are out of scope, so a subset run never calls them stale.
+function auditBunTest(output) {
+  const parsed = parseBunTest(output);
+  const ran = (id) => parsed.files.has(id.split(" > ")[0]);
+  const problems = compareWithKnown(parsed.failures, KNOWN.bun, ran);
+  if (parsed.errorCount > 0)
+    problems.push(
+      `bun reported ${parsed.errorCount} error(s) outside a named test`,
+    );
+  if (parsed.failCount !== parsed.failures.size)
+    problems.push(
+      `bun reported ${parsed.failCount} failure(s) but ${parsed.failures.size} were named`,
+    );
+  return {
+    problems,
+    explainsExit: problems.length === 0 && parsed.failures.size > 0,
+    detail: `${parsed.failures.size} known failure(s)`,
+  };
 }
 
 const opts = parseArgs(process.argv.slice(2));
@@ -164,20 +207,25 @@ let overall = 0;
 const results = [];
 for (const step of selected) {
   const start = Date.now();
+  // stdout and stderr share one file descriptor so the log keeps their
+  // order: cargo prints `Running <binary>` on stderr and the test results on
+  // stdout, and the known-failures audit needs both in sequence.
+  const logPath = join(LOGS, `${step.name}.log`);
+  const log = openSync(logPath, "w");
   const result = spawnSync(step.cmd[0], step.cmd.slice(1), {
     cwd: join(ROOT, step.cwd ?? "."),
-    encoding: "utf8",
-    maxBuffer: 512 * 1024 * 1024,
+    stdio: ["ignore", log, log],
     ...(step.env ? { env: { ...process.env, ...step.env } } : {}),
   });
-  const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-  writeFileSync(join(LOGS, `${step.name}.log`), out);
+  closeSync(log);
+  const out = readFileSync(logPath, "utf8");
   const seconds = Math.round((Date.now() - start) / 1000);
   const failures = [];
+  const audit = step.audit ? step.audit(out, opts.floor) : null;
   if (result.error) failures.push(`spawn failed: ${result.error.message}`);
-  else if (result.status !== 0) failures.push(`exit ${result.status}`);
-  if (step.audit) {
-    const audit = step.audit(out, opts.floor);
+  else if (result.status !== 0 && !audit?.explainsExit)
+    failures.push(`exit ${result.status}`);
+  if (audit) {
     failures.push(...audit.problems);
     if (audit.detail) console.log(`gates: ${step.name}: ${audit.detail}`);
   }

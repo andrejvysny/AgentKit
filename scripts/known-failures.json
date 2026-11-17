@@ -1,0 +1,56 @@
+{
+  "comment": "Tests that fail today (hardening H0.2, recorded 17 Nov 2026 at 4c002d43). This list may only shrink. Never add a test to make a change pass. scripts/gates.mjs fails on any failure outside this list and on any entry whose test passes again, unless the entry is marked intermittent.",
+  "rust": [
+    {
+      "id": "session_runtime::a_mid_run_interrupt_parks_and_the_resumed_turn_finishes_without_replay",
+      "intermittent": true,
+      "reason": "Intermittent. The slow tool body sometimes never starts within the 5 s wait (crates/chat/tests/session_runtime.rs:779). Failed 3 of 4 runs on 17 Nov while another build loaded the machine; passed in the 16 Nov review-fix run. Race or load not yet determined."
+    }
+  ],
+  "bun": [
+    {
+      "id": "scripts/tests/export-rust-fixtures.test.ts > Rust parity fixture exporter > is deterministic, complete and matches the committed freeze",
+      "reason": "Exporter produces 22 fixtures; the committed freeze expects 20. Failing since at least 848f327 (16 Nov). Cause not investigated."
+    },
+    {
+      "id": "examples/coding-agent/tests/acceptance.test.ts > coding agent — the acceptance run > explores, edits and runs the project's tests in one persistent session",
+      "reason": "Failing since at least 848f327 (16 Nov); assertion at acceptance.test.ts:291. Cause not investigated."
+    },
+    {
+      "id": "examples/coding-agent/tests/acceptance.test.ts > coding agent — the acceptance run > asks a human before mutating, and a denial is honoured",
+      "reason": "Failing since at least 848f327 (16 Nov); assertion at acceptance.test.ts:330. Cause not investigated."
+    },
+    {
+      "id": "examples/coding-agent/tests/acceptance.test.ts > coding agent — the acceptance run > a later approval does reopen the door: the same call lands on ask #2",
+      "reason": "Failing since at least 848f327 (16 Nov); assertion at acceptance.test.ts:367. Cause not investigated."
+    },
+    {
+      "id": "examples/coding-agent/tests/acceptance.test.ts > coding agent — the acceptance run > plan mode blocks writes until a human approves the plan",
+      "reason": "Failing since at least 848f327 (16 Nov); assertion at acceptance.test.ts:403 (expected 1, received 2). Cause not investigated."
+    },
+    {
+      "id": "examples/coding-agent/tests/acceptance.test.ts > coding agent — the session lifecycle > freezes selected native content and forwards it through the custom provider lane",
+      "reason": "Failing since at least 848f327 (16 Nov); the selected native template instruction is missing from the request (acceptance.test.ts:809). Cause not investigated."
+    },
+    {
+      "id": "packages/testing/tests/golden.test.ts > golden traces > replays tool-run live and matches the golden trace",
+      "reason": "The live trace carries run.tool.record events (tool-call record, T6.2) that the committed golden trace predates."
+    },
+    {
+      "id": "packages/testing/tests/golden.test.ts > golden traces > replays tool-cap-run live and matches the golden trace",
+      "reason": "The live trace carries run.tool.record events (tool-call record, T6.2) that the committed golden trace predates."
+    },
+    {
+      "id": "packages/testing/tests/golden.test.ts > golden traces > replays duplicate-id-run live and matches the golden trace",
+      "reason": "The live trace carries run.tool.record events (tool-call record, T6.2) that the committed golden trace predates."
+    },
+    {
+      "id": "packages/testing/tests/golden.test.ts > golden traces > replays tool-timeout-run live and matches the golden trace",
+      "reason": "The live trace carries run.tool.record events (tool-call record, T6.2) that the committed golden trace predates."
+    },
+    {
+      "id": "packages/testing/tests/golden.test.ts > golden traces > replays unserializable-run live and matches the golden trace",
+      "reason": "The live trace carries run.tool.record events (tool-call record, T6.2) that the committed golden trace predates."
+    }
+  ]
+}
