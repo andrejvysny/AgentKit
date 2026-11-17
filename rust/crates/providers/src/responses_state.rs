@@ -365,7 +365,7 @@ impl ResponsesState {
             match string(&item["type"])? {
                 "message" => content.push_str(&message_text(item)?),
                 "function_call" => {
-                    let call = tool_call(item, index, tools, &mut repairs)?;
+                    let call = tool_call(item, index, &mut repairs)?;
                     if !call_ids.insert(call.id.clone()) {
                         return err("duplicate_tool_call_id");
                     }
@@ -497,19 +497,15 @@ fn message_text(item: &Value) -> Result<String, CoreError> {
 /// A function call the model emitted always becomes a call, so it always gets
 /// a result: an empty name becomes `UNNAMED_TOOL`, an empty `call_id` a stable
 /// id from the output slot, and argument text that is not JSON passes through
-/// for the call pipeline to refuse. `repairs` records each case.
-fn tool_call(
-    item: &Value,
-    slot: usize,
-    tools: &[ToolDefinition],
-    repairs: &mut Vec<String>,
-) -> Result<ToolCall, CoreError> {
+/// for the call pipeline to refuse. A name the request did not offer passes
+/// through too: the call pipeline answers it with the closest offered names,
+/// as it does on Chat Completions, so the reply's text and other calls are
+/// kept (TU-09, hardening H1.5). `repairs` records each repaired case.
+fn tool_call(item: &Value, slot: usize, repairs: &mut Vec<String>) -> Result<ToolCall, CoreError> {
     let name = string(&item["name"])?;
     let call_id = string(&item["call_id"])?;
     let arguments = string(&item["arguments"])?;
-    if item["namespace"] != "agentkit"
-        || (!name.is_empty() && !tools.iter().any(|tool| tool.name == name))
-    {
+    if item["namespace"] != "agentkit" {
         return err("unknown_tool");
     }
     let id = if call_id.is_empty() {

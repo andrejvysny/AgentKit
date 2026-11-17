@@ -34,8 +34,8 @@ impl Run {
 }
 
 /// Run options with tool-call records on, the registry's tools offered to the
-/// model (the Responses parser refuses a call to a tool it was not offered)
-/// and an injected clock, so ids and timestamps do not depend on the host.
+/// model and an injected clock, so ids and timestamps do not depend on the
+/// host.
 pub fn options(registry: &ToolRegistry, clock: Arc<dyn Runtime>) -> RunOptions {
     RunOptions {
         request: ChatRequest {

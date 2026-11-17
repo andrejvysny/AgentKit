@@ -189,22 +189,91 @@ async fn responses_answers_malformed_and_unnamed_calls_once_each() {
     );
 }
 
-/// The Responses parser refuses a call to a tool the request never offered,
-/// so on that lane an unknown tool fails the run at the parser instead of
-/// getting a per-call result. The invariant that still holds: the call is not
-/// dropped silently and nothing runs.
+/// The `function_call_output` the provider was sent back for `id`.
+fn returned_output(request: &Value, id: &str) -> String {
+    request["input"]
+        .as_array()
+        .expect("input")
+        .iter()
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == id)
+        .unwrap_or_else(|| panic!("no output for {id}: {request}"))["output"]
+        .to_string()
+}
+
+/// A call to a tool the request never offered gets a failure result like any
+/// other unknown name (TU-09, hardening H1.5): the run goes on and nothing
+/// runs. Until H1.5 the Responses parser failed the whole run here with
+/// `unknown_tool`.
 #[tokio::test(flavor = "current_thread")]
-async fn responses_refuses_an_unoffered_tool_loudly_and_runs_nothing() {
-    let driven = run_fixtures(Protocol::Responses, &["responses_unknown_tool.sse"]).await;
+async fn responses_answers_an_unoffered_tool_with_a_failure_and_runs_nothing() {
+    let driven = run_fixtures(
+        Protocol::Responses,
+        &["responses_unknown_tool.sse", "responses_answer.sse"],
+    )
+    .await;
     let types = driven.run.types();
-    assert!(types.contains(&"run.failed"), "{types:?}");
-    assert!(!types.contains(&"run.completed"), "{types:?}");
+    assert!(types.contains(&"run.completed"), "{types:?}");
+    assert!(!types.contains(&"run.failed"), "{types:?}");
     assert_eq!(
-        driven.run.data("run.failed")[0]["errorCode"],
+        record_of(&driven.run, "call_unknown")["outcomeClass"],
         "unknown_tool"
     );
     assert!(driven.received.lock().unwrap().is_empty());
-    assert_eq!(driven.transport.requests().len(), 1, "no follow-up request");
+    let requests = driven.transport.requests();
+    assert_eq!(requests.len(), 2, "one follow-up request");
+    assert_eq!(
+        returned_ids(Protocol::Responses, &requests[1]),
+        ["call_unknown"]
+    );
+}
+
+/// H1.5 "Done when": a reply with text, an offered call and a call to a tool
+/// that was not offered keeps the text and the offered call, and the
+/// unoffered call gets one failure result that names the nearest offered
+/// tool.
+#[tokio::test(flavor = "current_thread")]
+async fn responses_keeps_text_and_valid_calls_beside_an_unoffered_tool() {
+    let driven = run_fixtures(
+        Protocol::Responses,
+        &["responses_unoffered_tool_mixed.sse", "responses_answer.sse"],
+    )
+    .await;
+    let run = &driven.run;
+    assert!(run.types().contains(&"run.completed"), "{:?}", run.types());
+    assert_eq!(record_of(run, "call_valid")["outcomeClass"], "ok");
+    assert_eq!(
+        record_of(run, "call_unknown")["outcomeClass"],
+        "unknown_tool"
+    );
+    assert_eq!(
+        *driven.received.lock().unwrap(),
+        [json!({"file_path":"a.txt"})],
+        "only the offered call ran"
+    );
+
+    let requests = driven.transport.requests();
+    assert_eq!(requests.len(), 2, "one follow-up request, no retry");
+    let follow_up = &requests[1];
+    assert!(
+        follow_up["input"].as_array().unwrap().iter().any(|item| {
+            item["type"] == "message"
+                && item.to_string().contains("Reading the file and the notes.")
+        }),
+        "the reply's text stays in the history: {follow_up}"
+    );
+    assert_eq!(
+        returned_ids(Protocol::Responses, follow_up),
+        ["call_valid", "call_unknown"],
+        "each call is answered once, in call order"
+    );
+    let failure = returned_output(follow_up, "call_unknown");
+    assert!(failure.contains("read_notes"), "{failure}");
+    assert!(
+        failure.contains("read_file"),
+        "names the nearest tool: {failure}"
+    );
+    assert!(failure.contains("tool_search"), "{failure}");
+    assert_eq!(driven.transport.unused(), 0);
 }
 
 /// Aliases and text-to-number conversions are applied by the pipeline and
