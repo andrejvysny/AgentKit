@@ -190,8 +190,15 @@ fn collect_paths(value: &Value, marker: &str, paths: &mut BTreeSet<String>) {
 struct PropertyKeyword {
     path: Location,
     context: Weak<Context>,
-    patterns: Vec<(regress::Regex, String)>,
+    patterns: Vec<Pattern>,
     additional: Option<Additional>,
+}
+struct Pattern {
+    regex: regress::Regex,
+    /// The pattern as written, for error messages.
+    source: String,
+    /// Pointer to the pattern's schema in the root.
+    path: String,
 }
 struct Additional {
     declared: BTreeMap<String, String>,
@@ -212,7 +219,7 @@ impl Keyword for PropertyKeyword {
         };
         object
             .iter()
-            .all(|(name, value)| self.valid_property(&context, name, value))
+            .all(|(name, value)| self.rejection(&context, name, value).is_none())
     }
     fn validate<'i>(
         &self,
@@ -222,47 +229,150 @@ impl Keyword for PropertyKeyword {
         if self.is_valid(instance) {
             return Ok(());
         }
-        Err(jsonschema::ValidationError::custom(
-            self.path.clone(),
-            location.into(),
-            instance,
-            "property rejected by ECMAScript schema constraints",
-        ))
+        // The verdict above is final. What follows only names the property
+        // that failed and why, so a model can fix its call (TU-10, H1.6).
+        let object_path = Location::from(location);
+        Err(self.describe(instance, &object_path).unwrap_or_else(|| {
+            jsonschema::ValidationError::custom(
+                self.path.clone(),
+                object_path,
+                instance,
+                "property rejected by ECMAScript schema constraints",
+            )
+        }))
     }
 }
+/// Why one property of an object fails this keyword.
+enum Rejection {
+    /// Not declared, matched by no pattern, and the object is closed.
+    NotAllowed,
+    /// Its value fails the schema that applies to it.
+    Value(Arc<Validator>),
+    /// The schema that applies to it is not compiled.
+    Unchecked,
+}
 impl PropertyKeyword {
-    fn valid_property(&self, context: &Context, name: &str, value: &Value) -> bool {
-        let matches: Vec<_> = self
+    /// `None` when the property passes this keyword.
+    fn rejection(&self, context: &Context, name: &str, value: &Value) -> Option<Rejection> {
+        let check = |path: &str| match context.child(path) {
+            Some(validator) if validator.is_valid(value) => None,
+            Some(validator) => Some(Rejection::Value(validator)),
+            None => Some(Rejection::Unchecked),
+        };
+        let mut matches = self
             .patterns
             .iter()
-            .filter(|(regex, _)| regex.find(name).is_some())
-            .collect();
+            .filter(|pattern| pattern.regex.find(name).is_some());
         if let Some(additional) = &self.additional {
             if let Some(path) = additional.declared.get(name) {
                 // jsonschema delegates declared-property checks to additionalProperties
                 // when its value is false or a schema, so the override must retain them.
-                return matches!(additional.rule, AdditionalRule::Allow)
-                    || context
-                        .child(path)
-                        .is_some_and(|validator| validator.is_valid(value));
+                return match additional.rule {
+                    AdditionalRule::Allow => None,
+                    _ => check(path),
+                };
             }
-            if !matches.is_empty() {
-                return true;
+            if matches.next().is_some() {
+                return None;
             }
             return match &additional.rule {
-                AdditionalRule::Allow => true,
-                AdditionalRule::Deny => false,
-                AdditionalRule::Schema(path) => context
-                    .child(path)
-                    .is_some_and(|validator| validator.is_valid(value)),
+                AdditionalRule::Allow => None,
+                AdditionalRule::Deny => Some(Rejection::NotAllowed),
+                AdditionalRule::Schema(path) => check(path),
             };
         }
-        matches.iter().all(|(_, path)| {
-            context
-                .child(path)
-                .is_some_and(|validator| validator.is_valid(value))
-        })
+        matches.find_map(|pattern| check(&pattern.path))
     }
+
+    /// The error for the first rejected property, in the caller's order. A
+    /// bad value is the nested validator's own error at its full path; an
+    /// undeclared property is named with every other undeclared one and the
+    /// properties the object accepts.
+    fn describe<'i>(
+        &self,
+        instance: &'i Value,
+        object_path: &Location,
+    ) -> Option<jsonschema::ValidationError<'i>> {
+        let object = instance.as_object()?;
+        let context = self.context.upgrade()?;
+        let rejected: Vec<(&String, &'i Value, Rejection)> = object
+            .iter()
+            .filter_map(|(name, value)| {
+                self.rejection(&context, name, value)
+                    .map(|rejection| (name, value, rejection))
+            })
+            .collect();
+        let (name, value, rejection) = rejected.first()?;
+        let path = object_path.join(name.as_str());
+        let message = match rejection {
+            Rejection::Value(validator) => {
+                if let Some(error) = validator.iter_errors(value).next() {
+                    let mut error = error.to_owned();
+                    error.instance_path = appended(&path, &error.instance_path);
+                    return Some(error);
+                }
+                format!("property \"{name}\" has a value its schema rejects")
+            }
+            Rejection::Unchecked => format!("property \"{name}\" could not be checked"),
+            Rejection::NotAllowed => {
+                let extra: Vec<&str> = rejected
+                    .iter()
+                    .filter(|(_, _, rejection)| matches!(rejection, Rejection::NotAllowed))
+                    .map(|(name, _, _)| name.as_str())
+                    .collect();
+                self.not_allowed(&extra)
+            }
+        };
+        Some(jsonschema::ValidationError::custom(
+            self.path.clone(),
+            path,
+            value,
+            message,
+        ))
+    }
+
+    fn not_allowed(&self, extra: &[&str]) -> String {
+        let quoted = |names: &mut dyn Iterator<Item = &str>| {
+            names
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let subject = match extra {
+            [one] => format!("property \"{one}\" is not allowed here"),
+            many => format!(
+                "properties {} are not allowed here",
+                quoted(&mut many.iter().copied())
+            ),
+        };
+        let declared = quoted(
+            &mut self
+                .additional
+                .iter()
+                .flat_map(|additional| additional.declared.keys().map(String::as_str)),
+        );
+        let patterns = quoted(&mut self.patterns.iter().map(|pattern| pattern.source.as_str()));
+        let allowed = match (declared.is_empty(), patterns.is_empty()) {
+            (true, true) => "this object takes no properties".to_owned(),
+            (false, true) => format!("the allowed properties are {declared}"),
+            (true, false) => format!("allowed are names matching {patterns}"),
+            (false, false) => {
+                format!("the allowed properties are {declared}, and names matching {patterns}")
+            }
+        };
+        let pronoun = if extra.len() == 1 { "it" } else { "them" };
+        format!("{subject}; {allowed}. Remove {pronoun} or use an allowed property")
+    }
+}
+
+/// `base` followed by the segments of the JSON pointer `tail`.
+fn appended(base: &Location, tail: &Location) -> Location {
+    tail.as_str()
+        .split('/')
+        .skip(1)
+        .fold(base.clone(), |path, segment| {
+            path.join(segment.replace("~1", "/").replace("~0", "~").as_str())
+        })
 }
 
 // The third-party keyword factory API fixes the large borrowed error type.
@@ -287,10 +397,11 @@ fn property_keyword<'a>(
         for pattern in map.keys() {
             let regex = regress::Regex::with_flags(pattern, "u")
                 .map_err(|error| failure(error.to_string()))?;
-            patterns.push((
+            patterns.push(Pattern {
                 regex,
-                pointer(&pointer(location, "patternProperties"), pattern),
-            ));
+                source: pattern.clone(),
+                path: pointer(&pointer(location, "patternProperties"), pattern),
+            });
         }
     }
     let additional = if additional {

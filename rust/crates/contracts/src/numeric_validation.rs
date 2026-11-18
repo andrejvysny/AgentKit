@@ -68,9 +68,79 @@ impl Keyword for NumericKeyword {
             self.path.clone(),
             location.into(),
             instance,
-            "value rejected by JavaScript numeric schema semantics",
+            self.reason(instance),
         ))
     }
+}
+impl NumericKeyword {
+    /// What the value broke, for a model to fix its call (TU-10, H1.6).
+    fn reason(&self, instance: &Value) -> String {
+        let value = shown(instance);
+        match &self.rule {
+            Rule::Type { names, .. } => {
+                let names: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+                format!("{value} is not of type {}", names.join(" or "))
+            }
+            Rule::Enum(values) if values.len() == 1 => {
+                format!("{value} is not the required value {}", shown(&values[0]))
+            }
+            Rule::Enum(values) => {
+                let allowed: Vec<String> = values.iter().take(MAX_LISTED).map(shown).collect();
+                let more = if values.len() > MAX_LISTED {
+                    ", ..."
+                } else {
+                    ""
+                };
+                format!("{value} is not one of {}{more}", allowed.join(", "))
+            }
+            Rule::Unique(_) => "the items are not unique".into(),
+            Rule::Bound { name, value: bound } => {
+                let bound = number_text(*bound);
+                match *name {
+                    "minimum" => format!("{value} is less than the minimum {bound}"),
+                    "maximum" => format!("{value} is greater than the maximum {bound}"),
+                    "exclusiveMinimum" => format!("{value} must be greater than {bound}"),
+                    _ => format!("{value} must be less than {bound}"),
+                }
+            }
+            Rule::Size { name, bound } => {
+                let bound = number_text(*bound);
+                let min = name.starts_with("min");
+                match *name {
+                    "minItems" | "maxItems" | "minProperties" | "maxProperties" => {
+                        let unit = if name.ends_with("Items") {
+                            "items"
+                        } else {
+                            "properties"
+                        };
+                        let side = if min { "fewer" } else { "more" };
+                        format!("{value} has {side} than {bound} {unit}")
+                    }
+                    _ => {
+                        let side = if min { "shorter" } else { "longer" };
+                        format!("{value} is {side} than {bound} characters")
+                    }
+                }
+            }
+        }
+    }
+}
+
+const MAX_LISTED: usize = 20;
+const MAX_SHOWN: usize = 60;
+
+/// A value as JSON text, cut to a readable length.
+pub(crate) fn shown(value: &Value) -> String {
+    let text = value.to_string();
+    if text.chars().count() <= MAX_SHOWN {
+        return text;
+    }
+    let cut: String = text.chars().take(MAX_SHOWN).collect();
+    format!("{cut}...")
+}
+
+fn number_text(number: f64) -> String {
+    ryu_js::Buffer::new().format(number).to_owned()
 }
 
 fn size_valid(name: &str, bound: f64, instance: &Value) -> bool {

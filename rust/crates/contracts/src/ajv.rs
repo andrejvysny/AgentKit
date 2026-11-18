@@ -77,7 +77,17 @@ impl Keyword for AjvKeyword {
             self.path.clone(),
             location.into(),
             instance,
-            "value rejected by AgentKit's Ajv compatibility profile",
+            match &self.rule {
+                Rule::Format { name, .. } => format!(
+                    "{} is not a valid \"{name}\"",
+                    crate::numeric_validation::shown(instance)
+                ),
+                Rule::MultipleOf(divisor) => format!(
+                    "{} is not a multiple of {}",
+                    crate::numeric_validation::shown(instance),
+                    ryu_js::Buffer::new().format(*divisor)
+                ),
+            },
         ))
     }
     fn is_valid(&self, instance: &Value) -> bool {
