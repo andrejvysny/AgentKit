@@ -4,7 +4,7 @@
 //! revision and is reported as a `run.warning`, because it rewrites bytes a
 //! provider cache may hold.
 
-use crate::{ChatError, ChatResult, ExecutionContext};
+use crate::{ChatError, ChatResult, ExecutionContext, TurnNote, TurnNoteKind};
 use agentkit_contracts::{AiSessionPrefix, Optional};
 use agentkit_core::{
     Classification, CoreError, Dialect, Freeze, PrefixDigests, PromotionObserver, PromptLayout,
@@ -214,7 +214,7 @@ impl PromotionRecorder {
             prefix: next,
             changed: vec!["tools"],
         };
-        persist(&self.context, &self.chat_id, &decision).await?;
+        persist(&self.context, &self.chat_id, &decision, &[]).await?;
         Ok(Some(revision))
     }
 }
@@ -318,7 +318,7 @@ pub(super) async fn bump_for_compaction(
         prefix: next,
         changed: vec!["compact"],
     };
-    persist(context, chat_id, &decision).await?;
+    persist(context, chat_id, &decision, &[]).await?;
     Ok(Some(revision))
 }
 
@@ -377,7 +377,7 @@ pub(super) async fn record(
     if matches!(&decision, Freeze::Unchanged(kept) if Some(kept) == prior.as_ref()) {
         return Ok(());
     }
-    persist(context, chat_id, &decision).await?;
+    persist(context, chat_id, &decision, &added_notes(&surface)).await?;
     if let Freeze::Refrozen { prefix, changed } = &decision {
         let revision = prefix.revision as u64;
         context
@@ -616,7 +616,39 @@ async fn warn_tools(context: &ExecutionContext, surface: &ToolSurface) -> ChatRe
     Ok(())
 }
 
-async fn persist(context: &ExecutionContext, chat_id: &str, decision: &Freeze) -> ChatResult<()> {
+/// One `tool_namespace_added` turn note per namespace of the tools that
+/// joined the deferred catalog this turn (H2.1). The frozen tools array never
+/// grows, so without it the model is never told a late tool exists. The
+/// namespace is the name's dotted prefix, or the whole name.
+fn added_notes(surface: &ToolSurface) -> Vec<TurnNote> {
+    let mut by_namespace: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for name in &surface.added {
+        let namespace = name.split_once('.').map_or(name.as_str(), |(head, _)| head);
+        by_namespace.entry(namespace).or_default().push(name);
+    }
+    by_namespace
+        .into_iter()
+        .map(|(namespace, names)| {
+            TurnNote::new(
+                TurnNoteKind::ToolNamespaceAdded,
+                Some(namespace),
+                &format!(
+                    "New tools are available: {}. They are not in your tool list; find them with tool_search and call them with tool_call.",
+                    names.join(", ")
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Write the prefix decision, and queue `notes` for this turn's context in
+/// the same transaction, so a retried turn never announces twice.
+async fn persist(
+    context: &ExecutionContext,
+    chat_id: &str,
+    decision: &Freeze,
+    notes: &[TurnNote],
+) -> ChatResult<()> {
     let tx = context.store.begin_transaction().await?;
     let view = tx.view();
     view.verify_fence(&context.fence, context.runtime.now_ms())
@@ -625,7 +657,10 @@ async fn persist(context: &ExecutionContext, chat_id: &str, decision: &Freeze) -
         .get_chat(chat_id)
         .await?
         .ok_or(ChatError::SessionDisappeared)?;
-    let metadata = agentkit_sessions::with_session_prefix(&chat.metadata, decision.prefix());
+    let mut metadata = agentkit_sessions::with_session_prefix(&chat.metadata, decision.prefix());
+    for note in notes {
+        metadata = crate::turn_context::with_turn_note(&metadata, note.clone());
+    }
     view.update_chat(
         chat_id,
         None,

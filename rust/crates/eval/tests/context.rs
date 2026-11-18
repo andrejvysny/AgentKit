@@ -117,24 +117,30 @@ async fn rule_and_selection_changes_reach_the_model_without_an_unannounced_break
     }
 }
 
-/// The capture example's own test (`context_eval/tests.rs`,
-/// `capture_reaches_mutation_and_report_retains_failures`) expects the tool a
-/// contributor switches on at turn 8 to be offered afterwards. In the current
-/// tree it never is, on either lane or profile, and that example test fails.
-/// Either the frozen tool manifest is intended (then the example test and the
-/// report's tools source hint are stale) or restaging is broken; the owner of
-/// the context design decides. See README, Findings.
+/// A tool a contributor switches on mid-session (`extra_read`, turn 8) joins
+/// the deferred catalog: the spec never extends the frozen tools array
+/// (context spec, "Tool became available"), so the old expectation that it is
+/// offered directly was stale. What H2.1 requires instead: the model is told
+/// in the turn context (`tool_namespace_added`), and the meta tools that reach
+/// the catalog stay in the array.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "bug: a contributor switched on mid-session never reaches a request (context_capture example test fails the same way)"]
-async fn a_restaged_tool_is_offered_after_its_contributor_turns_on() {
+async fn a_tool_that_joins_late_is_announced_and_reachable() {
     for case in baseline_scenarios().iter().filter(|c| c.name == "combined") {
         let capture = run(case.config.clone()).await;
+        let sent: Vec<String> = capture
+            .requests
+            .iter()
+            .map(|(body, _)| body.to_string())
+            .collect();
         assert!(
-            capture
-                .requests
-                .iter()
-                .any(|(body, _)| body.to_string().contains("extra_read")),
-            "{}: extra_read never offered",
+            sent.iter()
+                .any(|body| body.contains("tool_namespace_added") && body.contains("extra_read")),
+            "{}: extra_read was never announced",
+            label(case)
+        );
+        assert!(
+            sent.iter().all(|body| body.contains("tool_call")),
+            "{}: a request without the meta tools",
             label(case)
         );
     }

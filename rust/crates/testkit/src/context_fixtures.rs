@@ -177,6 +177,12 @@ impl ToolContributor for SwitchableContributor {
         "fixture"
     }
 
+    /// It switches its tool on mid-session, so it declares that it joins
+    /// late: the session keeps the meta tools that reach the late tool.
+    fn can_join_late(&self) -> bool {
+        true
+    }
+
     async fn contribute(
         &self,
         _: &ToolContributionContext,

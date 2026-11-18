@@ -120,6 +120,7 @@ pub struct agentkit_testkit::context_fixtures::SwitchableContributor
 impl agentkit_testkit::context_fixtures::SwitchableContributor
 pub fn agentkit_testkit::context_fixtures::SwitchableContributor::new(alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>, alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>) -> Self
 impl agentkit_governance::contribution::ToolContributor for agentkit_testkit::context_fixtures::SwitchableContributor
+pub fn agentkit_testkit::context_fixtures::SwitchableContributor::can_join_late(&self) -> bool
 pub fn agentkit_testkit::context_fixtures::SwitchableContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agentkit_testkit::context_fixtures::SwitchableContributor::namespace(&self) -> &str
 pub async fn agentkit_testkit::context_fixtures::recorded_events<R: agentkit_engine::repository::TaskRepository>(&R, &str) -> core::result::Result<alloc::vec::Vec<agentkit_engine::model::EventRecord>, <R as agentkit_engine::repository::TaskRepository>::Error>
