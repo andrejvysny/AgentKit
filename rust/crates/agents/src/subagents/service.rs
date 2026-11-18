@@ -1114,10 +1114,12 @@ impl SubagentService {
                         .map_err(|_| AgentsError::InvalidReasoningEffort)?,
                     content_selection: None,
                     workspace: workspace.clone(),
-                    context: descriptor
-                        .get("context")
-                        .filter(|value| value.is_object())
-                        .cloned(),
+                    context: child_context(
+                        descriptor.get("context"),
+                        &parent_task.payload,
+                        (parent_provider, parent_model),
+                        (provider_id.as_deref(), child_model.as_deref()),
+                    ),
                     skills: None,
                     turn_kind: None,
                     execution_mode: execution_mode.clone(),
@@ -3477,4 +3479,32 @@ impl agentkit_engine::TaskSettledObserver for SubagentService {
             .await
             .map_err(agentkit_engine::EngineError::from)?)
     }
+}
+
+/// The child's context section: the parent's, plus the window the parent's
+/// turn was admitted with when the child runs that same provider and model
+/// and the parent's context names no window. The host admits windows per
+/// turn and a child's turns carry no admission, so without this a child fell
+/// back to a 32,768-token window whatever its model's real one.
+fn child_context(
+    parent: Option<&Value>,
+    parent_payload: &Value,
+    parent_pair: (Option<&str>, Option<&str>),
+    child_pair: (Option<&str>, Option<&str>),
+) -> Option<Value> {
+    let mut context = parent.filter(|value| value.is_object()).cloned();
+    let admitted = parent_payload
+        .get("contextWindowTokens")
+        .and_then(Value::as_u64)
+        .filter(|window| *window > 0);
+    let same_model = parent_pair.1.is_some() && parent_pair == child_pair;
+    if let Some(window) = admitted.filter(|_| same_model)
+        && context
+            .as_ref()
+            .is_none_or(|context| context.get("windowTokens").is_none())
+    {
+        let context = context.get_or_insert_with(|| serde_json::json!({}));
+        context["windowTokens"] = window.into();
+    }
+    context
 }

@@ -430,3 +430,45 @@ async fn without_an_admitted_provider_the_descriptor_is_the_fallback() {
     assert_eq!(rig.a.calls(), vec!["model-a"]);
     assert!(rig.b.calls().is_empty());
 }
+
+/// A child that runs its parent's model inherits the window the parent's turn
+/// was admitted with. Without it the child's descriptor carries no window, so
+/// the child fell back to 32,768 tokens with a 16,384 reserve and overflowed
+/// in live OpenAI runs where the parent had 1,050,000.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_child_on_the_parents_model_inherits_the_admitted_window() {
+    let store = parent_store_admitted(
+        json!({"providerId": "b", "model": "model-b-now", "contextWindowTokens": 1_050_000}),
+    )
+    .await;
+    let rig = rig(&store, false).await;
+    let child = rig
+        .subagents
+        .spawn(&spawn_request("k", "plain"))
+        .await
+        .unwrap();
+    let chat = store.get_chat(&child.child_chat_id).await.unwrap().unwrap();
+    let descriptor = read_session_descriptor(&chat.metadata).expect("child descriptor");
+    assert_eq!(descriptor["context"]["windowTokens"], json!(1_050_000));
+}
+
+/// A child pinned to another model never inherits the parent's window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_child_on_another_model_does_not_inherit_the_window() {
+    let store = parent_store_admitted(
+        json!({"providerId": "a", "model": "model-a-now", "contextWindowTokens": 1_050_000}),
+    )
+    .await;
+    let rig = rig(&store, false).await;
+    let child = rig
+        .subagents
+        .spawn(&spawn_request("k", "pinned"))
+        .await
+        .unwrap();
+    let chat = store.get_chat(&child.child_chat_id).await.unwrap().unwrap();
+    let descriptor = read_session_descriptor(&chat.metadata).expect("child descriptor");
+    assert!(
+        descriptor["context"]["windowTokens"].is_null(),
+        "{descriptor}"
+    );
+}
