@@ -276,6 +276,98 @@ async fn responses_keeps_text_and_valid_calls_beside_an_unoffered_tool() {
     assert_eq!(driven.transport.unused(), 0);
 }
 
+/// What a `RecordingTool` was executed with.
+type Received = Arc<Mutex<Vec<Value>>>;
+
+/// A session where `notes_search` is deferred: it is in the catalog, not in
+/// the request's tool list, and `tool_call` reaches it.
+fn deferred_registry() -> (Arc<ToolRegistry>, Received, Received) {
+    let schema = json!({"type":"object","properties":{"file_path":{"type":"string"}}});
+    let (read, read_received) = RecordingTool::new("read_file", "read", schema);
+    let (notes, notes_received) = RecordingTool::new(
+        "notes_search",
+        "read",
+        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+    );
+    let mut registry = ToolRegistry::new();
+    registry.register(read).expect("register read_file");
+    registry.register(notes).expect("register notes_search");
+    registry.install_meta_tools().unwrap();
+    let classification = Classification {
+        direct: DirectSet::names(["read_file"]),
+        max_tokens: 0,
+        max_definitions: 0,
+        ..Classification::default()
+    };
+    let surface = ToolSurface::reconcile_with(None, &registry.definitions(), Some(&classification));
+    registry.freeze_surface(
+        surface.manifest.definitions().to_vec(),
+        surface.deferred_names(),
+    );
+    registry.freeze_catalog(&surface.deferred);
+    (Arc::new(registry), read_received, notes_received)
+}
+
+/// GPT calls a deferred tool by its name, as B5 expected. On the Responses
+/// lane the call now reaches the pipeline (H1.5) and gets the deferred-tool
+/// teaching failure, which names `tool_call`; the offered call beside it runs.
+#[tokio::test(flavor = "current_thread")]
+async fn responses_answers_a_deferred_tool_called_by_name_with_the_way_to_reach_it() {
+    let (registry, read_received, notes_received) = deferred_registry();
+    let offered: Vec<String> = registry
+        .definitions()
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
+    assert!(offered.contains(&"read_file".to_owned()), "{offered:?}");
+    assert!(offered.contains(&"tool_call".to_owned()), "{offered:?}");
+    assert!(
+        !offered.contains(&"notes_search".to_owned()),
+        "deferred: {offered:?}"
+    );
+
+    let transport = Arc::new(FixtureTransport::from_fixtures(
+        Protocol::Responses,
+        &[
+            "responses_deferred_tool_by_name.sse",
+            "responses_answer.sse",
+        ],
+    ));
+    let clock: Arc<dyn Runtime> = ManualClock::new(1_000);
+    let run = drive(
+        options(&registry, clock),
+        provider(Protocol::Responses, &transport),
+        Arc::clone(&registry),
+    )
+    .await;
+    assert!(run.types().contains(&"run.completed"), "{:?}", run.types());
+    assert_eq!(
+        *read_received.lock().unwrap(),
+        [json!({"file_path":"a.txt"})]
+    );
+    assert!(
+        notes_received.lock().unwrap().is_empty(),
+        "the deferred tool did not run"
+    );
+    let failed: Vec<&Value> = run
+        .data("run.tool.failed")
+        .into_iter()
+        .filter(|data| data["toolCallId"] == "call_deferred")
+        .collect();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0]["errorCode"], "tool_deferred", "{}", failed[0]);
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        returned_ids(Protocol::Responses, &requests[1]),
+        ["call_valid", "call_deferred"]
+    );
+    let failure = returned_output(&requests[1], "call_deferred");
+    assert!(failure.contains("deferred"), "{failure}");
+    assert!(failure.contains("tool_call"), "names the way in: {failure}");
+}
+
 /// Aliases and text-to-number conversions are applied by the pipeline and
 /// recorded on `run.tool.record`; the tool sees the canonical call.
 #[tokio::test(flavor = "current_thread")]
