@@ -191,9 +191,11 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
     }
 
     async fn lexical(&self, q: &LexicalQuery, f: &IndexFilter, k: u32) -> MemoryResult<Vec<Hit>> {
-        let mut terms = tokens(&q.text);
-        terms.sort();
-        terms.dedup();
+        let terms: Vec<(String, bool)> = q
+            .terms()
+            .into_iter()
+            .map(|term| (tokens(&term.text).concat(), term.prefix))
+            .collect();
         let committed = self.committed();
         let mut hits = Vec::new();
         for (id, item) in &committed.items.0 {
@@ -202,11 +204,10 @@ impl RetrievalIndex for InMemoryRetrievalIndex {
             }
             let score: f32 = terms
                 .iter()
-                .map(|term| {
+                .map(|(term, prefix)| {
                     if item.tokens.iter().any(|word| word == term) {
                         1.0
-                    } else if q.prefix_min_chars > 0
-                        && term.chars().count() >= q.prefix_min_chars as usize
+                    } else if *prefix
                         && item
                             .tokens
                             .iter()

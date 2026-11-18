@@ -146,6 +146,36 @@ async fn lexical_prefix_matches_long_terms_only<T: RetrievalIndex>(idx: Arc<T>) 
     assert!(hits.is_empty());
 }
 
+async fn lexical_stems_slovak_inflection<T: RetrievalIndex>(idx: Arc<T>) {
+    index(
+        &*idx,
+        &[
+            item("vet", 1, "k veterinárovi MVDr. Rahalqui"),
+            item("tea", 1, "Likes green tea"),
+        ],
+    )
+    .await;
+    assert_eq!(words(&*idx, "veterinára").await, vec!["vet"]);
+    assert_eq!(words(&*idx, "veterinarom").await, vec!["vet"]);
+    assert_eq!(words(&*idx, "tea").await, vec!["tea"]);
+    let exact_only = LexicalQuery {
+        text: "veterinára".to_owned(),
+        prefix_min_chars: 0,
+    };
+    let hits = port(idx.lexical(&exact_only, &IndexFilter::default(), 5).await);
+    assert!(
+        hits.is_empty(),
+        "stems are prefix terms; none without prefixes"
+    );
+}
+
+async fn lexical_drops_stop_words<T: RetrievalIndex>(idx: Arc<T>) {
+    index(&*idx, &[item("s", 1, "my dog is the best, je to pes")]).await;
+    assert!(words(&*idx, "my is the").await.is_empty());
+    assert!(words(&*idx, "je som na").await.is_empty());
+    assert_eq!(words(&*idx, "my dog").await, vec!["s"]);
+}
+
 async fn lexical_filters_by_corpus_scope_and_time<T: RetrievalIndex>(idx: Arc<T>) {
     let mut chat = item("chat", 20, "common");
     chat.corpus = Corpus::Chat;
@@ -713,6 +743,8 @@ suite!(
     lexical_ranks_more_matching_terms_first,
     lexical_respects_k,
     lexical_prefix_matches_long_terms_only,
+    lexical_stems_slovak_inflection,
+    lexical_drops_stop_words,
     lexical_filters_by_corpus_scope_and_time,
     upsert_replaces_item,
     delete_removes_from_lexical_and_knn,

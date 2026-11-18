@@ -12,6 +12,7 @@ mod embedding;
 mod error;
 mod gate;
 mod ids;
+mod lexical_terms;
 mod model;
 mod ports;
 mod retrieval;
@@ -39,6 +40,7 @@ pub use gate::{
     normalized_key, owner_span, screen_text, sensitive_category, strip_invisible, text_covered,
 };
 pub use ids::{ItemId, ModelId, RecordId, Timestamp};
+pub use lexical_terms::QueryTerm;
 pub use model::{
     Actor, Corpus, EventKind, Kind, MAX_TEXT_CHARS, MemoryEvent, NewRecord, Origin, Page,
     PurgeReport, Record, RecordFilter, Scope, ScopeKind, Status,

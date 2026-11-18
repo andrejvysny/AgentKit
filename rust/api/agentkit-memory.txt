@@ -239,6 +239,8 @@ pub agentkit_memory::LexicalQuery::prefix_min_chars: u32
 pub agentkit_memory::LexicalQuery::text: alloc::string::String
 impl agentkit_memory::LexicalQuery
 pub fn agentkit_memory::LexicalQuery::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_memory::LexicalQuery
+pub fn agentkit_memory::LexicalQuery::terms(&self) -> alloc::vec::Vec<agentkit_memory::QueryTerm>
 pub struct agentkit_memory::MemoryEvent
 pub agentkit_memory::MemoryEvent::actor: agentkit_memory::Actor
 pub agentkit_memory::MemoryEvent::at: agentkit_memory::Timestamp
@@ -381,6 +383,9 @@ impl agentkit_memory::PurgeReport
 pub fn agentkit_memory::PurgeReport::is_clean(&self) -> bool
 pub fn agentkit_memory::PurgeReport::merge(&mut self, agentkit_memory::PurgeReport)
 pub fn agentkit_memory::PurgeReport::removed(&self, &str) -> u64
+pub struct agentkit_memory::QueryTerm
+pub agentkit_memory::QueryTerm::prefix: bool
+pub agentkit_memory::QueryTerm::text: alloc::string::String
 pub struct agentkit_memory::Record
 pub agentkit_memory::Record::approved_at: core::option::Option<agentkit_memory::Timestamp>
 pub agentkit_memory::Record::core_order: core::option::Option<i64>

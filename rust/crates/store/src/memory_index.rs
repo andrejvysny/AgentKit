@@ -95,10 +95,6 @@ fn refuse_inactive(conn: &Connection, item: &IndexItem) -> Work<()> {
     }
 }
 
-/// Query limits: words beyond these never reach the FTS5 expression.
-const MAX_QUERY_CHARS: usize = 1_000;
-const MAX_QUERY_TERMS: usize = 32;
-
 /// Replay queued index ops in the caller's transaction.
 pub(crate) fn apply_index_ops(conn: &Connection, ops: Vec<IndexOp>) -> Work<()> {
     for op in ops {
@@ -176,30 +172,22 @@ fn model_spec(conn: &Connection, id: &ModelId) -> Work<Option<(ModelSpec, ModelS
     Ok(row)
 }
 
-/// The FTS5 expression of a lexical query: every word a quoted term, those
-/// of at least `prefix_min_chars` characters also as prefixes, alternatives
-/// joined by OR so more matching terms rank higher under bm25.
+/// The FTS5 expression of a lexical query: every term quoted, prefix terms
+/// (long words, stems) with a trailing `*`, alternatives joined by OR so more
+/// matching terms rank higher under bm25. Stop-words are already dropped by
+/// [`LexicalQuery::terms`].
 fn match_expression(query: &LexicalQuery) -> Option<String> {
-    let mut terms: Vec<String> = Vec::new();
-    let text: String = query.text.chars().take(MAX_QUERY_CHARS).collect();
-    for word in text
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-    {
-        if terms.len() >= MAX_QUERY_TERMS {
-            break;
-        }
-        let long =
-            query.prefix_min_chars > 0 && word.chars().count() >= query.prefix_min_chars as usize;
-        let term = if long {
-            format!("\"{word}\"*")
-        } else {
-            format!("\"{word}\"")
-        };
-        if !terms.contains(&term) {
-            terms.push(term);
-        }
-    }
+    let terms: Vec<String> = query
+        .terms()
+        .into_iter()
+        .map(|term| {
+            if term.prefix {
+                format!("\"{}\"*", term.text)
+            } else {
+                format!("\"{}\"", term.text)
+            }
+        })
+        .collect();
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
