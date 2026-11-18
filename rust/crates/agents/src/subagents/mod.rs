@@ -34,8 +34,8 @@ mod toolsets;
 
 pub use brief::{
     Brief, BriefBudget, BriefError, BriefScope, BudgetLines, ContextRef, MESSAGE_REF_CAP_BYTES,
-    OutputFormat, RefKind, RenderedRef, TITLE_MAX_CHARS, cap_message_text, confine_to_workspace,
-    render_brief,
+    OutputFormat, RefKind, RenderedRef, SUBAGENT_TOKENS_FLOOR, TITLE_MAX_CHARS, cap_message_text,
+    confine_to_workspace, render_brief,
 };
 pub use budget::SubagentTokenGate;
 pub(crate) use budget::{charge_advisor_usage, events_tenths};

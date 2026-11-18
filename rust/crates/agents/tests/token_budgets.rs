@@ -1170,3 +1170,41 @@ async fn spawning_onto_the_native_lane_is_refused() {
         "{refusal}"
     );
 }
+
+fn brief_with_tokens(max_tokens: Option<u64>) -> Brief {
+    let mut brief = Brief::new(
+        "general",
+        "child task",
+        "do the thing",
+        OutputFormat::Summary,
+        "the task is done",
+    );
+    brief.budget.max_tokens = max_tokens;
+    brief
+}
+
+#[test]
+fn an_explicit_child_token_budget_below_the_floor_is_refused_with_a_teaching_error() {
+    for tokens in [1, 2_000, 4_000, 31_999] {
+        let error = brief_with_tokens(Some(tokens))
+            .check_token_floor()
+            .expect_err("below the floor");
+        let text = error.to_string();
+        assert!(text.starts_with("invalid_brief:"), "{text}");
+        assert!(text.contains("32000"), "names the minimum: {text}");
+        assert!(text.contains(&tokens.to_string()), "names the ask: {text}");
+        assert!(
+            text.contains("Omit `budget`"),
+            "suggests the default: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_child_token_budget_at_or_above_the_floor_or_unset_is_accepted() {
+    for tokens in [None, Some(32_000), Some(50_000), Some(1_000_000)] {
+        brief_with_tokens(tokens)
+            .check_token_floor()
+            .expect("accepted");
+    }
+}

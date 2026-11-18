@@ -104,7 +104,7 @@ fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefini
                     "budget":{"type":"object","required":[],"additionalProperties":false,
                         "description":"Optional limits for the child, clamped to the host ceilings.",
                         "properties":{
-                            "max_tokens":{"type":"integer","minimum":1,"maximum":SUBAGENT_TOKENS_CEILING,"description":"Upper bound on the tokens the child may spend."},
+                            "max_tokens":{"type":"integer","minimum":1,"maximum":SUBAGENT_TOKENS_CEILING,"description":"Upper bound on the tokens the child may spend. At least 32000; omit `budget` to use the default."},
                             "max_provider_requests":{"type":"integer","minimum":1,"maximum":SUBAGENT_PROVIDER_REQUESTS_CEILING,"description":"Upper bound on the child's provider requests."},
                             "timeout":{"type":"integer","minimum":1000,"maximum":SUBAGENT_OVERALL_MS_CEILING,"description":"Overall time limit for the child, in milliseconds."},
                             "max_iterations":{"type":"integer","minimum":1,"maximum":SUBAGENT_ITERATIONS_CEILING,"description":"Upper bound on the child's tool iterations."}
@@ -426,6 +426,9 @@ impl agentkit_governance::ToolContributor for SubagentContributor {
                         let (parent_chat_id, parent_task_id) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
                         let brief = Brief::from_input(&input).map_err(|error| error.to_string())?;
+                        brief
+                            .check_token_floor()
+                            .map_err(|error| error.to_string())?;
                         require_call_identity(&context, &input, "spawnKey")?;
                         let request = SpawnRequest {
                             parent_chat_id,

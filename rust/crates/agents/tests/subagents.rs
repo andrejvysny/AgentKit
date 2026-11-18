@@ -2650,6 +2650,46 @@ async fn spawn_tool_without_a_call_identity_requires_an_explicit_key() {
     h.await_all().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_tool_refuses_a_child_token_budget_below_the_floor() {
+    let h = Harness::start().await;
+    let tools = SubagentContributor::new(h.subagents.clone())
+        .contribute(&contribution_context(Some("parent".into())))
+        .await
+        .unwrap();
+    let spawn = tools
+        .into_iter()
+        .find_map(|contributed| match contributed {
+            ContributedTool::Read(tool) if tool.definition().name == "subagent_spawn" => Some(tool),
+            _ => None,
+        })
+        .expect("spawn tool");
+    let context = agentkit_core::ToolContext {
+        run_id: "parent-turn".into(),
+        tool_call_id: None,
+        attempt_id: None,
+        chat_id: Some("parent".into()),
+        scope_id: Some("parent".into()),
+        user_id: None,
+        bindings: vec![],
+        limits: ToolLimits::default(),
+        cancellation: CancellationToken::new(),
+        dispatch_guard: None,
+        metadata: Default::default(),
+        suspension: None,
+    };
+    let mut input = with_spawn_key(valid_brief("reviewer", "audit"), "small-budget");
+    input["budget"] = json!({"max_tokens": 2_000});
+    let refused = spawn.execute(context, input).await.unwrap();
+    assert!(!refused.ok, "{refused:?}");
+    let text = refused.data.as_ref().and_then(Value::as_str).unwrap_or("");
+    assert!(
+        text.contains("32000") && text.contains("Omit `budget`"),
+        "{refused:?}"
+    );
+    assert!(h.subagents.list("parent").await.unwrap().is_empty());
+}
+
 /// TU-06: the model sends no key. A retried call (same run id, same call
 /// id) is one spawn; another call id is another child.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

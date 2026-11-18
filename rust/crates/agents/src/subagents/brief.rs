@@ -26,6 +26,11 @@ const NOTE_MAX_CHARS: usize = 300;
 const REF_ID_MAX_CHARS: usize = 128;
 const PATH_REF_MAX_CHARS: usize = 1_024;
 
+/// Smallest explicit `budget.max_tokens` a spawn accepts: one child request
+/// (instructions, tool definitions, brief) already needs about 20,000 tokens,
+/// so a smaller cap fails the child on its first request.
+pub const SUBAGENT_TOKENS_FLOOR: u64 = 32_000;
+
 /// A rejected brief. The text names the field, so the model can repair the
 /// call.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,6 +238,20 @@ impl Brief {
             })
             .to_string(),
         )
+    }
+
+    /// Refuse an explicit token budget below [`SUBAGENT_TOKENS_FLOOR`]. An
+    /// unset budget keeps the default; a low one is never silently raised.
+    pub fn check_token_floor(&self) -> Result<(), BriefError> {
+        match self.budget.max_tokens {
+            Some(tokens) if tokens < SUBAGENT_TOKENS_FLOOR => Err(invalid(format!(
+                "budget.max_tokens {tokens} is below the minimum of {SUBAGENT_TOKENS_FLOOR} \
+                 tokens: a single child request needs about 20000 tokens, so the child would \
+                 fail at once. Omit `budget` to use the default, or pass at least \
+                 {SUBAGENT_TOKENS_FLOOR}."
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Parse the `subagent_spawn` arguments. A required field that is

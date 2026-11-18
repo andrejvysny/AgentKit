@@ -226,6 +226,7 @@ pub agentkit_agents::Brief::role: alloc::string::String
 pub agentkit_agents::Brief::scope: agentkit_agents::BriefScope
 pub agentkit_agents::Brief::title: alloc::string::String
 impl agentkit_agents::Brief
+pub fn agentkit_agents::Brief::check_token_floor(&self) -> core::result::Result<(), agentkit_agents::BriefError>
 pub fn agentkit_agents::Brief::digest(&self) -> alloc::string::String
 pub fn agentkit_agents::Brief::from_input(&serde_json::value::Value) -> core::result::Result<Self, agentkit_agents::BriefError>
 pub fn agentkit_agents::Brief::new(&str, &str, &str, agentkit_agents::OutputFormat, &str) -> Self
@@ -540,6 +541,7 @@ pub const agentkit_agents::DELEGATION_TOOLSET: &str
 pub const agentkit_agents::MESSAGE_REF_CAP_BYTES: usize
 pub const agentkit_agents::REPORT_FINDINGS_TOOL: &str
 pub const agentkit_agents::SUBAGENT_ARG_ALIASES: &[(&str, &str)]
+pub const agentkit_agents::SUBAGENT_TOKENS_FLOOR: u64
 pub const agentkit_agents::SUBAGENT_TOOL_NAMES: [&str; 7]
 pub const agentkit_agents::SUMMARY_CAP_BYTES: usize
 pub const agentkit_agents::TITLE_MAX_CHARS: usize
