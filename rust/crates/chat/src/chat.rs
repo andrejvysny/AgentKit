@@ -758,19 +758,26 @@ impl ChatExecutor {
         }
         // Cache directives (CE-07) come from the frozen prefix's key and the
         // provider's declared capability; an unknown provider gets none.
-        let cache_chat = if session {
-            context.store.get_chat(chat_id).await?
-        } else {
-            None
-        };
-        if let Some(chat) = cache_chat
-            && let Some(prefix) = agentkit_sessions::read_session_prefix(&chat.metadata)
-        {
-            let tools = registry.definitions();
+        let tools = registry.definitions();
+        let branch = request
+            .continuation_scope
+            .as_ref()
+            .map_or("", |scope| scope.branch_id.as_str());
+        let cache_prefix = prefix::for_cache(prefix::CacheTurn {
+            context: &context,
+            chat_id,
+            session,
+            capability: &cache_capability,
+            layout: &layout,
+            tools: &tools,
+            model,
+            branch,
+        })
+        .await?;
+        if let Some((prefix, is_child)) = cache_prefix {
             // The profile's `cacheTtl` ("5m" | "1h") sets BP1/BP2; 1h by default.
             // A subagent always takes the 5-minute class: its prefix is short
             // lived and shared by siblings inside one fan-out (DEL-12).
-            let is_child = chat.metadata[agentkit_core::SUBAGENT_METADATA_KEY].is_object();
             let long_ttl = match model_profile
                 .as_ref()
                 .and_then(|profile| profile.extra.get("cacheTtl"))

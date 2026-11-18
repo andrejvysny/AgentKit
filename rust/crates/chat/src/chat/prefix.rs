@@ -242,6 +242,51 @@ pub(super) async fn frozen_tools(
         ))
 }
 
+/// What [`for_cache`] needs from the turn.
+pub(super) struct CacheTurn<'a> {
+    pub context: &'a ExecutionContext,
+    pub chat_id: &'a str,
+    pub session: bool,
+    pub capability: &'a agentkit_core::CacheCapability,
+    pub layout: &'a PromptLayout,
+    pub tools: &'a [ToolDefinition],
+    pub model: &'a str,
+    pub branch: &'a str,
+}
+
+/// The prefix a turn's cache directives are planned from, and whether the
+/// chat is a subagent child. A session reads its frozen record. A plain chat
+/// freezes none, so it used to plan no cache at all and every request paid
+/// full input price (hardening B3): its key is derived the way a session's
+/// first revision is, per chat and branch and stable across turns. A
+/// provider that declares no caching gets nothing either way.
+pub(super) async fn for_cache(turn: CacheTurn<'_>) -> ChatResult<Option<(AiSessionPrefix, bool)>> {
+    if turn.session {
+        return Ok(turn
+            .context
+            .store
+            .get_chat(turn.chat_id)
+            .await?
+            .and_then(|chat| {
+                let is_child = chat.metadata[agentkit_core::SUBAGENT_METADATA_KEY].is_object();
+                agentkit_sessions::read_session_prefix(&chat.metadata)
+                    .map(|prefix| (prefix, is_child))
+            }));
+    }
+    if *turn.capability == agentkit_core::CacheCapability::None {
+        return Ok(None);
+    }
+    let digests = PrefixDigests::compute(turn.layout, turn.tools, &json!({"model": turn.model}));
+    let frozen = freeze(
+        None,
+        digests,
+        turn.chat_id,
+        turn.branch,
+        &turn.context.task.task_id,
+    );
+    Ok(Some((frozen.prefix().clone(), false)))
+}
+
 /// A compaction rewrites the history, so the session's prefix moves to a new
 /// revision (a new provider cache key) and records the S3/S4 text the
 /// compaction adopted. The compaction owns the cache break event, so none is
