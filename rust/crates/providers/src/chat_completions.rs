@@ -1,5 +1,5 @@
 use crate::{
-    TrustedTransport,
+    TrustedTransport, chat_completions_effort as effort,
     chat_completions_request::build_body,
     sse::{SseDecoder, SseFrame},
     transport::{self, read_json},
@@ -19,6 +19,7 @@ pub struct ChatCompletionsProvider {
     transport: Arc<dyn TrustedTransport>,
     identity: ConnectionIdentity,
     cache: agentkit_core::CacheCapability,
+    effort_refusals: effort::Refusals,
 }
 impl ChatCompletionsProvider {
     /// Declare the cache behavior of the connection's preset (CE-07).
@@ -38,15 +39,24 @@ impl ChatCompletionsProvider {
             transport,
             identity,
             cache: Default::default(),
+            effort_refusals: Default::default(),
         })
     }
+    /// Dispatch; two refusals are retried once each: `max_tokens` (moved to
+    /// `max_completion_tokens`) and function tools with a reasoning effort
+    /// (sent again with `reasoning_effort: "none"`, see
+    /// `chat_completions_effort`). The flag says the effort was forced.
     async fn send(
         &self,
         input: &ChatRequest,
         mut body: Value,
         cancellation: CancellationToken,
-    ) -> Result<reqwest::Response, CoreError> {
-        for attempt in 0..2 {
+    ) -> Result<(reqwest::Response, bool), CoreError> {
+        let mut effort_forced = effort::has_tools(&body)
+            && self.effort_refusals.contains(&input.model)
+            && effort::force_none(&mut body);
+        let mut tokens_moved = false;
+        loop {
             if cancellation.is_cancelled() {
                 return Err(CoreError::new("cancelled", "aborted"));
             }
@@ -96,11 +106,11 @@ impl ChatCompletionsProvider {
                 if response.content_length() == Some(0) {
                     return Err(CoreError::new("empty_body", "Provider returned empty body"));
                 }
-                return Ok(response);
+                return Ok((response, effort_forced));
             }
             let status = response.status().as_u16();
             let detail = read_body(response, cancellation.clone()).await?;
-            if attempt == 0
+            if !tokens_moved
                 && status == 400
                 && body.get("max_tokens").is_some()
                 && (detail.contains("max_tokens") || detail.contains("max_completion_tokens"))
@@ -111,6 +121,14 @@ impl ChatCompletionsProvider {
                     .remove("max_tokens")
                     .expect("checked");
                 body["max_completion_tokens"] = tokens;
+                tokens_moved = true;
+            } else if status == 400
+                && effort::has_tools(&body)
+                && effort::blames_effort(&detail)
+                && effort::force_none(&mut body)
+            {
+                self.effort_refusals.remember(&input.model);
+                effort_forced = true;
             } else {
                 return Err(CoreError::new(
                     &status.to_string(),
@@ -118,7 +136,6 @@ impl ChatCompletionsProvider {
                 ));
             }
         }
-        unreachable!("second request either returns or fails")
     }
     fn events(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         let provider = self.clone();
@@ -143,8 +160,14 @@ impl ChatCompletionsProvider {
                     ),
                 };
             }
-            let response = provider.send(&input, body, cancellation.clone()).await?;
+            let (response, effort_forced) = provider.send(&input, body, cancellation.clone()).await?;
             provider.transport.check_authority().await?;
+            if effort_forced {
+                yield ProviderEvent::Warning {
+                    code: effort::WARNING_CODE.into(),
+                    message: effort::warning_message(&input.model),
+                };
+            }
             let mut bytes = response.bytes_stream();
             let mut parser = SseDecoder::new();
             let mut state = ChatState {

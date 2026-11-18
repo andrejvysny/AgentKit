@@ -1,6 +1,7 @@
 //! Concrete LLM provider adapters and their HTTP plumbing, driven through the
 //! `agentkit-core` provider port.
 mod chat_completions;
+mod chat_completions_effort;
 mod chat_completions_request;
 pub mod conformance;
 mod connection_transport;
