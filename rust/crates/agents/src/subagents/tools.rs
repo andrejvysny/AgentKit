@@ -104,7 +104,7 @@ fn definition_for(name: &str, roles: &[String], max_await_ms: u64) -> ToolDefini
                     "budget":{"type":"object","required":[],"additionalProperties":false,
                         "description":"Optional limits for the child, clamped to the host ceilings.",
                         "properties":{
-                            "max_tokens":{"type":"integer","minimum":1,"maximum":SUBAGENT_TOKENS_CEILING,"description":"Upper bound on the tokens the child may spend. At least 32000; omit `budget` to use the default."},
+                            "max_tokens":{"type":"integer","minimum":1,"maximum":SUBAGENT_TOKENS_CEILING,"description":"Upper bound on the tokens the child may spend. At least 32000; leave it out to use the default."},
                             "max_provider_requests":{"type":"integer","minimum":1,"maximum":SUBAGENT_PROVIDER_REQUESTS_CEILING,"description":"Upper bound on the child's provider requests."},
                             "timeout":{"type":"integer","minimum":1000,"maximum":SUBAGENT_OVERALL_MS_CEILING,"description":"Overall time limit for the child, in milliseconds."},
                             "max_iterations":{"type":"integer","minimum":1,"maximum":SUBAGENT_ITERATIONS_CEILING,"description":"Upper bound on the child's tool iterations."}
