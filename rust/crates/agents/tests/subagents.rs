@@ -357,6 +357,41 @@ async fn spawn_await_returns_durable_child_answer() {
     assert_eq!(list.len(), 1);
 }
 
+/// A tool-call round stores an internal, empty assistant message after the
+/// turn's answer; it must not shadow the answer in the result envelope.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn internal_tool_round_message_does_not_replace_the_answer() {
+    let h = Harness::start().await;
+    let spawned = h.spawn("k-internal", "reviewer", "audit the module").await;
+    assert!(h.await_all().await.settled);
+    h.store
+        .append_message(
+            agentkit_store::MessageInput {
+                id: Some("tool-round".into()),
+                chat_id: spawned.child_chat_id.clone(),
+                run_id: spawned.turn_task_id.clone(),
+                role: "assistant".into(),
+                content: json!(""),
+                metadata: json!({"internal": true}),
+                activate: true,
+                ..Default::default()
+            },
+            None,
+            h.subagents.now_ms(),
+        )
+        .await
+        .unwrap();
+    let view = h.status(&spawned.child_chat_id).await;
+    assert_eq!(view.result.as_deref(), Some(ANSWER));
+    let envelope = h
+        .subagents
+        .build_envelope(&view)
+        .await
+        .unwrap()
+        .expect("settled envelope");
+    assert_eq!(envelope.summary, ANSWER);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_replays_idempotently_per_spawn_key() {
     let h = Harness::start().await;

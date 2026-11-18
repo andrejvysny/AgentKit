@@ -3117,6 +3117,7 @@ impl SubagentService {
 
     /// The child's final assistant answer for the tracked turn: the durable
     /// assistant message written under the turn's run, not a transcription.
+    /// Internal tool-round messages are not the answer.
     async fn final_answer(&self, row: &SubagentRecord) -> AgentsResult<Option<String>> {
         let Some(turn_id) = row.turn_task_id.as_deref() else {
             return Ok(row.result.clone());
@@ -3129,6 +3130,7 @@ impl SubagentService {
                     && record.role == "assistant"
                     && record.run_id.as_deref() == Some(turn_id)
                     && record.metadata.get("placeholder") != Some(&Value::Bool(true))
+                    && record.metadata.get("internal") != Some(&Value::Bool(true))
             })
             .max_by_key(|record| record.order_key)
             .map(|record| match &record.content {
