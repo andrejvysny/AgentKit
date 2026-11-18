@@ -393,6 +393,7 @@ pub(crate) async fn resolve_approved_calls(
             target_task_id: Some(context.task.task_id.clone()),
         })
         .await?;
+    announce_denied_calls(context, &requests).await?;
     let requests: Vec<_> = requests
         .into_iter()
         .filter(|request| {
@@ -556,6 +557,85 @@ pub(crate) async fn resolve_approved_calls(
         resume.push(call.clone());
     }
     Ok((approvals, resume))
+}
+
+/// Emit the tool outcome of each call this turn's owner denied (H1.1c).
+/// The answer writes the denial as the call's tool record, which the model
+/// reads, but no run event: a host that renders tool results from the
+/// durable event log showed the call with no result. Each denied call gets
+/// one `run.tool.failed` with `errorCode: "approval_denied"`, the event a
+/// tool refusal emits; a call that already has an outcome event gets none,
+/// so a re-run of the attempt never emits twice.
+async fn announce_denied_calls(
+    context: &ExecutionContext,
+    requests: &[AgentInputRecord],
+) -> ChatResult<()> {
+    let denied: Vec<(&AgentInputRecord, &str)> = requests
+        .iter()
+        .filter(|request| is_approval_request(&request.content))
+        .filter_map(|request| {
+            let record = request.applied_message_id.as_deref()?;
+            let denial = !record.starts_with(agentkit_sessions::APPROVAL_MARKER);
+            denial.then_some((request, record))
+        })
+        .collect();
+    if denied.is_empty() {
+        return Ok(());
+    }
+    let mut announced: HashSet<String> = HashSet::new();
+    let mut after = None;
+    loop {
+        let page = context
+            .store
+            .events(&context.task.task_id, after, 1000)
+            .await?;
+        for record in &page {
+            let kind = record.event["type"].as_str().unwrap_or_default();
+            if (kind == "run.tool.succeeded" || kind == "run.tool.failed")
+                && let Some(id) = record.event["data"]["toolCallId"].as_str()
+            {
+                announced.insert(id.to_owned());
+            }
+        }
+        match page.last() {
+            Some(last) if page.len() == 1000 => after = Some(last.seq as u64),
+            _ => break,
+        }
+    }
+    for (request, record_id) in denied {
+        let Some(call_id) = request.tool_call_id.as_deref() else {
+            continue;
+        };
+        if announced.contains(call_id) {
+            continue;
+        }
+        let Some(record) = context.store.get_message(record_id).await? else {
+            continue;
+        };
+        let envelope = match &record.content {
+            Value::String(text) => serde_json::from_str(text).unwrap_or(Value::Null),
+            value => value.clone(),
+        };
+        if envelope["data"]["errorCode"] != "approval_denied" {
+            continue;
+        }
+        let message = envelope["data"]["errorMessage"]
+            .as_str()
+            .unwrap_or("The user denied this tool call.");
+        context
+            .emit(
+                "run.tool.failed",
+                serde_json::json!({
+                    "toolCallId": call_id,
+                    "toolName": request.content["toolName"],
+                    "errorMessage": message,
+                    "errorCode": "approval_denied",
+                }),
+            )
+            .await?;
+        announced.insert(call_id.to_owned());
+    }
+    Ok(())
 }
 
 async fn append_approval_mismatch(

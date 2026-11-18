@@ -273,6 +273,58 @@ async fn a_denied_call_in_a_plain_chat_reaches_the_model_as_a_denial() {
     assert_eq!(error_code(&result), Some("approval_denied"), "{result}");
 }
 
+/// The call's terminal tool events in the run's durable log, as
+/// `(kind, errorCode)`.
+async fn tool_outcomes(f: &Fixture) -> Vec<(String, Option<String>)> {
+    f.store
+        .events(TURN, None, 10_000)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            let kind = event.event["type"].as_str().unwrap_or_default();
+            (kind == "run.tool.succeeded" || kind == "run.tool.failed")
+                && event.event["data"]["toolCallId"] == "call-1"
+        })
+        .map(|event| {
+            (
+                event.event["type"].as_str().unwrap_or_default().to_owned(),
+                event.event["data"]["errorCode"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+/// H1.1c: a host renders tool results from the durable run events. A denial
+/// is written as a tool record by the answer, so without an event the call
+/// showed no result at all.
+#[tokio::test]
+async fn a_denied_call_has_one_failed_tool_event() {
+    let f = parked().await;
+    let request = f.pending().await.into_iter().next().expect("one ask");
+    f.answer(&request.input_id, "deny").await;
+    f.resume().await;
+    assert_eq!(
+        tool_outcomes(&f).await,
+        vec![(
+            "run.tool.failed".to_owned(),
+            Some("approval_denied".to_owned())
+        )]
+    );
+}
+
+#[tokio::test]
+async fn an_approved_call_has_one_succeeded_tool_event() {
+    let f = parked().await;
+    let request = f.pending().await.into_iter().next().expect("one ask");
+    f.answer(&request.input_id, "approve").await;
+    f.resume().await;
+    assert_eq!(
+        tool_outcomes(&f).await,
+        vec![("run.tool.succeeded".to_owned(), None)]
+    );
+}
+
 #[tokio::test]
 async fn an_approval_for_other_arguments_never_runs_the_call() {
     let f = parked().await;
