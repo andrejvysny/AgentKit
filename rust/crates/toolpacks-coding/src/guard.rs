@@ -25,6 +25,7 @@ use agentkit_core::permission::{
     role_ceiling_allows,
 };
 
+use crate::command_policy::{CommandClass, classify_shell_command, shell_args_of};
 use crate::plan_tool::SUBMIT_PLAN_TOOL_NAME;
 use crate::types::{CodingMode, CodingPermissionAuthority, CodingRole, PermissionContext};
 
@@ -110,11 +111,16 @@ impl ToolGuard for CodingPermissionGuard {
                 .unwrap_or(self.configured_mode),
             None => self.configured_mode,
         };
-        match decide(
-            mode,
-            tool_class,
-            self.plan_tools.iter().any(|plan| plan == &name),
-        ) {
+        let is_plan_tool = self.plan_tools.iter().any(|plan| plan == &name);
+        // Spec 10 (U5): read_only and plan mode run a read-only shell command
+        // without a prompt. Every other call keeps the matrix verdict.
+        if matches!(mode, CodingMode::ReadOnly | CodingMode::Plan)
+            && !is_plan_tool
+            && is_read_only_command(&name, context.arguments.as_ref())
+        {
+            return Ok(ToolGuardVerdict::Allowed);
+        }
+        match decide(mode, tool_class, is_plan_tool) {
             PermissionDecision::Allowed => Ok(ToolGuardVerdict::Allowed),
             PermissionDecision::PlanApprovalRequired => {
                 Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
@@ -143,6 +149,15 @@ impl ToolGuard for CodingPermissionGuard {
             }
         }
     }
+}
+
+/// `run_command` whose live command classifies ReadOnly. A call without
+/// readable arguments is not one.
+fn is_read_only_command(name: &str, args: Option<&Value>) -> bool {
+    name == "run_command"
+        && args
+            .and_then(shell_args_of)
+            .is_some_and(|args| classify_shell_command(&args.command) == CommandClass::ReadOnly)
 }
 
 /// The mode the plan asks for; recorded for the human, never obeyed.
@@ -345,6 +360,61 @@ mod tests {
             )
             .await,
             "plan_approval_required: submit_plan"
+        );
+    }
+
+    async fn command_verdict(guard: &CodingPermissionGuard, name: &str, command: &str) -> String {
+        let mut context = context("process.exec", name, CODING_NAMESPACE);
+        context.arguments = Some(json!({ "command": command }));
+        match guard.can_execute(&context).await.unwrap() {
+            ToolGuardVerdict::Allowed => String::new(),
+            ToolGuardVerdict::Refused(reason) => reason,
+            ToolGuardVerdict::AwaitingHuman(ask) => ask.reason,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_only_and_plan_modes_run_read_only_commands_only() {
+        let read_only = guard(CodingMode::ReadOnly, None);
+        for command in ["git status", "ls -la src", "cat README.md"] {
+            assert_eq!(
+                command_verdict(&read_only, "run_command", command).await,
+                "",
+                "{command}"
+            );
+        }
+        for command in ["npm install", "cargo test", "cat x > y", "git push"] {
+            assert_eq!(
+                command_verdict(&read_only, "run_command", command).await,
+                "read_only: run_command is not allowed",
+                "{command}"
+            );
+        }
+        assert_eq!(
+            command_verdict(&read_only, "run_tests", "git status").await,
+            "read_only: run_tests is not allowed"
+        );
+        let plan = guard(CodingMode::Plan, None);
+        assert_eq!(
+            command_verdict(&plan, "run_command", "git diff HEAD").await,
+            ""
+        );
+        assert!(
+            command_verdict(&plan, "run_command", "npm install")
+                .await
+                .starts_with("plan mode:")
+        );
+        // Other modes keep today's verdict for the same command.
+        let ask = guard(CodingMode::Ask, None);
+        assert_eq!(
+            command_verdict(&ask, "run_command", "git status").await,
+            "approval_required: run_command"
+        );
+        // The role ceiling still wins.
+        let supervisor = guard(CodingMode::ReadOnly, Some(CodingRole::Supervisor));
+        assert_eq!(
+            command_verdict(&supervisor, "run_command", "git status").await,
+            "role_ceiling: supervisor may not use exec tools (run_command)"
         );
     }
 

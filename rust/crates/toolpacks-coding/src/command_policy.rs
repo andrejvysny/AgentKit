@@ -25,6 +25,9 @@ use crate::command_fingerprint::{command_fingerprint, hex_sha256, json_quote};
 /// Ported classification of `packages/toolpacks-coding/src/command-policy.ts`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandClass {
+    /// Cannot write or run other programs (spec 10, U5): runs without a
+    /// prompt in `read_only` and `plan` mode. Judged before `Eligible`.
+    ReadOnly,
     Eligible,
     HighRisk,
     Unknown,
@@ -33,6 +36,7 @@ pub enum CommandClass {
 impl CommandClass {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::ReadOnly => "read_only",
             Self::Eligible => "eligible",
             Self::HighRisk => "high_risk",
             Self::Unknown => "unknown",
@@ -794,6 +798,77 @@ fn matches_allowlist(tokens: &[&str]) -> bool {
     false
 }
 
+/// The read-only allow-list (spec 10, U5): commands and subcommands that
+/// cannot write files or run another program. The flags refused below are
+/// the ones that would let a listed command do either.
+fn matches_read_only(tokens: &[&str]) -> bool {
+    let Some((&first, rest)) = tokens.split_first() else {
+        return false;
+    };
+    // Read-only commands run without a prompt, so they stay inside the
+    // workspace (the command's cwd): no absolute, home-relative or parent
+    // paths, including the value half of `--flag=/path`.
+    if rest.iter().any(|token| escapes_workspace(token)) {
+        return false;
+    }
+    match first {
+        "git" => read_only_git(rest),
+        "find" => !rest.iter().any(|token| find_action_flags().contains(token)),
+        // `--pre` runs a preprocessor program on every file searched.
+        "rg" => !rest
+            .iter()
+            .any(|token| *token == "--pre" || token.starts_with("--pre=")),
+        // `-o` (alone or among combined short flags) writes the listing to a file.
+        "tree" => !rest.iter().any(|token| short_flag(token, 'o')),
+        // `-C`/`--compile` writes a compiled magic file.
+        "file" => !rest
+            .iter()
+            .any(|token| *token == "--compile" || short_flag(token, 'C')),
+        "ls" | "cat" | "head" | "tail" | "wc" | "grep" | "pwd" | "stat" | "du" | "which" => true,
+        _ => false,
+    }
+}
+
+/// True when `token`, or the value after `=` in a flag, names a path that can
+/// leave the workspace: absolute, `~`-relative, or with a `..` segment.
+fn escapes_workspace(token: &str) -> bool {
+    let value = token.split_once('=').map_or(token, |(_, value)| value);
+    value.starts_with('/')
+        || value.starts_with('~')
+        || value.split('/').any(|segment| segment == "..")
+}
+
+/// True when `token` is a short-flag group (`-ao`) that contains `flag`.
+fn short_flag(token: &str, flag: char) -> bool {
+    token
+        .strip_prefix('-')
+        .is_some_and(|flags| !flags.starts_with('-') && flags.contains(flag))
+}
+
+/// `git` with a read-only first subcommand, or `git branch` that only lists.
+/// `--output` makes `diff`, `log` and `show` write a file.
+fn read_only_git(args: &[&str]) -> bool {
+    let Some((&subcommand, rest)) = args.split_first() else {
+        return false;
+    };
+    if subcommand == "branch" {
+        return rest
+            .iter()
+            .all(|arg| matches!(*arg, "-a" | "-r" | "-v" | "--list"));
+    }
+    matches!(
+        subcommand,
+        "status" | "diff" | "log" | "show" | "rev-parse" | "ls-files" | "blame"
+    ) && !rest.iter().any(|arg| arg.starts_with("--output"))
+}
+
+/// `find` flags that run a program, delete, or write a file.
+fn find_action_flags() -> &'static [&'static str] {
+    &[
+        "-exec", "-execdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls", "-ok", "-okdir",
+    ]
+}
+
 fn safe_script() -> &'static regex::Regex {
     static SAFE_SCRIPT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         compiled(
@@ -805,8 +880,8 @@ fn safe_script() -> &'static regex::Regex {
 
 /// `high_risk` is checked first and on the raw text, metacharacters
 /// included, so `echo ok; rm -rf x` is high risk and not merely "unknown".
-/// `eligible` needs the full allowlist; there is no "looks read-only" path
-/// to it.
+/// `read_only` and `eligible` each need their full allowlist; there is no
+/// "looks read-only" path to either.
 pub fn classify_shell_command(command: &str) -> CommandClass {
     static PLAIN_CHARS: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, -]+\z"));
@@ -826,10 +901,26 @@ pub fn classify_shell_command(command: &str) -> CommandClass {
     if ASSIGNMENT.is_match(first) {
         return CommandClass::Unknown;
     }
-    if matches_allowlist(&tokens) {
+    if matches_read_only(&tokens) {
+        CommandClass::ReadOnly
+    } else if matches_allowlist(&tokens) {
         CommandClass::Eligible
     } else {
         CommandClass::Unknown
+    }
+}
+
+/// True when a standing approval may key `command`: exactly the commands the
+/// build/test allow-list names. A read-only command that list also names
+/// (`git status`) stays keyable; the ReadOnly class adds none (`cat x`).
+fn standing_keyable(command: &str) -> bool {
+    match classify_shell_command(command) {
+        CommandClass::Eligible => true,
+        CommandClass::ReadOnly => {
+            let tokens: Vec<&str> = command.split(' ').filter(|t| !t.is_empty()).collect();
+            matches_allowlist(&tokens)
+        }
+        CommandClass::HighRisk | CommandClass::Unknown => false,
     }
 }
 
@@ -977,7 +1068,7 @@ pub async fn coding_standing_approval_key(
         return None;
     }
     let chat_id = chat_id?;
-    if classify_shell_command(&args.command) != CommandClass::Eligible {
+    if !standing_keyable(&args.command) {
         return None;
     }
     let root = crate::paths::canonical_root(&workspace.root).await.ok()?;
@@ -1133,10 +1224,70 @@ mod tests {
         "go vet ./...",
         "make test",
         "make typecheck",
+    ];
+
+    /// Spec 10 (U5). `git status|diff|log|show` were `eligible` before the
+    /// read-only class; they stay standing-approvable (see
+    /// `standing_keys_cover_exactly_the_build_and_test_allowlist`).
+    const READ_ONLY: &[&str] = &[
         "git status",
         "git diff HEAD",
         "git log --oneline -n 5",
         "git show HEAD",
+        "git rev-parse HEAD",
+        "git ls-files src",
+        "git blame src/lib.rs",
+        "ls",
+        "ls -la src",
+        "cat README.md",
+        "head -n 20 src/lib.rs",
+        "tail -n 5 Cargo.toml",
+        "wc -l src/lib.rs",
+        "rg needle src",
+        "grep -rn needle src",
+        "pwd",
+        "stat Cargo.toml",
+        "file Cargo.toml",
+        "tree src",
+        "du -sh src",
+        "which cargo",
+        "find . -name Cargo.toml",
+    ];
+
+    /// Near misses: each stays out of the read-only class.
+    const NOT_READ_ONLY: &[(&str, CommandClass)] = &[
+        ("find . -exec ls {} ;", CommandClass::HighRisk),
+        ("find . -name x -delete", CommandClass::HighRisk),
+        ("find . -fprint out.txt", CommandClass::Unknown),
+        ("find . -fls out.txt", CommandClass::Unknown),
+        ("find . -ok ls", CommandClass::Unknown),
+        ("git push", CommandClass::HighRisk),
+        ("git branch", CommandClass::HighRisk),
+        ("git branch -D main", CommandClass::HighRisk),
+        ("git -C /repo status", CommandClass::Unknown),
+        ("git diff --output=patch.txt", CommandClass::Eligible),
+        ("git log --output=log.txt", CommandClass::Eligible),
+        ("git blame --output=x src/lib.rs", CommandClass::Unknown),
+        ("cat x > y", CommandClass::Unknown),
+        ("cat README.md | grep x", CommandClass::Unknown),
+        ("cat $HOME/x", CommandClass::Unknown),
+        ("LANG=C ls", CommandClass::Unknown),
+        ("rg --pre ./decode.sh needle", CommandClass::Unknown),
+        ("rg --pre=./decode.sh needle", CommandClass::Unknown),
+        ("tree -o out.txt", CommandClass::Unknown),
+        ("tree -ao out.txt", CommandClass::Unknown),
+        ("file -C -m magic", CommandClass::Unknown),
+        ("file --compile", CommandClass::Unknown),
+        ("npm install", CommandClass::Unknown),
+        ("cargo test", CommandClass::Eligible),
+        ("touch x", CommandClass::Unknown),
+        // Read-only commands stay inside the workspace.
+        ("cat /etc/passwd", CommandClass::Unknown),
+        ("cat ../outside.txt", CommandClass::Unknown),
+        ("cat src/../../outside.txt", CommandClass::Unknown),
+        ("grep -r needle /Users", CommandClass::Unknown),
+        ("rg --ignore-file=/tmp/x needle", CommandClass::Unknown),
+        ("ls ~", CommandClass::Unknown),
     ];
 
     const HIGH_RISK: &[&str] = &[
@@ -1179,8 +1330,6 @@ mod tests {
     ];
 
     const UNKNOWN: &[&str] = &[
-        "ls",
-        "cat README.md",
         "echo hi",
         "bun run dev",
         "bun run test extra",
@@ -1220,6 +1369,43 @@ mod tests {
                 CommandClass::Eligible,
                 "expected eligible: {command:?}"
             );
+        }
+    }
+
+    #[test]
+    fn read_only_commands() {
+        for command in READ_ONLY {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "expected read_only: {command:?}"
+            );
+        }
+        assert_eq!(CommandClass::ReadOnly.as_str(), "read_only");
+    }
+
+    #[test]
+    fn near_misses_are_not_read_only() {
+        for (command, class) in NOT_READ_ONLY {
+            assert_eq!(classify_shell_command(command), *class, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn standing_keys_cover_exactly_the_build_and_test_allowlist() {
+        for command in [
+            "git status",
+            "git diff HEAD",
+            "git log --oneline -n 5",
+            "git show HEAD",
+        ] {
+            assert!(standing_keyable(command), "{command}");
+        }
+        for command in ELIGIBLE {
+            assert!(standing_keyable(command), "{command}");
+        }
+        for command in ["ls", "cat README.md", "git rev-parse HEAD", "rg needle src"] {
+            assert!(!standing_keyable(command), "{command}");
         }
     }
 

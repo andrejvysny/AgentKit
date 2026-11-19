@@ -53,6 +53,7 @@ pub mod agentkit_toolpacks_coding::command_policy
 pub enum agentkit_toolpacks_coding::command_policy::CommandClass
 pub agentkit_toolpacks_coding::command_policy::CommandClass::Eligible
 pub agentkit_toolpacks_coding::command_policy::CommandClass::HighRisk
+pub agentkit_toolpacks_coding::command_policy::CommandClass::ReadOnly
 pub agentkit_toolpacks_coding::command_policy::CommandClass::Unknown
 impl agentkit_toolpacks_coding::command_policy::CommandClass
 pub fn agentkit_toolpacks_coding::command_policy::CommandClass::as_str(&self) -> &'static str
@@ -759,6 +760,7 @@ pub fn agentkit_toolpacks_coding::version_ledger::record_write(core::option::Opt
 pub enum agentkit_toolpacks_coding::CommandClass
 pub agentkit_toolpacks_coding::CommandClass::Eligible
 pub agentkit_toolpacks_coding::CommandClass::HighRisk
+pub agentkit_toolpacks_coding::CommandClass::ReadOnly
 pub agentkit_toolpacks_coding::CommandClass::Unknown
 impl agentkit_toolpacks_coding::command_policy::CommandClass
 pub fn agentkit_toolpacks_coding::command_policy::CommandClass::as_str(&self) -> &'static str
