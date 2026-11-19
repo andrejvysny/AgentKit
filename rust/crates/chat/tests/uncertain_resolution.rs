@@ -126,14 +126,14 @@ async fn fixture() -> Fixture {
         }))
         .unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
                 call_seq: Arc::new(AtomicUsize::new(0)),
             }),
             Arc::new(tools),
         )
-        .with_options(ChatExecutorOptions::default()),
+        .with_options(AgentExecutorOptions::default()),
     );
     let host = AgentHost::new(
         store.clone(),

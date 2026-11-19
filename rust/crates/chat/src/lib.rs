@@ -15,9 +15,17 @@ pub use budget::{
     RoleTaskOverrides, parse_budget_limits, restore_execution_budget, task_overrides,
 };
 pub use chat::{
-    AttachmentBudgets, ChatExecutor, ChatExecutorOptions, ChatHookTimeouts, ChatHostExt,
+    AgentExecutor, AgentExecutorOptions, AttachmentBudgets, ChatHookTimeouts, ChatHostExt,
     CorrectionConfig, SubmitChat,
 };
+
+/// Kept for one release so hosts can migrate (spec 10, U17).
+#[deprecated(note = "renamed to AgentExecutor (spec 10, U17)")]
+pub type ChatExecutor = AgentExecutor;
+/// Kept for one release so hosts can migrate (spec 10, U17).
+#[deprecated(note = "renamed to AgentExecutorOptions (spec 10, U17)")]
+pub type ChatExecutorOptions = AgentExecutorOptions;
+
 pub use core_memory::{
     CORE_MEMORY_METADATA_KEY, CoreMemoryBlock, CoreMemoryEntry, CoreMemorySource,
     refreeze_core_memory,

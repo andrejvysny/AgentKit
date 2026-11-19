@@ -92,6 +92,52 @@ pub agentkit_chat::TurnNoteKind::ToolNamespaceRemoved
 pub agentkit_chat::TurnNoteKind::ToolsetRecommendation
 impl agentkit_chat::TurnNoteKind
 pub fn agentkit_chat::TurnNoteKind::as_str(self) -> &'static str
+pub struct agentkit_chat::AgentExecutor
+impl agentkit_chat::AgentExecutor
+pub fn agentkit_chat::AgentExecutor::new(alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
+pub fn agentkit_chat::AgentExecutor::with_options(self, agentkit_chat::AgentExecutorOptions) -> Self
+pub fn agentkit_chat::AgentExecutor::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>) -> Self
+impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_chat::AgentExecutor
+pub fn agentkit_chat::AgentExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_chat::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_chat::AgentExecutor::handles_verification(&self) -> bool
+pub fn agentkit_chat::AgentExecutor::resolves_provider_snapshots(&self) -> bool
+pub struct agentkit_chat::AgentExecutorOptions
+pub agentkit_chat::AgentExecutorOptions::actor: serde_json::value::Value
+pub agentkit_chat::AgentExecutorOptions::actor_id: core::option::Option<alloc::string::String>
+pub agentkit_chat::AgentExecutorOptions::attachment_budgets: agentkit_chat::AttachmentBudgets
+pub agentkit_chat::AgentExecutorOptions::attachments: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::AttachmentResolver>>
+pub agentkit_chat::AgentExecutorOptions::auto_compaction: bool
+pub agentkit_chat::AgentExecutorOptions::content_authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>>
+pub agentkit_chat::AgentExecutorOptions::context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ContextProvider>>
+pub agentkit_chat::AgentExecutorOptions::core_memory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemorySource>>
+pub agentkit_chat::AgentExecutorOptions::core_memory_refreeze: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemoryRefreeze>>
+pub agentkit_chat::AgentExecutorOptions::correction: core::option::Option<agentkit_chat::CorrectionConfig>
+pub agentkit_chat::AgentExecutorOptions::default_tool_timeout_ms: core::option::Option<u64>
+pub agentkit_chat::AgentExecutorOptions::delegation_guidance: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::DelegationGuidance>>
+pub agentkit_chat::AgentExecutorOptions::execution_budgets: agentkit_core::budget::BudgetLimits
+pub agentkit_chat::AgentExecutorOptions::history_limit: usize
+pub agentkit_chat::AgentExecutorOptions::hook_timeouts: agentkit_chat::ChatHookTimeouts
+pub agentkit_chat::AgentExecutorOptions::max_output_tokens: core::option::Option<u64>
+pub agentkit_chat::AgentExecutorOptions::max_tool_calls_per_iteration: usize
+pub agentkit_chat::AgentExecutorOptions::max_tool_iterations: u32
+pub agentkit_chat::AgentExecutorOptions::output: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::output::OutputGate>>
+pub agentkit_chat::AgentExecutorOptions::project_instructions: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ProjectInstructionsSource>>
+pub agentkit_chat::AgentExecutorOptions::provider_factory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>>
+pub agentkit_chat::AgentExecutorOptions::providers: core::option::Option<alloc::rcs::arc::Arc<agentkit_chat::ProviderRegistry>>
+pub agentkit_chat::AgentExecutorOptions::run_hooks: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::types::RunHooks>>
+pub agentkit_chat::AgentExecutorOptions::skip_untrusted_project_instructions: bool
+pub agentkit_chat::AgentExecutorOptions::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
+pub agentkit_chat::AgentExecutorOptions::tool_call_records: bool
+pub agentkit_chat::AgentExecutorOptions::tool_classification: core::option::Option<agentkit_core::deferred::Classification>
+pub agentkit_chat::AgentExecutorOptions::tool_contributors: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>
+pub agentkit_chat::AgentExecutorOptions::tool_guards: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>>
+pub agentkit_chat::AgentExecutorOptions::turn_context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::TurnContextHook>>
+pub agentkit_chat::AgentExecutorOptions::turn_context_date: bool
+pub agentkit_chat::AgentExecutorOptions::turn_oversize: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::OversizedItemSink>>
+pub agentkit_chat::AgentExecutorOptions::usage: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::UsageAuthorizer>>
+pub agentkit_chat::AgentExecutorOptions::verification: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_engine::ports::VerificationHook<agentkit_store::actor::SqliteStore>>>
+impl core::default::Default for agentkit_chat::AgentExecutorOptions
+pub fn agentkit_chat::AgentExecutorOptions::default() -> Self
 pub struct agentkit_chat::AttachmentBudgets
 pub agentkit_chat::AttachmentBudgets::max_bytes_per_image: usize
 pub agentkit_chat::AttachmentBudgets::max_images: usize
@@ -100,52 +146,6 @@ impl core::default::Default for agentkit_chat::AttachmentBudgets
 pub fn agentkit_chat::AttachmentBudgets::default() -> Self
 pub struct agentkit_chat::AttachmentResolveContext
 pub agentkit_chat::AttachmentResolveContext::chat_id: alloc::string::String
-pub struct agentkit_chat::ChatExecutor
-impl agentkit_chat::ChatExecutor
-pub fn agentkit_chat::ChatExecutor::new(alloc::rcs::arc::Arc<dyn agentkit_core::types::ChatProvider>, alloc::rcs::arc::Arc<agentkit_core::registry::ToolRegistry>) -> Self
-pub fn agentkit_chat::ChatExecutor::with_options(self, agentkit_chat::ChatExecutorOptions) -> Self
-pub fn agentkit_chat::ChatExecutor::with_provider_factory(self, alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>) -> Self
-impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_chat::ChatExecutor
-pub fn agentkit_chat::ChatExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_chat::ExecutionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn agentkit_chat::ChatExecutor::handles_verification(&self) -> bool
-pub fn agentkit_chat::ChatExecutor::resolves_provider_snapshots(&self) -> bool
-pub struct agentkit_chat::ChatExecutorOptions
-pub agentkit_chat::ChatExecutorOptions::actor: serde_json::value::Value
-pub agentkit_chat::ChatExecutorOptions::actor_id: core::option::Option<alloc::string::String>
-pub agentkit_chat::ChatExecutorOptions::attachment_budgets: agentkit_chat::AttachmentBudgets
-pub agentkit_chat::ChatExecutorOptions::attachments: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::AttachmentResolver>>
-pub agentkit_chat::ChatExecutorOptions::auto_compaction: bool
-pub agentkit_chat::ChatExecutorOptions::content_authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::run_content::ContentAuthority<agentkit_store::StoreError>>>
-pub agentkit_chat::ChatExecutorOptions::context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ContextProvider>>
-pub agentkit_chat::ChatExecutorOptions::core_memory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemorySource>>
-pub agentkit_chat::ChatExecutorOptions::core_memory_refreeze: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::CoreMemoryRefreeze>>
-pub agentkit_chat::ChatExecutorOptions::correction: core::option::Option<agentkit_chat::CorrectionConfig>
-pub agentkit_chat::ChatExecutorOptions::default_tool_timeout_ms: core::option::Option<u64>
-pub agentkit_chat::ChatExecutorOptions::delegation_guidance: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::DelegationGuidance>>
-pub agentkit_chat::ChatExecutorOptions::execution_budgets: agentkit_core::budget::BudgetLimits
-pub agentkit_chat::ChatExecutorOptions::history_limit: usize
-pub agentkit_chat::ChatExecutorOptions::hook_timeouts: agentkit_chat::ChatHookTimeouts
-pub agentkit_chat::ChatExecutorOptions::max_output_tokens: core::option::Option<u64>
-pub agentkit_chat::ChatExecutorOptions::max_tool_calls_per_iteration: usize
-pub agentkit_chat::ChatExecutorOptions::max_tool_iterations: u32
-pub agentkit_chat::ChatExecutorOptions::output: core::option::Option<alloc::rcs::arc::Arc<agentkit_core::output::OutputGate>>
-pub agentkit_chat::ChatExecutorOptions::project_instructions: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::ProjectInstructionsSource>>
-pub agentkit_chat::ChatExecutorOptions::provider_factory: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_sessions::ports::ChatProviderFactory>>
-pub agentkit_chat::ChatExecutorOptions::providers: core::option::Option<alloc::rcs::arc::Arc<agentkit_chat::ProviderRegistry>>
-pub agentkit_chat::ChatExecutorOptions::run_hooks: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_core::types::RunHooks>>
-pub agentkit_chat::ChatExecutorOptions::skip_untrusted_project_instructions: bool
-pub agentkit_chat::ChatExecutorOptions::standing: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::approval::StandingApprovalPolicy>>
-pub agentkit_chat::ChatExecutorOptions::tool_call_records: bool
-pub agentkit_chat::ChatExecutorOptions::tool_classification: core::option::Option<agentkit_core::deferred::Classification>
-pub agentkit_chat::ChatExecutorOptions::tool_contributors: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>>
-pub agentkit_chat::ChatExecutorOptions::tool_guards: alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_governance::guard::ToolGuard>>
-pub agentkit_chat::ChatExecutorOptions::turn_context: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::TurnContextHook>>
-pub agentkit_chat::ChatExecutorOptions::turn_context_date: bool
-pub agentkit_chat::ChatExecutorOptions::turn_oversize: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::OversizedItemSink>>
-pub agentkit_chat::ChatExecutorOptions::usage: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_chat::UsageAuthorizer>>
-pub agentkit_chat::ChatExecutorOptions::verification: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_engine::ports::VerificationHook<agentkit_store::actor::SqliteStore>>>
-impl core::default::Default for agentkit_chat::ChatExecutorOptions
-pub fn agentkit_chat::ChatExecutorOptions::default() -> Self
 pub struct agentkit_chat::ChatHookTimeouts
 pub agentkit_chat::ChatHookTimeouts::attachments_ms: u64
 pub agentkit_chat::ChatHookTimeouts::context_ms: u64
@@ -271,11 +271,13 @@ pub async fn agentkit_chat::load_project_instructions(&dyn agentkit_chat::Projec
 pub fn agentkit_chat::looks_like_emulated_tool_call(&str, &std::collections::hash::set::HashSet<alloc::string::String>) -> bool
 pub fn agentkit_chat::parse_budget_limits(core::option::Option<&serde_json::value::Value>) -> agentkit_chat::ChatResult<agentkit_core::budget::BudgetLimits>
 pub async fn agentkit_chat::refreeze_core_memory(&dyn agentkit_chat::CoreMemorySource, &agentkit_store::actor::SqliteStore, &str, i64) -> agentkit_chat::ChatResult<bool>
-pub async fn agentkit_chat::refreeze_project_rules(&agentkit_chat::ChatExecutorOptions, &agentkit_store::actor::SqliteStore, &str, i64) -> agentkit_chat::ChatResult<bool>
+pub async fn agentkit_chat::refreeze_project_rules(&agentkit_chat::AgentExecutorOptions, &agentkit_store::actor::SqliteStore, &str, i64) -> agentkit_chat::ChatResult<bool>
 pub async fn agentkit_chat::restore_execution_budget(&agentkit_chat::ExecutionContext, agentkit_core::budget::BudgetLimits, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>) -> agentkit_chat::ChatResult<alloc::rcs::arc::Arc<agentkit_core::budget::ExecutionBudget>>
 pub async fn agentkit_chat::task_overrides(&agentkit_store::actor::SqliteStore, &str) -> agentkit_chat::ChatResult<agentkit_chat::RoleTaskOverrides>
 pub fn agentkit_chat::with_turn_note(&serde_json::value::Value, agentkit_chat::TurnNote) -> serde_json::value::Value
 pub type agentkit_chat::AgentHost = agentkit_engine::runner::AgentHost<agentkit_store::actor::SqliteStore>
+pub type agentkit_chat::ChatExecutor = agentkit_chat::AgentExecutor
+pub type agentkit_chat::ChatExecutorOptions = agentkit_chat::AgentExecutorOptions
 pub type agentkit_chat::ChatResult<T> = core::result::Result<T, agentkit_chat::ChatError>
 pub type agentkit_chat::ExecutionContext = agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>
 pub type agentkit_chat::HostOptions = agentkit_engine::runner::HostOptions<agentkit_store::actor::SqliteStore>

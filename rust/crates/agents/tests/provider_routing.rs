@@ -50,8 +50,8 @@ impl ChatProvider for Fake {
     }
 }
 
-fn executor_options(registry: Option<Arc<ProviderRegistry>>) -> ChatExecutorOptions {
-    ChatExecutorOptions {
+fn executor_options(registry: Option<Arc<ProviderRegistry>>) -> AgentExecutorOptions {
+    AgentExecutorOptions {
         providers: registry,
         ..Default::default()
     }
@@ -63,7 +63,7 @@ fn host_over(
     registry: Option<Arc<ProviderRegistry>>,
 ) -> AgentHost {
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             default.clone() as Arc<dyn ChatProvider>,
             Arc::new(ToolRegistry::new()),
         )

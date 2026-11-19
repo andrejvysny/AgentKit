@@ -92,7 +92,7 @@ async fn turn(answer_after: Option<usize>) -> (usize, Vec<String>, TaskStatus) {
             .unwrap(),
         )))
         .unwrap();
-    let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(ChatExecutor::new(
+    let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(AgentExecutor::new(
         Arc::new(Scripted {
             requests: requests.clone(),
             answer_after,
@@ -136,7 +136,7 @@ async fn turn(answer_after: Option<usize>) -> (usize, Vec<String>, TaskStatus) {
 
 #[test]
 fn the_default_chat_request_limit_is_24() {
-    assert_eq!(ChatExecutorOptions::default().max_tool_iterations, 24);
+    assert_eq!(AgentExecutorOptions::default().max_tool_iterations, 24);
 }
 
 #[tokio::test]

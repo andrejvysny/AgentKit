@@ -258,8 +258,8 @@ async fn session_with(context: Value, setup: Setup) -> Session {
         billed: billed.clone(),
     };
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(Arc::new(provider), Arc::new(ToolRegistry::new())).with_options(
-            ChatExecutorOptions {
+        AgentExecutor::new(Arc::new(provider), Arc::new(ToolRegistry::new())).with_options(
+            AgentExecutorOptions {
                 auto_compaction: true,
                 tool_contributors: vec![Arc::new(ReadContributor(tool))],
                 output: Some(Arc::new(OutputGate::new(store_port))),

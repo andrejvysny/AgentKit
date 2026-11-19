@@ -31,7 +31,7 @@ cannot raise a profile or host ceiling.
 ## Transcript and context limits
 
 Native built-in profiles preserve the full eligible transcript. They deliberately
-omit the historical TypeScript count limits. `ChatExecutorOptions.history_limit`
+omit the historical TypeScript count limits. `AgentExecutorOptions.history_limit`
 defaults to `usize::MAX`. An explicit host/profile history limit is an admission
 ceiling: an oversized transcript fails with `context_overflow`; it is never
 silently sliced.
@@ -47,7 +47,7 @@ fail with `context_overflow` before provider dispatch.
 
 `windowSource` retains the shared event vocabulary: `descriptor` includes a frozen per-turn window override as well as a session descriptor; `model` includes frozen native model metadata and the stored model catalog. These labels do not change admission precedence.
 
-Automatic compaction is on when `ChatExecutorOptions.auto_compaction` is true
+Automatic compaction is on when `AgentExecutorOptions.auto_compaction` is true
 (the host default, false) unless the session's `context.autoCompaction` says
 otherwise: a bool that overrides the host default either way, so any profile
 (chat included) can turn it on or off per session. An explicit session compact
@@ -56,7 +56,7 @@ continuation lane included: a masking batch or a compaction voids the durable
 checkpoint, the request replays the rewritten history in full and the provider
 saves a new checkpoint from it. A compaction also adopts the project-rule
 changes still waiting (`refreeze_project_rules`) and, through
-`ChatExecutorOptions.core_memory_refreeze`, pending core-memory changes, moves
+`AgentExecutorOptions.core_memory_refreeze`, pending core-memory changes, moves
 the session prefix to a new revision, and emits ONE `context.cache_break`
 (`reason: "compact"`). The `run.context.compacted` event carries
 `summaryId`, `coversThroughMessageId` and `firstKeptMessageId` so a host can

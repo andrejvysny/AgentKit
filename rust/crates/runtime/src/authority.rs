@@ -32,7 +32,7 @@ use serde_json::Value;
 /// coding pack's own namespace — those tools carry their own guard chain.
 pub(crate) const JS_NAMESPACE: &str = "js";
 
-/// Late-bound session service: the ChatExecutor (and therefore the guard)
+/// Late-bound session service: the AgentExecutor (and therefore the guard)
 /// is constructed before the session service exists, and the worker only
 /// starts after `bind`, so a run can never observe an unbound authority.
 /// Unbound means "no session-level decision yet": the guard falls back to

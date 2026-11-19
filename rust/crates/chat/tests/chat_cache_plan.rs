@@ -95,14 +95,14 @@ async fn two_turns(cache: CacheCapability) -> Vec<Option<CacheDirectives>> {
         )))
         .unwrap();
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Recording {
                 cache,
                 seen: seen.clone(),
             }),
             Arc::new(tools),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             context: Some(Arc::new(SystemPrompt)),
             ..Default::default()
         }),

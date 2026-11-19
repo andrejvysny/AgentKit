@@ -69,7 +69,7 @@ async fn executor_context(store: SqliteStore) -> ExecutionContext {
 async fn tool_calling_setting_and_recorded_capabilities_gate_staging() {
     let store = SqliteStore::memory(2).unwrap();
     let context = executor_context(store.clone()).await;
-    let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+    let executor = AgentExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
     // No settings document, no capability record: tools stage.
     assert!(executor.stage_tools(&context, "p").await.unwrap());
     // "auto" (absent) follows the recorded probe: `toolCalling: false`
@@ -108,7 +108,7 @@ async fn session_tasks_without_frozen_profiles_fail_before_dispatch() {
     store.create_chat("chat",None,json!({"agentkit.session":{"version":1,"profile":{"id":"coding"},"createdAt":"2026-01-01T00:00:00.000Z"}}),1000).await.unwrap();
     let mut context = executor_context(store).await;
     context.task.payload = json!({"chatId":"chat","model":"model"});
-    let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+    let executor = AgentExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
     assert!(
         executor
             .execute(context)

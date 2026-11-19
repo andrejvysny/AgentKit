@@ -4,7 +4,7 @@
 //! The engine has no filesystem of its own, so reading goes through a port
 //! ([`ProjectInstructionsSource`]); the secure filesystem implementation, with
 //! its symlink refusal and root confinement, lives in [`fs`] (the binding
-//! wires it into [`ChatExecutorOptions::project_instructions`]). The text is
+//! wires it into [`AgentExecutorOptions::project_instructions`]). The text is
 //! repository content: it is labelled with the file and a hash so a transcript
 //! says WHICH instructions were in force, and it is never a permission grant
 //! -- tools still decide what may run.
@@ -18,7 +18,7 @@ use agentkit_store::SqliteStore;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::{ChatExecutorOptions, ChatResult, ExecutionContext};
+use crate::{AgentExecutorOptions, ChatResult, ExecutionContext};
 
 pub use fs::FileProjectInstructions;
 pub use rules_snapshot::{PROJECT_RULES_METADATA_KEY, REFREEZE_DIFF_BYTES, refreeze_project_rules};
@@ -180,13 +180,13 @@ pub fn append_to_system_prompt(system_prompt: Option<&str>, block: &str) -> Opti
 /// message }`. `None` means the session has no project rules block.
 ///
 /// Skipped entirely — no load, no warnings — for an untrusted workspace when
-/// [`ChatExecutorOptions::skip_untrusted_project_instructions`] is set (the
+/// [`AgentExecutorOptions::skip_untrusted_project_instructions`] is set (the
 /// TS host's `untrustedProjectInstructions: "skip"`). The TS profile gate
 /// `profile.resources.projectInstructions === false` is not engine-side:
 /// profiles resolve in the TypeScript authority, so this lane gates on
 /// workspace presence and the option's own presence.
 pub(crate) async fn project_rules_block(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
     session: bool,
@@ -224,7 +224,7 @@ async fn emit_warnings(context: &ExecutionContext, warnings: &[String]) -> ChatR
 /// The workspace `(root, trusted)` whose rules this session loads; `None`
 /// when it has no workspace or an untrusted one is configured to be skipped.
 async fn rules_workspace(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     store: &SqliteStore,
     chat_id: &str,
 ) -> ChatResult<Option<(String, bool)>> {

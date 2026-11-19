@@ -41,10 +41,9 @@ struct Harness {
 
 fn harness() -> Harness {
     let store = SqliteStore::memory(64).expect("store");
-    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
-        Arc::new(Answer),
-        Arc::new(ToolRegistry::new()),
-    ));
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
+        AgentExecutor::new(Arc::new(Answer), Arc::new(ToolRegistry::new())),
+    );
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let host = AgentHost::new(
         store.clone(),

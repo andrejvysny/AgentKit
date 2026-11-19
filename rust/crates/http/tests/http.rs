@@ -1,4 +1,4 @@
-use agentkit_chat::ChatExecutor;
+use agentkit_chat::AgentExecutor;
 use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_engine::{SystemRuntime, TaskExecutor};
@@ -33,12 +33,13 @@ impl ChatProvider for Provider {
 }
 fn host() -> (AgentHost, Arc<Mutex<Vec<ChatRequest>>>) {
     let prompts = Arc::new(Mutex::new(Vec::new()));
-    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
-        Arc::new(Provider {
-            prompts: prompts.clone(),
-        }),
-        Arc::new(ToolRegistry::new()),
-    ));
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
+        Arc::new(AgentExecutor::new(
+            Arc::new(Provider {
+                prompts: prompts.clone(),
+            }),
+            Arc::new(ToolRegistry::new()),
+        ));
     let host = AgentHost::new(
         SqliteStore::memory(64).unwrap(),
         HashMap::from([("chat.turn".into(), executor)]),

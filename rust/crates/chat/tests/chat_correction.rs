@@ -117,14 +117,14 @@ fn partial(
     })
 }
 async fn make(
-    options: ChatExecutorOptions,
+    options: AgentExecutorOptions,
     fail_first: bool,
     empty_first: bool,
 ) -> (AgentHost, Arc<Mutex<Vec<ChatRequest>>>) {
     make_with(options, fail_first, empty_first, "tools unsupported", None).await
 }
 async fn make_with(
-    options: ChatExecutorOptions,
+    options: AgentExecutorOptions,
     fail_first: bool,
     empty_first: bool,
     fail_message: &'static str,
@@ -148,7 +148,7 @@ async fn make_with(
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(Echo {definition:serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap()})).unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
-        Arc::new(ChatExecutor::new(Arc::new(provider), Arc::new(tools)).with_options(options));
+        Arc::new(AgentExecutor::new(Arc::new(provider), Arc::new(tools)).with_options(options));
     let host = AgentHost::new(
         store,
         HashMap::from([("chat.turn".into(), executor)]),
@@ -176,7 +176,7 @@ async fn correction_shrinks_then_stalls_with_replaced_answer_and_durable_writeba
         reports: Mutex::new(vec![partial(2), partial(1), partial(1)]),
         seen: Mutex::new(vec![]),
     });
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         verification: Some(verifier.clone()),
         correction: Some(CorrectionConfig::default()),
         ..Default::default()
@@ -255,7 +255,7 @@ async fn correction_verifier_failure_is_unavailable_never_pass() {
         seen: Mutex::new(vec![]),
     });
     let (host, requests) = make(
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             verification: Some(verifier),
             correction: Some(CorrectionConfig::default()),
             ..Default::default()
@@ -284,7 +284,7 @@ async fn correction_passes_share_cumulative_request_budget() {
         reports: Mutex::new(vec![partial(2), partial(1)]),
         seen: Mutex::new(vec![]),
     });
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         verification: Some(verifier),
         correction: Some(CorrectionConfig::default()),
         execution_budgets: BudgetLimits {
@@ -304,7 +304,7 @@ async fn correction_passes_share_cumulative_request_budget() {
 #[tokio::test]
 async fn tool_schema_rejection_retries_once_without_tools_and_empty_answer_reasks_original() {
     for (fail, empty) in [(true, false), (false, true)] {
-        let (host, requests) = make(ChatExecutorOptions::default(), fail, empty).await;
+        let (host, requests) = make(AgentExecutorOptions::default(), fail, empty).await;
         execute(&host).await;
         assert_eq!(
             host.store().get_task("run").await.unwrap().unwrap().status,
@@ -330,7 +330,7 @@ async fn warning_codes(host: &AgentHost) -> Vec<String> {
 }
 #[tokio::test]
 async fn tool_less_retry_emits_a_visible_notice_with_the_provider_error() {
-    let (host, requests) = make(ChatExecutorOptions::default(), true, false).await;
+    let (host, requests) = make(AgentExecutorOptions::default(), true, false).await;
     execute(&host).await;
     assert_eq!(requests.lock().unwrap().len(), 2);
     let codes = warning_codes(&host).await;
@@ -350,7 +350,7 @@ async fn tool_less_retry_emits_a_visible_notice_with_the_provider_error() {
 }
 #[tokio::test]
 async fn empty_answer_reask_runs_without_tools_and_says_so() {
-    let (host, requests) = make(ChatExecutorOptions::default(), false, true).await;
+    let (host, requests) = make(AgentExecutorOptions::default(), false, true).await;
     execute(&host).await;
     assert_eq!(requests.lock().unwrap().len(), 2);
     assert!(requests.lock().unwrap()[1].tools.is_empty());
@@ -366,7 +366,7 @@ async fn empty_answer_reask_runs_without_tools_and_says_so() {
 #[tokio::test]
 async fn generic_400_does_not_retry_without_tools() {
     let (host, requests) = make_with(
-        ChatExecutorOptions::default(),
+        AgentExecutorOptions::default(),
         true,
         false,
         "chat template error: System message must be at the beginning",
@@ -388,7 +388,7 @@ async fn generic_400_does_not_retry_without_tools() {
 #[tokio::test]
 async fn tool_capable_provider_never_retries_without_tools() {
     let (host, requests) = make_with(
-        ChatExecutorOptions::default(),
+        AgentExecutorOptions::default(),
         true,
         false,
         "tools unsupported",
@@ -414,7 +414,7 @@ async fn correction_hard_cap_is_five_despite_larger_host_configuration() {
         seen: Mutex::new(vec![]),
     });
     let (host, requests) = make(
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             verification: Some(verifier.clone()),
             correction: Some(CorrectionConfig {
                 max_passes: 99,
@@ -453,7 +453,7 @@ impl VerificationHook<agentkit_store::SqliteStore> for NullVerifier {
 #[tokio::test]
 async fn null_verifier_stops_harness_as_unavailable() {
     let (host, requests) = make(
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             verification: Some(Arc::new(NullVerifier)),
             correction: Some(CorrectionConfig::default()),
             ..Default::default()
@@ -512,7 +512,7 @@ async fn contributors_stage_once_and_same_guarded_registry_serves_correction_pas
         ]),
         seen: Mutex::new(vec![]),
     });
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         verification: Some(verifier),
         correction: Some(CorrectionConfig::default()),
         tool_contributors: vec![Arc::new(ExtraContributor(contributions.clone()))],
@@ -593,7 +593,7 @@ async fn correction_persists_typed_and_opaque_failure_codes() {
             seen: Mutex::new(vec![]),
         });
         let (host, _) = make(
-            ChatExecutorOptions {
+            AgentExecutorOptions {
                 verification: Some(verifier),
                 ..Default::default()
             },

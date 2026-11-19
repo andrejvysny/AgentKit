@@ -1,6 +1,6 @@
 use super::{
     history::DurableEvents,
-    hooks::{ChatExecutorOptions, bounded},
+    hooks::{AgentExecutorOptions, bounded},
 };
 use crate::*;
 use agentkit_core::{ChatMessage, ChatProvider, RunOptions, Terminal, ToolRegistry};
@@ -57,7 +57,7 @@ pub fn tools_unsupported_failure(code: Option<&str>, message: &str) -> bool {
 }
 pub(super) struct ChatSession {
     pub context: ExecutionContext,
-    pub options: ChatExecutorOptions,
+    pub options: AgentExecutorOptions,
     pub base: RunOptions,
     pub provider: Arc<dyn ChatProvider>,
     pub registry: Arc<ToolRegistry>,

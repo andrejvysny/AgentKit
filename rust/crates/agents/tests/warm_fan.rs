@@ -200,7 +200,7 @@ impl Fan {
             .with_output_root(outputs.path().join("outputs"));
         let runtime: SharedRuntime = Arc::new(SystemRuntime);
         let provider = Arc::new(Warm::new(capability));
-        let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(ChatExecutor::new(
+        let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(AgentExecutor::new(
             Arc::clone(&provider) as Arc<dyn ChatProvider>,
             Arc::new(ToolRegistry::new()),
         ));

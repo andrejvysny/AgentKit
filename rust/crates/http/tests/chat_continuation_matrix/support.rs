@@ -1,5 +1,5 @@
+use agentkit_chat::{AgentExecutor, ChatHostExt, SubmitChat};
 use agentkit_chat::{AgentHost, HostOptions};
-use agentkit_chat::{ChatExecutor, ChatHostExt, SubmitChat};
 use agentkit_core::*;
 use agentkit_engine::TaskExecutor;
 use agentkit_providers::*;
@@ -73,7 +73,7 @@ impl Fixture {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(Write { count: self.tools.clone(), definition: serde_json::from_value(json!({"name":"write","version":"1","effect":"write","capability":"test","description":"Write","inputSchema":{"type":"object"}})).unwrap() })).unwrap();
         let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
-            Arc::new(ChatExecutor::new(provider, Arc::new(registry)));
+            Arc::new(AgentExecutor::new(provider, Arc::new(registry)));
         AgentHost::new(
             store,
             HashMap::from([("chat.turn".into(), executor)]),

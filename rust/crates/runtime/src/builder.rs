@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use agentkit_agents::AdvisorEventSink;
+use agentkit_chat::{AgentExecutor, AgentExecutorOptions, ProviderRegistry};
 use agentkit_chat::{AgentHost, HostOptions};
-use agentkit_chat::{ChatExecutor, ChatExecutorOptions, ProviderRegistry};
 use agentkit_core::permission::CodingMode;
 use agentkit_core::{ChatProvider, RunHooks, ToolRegistry};
 use agentkit_engine::{
@@ -589,8 +589,8 @@ impl AgentRuntimeBuilder {
         // builder would serve are held by a typed refusal, so a turn that
         // needs a model settles failed instead of running or panicking.
         let model_loop = default_provider.as_ref().map(|provider| {
-            ChatExecutor::new(Arc::clone(provider), Arc::new(ToolRegistry::new())).with_options(
-                ChatExecutorOptions {
+            AgentExecutor::new(Arc::clone(provider), Arc::new(ToolRegistry::new())).with_options(
+                AgentExecutorOptions {
                     providers: Some(Arc::clone(&registry)),
                     provider_factory: Some(native_provider_factory.clone()),
                     content_authority: content_authority.clone(),

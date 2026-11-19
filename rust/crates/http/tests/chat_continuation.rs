@@ -1,5 +1,5 @@
+use agentkit_chat::{AgentExecutor, ChatHostExt, SubmitChat};
 use agentkit_chat::{AgentHost, HostOptions};
-use agentkit_chat::{ChatExecutor, ChatHostExt, SubmitChat};
 use agentkit_core::*;
 use agentkit_engine::TaskExecutor;
 use agentkit_providers::*;
@@ -64,10 +64,9 @@ fn host(store: SqliteStore, url: &str, generation: u64) -> AgentHost {
         identity,
     }))
     .unwrap();
-    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
-        Arc::new(provider),
-        Arc::new(ToolRegistry::new()),
-    ));
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
+        AgentExecutor::new(Arc::new(provider), Arc::new(ToolRegistry::new())),
+    );
     AgentHost::new(
         store,
         HashMap::from([("chat.turn".into(), executor)]),
@@ -234,13 +233,13 @@ async fn responses_correction_preserves_canonical_private_history_for_next_run()
     let provider = ResponsesProvider::new(Arc::new(Transport { url, identity })).unwrap();
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(Echo {definition:serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap()})).unwrap();
-    let options = agentkit_chat::ChatExecutorOptions {
+    let options = agentkit_chat::AgentExecutorOptions {
         verification: Some(Arc::new(VerifyOnce(std::sync::atomic::AtomicUsize::new(0)))),
         correction: Some(agentkit_chat::CorrectionConfig::default()),
         ..Default::default()
     };
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
-        Arc::new(ChatExecutor::new(Arc::new(provider), Arc::new(registry)).with_options(options));
+        Arc::new(AgentExecutor::new(Arc::new(provider), Arc::new(registry)).with_options(options));
     let host = AgentHost::new(
         store.clone(),
         HashMap::from([("chat.turn".into(), executor)]),

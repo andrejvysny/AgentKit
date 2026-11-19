@@ -6,7 +6,7 @@
 //! moment: the project rules (S3) and the core memory block (S4).
 
 use super::{history::ContinuationSession, masking, session_meta};
-use crate::{ChatExecutorOptions, ChatResult, ExecutionContext, refreeze_project_rules};
+use crate::{AgentExecutorOptions, ChatResult, ExecutionContext, refreeze_project_rules};
 use agentkit_kernel::sha256_hex;
 use serde_json::{Value, json};
 
@@ -135,7 +135,7 @@ pub(super) struct Adopted {
 /// Adopts the pending project-rule and core-memory changes. Neither emits
 /// the cache break: the compaction owns the one event of this rewrite.
 pub(super) async fn adopt_pending(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
 ) -> ChatResult<Adopted> {

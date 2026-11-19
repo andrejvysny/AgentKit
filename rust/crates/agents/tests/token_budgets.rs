@@ -10,7 +10,7 @@ use agentkit_agents::{
     SubagentConfig, SubagentRoleGuard, SubagentRoleLimits, SubagentService, SubagentTokenGate,
 };
 use agentkit_chat::{
-    AgentHost, ChatExecutor, ChatExecutorOptions, ChatResult, HostOptions, UsageAuthorizer,
+    AgentExecutor, AgentExecutorOptions, AgentHost, ChatResult, HostOptions, UsageAuthorizer,
     WorkerHandle,
 };
 use agentkit_core::{
@@ -242,11 +242,11 @@ impl Rig {
             }))
             .unwrap();
         let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-            ChatExecutor::new(
+            AgentExecutor::new(
                 Arc::clone(&provider) as Arc<dyn ChatProvider>,
                 Arc::new(registry),
             )
-            .with_options(ChatExecutorOptions {
+            .with_options(AgentExecutorOptions {
                 usage: Some(Arc::clone(&gate) as Arc<dyn UsageAuthorizer>),
                 ..Default::default()
             }),

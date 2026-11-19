@@ -14,7 +14,7 @@ mod compaction_runner;
 mod context_budget;
 mod hooks;
 mod masking;
-pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
+pub use hooks::{AgentExecutorOptions, AttachmentBudgets, ChatHookTimeouts};
 mod prefix;
 mod rewrite;
 mod session_meta;
@@ -39,20 +39,20 @@ pub(crate) async fn record_generation(
 }
 
 /// A fixed provider binding or an immutable task snapshot determines the account.
-pub struct ChatExecutor {
+pub struct AgentExecutor {
     provider: Arc<dyn ChatProvider>,
     tools: Arc<ToolRegistry>,
-    options: ChatExecutorOptions,
+    options: AgentExecutorOptions,
 }
-impl ChatExecutor {
+impl AgentExecutor {
     pub fn new(provider: Arc<dyn ChatProvider>, tools: Arc<ToolRegistry>) -> Self {
         Self {
             provider,
             tools,
-            options: ChatExecutorOptions::default(),
+            options: AgentExecutorOptions::default(),
         }
     }
-    pub fn with_options(mut self, options: ChatExecutorOptions) -> Self {
+    pub fn with_options(mut self, options: AgentExecutorOptions) -> Self {
         self.options = options;
         self
     }
@@ -150,7 +150,7 @@ impl ChatExecutor {
     }
 }
 #[async_trait]
-impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
+impl TaskExecutor<agentkit_store::SqliteStore> for AgentExecutor {
     fn handles_verification(&self) -> bool {
         self.options.verification.is_some()
     }
@@ -168,7 +168,7 @@ impl TaskExecutor<agentkit_store::SqliteStore> for ChatExecutor {
     }
 }
 
-impl ChatExecutor {
+impl AgentExecutor {
     async fn execute_chat(&self, context: ExecutionContext) -> ChatResult<()> {
         context.check_cancelled()?;
         let chat_id = required(&context.task.payload, "chatId")?;

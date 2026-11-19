@@ -16,7 +16,7 @@ The demo provider streams a deterministic echo in process. It uses the real
 performs no network I/O and reads no credentials. The URL shown in the demo
 consent dialog identifies a scope only. `demo-slow` makes cancellation visible.
 
-The application uses `AgentHost`, `ChatExecutor`, `SqliteStore`, durable event
+The application uses `AgentHost`, `AgentExecutor`, `SqliteStore`, durable event
 subscriptions, and real proposal transitions and receipts. A proposal replaces a
 local demo note in SQLite. Approval is separate from apply; replaying an applied
 proposal reads its receipt. This is a deliberately idempotent local setting

@@ -76,7 +76,7 @@ impl Tool for Edit {
     }
 }
 
-async fn records(options: ChatExecutorOptions) -> Vec<Value> {
+async fn records(options: AgentExecutorOptions) -> Vec<Value> {
     let store = SqliteStore::memory(64).unwrap();
     store.create_chat("chat", None, json!({}), 0).await.unwrap();
     let mut tools = ToolRegistry::new();
@@ -87,7 +87,7 @@ async fn records(options: ChatExecutorOptions) -> Vec<Value> {
         .unwrap();
     tools.register(Arc::new(Edit { definition })).unwrap();
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Script {
                 asked: Mutex::new(false),
             }),
@@ -125,7 +125,7 @@ async fn records(options: ChatExecutorOptions) -> Vec<Value> {
 
 #[tokio::test]
 async fn chat_executor_emits_one_record_per_call_by_default() {
-    let records = records(ChatExecutorOptions::default()).await;
+    let records = records(AgentExecutorOptions::default()).await;
     let ids: Vec<&str> = records
         .iter()
         .map(|r| r["toolCallId"].as_str().unwrap())
@@ -151,7 +151,7 @@ async fn chat_executor_emits_one_record_per_call_by_default() {
 
 #[tokio::test]
 async fn records_can_be_turned_off() {
-    let records = records(ChatExecutorOptions {
+    let records = records(AgentExecutorOptions {
         tool_call_records: false,
         ..Default::default()
     })

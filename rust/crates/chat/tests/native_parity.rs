@@ -72,8 +72,8 @@ fn host(
     authority: Arc<dyn ContentAuthority<agentkit_store::StoreError>>,
 ) -> AgentHost {
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(Arc::new(Provider(requests)), Arc::new(tools())).with_options(
-            ChatExecutorOptions {
+        AgentExecutor::new(Arc::new(Provider(requests)), Arc::new(tools())).with_options(
+            AgentExecutorOptions {
                 content_authority: Some(authority),
                 max_output_tokens: Some(5),
                 ..Default::default()
@@ -428,8 +428,8 @@ async fn connector_revocation_during_usage_authorization_prevents_final_dispatch
         release: tokio::sync::Notify::new(),
     });
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(Arc::new(Provider(requests.clone())), Arc::new(tools())).with_options(
-            ChatExecutorOptions {
+        AgentExecutor::new(Arc::new(Provider(requests.clone())), Arc::new(tools())).with_options(
+            AgentExecutorOptions {
                 content_authority: Some(authority.clone()),
                 usage: Some(usage.clone()),
                 ..Default::default()

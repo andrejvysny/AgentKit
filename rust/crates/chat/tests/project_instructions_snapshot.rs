@@ -52,8 +52,8 @@ impl ChatProvider for Capturing {
     }
 }
 
-fn options() -> ChatExecutorOptions {
-    ChatExecutorOptions {
+fn options() -> AgentExecutorOptions {
+    AgentExecutorOptions {
         project_instructions: Some(Arc::new(FileProjectInstructions)),
         ..Default::default()
     }
@@ -76,7 +76,7 @@ impl Session {
         let store = SqliteStore::memory(64).expect("store");
         let seen: Seen = Arc::default();
         let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-            ChatExecutor::new(
+            AgentExecutor::new(
                 Arc::new(Capturing(Arc::clone(&seen))),
                 Arc::new(ToolRegistry::new()),
             )

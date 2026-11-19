@@ -55,7 +55,7 @@
  *    which is exactly what this script exercises.
  *  - TurnRunner `maxToolIterations: 30` has NO JS surface on the binding:
  session turns run under the engine's internal per-run cap
- (`ChatExecutorOptions::max_tool_iterations`,
+ (`AgentExecutorOptions::max_tool_iterations`,
  rust/crates/chat/src/chat/hooks.rs). The honest native witness for a cap
  *    hit is the existing "no turn failed" assertion: a capped run ends
  *    `run.failed` with `Reached maxToolIterations=…` and lands in

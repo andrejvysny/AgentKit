@@ -1487,7 +1487,7 @@ INSERT INTO messages (id,chat_id,run_id,role,content,content_format,order_key,pa
 #[tokio::test]
 async fn imported_settings_reach_the_production_settings_document() {
     // The R05 regression: `toolCalling: "off"` written only to the
-    // compatibility namespace never reached `ChatExecutor::stage_tools`,
+    // compatibility namespace never reached `AgentExecutor::stage_tools`,
     // which reads ("http","settings"). The promotion must carry the whole
     // whitelist and must never overwrite a live document.
     let root = tempfile::tempdir().unwrap();

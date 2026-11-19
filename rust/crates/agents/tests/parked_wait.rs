@@ -214,11 +214,11 @@ async fn rig(store: SqliteStore, pool: usize, provider: Arc<Scripted>) -> Rig {
     .with_profiles(profiles.clone());
     let subagents = SubagentService::new(store.clone(), child_session, runtime.clone(), config);
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::clone(&provider) as Arc<dyn ChatProvider>,
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_contributors: vec![
                 Arc::new(SubagentContributor::new(subagents.clone())) as Arc<dyn ToolContributor>
             ],

@@ -44,7 +44,7 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   `recovery_unreadable`; drop never joins the thread.
 - `store.createService(options?)` builds the whole Rust pipeline per
   service: `JsBridge` (callback router), `JsToolContributor`,
-  `AgentHost`, `ChatExecutor` with a `JsProvider`, and
+  `AgentHost`, `AgentExecutor` with a `JsProvider`, and
   `AgentSessionService` — no `NativeHost`/`NativeRegistry` mirrors, and
   no session/governance logic duplicated in TS.
 - JS-contributed tools run under **Rust-side authority**:

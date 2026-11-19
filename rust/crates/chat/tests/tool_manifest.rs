@@ -81,7 +81,7 @@ struct Rig {
 
 fn rig(store: &SqliteStore, tools: Arc<ToolRegistry>) -> Rig {
     let seen = Arc::new(Mutex::new(vec![]));
-    let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(ChatExecutor::new(
+    let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(AgentExecutor::new(
         Arc::new(Capturing {
             tools: Arc::clone(&seen),
         }),

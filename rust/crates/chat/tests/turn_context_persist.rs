@@ -46,10 +46,10 @@ const SKILL: &str = "---\nname: guide\ndescription: guide\n---\noriginal instruc
 fn runtime(
     store: &SqliteStore,
     seen: Seen,
-    options: ChatExecutorOptions,
+    options: AgentExecutorOptions,
 ) -> (AgentHost, AgentSessionService<SqliteStore>) {
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(Arc::new(Recording(seen)), Arc::new(ToolRegistry::new()))
+        AgentExecutor::new(Arc::new(Recording(seen)), Arc::new(ToolRegistry::new()))
             .with_options(options),
     );
     let shared: SharedRuntime = Arc::new(SystemRuntime);
@@ -146,7 +146,7 @@ fn user_messages(store_messages: &[agentkit_sessions::MessageRecord]) -> Vec<&Me
 async fn selected_skill_enters_the_user_message_once_and_replays_after_a_restart() {
     let store = SqliteStore::memory(64).expect("store");
     let first: Seen = Arc::default();
-    let (host, service) = runtime(&store, first.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, first.clone(), AgentExecutorOptions::default());
     create(&service, Some(skill_selection(&store, SKILL).await)).await;
     turn(&host, &store, &service, "q1", "in1").await;
     turn(&host, &store, &service, "q2", "in2").await;
@@ -197,7 +197,7 @@ async fn selected_skill_enters_the_user_message_once_and_replays_after_a_restart
 
     // CE-03: restart the runtime mid-session; the replayed request is identical.
     let second: Seen = Arc::default();
-    let (host, service) = runtime(&store, second.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, second.clone(), AgentExecutorOptions::default());
     turn(&host, &store, &service, "q3", "in3").await;
     let replayed = second.lock().unwrap()[0].clone();
     let sent_before = requests[1].messages.len();
@@ -215,7 +215,7 @@ async fn selected_skill_enters_the_user_message_once_and_replays_after_a_restart
 async fn queued_notes_reach_the_next_turn_only() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     create(&service, None).await;
     turn(&host, &store, &service, "q1", "in1").await;
     for kind in [
@@ -270,7 +270,7 @@ async fn queued_notes_reach_the_next_turn_only() {
 async fn the_date_is_sent_when_it_differs_from_the_last_date_sent() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         turn_context_date: true,
         ..Default::default()
     };
@@ -293,7 +293,7 @@ async fn the_date_is_sent_when_it_differs_from_the_last_date_sent() {
 async fn an_item_over_the_budget_is_replaced_by_a_placeholder_naming_its_handle() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         turn_oversize: Some(Arc::new(Keeps)),
         ..Default::default()
     };
@@ -337,7 +337,7 @@ impl TurnContextHook for Racing {
 async fn a_note_queued_while_the_turn_starts_is_rendered_and_cleared_not_lost() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         turn_context: Some(Arc::new(Racing(store.clone()))),
         ..Default::default()
     };
@@ -381,7 +381,7 @@ impl TurnContextHook for FixedHint {
 async fn the_recommendation_line_is_persisted_once_and_replays_unchanged() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         turn_context: Some(Arc::new(FixedHint)),
         ..Default::default()
     };
@@ -407,7 +407,7 @@ async fn the_recommendation_line_is_persisted_once_and_replays_unchanged() {
 async fn a_submitted_turn_context_part_is_refused() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (_host, service) = runtime(&store, seen, ChatExecutorOptions::default());
+    let (_host, service) = runtime(&store, seen, AgentExecutorOptions::default());
     create(&service, None).await;
     let forged = json!([
         {"type": "text", "text": "hi"},
@@ -447,7 +447,7 @@ async fn a_submitted_turn_context_part_is_refused() {
 async fn an_oversized_skill_is_not_carried_so_the_next_turn_tries_again() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     let big = format!(
         "---\nname: guide\ndescription: guide\n---\n{}\n",
         "x".repeat(20_000)
@@ -511,7 +511,7 @@ async fn turn_in(
 async fn a_selected_skill_survives_compaction_and_a_restart_exactly_once() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     create(&service, Some(skill_selection(&store, SKILL).await)).await;
     service
         .configure(
@@ -548,7 +548,7 @@ async fn a_selected_skill_survives_compaction_and_a_restart_exactly_once() {
     );
     // A restart builds the same request.
     let after: Seen = Arc::default();
-    let (host, service) = runtime(&store, after.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, after.clone(), AgentExecutorOptions::default());
     turn_in(&host, &store, &service, "s1", "d").await;
     assert_eq!(
         mentions(&mains(&after)[0].messages, "original instruction"),
@@ -560,7 +560,7 @@ async fn a_selected_skill_survives_compaction_and_a_restart_exactly_once() {
 async fn a_fork_from_before_the_selection_does_not_inherit_it_as_carried() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     create(&service, None).await;
     turn_in(&host, &store, &service, "s1", "q1").await;
     service
@@ -594,7 +594,7 @@ async fn a_fork_from_before_the_selection_does_not_inherit_it_as_carried() {
 async fn editing_an_earlier_message_resends_what_only_the_old_branch_carried() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     create(&service, None).await;
     turn_in(&host, &store, &service, "s1", "q1").await;
     service
@@ -640,7 +640,7 @@ async fn editing_an_earlier_message_resends_what_only_the_old_branch_carried() {
 async fn deselecting_and_reselecting_sends_notes_not_a_second_copy() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     let selection = skill_selection(&store, SKILL).await;
     create(&service, Some(selection.clone())).await;
     turn_in(&host, &store, &service, "s1", "q1").await;
@@ -667,7 +667,7 @@ async fn an_oversized_guide_is_stored_and_its_handle_reads_back_exactly() {
     let outputs = Arc::new(InMemoryOutputStore::new(ManualClock::new(
         1_700_000_000_000,
     )));
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         output: Some(Arc::new(OutputGate::new(outputs.clone()))),
         ..Default::default()
     };
@@ -705,7 +705,7 @@ async fn an_oversized_guide_is_stored_and_its_handle_reads_back_exactly() {
 async fn an_oversized_guide_without_a_store_says_it_was_not_supplied_in_full() {
     let store = SqliteStore::memory(64).expect("store");
     let seen: Seen = Arc::default();
-    let (host, service) = runtime(&store, seen.clone(), ChatExecutorOptions::default());
+    let (host, service) = runtime(&store, seen.clone(), AgentExecutorOptions::default());
     let guide = format!(
         "---\nname: guide\ndescription: guide\n---\n{}\n",
         "x".repeat(30_000)

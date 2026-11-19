@@ -171,7 +171,7 @@ fn host_with(store: SqliteStore, provider: Arc<dyn ChatProvider>, tool: Arc<Muta
     let mut tools = ToolRegistry::new();
     tools.register(tool).unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(provider, Arc::new(tools)).with_options(ChatExecutorOptions::default()),
+        AgentExecutor::new(provider, Arc::new(tools)).with_options(AgentExecutorOptions::default()),
     );
     AgentHost::new(
         store,

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::turn_context::{TurnNote, TurnNoteKind, with_turn_note, without_turn_notes};
-use crate::{ChatError, ChatExecutorOptions, ChatResult, ExecutionContext, REFREEZE_DIFF_BYTES};
+use crate::{AgentExecutorOptions, ChatError, ChatResult, ExecutionContext, REFREEZE_DIFF_BYTES};
 
 /// Chat metadata key holding the frozen core-memory record.
 pub const CORE_MEMORY_METADATA_KEY: &str = "agentkit.session.coreMemory";
@@ -256,7 +256,7 @@ async fn stored_block(store: &SqliteStore, chat_id: &str) -> ChatResult<Option<S
 /// that follows. A non-session turn gets the current block, unfrozen. `None`
 /// means the turn has no S4.
 pub(crate) async fn core_memory_block(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
     session: bool,

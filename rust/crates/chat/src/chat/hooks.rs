@@ -14,7 +14,7 @@ use std::{collections::HashMap, future::Future, time::Duration};
 const CHAT_REQUEST_LIMIT: u32 = 24;
 
 #[derive(Clone)]
-pub struct ChatExecutorOptions {
+pub struct AgentExecutorOptions {
     pub context: Option<Arc<dyn ContextProvider>>,
     pub content_authority: Option<Arc<dyn ContentAuthority<StoreError>>>,
     pub attachments: Option<Arc<dyn AttachmentResolver>>,
@@ -94,7 +94,7 @@ pub struct ChatExecutorOptions {
     /// handle. Absent, results are bounded by the envelope's byte budget.
     pub output: Option<Arc<agentkit_core::OutputGate>>,
 }
-impl Default for ChatExecutorOptions {
+impl Default for AgentExecutorOptions {
     fn default() -> Self {
         Self {
             context: None,
@@ -180,7 +180,7 @@ pub(crate) struct ContextSnapshot {
 }
 
 pub(crate) async fn resolve_context(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
 ) -> ChatResult<ContextSnapshot> {
@@ -236,7 +236,7 @@ pub(crate) async fn bounded<T, E: Into<ChatError>>(
 #[derive(Clone)]
 pub(crate) struct PreparedProvider {
     pub inner: Arc<dyn ChatProvider>,
-    pub options: ChatExecutorOptions,
+    pub options: AgentExecutorOptions,
     pub context: ExecutionContext,
     pub chat_id: String,
     pub budget: Option<super::context_budget::ContextBudget>,
@@ -327,7 +327,7 @@ pub(crate) fn message_text(value: &Value) -> String {
         .join("\n")
 }
 async fn resolve_attachments(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
     mut messages: Vec<ChatMessage>,
@@ -393,7 +393,7 @@ async fn resolve_attachments(
     Ok((messages, warnings))
 }
 async fn resolve_one(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
     reference: &str,
@@ -458,7 +458,7 @@ fn refusal(
 }
 
 pub(super) async fn stage_registry(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     context: &ExecutionContext,
     chat_id: &str,
     static_registry: Arc<agentkit_core::ToolRegistry>,

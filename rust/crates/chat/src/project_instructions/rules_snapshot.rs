@@ -25,7 +25,7 @@ use super::{
     read_instruction_files, render_block, rules_workspace, unreadable_warning,
 };
 use crate::turn_context::{TurnNote, TurnNoteKind, with_turn_note, without_turn_notes};
-use crate::{ChatError, ChatExecutorOptions, ChatResult, ExecutionContext};
+use crate::{AgentExecutorOptions, ChatError, ChatResult, ExecutionContext};
 
 /// Chat metadata key holding the frozen rules record.
 pub const PROJECT_RULES_METADATA_KEY: &str = "agentkit.session.projectRules";
@@ -453,7 +453,7 @@ pub(super) async fn turn_rules(
 /// now keeps its previously frozen text. Returns false when nothing needed
 /// adopting: no frozen rules yet, no workspace, or no change.
 pub async fn refreeze_project_rules(
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     store: &SqliteStore,
     chat_id: &str,
     now_ms: i64,

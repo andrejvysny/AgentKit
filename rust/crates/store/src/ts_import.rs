@@ -71,7 +71,7 @@ pub const ASSISTANT_SETTINGS_NAMESPACE: &str = "agentkit.compat.settings";
 /// The only key [`ASSISTANT_SETTINGS_NAMESPACE`] ever holds.
 pub const ASSISTANT_SETTINGS_KEY: &str = "assistant";
 /// The production assistant-settings document: the namespace/key every
-/// runtime reader consumes — `ChatExecutor::stage_tools` (the `toolCalling`
+/// runtime reader consumes — `AgentExecutor::stage_tools` (the `toolCalling`
 /// staging gate), the HTTP turn lane (default provider/model), the
 /// `DesktopBackend` management lane and the napi settings port. Mirroring
 /// the compatibility record here is what makes an imported
@@ -2468,7 +2468,7 @@ impl<'a> Importer<'a> {
                 &Value::Object(record.clone()),
             )? && self.opts.promote_settings
             {
-                // The runtime policy gate (`ChatExecutor::stage_tools`) and
+                // The runtime policy gate (`AgentExecutor::stage_tools`) and
                 // the turn lane read ONLY the production document; a settings
                 // row that lives just in the compatibility namespace has no
                 // effect on any executor. Copy the wire-identical whitelist

@@ -104,10 +104,10 @@ fn make_host(
     store: SqliteStore,
     provider: Arc<dyn ChatProvider>,
     tools: ToolRegistry,
-    options: ChatExecutorOptions,
+    options: AgentExecutorOptions,
 ) -> AgentHost {
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
-        Arc::new(ChatExecutor::new(provider, Arc::new(tools)).with_options(options));
+        Arc::new(AgentExecutor::new(provider, Arc::new(tools)).with_options(options));
     AgentHost::new(
         store,
         HashMap::from([("chat.turn".into(), executor)]),
@@ -161,7 +161,7 @@ async fn context_and_canonical_tools_are_durable_before_effect_then_replay_balan
             tool: true,
         }),
         tools,
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             context: Some(Arc::new(Context)),
             ..Default::default()
         },
@@ -220,7 +220,7 @@ async fn attachment_cache_and_budgets_are_per_pass_without_rewriting_stored_refs
     let attachments = Arc::new(Attachments {
         calls: AtomicUsize::new(0),
     });
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         attachments: Some(attachments.clone()),
         attachment_budgets: AttachmentBudgets {
             max_bytes_per_image: 100,
@@ -303,7 +303,7 @@ async fn usage_request_names_the_turn_and_counts_tools_and_an_output_reserve() {
             tool: false,
         }),
         tools,
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             usage: Some(Arc::new(Spy(seen.clone()))),
             ..Default::default()
         },
@@ -331,7 +331,7 @@ async fn usage_denial_prevents_provider_work_and_settles_failed() {
             tool: false,
         }),
         ToolRegistry::new(),
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             usage: Some(Arc::new(Denied)),
             ..Default::default()
         },
@@ -354,7 +354,7 @@ impl ContextProvider for SlowContext {
 async fn stalled_context_degrades_under_deadline_and_emits_durable_warning() {
     let store = store().await;
     let requests = Arc::new(Mutex::new(vec![]));
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         context: Some(Arc::new(SlowContext)),
         hook_timeouts: ChatHookTimeouts {
             context_ms: 5,
@@ -433,7 +433,7 @@ async fn queued_provider_snapshot_never_changes_to_new_canonical_generation() {
             tool: false,
         }),
         ToolRegistry::new(),
-        ChatExecutorOptions {
+        AgentExecutorOptions {
             provider_factory: Some(factory.clone()),
             ..Default::default()
         },
@@ -518,7 +518,7 @@ async fn native_submit_replay_rejects_changed_parent_identity() {
             tool: false,
         }),
         ToolRegistry::new(),
-        ChatExecutorOptions::default(),
+        AgentExecutorOptions::default(),
     );
     host.submit_chat(SubmitChat {
         task_id: "same".into(),
@@ -570,7 +570,7 @@ async fn hook_timeout_text_from_callbacks_does_not_trigger_fallback() {
     for attachment in [false, true] {
         let store = store().await;
         let requests = Arc::new(Mutex::new(vec![]));
-        let mut options = ChatExecutorOptions::default();
+        let mut options = AgentExecutorOptions::default();
         let content = if attachment {
             options.attachments = Some(Arc::new(SpoofAttachment));
             json!([{"type":"text","text":"view"},{"type":"image","source":{"kind":"ref","ref":"ref"}}])

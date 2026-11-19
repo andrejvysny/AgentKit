@@ -5,7 +5,7 @@
 //! durable receipt, with the human approving the exact bytes.
 
 use agentkit_chat::AgentHost;
-use agentkit_chat::{ChatExecutor, ChatExecutorOptions};
+use agentkit_chat::{AgentExecutor, AgentExecutorOptions};
 use agentkit_core::{ChatProvider, ChatRequest, ProviderEvent, ProviderStream, ToolRegistry};
 use agentkit_engine::{SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_runtime::SessionExecutionAuthority;
@@ -175,8 +175,8 @@ async fn fixture_opts(
         plan_tool_names: None,
     });
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
-            ChatExecutorOptions {
+        AgentExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
+            AgentExecutorOptions {
                 tool_contributors: vec![pack],
                 tool_guards: vec![Arc::new(guard)],
                 ..Default::default()

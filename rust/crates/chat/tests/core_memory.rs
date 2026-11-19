@@ -90,8 +90,8 @@ impl CoreMemorySource for Pins {
     }
 }
 
-fn options(pins: &Arc<Pins>) -> ChatExecutorOptions {
-    ChatExecutorOptions {
+fn options(pins: &Arc<Pins>) -> AgentExecutorOptions {
+    AgentExecutorOptions {
         core_memory: Some(Arc::clone(pins) as Arc<dyn CoreMemorySource>),
         ..Default::default()
     }
@@ -110,7 +110,7 @@ impl Session {
         let store = SqliteStore::memory(64).expect("store");
         let seen: Seen = Arc::default();
         let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-            ChatExecutor::new(
+            AgentExecutor::new(
                 Arc::new(Capturing(Arc::clone(&seen))),
                 Arc::new(ToolRegistry::new()),
             )

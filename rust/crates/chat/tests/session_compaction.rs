@@ -147,8 +147,8 @@ impl Harness {
             fail_after_summary: AtomicU8::new(u8::from(setup.fail_after_summary)),
         };
         let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-            ChatExecutor::new(Arc::new(provider), Arc::new(ToolRegistry::new())).with_options(
-                ChatExecutorOptions {
+            AgentExecutor::new(Arc::new(provider), Arc::new(ToolRegistry::new())).with_options(
+                AgentExecutorOptions {
                     auto_compaction: setup.auto_compaction,
                     project_instructions: setup
                         .workspace

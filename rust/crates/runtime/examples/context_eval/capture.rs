@@ -1,4 +1,4 @@
-use agentkit_chat::{ChatExecutor, ChatExecutorOptions, FileProjectInstructions};
+use agentkit_chat::{AgentExecutor, AgentExecutorOptions, FileProjectInstructions};
 use agentkit_core::{ChatProvider, ToolRegistry};
 use agentkit_engine::{AgentHost, HostOptions, SharedRuntime, SystemRuntime, TaskExecutor};
 use agentkit_providers::{ChatCompletionsProvider, ResponsesProvider};
@@ -89,8 +89,8 @@ fn executor(
         .unwrap();
     let extra = Arc::new(ScriptedReadTool::new("extra_read", "extra tool", vec![]));
     Arc::new(
-        ChatExecutor::new(provider(&config.protocol, transport), Arc::new(registry)).with_options(
-            ChatExecutorOptions {
+        AgentExecutor::new(provider(&config.protocol, transport), Arc::new(registry)).with_options(
+            AgentExecutorOptions {
                 project_instructions: Some(Arc::new(FileProjectInstructions)),
                 tool_contributors: vec![Arc::new(SwitchableContributor::new(enabled, extra))],
                 ..Default::default()

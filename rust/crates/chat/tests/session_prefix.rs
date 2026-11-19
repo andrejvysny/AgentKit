@@ -130,12 +130,12 @@ async fn the_prefix_is_recorded_once_kept_while_unchanged_and_refrozen_on_edit()
     let dir = workspace();
     let store = SqliteStore::memory(64).expect("store");
     let requests = Arc::new(Mutex::new(vec![]));
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         project_instructions: Some(Arc::new(FileProjectInstructions)),
         ..Default::default()
     };
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Capturing {
                 inner: Answer,
                 requests: Arc::clone(&requests),

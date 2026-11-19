@@ -87,14 +87,14 @@ async fn a_symlinked_agents_md_skips_with_a_durable_warning_and_never_leaks() {
     let store = SqliteStore::memory(64).expect("store");
     let requests = Arc::new(Mutex::new(vec![]));
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Capturing {
                 inner: Answer,
                 requests: Arc::clone(&requests),
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             project_instructions: Some(Arc::new(FileProjectInstructions)),
             ..Default::default()
         }),

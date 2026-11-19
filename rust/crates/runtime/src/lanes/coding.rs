@@ -2,7 +2,7 @@
 //! binding as a first-class contributor on the SAME executor lane as the JS
 //! tools.
 //!
-//! Registration is late-bound because the `ChatExecutor` (and with it the
+//! Registration is late-bound because the `AgentExecutor` (and with it the
 //! contributor/guard chain and the standing-approval policy) is constructed
 //! before any JS call can arrive: the executor holds the three adapters
 //! below for the service's whole life, and they consult one shared lane

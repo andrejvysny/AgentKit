@@ -350,7 +350,7 @@ async fn fixture_shaped(
     }))
     .unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
                 ask: ask.clone(),
@@ -359,7 +359,7 @@ async fn fixture_shaped(
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             verification: options.verification.clone(),
             correction: options
                 .verification

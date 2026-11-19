@@ -113,7 +113,7 @@ volume-serial/file-index identity — the `dev`/`ino` equivalent, since
 `O_NOFOLLOW` does not exist there; other non-POSIX targets hard-refuse,
 never an unchecked read,
 65 536-byte cap, digest titles, trailing-U+FFFD strip matching lossy
-UTF-8), `ChatExecutor` appends the block to the resolved system prompt
+UTF-8), `AgentExecutor` appends the block to the resolved system prompt
 per pass and emits one durable `run.warning
 {code:"project_instructions_unavailable"}` per skipped/truncated file,
 and the binding wires the FS source unconditionally — sessions whose

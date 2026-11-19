@@ -7,7 +7,7 @@ use super::render::{Draft, TURN_CONTEXT_BUDGET_TOKENS, TurnItem, TurnItemKind, r
 use super::state::{
     Carried, Delta, MAX_TURN_NOTES, Pinned, TurnNote, TurnNoteKind, TurnState, coalesce,
 };
-use crate::{ChatError, ChatExecutorOptions, ChatResult, ExecutionContext};
+use crate::{AgentExecutorOptions, ChatError, ChatResult, ExecutionContext};
 use agentkit_core::{ChatMessage, TURN_CONTEXT_PART_TYPE, ToolRegistry, turn_context_part};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -398,7 +398,7 @@ pub(super) async fn turn_user_message(
 /// context, so it is persisted once and replayed unchanged.
 pub(crate) async fn attach(
     context: &ExecutionContext,
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     registry: &ToolRegistry,
     chat_id: &str,
     anchor: &str,
@@ -468,7 +468,7 @@ pub(crate) async fn attach(
 /// the explicit "could not be supplied in full" notice.
 async fn spill_oversized(
     context: &ExecutionContext,
-    options: &ChatExecutorOptions,
+    options: &AgentExecutorOptions,
     chat_id: &str,
     (carried, chosen, extras, today): (&Carried, &Chosen, &Extras, Option<&str>),
 ) -> ChatResult<Option<super::repair::Spilled>> {

@@ -295,7 +295,7 @@ async fn fixture_with_runtime(
     let responses = Arc::new(AtomicBool::new(false));
     let usage_records = Arc::new(Mutex::new(vec![]));
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
                 tool_first,
@@ -307,7 +307,7 @@ async fn fixture_with_runtime(
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             usage: Some(Arc::new(UsageMeter(usage_records.clone()))),
             auto_compaction: true,
             tool_contributors: vec![Arc::new(WriterContributor {
@@ -676,7 +676,7 @@ async fn fixture_slow(
     }))
     .unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
                 tool_first: true,
@@ -688,7 +688,7 @@ async fn fixture_slow(
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_contributors: vec![Arc::new(WriterContributor {
                 tool: Arc::new(SlowWrite {
                     definition,
@@ -885,7 +885,7 @@ async fn fixture_gated(
     }))
     .unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
                 tool_first: true,
@@ -897,7 +897,7 @@ async fn fixture_gated(
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_contributors: vec![Arc::new(WriterContributor {
                 tool: Arc::new(GatedWrite {
                     definition,

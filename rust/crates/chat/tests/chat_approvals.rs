@@ -135,13 +135,13 @@ async fn parked() -> Fixture {
         }))
         .unwrap();
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Scripted {
                 requests: requests.clone(),
             }),
             Arc::new(tools),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_guards: vec![Arc::new(AskGuard)],
             ..Default::default()
         }),

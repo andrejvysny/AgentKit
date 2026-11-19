@@ -1,4 +1,4 @@
-use agentkit_chat::ChatExecutor;
+use agentkit_chat::AgentExecutor;
 use agentkit_chat::{AgentHost, HostOptions};
 use agentkit_connections::{
     AppId, Capability, Connection, ConnectionConfig, ConnectionId, ConnectionRepository, Model,
@@ -92,12 +92,11 @@ async fn selection_freezes_full_snapshot_and_factory_rejects_mutated_generation(
     let original = connections.create(id.clone(), configuration()).unwrap();
     let observed = Arc::new(Mutex::new(vec![]));
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(Arc::new(Provider), Arc::new(ToolRegistry::new())).with_provider_factory(
-            Arc::new(Factory {
+        AgentExecutor::new(Arc::new(Provider), Arc::new(ToolRegistry::new()))
+            .with_provider_factory(Arc::new(Factory {
                 connections: connections.clone(),
                 observed: observed.clone(),
-            }),
-        ),
+            })),
     );
     let host = AgentHost::new(
         SqliteStore::memory(64).unwrap(),

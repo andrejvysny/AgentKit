@@ -98,13 +98,13 @@ async fn the_line_is_a_persisted_note_of_the_user_message_and_nowhere_else() {
         .register(Arc::new(Body(definition("notes_read"))))
         .unwrap();
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Capturing {
                 seen: Arc::clone(&seen),
             }),
             Arc::new(registry),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             turn_context: Some(Arc::new(FixedLine)),
             ..Default::default()
         }),

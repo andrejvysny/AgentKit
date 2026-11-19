@@ -156,7 +156,7 @@ impl Harness {
             answer: Mutex::new(ANSWER.to_owned()),
         });
         let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
-            Arc::new(ChatExecutor::new(
+            Arc::new(AgentExecutor::new(
                 Arc::clone(&child) as Arc<dyn ChatProvider>,
                 Arc::new(ToolRegistry::new()),
             ));
@@ -1550,14 +1550,14 @@ async fn enabled_delegation_guidance_reaches_every_session_turn() {
         runtime.clone(),
         config().effective(),
     );
-    let options = ChatExecutorOptions {
+    let options = AgentExecutorOptions {
         actor: json!({"kind": "user"}),
         delegation_guidance: Some(Arc::new(subagents) as Arc<dyn DelegationGuidance>),
         ..Default::default()
     };
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> =
-        Arc::new(ChatExecutor::with_options(
-            ChatExecutor::new(
+        Arc::new(AgentExecutor::with_options(
+            AgentExecutor::new(
                 Arc::clone(&child) as Arc<dyn ChatProvider>,
                 Arc::new(ToolRegistry::new()),
             ),
@@ -1789,11 +1789,11 @@ async fn worker_pool_sized_for_delegation_does_not_starve_children() {
         config.clone(),
     );
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::clone(&provider) as Arc<dyn ChatProvider>,
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_contributors: vec![
                 Arc::new(SubagentContributor::new(subagents)) as Arc<dyn ToolContributor>
             ],

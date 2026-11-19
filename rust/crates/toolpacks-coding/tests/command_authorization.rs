@@ -162,13 +162,13 @@ async fn fixture_inner(
         plan_tool_names: None,
     });
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Provider {
                 command: command.into(),
             }),
             Arc::new(ToolRegistry::new()),
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_contributors: vec![Arc::new(Contributor(tool))],
             tool_guards: vec![Arc::new(guard), Arc::new(HighRiskCommandGuard)],
             standing: Some(Arc::new(CodingStandingApproval {

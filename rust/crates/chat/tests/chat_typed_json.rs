@@ -1,5 +1,7 @@
+use agentkit_chat::{
+    AgentExecutor, AgentExecutorOptions, ChatHostExt, ContextProvider, SubmitChat,
+};
 use agentkit_chat::{AgentHost, HostOptions};
-use agentkit_chat::{ChatExecutor, ChatExecutorOptions, ChatHostExt, ContextProvider, SubmitChat};
 use agentkit_core::*;
 use agentkit_engine::TaskExecutor;
 use agentkit_store::{SqliteStore, TaskStatus};
@@ -74,10 +76,12 @@ async fn context_bindings_keep_private_number_object_keys_through_live_tool_call
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(Echo { bindings: bindings.clone(), definition: serde_json::from_value(json!({"name":"echo","version":"1","effect":"read","capability":"test","description":"Echo","inputSchema":{"type":"object"}})).unwrap() })).unwrap();
     let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
-        ChatExecutor::new(Arc::new(Provider), Arc::new(tools)).with_options(ChatExecutorOptions {
-            context: Some(Arc::new(Context)),
-            ..Default::default()
-        }),
+        AgentExecutor::new(Arc::new(Provider), Arc::new(tools)).with_options(
+            AgentExecutorOptions {
+                context: Some(Arc::new(Context)),
+                ..Default::default()
+            },
+        ),
     );
     let host = AgentHost::new(
         store.clone(),

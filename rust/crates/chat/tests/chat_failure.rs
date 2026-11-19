@@ -1,5 +1,5 @@
+use agentkit_chat::{AgentExecutor, ChatHostExt, SubmitChat};
 use agentkit_chat::{AgentHost, HostOptions};
-use agentkit_chat::{ChatExecutor, ChatHostExt, SubmitChat};
 use agentkit_core::*;
 use agentkit_engine::TaskExecutor;
 use agentkit_store::{SqliteStore, TaskStatus};
@@ -29,10 +29,9 @@ async fn failed_chat_keeps_provider_message_and_code_without_replaying() {
     let store = SqliteStore::memory(32).unwrap();
     store.create_chat("chat", None, json!({}), 0).await.unwrap();
     let provider = Arc::new(FailingProvider(AtomicUsize::new(0)));
-    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(ChatExecutor::new(
-        provider.clone(),
-        Arc::new(ToolRegistry::new()),
-    ));
+    let executor: Arc<dyn TaskExecutor<agentkit_store::SqliteStore>> = Arc::new(
+        AgentExecutor::new(provider.clone(), Arc::new(ToolRegistry::new())),
+    );
     let host = AgentHost::new(
         store.clone(),
         std::collections::HashMap::from([("chat.turn".into(), executor)]),

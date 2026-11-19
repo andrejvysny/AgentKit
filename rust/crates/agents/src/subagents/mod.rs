@@ -1,6 +1,6 @@
 //! Subagent delegation (ADR 0003's host-level consumer): a running session
 //! spawns kind-dispatched CHILD SESSIONS through the SAME durable engine —
-//! same `AgentHost` queue, same `ChatExecutor`, same store, guards, events
+//! same `AgentHost` queue, same `AgentExecutor`, same store, guards, events
 //! and recovery — and coordinates them with spawn/list/status/message/await/
 //! cancel/resume tools.
 //!

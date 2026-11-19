@@ -57,7 +57,7 @@ unknown `Last-Event-ID` announces its full replay — the
 `x-agentkit-stream-resync` header and an opening `agentkit.stream.resync`
 control frame — byte-for-byte as the TypeScript transport does.
 
-`ChatExecutor` uses the core's awaited event-persistence hook. Failed persistence
+`AgentExecutor` uses the core's awaited event-persistence hook. Failed persistence
 prevents the next tool/provider operation. Completed tool effects still need
 domain receipts: cancellation, timeouts and transport exceptions do not imply
 that an external mutation was rolled back. `ProposalService` validates proposal

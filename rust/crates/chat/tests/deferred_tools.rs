@@ -404,13 +404,13 @@ struct Rig {
 fn rig(store: &SqliteStore, tools: Arc<agentkit_core::ToolRegistry>) -> Rig {
     let seen = Arc::new(Mutex::new(vec![]));
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(
+        AgentExecutor::new(
             Arc::new(Capturing {
                 seen: Arc::clone(&seen),
             }),
             tools,
         )
-        .with_options(ChatExecutorOptions {
+        .with_options(AgentExecutorOptions {
             tool_classification: Some(Classification {
                 direct: DirectSet::names(["read_file"]),
                 max_tokens: 0,
@@ -630,15 +630,17 @@ async fn a_profiled_session_keeps_toolsets_and_legacy_names() {
     });
     let store = SqliteStore::memory(64).expect("store");
     let executor: Arc<dyn TaskExecutor<SqliteStore>> = Arc::new(
-        ChatExecutor::new(provider.clone(), Arc::new(registry)).with_options(ChatExecutorOptions {
-            tool_classification: Some(Classification {
-                direct: DirectSet::names(["read_file"]),
-                max_tokens: 0,
-                max_definitions: 0,
-                ..Classification::default()
-            }),
-            ..Default::default()
-        }),
+        AgentExecutor::new(provider.clone(), Arc::new(registry)).with_options(
+            AgentExecutorOptions {
+                tool_classification: Some(Classification {
+                    direct: DirectSet::names(["read_file"]),
+                    max_tokens: 0,
+                    max_definitions: 0,
+                    ..Classification::default()
+                }),
+                ..Default::default()
+            },
+        ),
     );
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let host = AgentHost::new(

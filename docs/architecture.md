@@ -41,7 +41,7 @@ rules (R1–R13) over `cargo metadata`; violations live in
 | 2 | `agentkit-native` | Versioned execution contracts, capability policy and injected ports for vendor agent runtimes ([ADR 0025](adr/0025-claude-code-native-backend-contracts.md)); also declares the native-lane ports `AttemptBrokerHandle` and `NativeRunRepository` (ADR 0024 addendum) |
 | 3 | `agentkit-engine` | Generic durable task execution: `AgentHost`, worker, retry, subscription, the `TaskRepository` port and the task/lease/attempt model |
 | 3 | `agentkit-sessions` | Durable agent-session service, agent/run profiles, run-content freezing |
-| 3 | `agentkit-chat` | Chat execution and governance: `ChatExecutor`, compaction, correction passes, proposals, project instructions |
+| 3 | `agentkit-chat` | Chat execution and governance: `AgentExecutor`, compaction, correction passes, proposals, project instructions |
 | 3 | `agentkit-agents` | Agent definitions, teammates, subagents and the advisor |
 | 3 | `agentkit-memory` | Long-term memory: records, supersession, the `MemoryRepository`, `RetrievalIndex`, `Embedder` and `Reranker` ports, `MemoryService` ([ADR 0035](adr/0035-long-term-memory.md)); no SQL |
 | 3 | `agentkit-native-exec` | Durable executor for vendor agent runtimes: `NativeAgentExecutor`, `NativeDispatchExecutor`, one owned process per attempt |
@@ -73,7 +73,7 @@ claims the task under a lease fence and hands it to the executor registered
 for its kind; that executor alone decides the terminal outcome.
 
 - **The model loop.** `agentkit-core` runs the streaming model/tool loop;
-  `agentkit-chat`'s `ChatExecutor` owns chat turns — provider passes, bounded
+  `agentkit-chat`'s `AgentExecutor` owns chat turns — provider passes, bounded
   tool execution, budgets, compaction, correction passes and proposals.
 - **The vendor runtime lane.** `agentkit-native` declares the contracts and
   ports (`NativeBackend`, `ProcessSupervisor`, `ExecutableLocator`,
@@ -156,7 +156,7 @@ Execution is a durable queue in `agentkit-store`, driven by `AgentHost`
 `rust/crates/engine/src/model.rs`).
 
 **Tasks and attempts.** A task has a `kind` and a `scope_id`; kind-dispatched
-executors run it (`ChatExecutor` is the chat executor; the native executors
+executors run it (`AgentExecutor` is the chat executor; the native executors
 cover native-target payloads). Each execution is an *attempt*. Attempt end
 statuses are `completed`, `failed`, `abandoned` and `cancelled`; `abandoned`
 is the crash outcome: the lease expired while the attempt was running, so
