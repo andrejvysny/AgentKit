@@ -76,7 +76,8 @@ pub(crate) async fn effective_session_descriptor(
 pub(crate) struct ContextAssembly {
     pub(crate) policy: super::history::HistoryPolicy,
     pub(crate) masking: super::masking::MaskSettings,
-    /// The session's `context.autoCompaction` switch; absent, the executor's
+    /// The session's `context.autoCompaction` switch, else the profile's
+    /// `contextPolicy.autoCompaction`; absent both, the executor's
     /// `auto_compaction` option decides.
     pub(crate) auto_compaction: Option<bool>,
 }
@@ -86,14 +87,26 @@ pub(crate) struct ContextAssembly {
 /// transcript. Masking (ADR 0034) is on for sessions with its own defaults;
 /// it only acts past 80% of the budget. A chat that is not a session
 /// assembles as it always did: full replay, no masking.
+///
+/// `policy` is the turn's profile `contextPolicy`: it fills masking
+/// `enabled` and `autoCompaction` only where the descriptor leaves them unset.
 pub(crate) async fn resolve_context_assembly(
     context: &ExecutionContext,
     chat_id: &str,
+    policy: Option<&agentkit_sessions::ContextPolicy>,
 ) -> ChatResult<ContextAssembly> {
     let descriptor = effective_session_descriptor(context, chat_id).await?;
     let options = descriptor
         .as_ref()
         .and_then(|descriptor| descriptor.get("context"));
+    let masking_options = options.and_then(|context| context.get("masking"));
+    let mut masking = super::masking::MaskSettings::resolve(masking_options);
+    let masking_set = masking_options
+        .and_then(|masking| masking.get("enabled"))
+        .is_some_and(Value::is_boolean);
+    if !masking_set && let Some(enabled) = policy.and_then(|policy| policy.masking) {
+        masking.enabled = enabled;
+    }
     Ok(ContextAssembly {
         policy: match options
             .and_then(|context| context.get("policy"))
@@ -104,12 +117,11 @@ pub(crate) async fn resolve_context_assembly(
             // absent (or a non-session chat) is the frozen default.
             _ => super::history::HistoryPolicy::Transcript,
         },
-        masking: super::masking::MaskSettings::resolve(
-            options.and_then(|context| context.get("masking")),
-        ),
+        masking,
         auto_compaction: options
             .and_then(|context| context.get("autoCompaction"))
-            .and_then(Value::as_bool),
+            .and_then(Value::as_bool)
+            .or_else(|| policy.and_then(|policy| policy.auto_compaction)),
     })
 }
 

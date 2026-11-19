@@ -211,6 +211,7 @@ pub agentkit_sessions::AgentLimits::max_output_tokens: core::option::Option<u64>
 pub agentkit_sessions::AgentLimits::max_tool_calls_per_iteration: core::option::Option<usize>
 pub agentkit_sessions::AgentLimits::max_tool_iterations: core::option::Option<u32>
 pub struct agentkit_sessions::AgentProfile
+pub agentkit_sessions::AgentProfile::context_policy: core::option::Option<agentkit_sessions::ContextPolicy>
 pub agentkit_sessions::AgentProfile::id: alloc::string::String
 pub agentkit_sessions::AgentProfile::instructions: alloc::string::String
 pub agentkit_sessions::AgentProfile::kind: alloc::string::String
@@ -350,6 +351,9 @@ pub agentkit_sessions::ChatRecord::title: core::option::Option<alloc::string::St
 pub agentkit_sessions::ChatRecord::updated_at: agentkit_kernel::timestamp::ConversationTimestamp
 impl agentkit_contracts::json_deserialize::JsonDeserialize for agentkit_sessions::ChatRecord
 pub fn agentkit_sessions::ChatRecord::from_json(serde_json::value::Value) -> core::result::Result<Self, serde_json::error::Error>
+pub struct agentkit_sessions::ContextPolicy
+pub agentkit_sessions::ContextPolicy::auto_compaction: core::option::Option<bool>
+pub agentkit_sessions::ContextPolicy::masking: core::option::Option<bool>
 pub struct agentkit_sessions::ContextUnit
 pub agentkit_sessions::ContextUnit::citations: alloc::vec::Vec<alloc::string::String>
 pub agentkit_sessions::ContextUnit::kind: agentkit_sessions::ContextUnitKind

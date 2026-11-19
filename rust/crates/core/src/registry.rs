@@ -169,6 +169,11 @@ impl ToolRegistry {
         let tool = self.tools.get(canonical)?;
         Some(self.toolset_id_for(canonical, tool.tool.definition()))
     }
+    /// The toolset of `definition` by the same rule as
+    /// [`ToolRegistry::toolset_of`], for a withheld (unregistered) tool too.
+    pub fn toolset_of_definition(&self, definition: &ToolDefinition) -> String {
+        self.toolset_id_for(&definition.name, definition)
+    }
     /// The toolsets and the toolset of each of `offered` (names as the model
     /// sees them under `dialect`).
     pub fn toolset_view(

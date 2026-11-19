@@ -49,7 +49,8 @@ pub use model::{
 };
 pub use ports::ChatProviderFactory;
 pub use profiles::{
-    AgentLimits, AgentProfile, AgentResources, ProfileRegistry, SkillSelection, task_profile,
+    AgentLimits, AgentProfile, AgentResources, ContextPolicy, ProfileRegistry, SkillSelection,
+    task_profile,
 };
 pub use receipts::resolve_uncertain_execution;
 pub use repository::{RepositoryFault, SessionBackend, SessionFault, SessionRepository};

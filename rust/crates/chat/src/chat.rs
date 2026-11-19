@@ -457,9 +457,11 @@ impl AgentExecutor {
         let turn_deltas = crate::turn_context::repair::deltas_of(&records);
         // What the provider-facing history is built from (ADR 0017 part 1):
         // the session's anchored-history policy and its masking thresholds,
-        // both from the turn's staged context snapshot. A non-session chat
-        // assembles exactly as it always did.
-        let assembly = context_budget::resolve_context_assembly(&context, chat_id).await?;
+        // both from the turn's staged context snapshot (the profile's
+        // `contextPolicy` fills gaps). A non-session chat assembles as before.
+        let context_policy = profile.as_ref().and_then(|p| p.context_policy.as_ref());
+        let assembly =
+            context_budget::resolve_context_assembly(&context, chat_id, context_policy).await?;
         let receipts = context
             .store
             .list_executions_by_chat(chat_id.to_owned())
@@ -575,8 +577,7 @@ impl AgentExecutor {
             && context.store.get_chat(chat_id).await?.is_some_and(|chat| {
                 chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
             });
-        // Any session may compact: the executor's switch is the default and
-        // the session's `context.autoCompaction` overrides it either way.
+        // Any session may compact: `context.autoCompaction`, else profile's, else executor's.
         let auto_compaction = assembly.auto_compaction.unwrap_or(options.auto_compaction);
         let mut compacted = None;
         let summary_id: Option<String>;

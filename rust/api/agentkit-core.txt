@@ -719,6 +719,7 @@ pub fn agentkit_core::ToolRegistry::set_promotion_observer(&self, alloc::rcs::ar
 pub fn agentkit_core::ToolRegistry::set_visible_bound(&mut self, core::option::Option<usize>)
 pub fn agentkit_core::ToolRegistry::take_refused_promotions(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<alloc::string::String>)>
 pub fn agentkit_core::ToolRegistry::toolset_of(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn agentkit_core::ToolRegistry::toolset_of_definition(&self, &agentkit_core::ToolDefinition) -> alloc::string::String
 pub fn agentkit_core::ToolRegistry::toolset_view(&self, &[agentkit_core::ToolDefinition], core::option::Option<&agentkit_core::Dialect>) -> agentkit_core::ToolsetView
 pub fn agentkit_core::ToolRegistry::toolsets(&self) -> alloc::vec::Vec<agentkit_core::Toolset>
 pub fn agentkit_core::ToolRegistry::translate(&self, &str, serde_json::value::Value) -> core::result::Result<agentkit_core::Translated, agentkit_core::DialectError>
