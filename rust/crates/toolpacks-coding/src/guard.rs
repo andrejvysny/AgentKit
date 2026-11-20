@@ -112,9 +112,9 @@ impl ToolGuard for CodingPermissionGuard {
             None => self.configured_mode,
         };
         let is_plan_tool = self.plan_tools.iter().any(|plan| plan == &name);
-        // Spec 10 (U5): read_only and plan mode run a read-only shell command
+        // Spec 10 (U5): every mode but `ask` runs a read-only shell command
         // without a prompt. Every other call keeps the matrix verdict.
-        if matches!(mode, CodingMode::ReadOnly | CodingMode::Plan)
+        if !matches!(mode, CodingMode::Ask)
             && !is_plan_tool
             && is_read_only_command(&name, context.arguments.as_ref())
         {
@@ -416,6 +416,28 @@ mod tests {
             command_verdict(&supervisor, "run_command", "git status").await,
             "role_ceiling: supervisor may not use exec tools (run_command)"
         );
+    }
+
+    #[tokio::test]
+    async fn auto_edit_and_full_auto_run_read_only_commands_without_a_prompt() {
+        for mode in [CodingMode::AutoEdit, CodingMode::FullAuto] {
+            let guard = guard(mode, None);
+            for command in ["cat a; ls; cat b", "git status", "cat a | head -n 5"] {
+                assert_eq!(
+                    command_verdict(&guard, "run_command", command).await,
+                    "",
+                    "{command}"
+                );
+            }
+        }
+        let ask = guard(CodingMode::Ask, None);
+        assert_eq!(
+            command_verdict(&ask, "run_command", "cat a; ls").await,
+            "approval_required: run_command"
+        );
+        // A high-risk part keeps the whole command out of ReadOnly, so
+        // HighRiskCommandGuard still forces a fresh approval in full_auto.
+        assert_eq!(classify_shell_command("ls; rm x"), CommandClass::HighRisk);
     }
 
     struct FixedAuthority {

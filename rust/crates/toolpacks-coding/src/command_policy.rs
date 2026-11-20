@@ -26,7 +26,7 @@ use crate::command_fingerprint::{command_fingerprint, hex_sha256, json_quote};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandClass {
     /// Cannot write or run other programs (spec 10, U5): runs without a
-    /// prompt in `read_only` and `plan` mode. Judged before `Eligible`.
+    /// prompt in every mode but `ask`. Judged before `Eligible`.
     ReadOnly,
     Eligible,
     HighRisk,
@@ -811,20 +811,39 @@ fn matches_read_only(tokens: &[&str]) -> bool {
     if rest.iter().any(|token| escapes_workspace(token)) {
         return false;
     }
+    // Nor may they read secrets the file tools refuse (`.env`, keys,
+    // credential files): naming one keeps the command on the prompt path.
+    if rest.iter().any(|token| names_sensitive_path(token)) {
+        return false;
+    }
     match first {
         "git" => read_only_git(rest),
         "find" => !rest.iter().any(|token| find_action_flags().contains(token)),
-        // `--pre` runs a preprocessor program on every file searched.
-        "rg" => !rest
-            .iter()
-            .any(|token| *token == "--pre" || token.starts_with("--pre=")),
+        // `--pre` runs a preprocessor program on every file searched; the
+        // other flags make rg read hidden or ignored files such as `.env`.
+        "rg" => !rest.iter().any(|token| {
+            *token == "--pre"
+                || token.starts_with("--pre=")
+                || *token == "--hidden"
+                || token.starts_with("--no-ignore")
+                || *token == "-."
+                || (token.starts_with("-u") && token[1..].chars().all(|c| c == 'u'))
+        }),
+        // A recursive grep reads every file below, hidden ones included.
+        "grep" => !rest.iter().any(|token| {
+            short_flag(token, 'r')
+                || short_flag(token, 'R')
+                || token.starts_with("--recursive")
+                || token.starts_with("--dereference-recursive")
+                || *token == "--directories=recurse"
+        }),
         // `-o` (alone or among combined short flags) writes the listing to a file.
         "tree" => !rest.iter().any(|token| short_flag(token, 'o')),
         // `-C`/`--compile` writes a compiled magic file.
         "file" => !rest
             .iter()
             .any(|token| *token == "--compile" || short_flag(token, 'C')),
-        "ls" | "cat" | "head" | "tail" | "wc" | "grep" | "pwd" | "stat" | "du" | "which" => true,
+        "ls" | "cat" | "head" | "tail" | "wc" | "pwd" | "stat" | "du" | "which" => true,
         _ => false,
     }
 }
@@ -836,6 +855,23 @@ fn escapes_workspace(token: &str) -> bool {
     value.starts_with('/')
         || value.starts_with('~')
         || value.split('/').any(|segment| segment == "..")
+}
+
+/// True when `token` (or the value after `=`) names a sensitive path in any
+/// segment, by the same rule the file tools use, or is a glob that could
+/// match one (`.env*`, `*.pem`).
+fn names_sensitive_path(token: &str) -> bool {
+    let value = token.split_once('=').map_or(token, |(_, value)| value);
+    if value.starts_with('-') {
+        return false;
+    }
+    value.split('/').any(|segment| {
+        crate::paths::is_sensitive_segment(segment)
+            || (segment.contains('*') && {
+                let stem = segment.replace('*', "");
+                !stem.is_empty() && crate::paths::is_sensitive_segment(&stem)
+            })
+    })
 }
 
 /// True when `token` is a short-flag group (`-ao`) that contains `flag`.
@@ -885,12 +921,19 @@ fn safe_script() -> &'static regex::Regex {
 pub fn classify_shell_command(command: &str) -> CommandClass {
     static PLAIN_CHARS: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, -]+\z"));
+    // The same set plus the four separator characters; redirections,
+    // substitutions, quotes and newlines stay outside it.
+    static COMPOUND_CHARS: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, ;&|-]+\z"));
     static ASSIGNMENT: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z_][A-Za-z0-9_]*="));
     if is_high_risk(command) {
         return CommandClass::HighRisk;
     }
     if !PLAIN_CHARS.is_match(command) {
+        if COMPOUND_CHARS.is_match(command) && read_only_compound(command, &ASSIGNMENT) {
+            return CommandClass::ReadOnly;
+        }
         return CommandClass::Unknown;
     }
     let tokens: Vec<&str> = command.split(' ').filter(|t| !t.is_empty()).collect();
@@ -910,12 +953,78 @@ pub fn classify_shell_command(command: &str) -> CommandClass {
     }
 }
 
+/// True when `command` (already limited to plain characters and `;&|`) is
+/// made only of read-only parts joined by `;`, `&&`, `||` or `|`. Any other
+/// use of `&` (background), an empty part, or an assignment part refuses. A
+/// part after `|` may also be a stdin filter (`sort`, `uniq`, `cut`, `tr`).
+/// Quotes are not plain characters, so a quoted separator never gets here.
+fn read_only_compound(command: &str, assignment: &regex::Regex) -> bool {
+    let chars: Vec<char> = command.chars().collect();
+    let mut parts: Vec<(String, bool)> = Vec::new();
+    let (mut current, mut piped) = (String::new(), false);
+    let mut i = 0;
+    while i < chars.len() {
+        let next = chars.get(i + 1).copied();
+        let after_pipe = match (chars[i], next) {
+            (';', _) => Some(false),
+            ('&', Some('&')) | ('|', Some('|')) => {
+                i += 1;
+                Some(false)
+            }
+            ('|', _) => Some(true),
+            ('&', _) => return false,
+            (ch, _) => {
+                current.push(ch);
+                None
+            }
+        };
+        if let Some(after_pipe) = after_pipe {
+            parts.push((std::mem::take(&mut current), piped));
+            piped = after_pipe;
+        }
+        i += 1;
+    }
+    parts.push((current, piped));
+    parts.len() > 1
+        && parts.iter().all(|(part, piped)| {
+            let tokens: Vec<&str> = part.split(' ').filter(|t| !t.is_empty()).collect();
+            let Some(first) = tokens.first() else {
+                return false;
+            };
+            !assignment.is_match(first)
+                && (matches_read_only(&tokens) || (*piped && matches_pipe_filter(&tokens)))
+        })
+}
+
+/// Stdin filters allowed after a `|` besides the read-only commands. Refused:
+/// `sort -o`/`--output` (writes a file), `--compress-program` (runs one), and
+/// `uniq` with any value or file operand (the second operand is an output file).
+fn matches_pipe_filter(tokens: &[&str]) -> bool {
+    let Some((&first, rest)) = tokens.split_first() else {
+        return false;
+    };
+    if rest.iter().any(|token| escapes_workspace(token)) {
+        return false;
+    }
+    match first {
+        "sort" => !rest.iter().any(|token| {
+            token.starts_with("--output")
+                || token.starts_with("--compress-program")
+                || short_flag(token, 'o')
+        }),
+        "uniq" => rest.iter().all(|token| token.starts_with('-')),
+        "cut" | "tr" => true,
+        _ => false,
+    }
+}
+
 /// True when a standing approval may key `command`: exactly the commands the
 /// build/test allow-list names. A read-only command that list also names
 /// (`git status`) stays keyable; the ReadOnly class adds none (`cat x`).
 fn standing_keyable(command: &str) -> bool {
     match classify_shell_command(command) {
         CommandClass::Eligible => true,
+        CommandClass::ReadOnly if command.contains([';', '&', '|']) => false,
         CommandClass::ReadOnly => {
             let tokens: Vec<&str> = command.split(' ').filter(|t| !t.is_empty()).collect();
             matches_allowlist(&tokens)
@@ -1244,7 +1353,7 @@ mod tests {
         "tail -n 5 Cargo.toml",
         "wc -l src/lib.rs",
         "rg needle src",
-        "grep -rn needle src",
+        "grep -n needle src/lib.rs",
         "pwd",
         "stat Cargo.toml",
         "file Cargo.toml",
@@ -1269,7 +1378,7 @@ mod tests {
         ("git log --output=log.txt", CommandClass::Eligible),
         ("git blame --output=x src/lib.rs", CommandClass::Unknown),
         ("cat x > y", CommandClass::Unknown),
-        ("cat README.md | grep x", CommandClass::Unknown),
+        ("cat README.md | tee out.txt", CommandClass::Unknown),
         ("cat $HOME/x", CommandClass::Unknown),
         ("LANG=C ls", CommandClass::Unknown),
         ("rg --pre ./decode.sh needle", CommandClass::Unknown),
@@ -1289,6 +1398,104 @@ mod tests {
         ("rg --ignore-file=/tmp/x needle", CommandClass::Unknown),
         ("ls ~", CommandClass::Unknown),
     ];
+
+    #[test]
+    fn read_only_commands_never_read_secrets() {
+        for command in [
+            "cat .env",
+            "cat config/.env.local",
+            "head -n 5 secrets/id_rsa",
+            "cat *.pem",
+            "cat .env*",
+            "grep -rn token .",
+            "grep -rn needle src",
+            "grep -R token src",
+            "grep --recursive token src",
+            "rg --hidden token",
+            "rg -uu token",
+            "rg --no-ignore token",
+            "ls; cat .env",
+        ] {
+            assert_ne!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "{command}"
+            );
+        }
+        for command in [
+            "cat .env.example",
+            "grep -n token src/a.ts",
+            "rg token",
+            "ls -la",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn compound_commands_are_read_only_only_when_every_part_is() {
+        for command in [
+            "cat a; ls; cat b",
+            "ls src && cat package.json",
+            "cat a | head -n 5",
+            "git status; git diff",
+            "ls || pwd",
+            "cat a | sort | uniq -c | head",
+            "grep -n needle src/a.ts | cut -d: -f1 | tr a b | wc -l",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "{command}"
+            );
+        }
+        for command in [
+            "cat a > b",
+            "cat a >> b",
+            "cat a < b",
+            "cat a 2> b",
+            "cat a; rm b",
+            "ls $(pwd)",
+            "ls `pwd`",
+            "cat <(ls)",
+            "cat /etc/hosts; ls",
+            "cat ../x | head",
+            "cat a | sort -o out",
+            "cat a | sort --output=out",
+            "cat a | sort -ro out",
+            "cat a | uniq in out",
+            "sort a; ls",
+            "ls &",
+            "ls & ls",
+            "ls &&& ls",
+            "ls;",
+            "; ls",
+            "ls ;; ls",
+            "ls | | head",
+            "FOO=1 ls; ls",
+            "ls; FOO=1 ls",
+            "cat a; cargo test",
+            "cargo test && ls",
+            "cat a\nls",
+            "echo 'a;b'",
+            "cat 'a; ls",
+            "cat \"a; ls",
+        ] {
+            assert_ne!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "{command}"
+            );
+        }
+        assert_eq!(classify_shell_command("cat 'a; ls"), CommandClass::Unknown);
+        assert_eq!(classify_shell_command("echo 'a;b'"), CommandClass::Unknown);
+        // A compound is never keyed by a standing approval.
+        assert!(!standing_keyable("git diff | head"));
+    }
 
     const HIGH_RISK: &[&str] = &[
         "rm -rf x",
