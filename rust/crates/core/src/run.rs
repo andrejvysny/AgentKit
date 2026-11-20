@@ -19,6 +19,8 @@ use tokio_util::sync::CancellationToken;
 mod cleanup;
 #[path = "run_hooks.rs"]
 mod hooks;
+#[path = "run_parallel.rs"]
+mod parallel;
 
 #[async_trait::async_trait]
 pub trait RunEventGate: Send + Sync {
@@ -68,6 +70,10 @@ pub struct RunOptions {
     /// Output store gate (roadmap 2.1): a result larger than its inline
     /// limit is stored and shown as a preview with a handle.
     pub output: Option<Arc<crate::OutputGate>>,
+    /// Run consecutive read-only tool calls of one response concurrently
+    /// (at most four at a time). Results, events and records keep the call
+    /// order, and every other call stays sequential. On by default.
+    pub parallel_read_tools: bool,
 }
 impl Default for RunOptions {
     fn default() -> Self {
@@ -101,6 +107,7 @@ impl Default for RunOptions {
             tool_call_records: false,
             record_identity: crate::RecordIdentity::default(),
             output: None,
+            parallel_read_tools: true,
         }
     }
 }
@@ -831,12 +838,29 @@ impl State {
         let mut cancelled = false;
         let mut budget_error = None;
         let mut pending_suspension: Option<(crate::HumanRequestSpec, ToolCall)> = None;
-        for (index, (call, prepared)) in calls.iter().zip(prepared_calls).enumerate() {
+        // Calls up to here were already gated and, for a read batch, run.
+        let mut settled_until = 0;
+        let mut batch = parallel::BatchResults::default();
+        for (index, (call, prepared)) in calls.iter().zip(&prepared_calls).enumerate() {
+            if index >= settled_until
+                && !cancelled
+                && budget_error.is_none()
+                && !self.options.cancellation.is_cancelled()
+            {
+                let end = self.read_batch_end(registry, &prepared_calls, index, cap);
+                if end > index {
+                    batch = self
+                        .run_read_batch(registry, &prepared_calls, index..end)
+                        .await?;
+                    settled_until = end;
+                }
+            }
             // Guards and execution below see the canonical call prepared
             // above, and the record shows what normalisation did.
             let emitted_name = call.name.clone();
             let call = &prepared.call;
-            let call_started_ms = self.options.runtime.now_ms();
+            let mut call_started_ms = self.options.runtime.now_ms();
+            let mut call_finished_ms = None;
             if self.options.batch_suspension
                 && self.options.cancellation.is_cancelled()
                 && let Some((_, held)) = pending_suspension.take()
@@ -873,7 +897,9 @@ impl State {
                     json!({"toolCallId":call.id,"toolName":call.name}),
                 )
                 .await?;
-                let gate = if self.options.hooks.is_some() && prepared.failure.is_none() {
+                let gate = if let Some(gate) = batch.gates.remove(&index) {
+                    gate
+                } else if self.options.hooks.is_some() && prepared.failure.is_none() {
                     self.tool_gate(registry, call).await?
                 } else {
                     None
@@ -881,7 +907,11 @@ impl State {
                 if self.options.cancellation.is_cancelled() {
                     cancelled = true;
                 }
-                let slot = Arc::new(crate::SuspendSlot::default());
+                let early = batch.early.remove(&index);
+                let slot = early.as_ref().map_or_else(
+                    || Arc::new(crate::SuspendSlot::default()),
+                    |early| early.slot.clone(),
+                );
                 let outcome = if cancelled {
                     tool_execution::failed(
                         call,
@@ -908,16 +938,22 @@ impl State {
                     )
                 } else {
                     executed = true;
-                    tool_execution::execute(
-                        registry,
-                        call,
-                        self.tool_context(call, Some(slot.clone())),
-                        self.options.default_tool_timeout_ms,
-                        self.options.request.budget.clone(),
-                        self.options.tool_close.clone(),
-                        self.options.output.clone(),
-                    )
-                    .await
+                    if let Some(early) = early {
+                        call_started_ms = early.started_ms;
+                        call_finished_ms = Some(early.finished_ms);
+                        early.outcome
+                    } else {
+                        tool_execution::execute(
+                            registry,
+                            call,
+                            self.tool_context(call, Some(slot.clone())),
+                            self.options.default_tool_timeout_ms,
+                            self.options.request.budget.clone(),
+                            self.options.tool_close.clone(),
+                            self.options.output.clone(),
+                        )
+                        .await
+                    }
                 };
                 if let Some(spec) = slot.take() {
                     if self.options.batch_suspension {
@@ -1025,10 +1061,8 @@ impl State {
                     succeeded: outcome.kind == "run.tool.succeeded",
                     error_code: outcome.data["errorCode"].as_str(),
                     error_message: outcome.data["errorMessage"].as_str(),
-                    duration_ms: self
-                        .options
-                        .runtime
-                        .now_ms()
+                    duration_ms: call_finished_ms
+                        .unwrap_or_else(|| self.options.runtime.now_ms())
                         .saturating_sub(call_started_ms)
                         .max(0)
                         .cast_unsigned(),

@@ -831,6 +831,7 @@ impl AgentExecutor {
             }),
             resume_calls,
             tool_call_records: options.tool_call_records,
+            parallel_read_tools: options.parallel_read_tools,
             record_identity,
             output: options.output.clone(),
             tool_metadata: serde_json::Map::from_iter((!live_reads.is_empty()).then(|| {

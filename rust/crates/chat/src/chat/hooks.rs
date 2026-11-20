@@ -89,6 +89,9 @@ pub struct AgentExecutorOptions {
     /// Emit one `run.tool.record` per finished tool call (TU-35). On by
     /// default; a host that cannot take the extra event turns it off.
     pub tool_call_records: bool,
+    /// Run consecutive read-only tool calls of one response concurrently
+    /// (at most four at a time; results keep the call order). On by default.
+    pub parallel_read_tools: bool,
     /// Output store gate (roadmap 2.1, ADR 0034): a tool result larger than
     /// its inline limit is stored and the model reads a preview with a
     /// handle. Absent, results are bounded by the envelope's byte budget.
@@ -130,6 +133,7 @@ impl Default for AgentExecutorOptions {
             default_tool_timeout_ms: None,
             tool_classification: None,
             tool_call_records: true,
+            parallel_read_tools: true,
             output: None,
         }
     }
