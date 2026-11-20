@@ -301,6 +301,91 @@ async fn park_parks_and_approve_resumes_the_turn() {
     );
 }
 
+/// Park one approval on the claimed attempt and answer it, so the turn is
+/// queued again; `n` keeps request ids unique per cycle.
+async fn park_and_approve(store: &SqliteStore, lease: &Lease, n: i64) {
+    let request = human_request(
+        &format!("req-{n}"),
+        "run",
+        approval_content(None),
+        Some(&format!("call-{n}")),
+        None,
+    );
+    store
+        .park_turn(ParkTurn {
+            fence: lease.fence(),
+            assistant_message: None,
+            events: vec![],
+            request: Some(request),
+            now: 2000 + n,
+        })
+        .await
+        .unwrap();
+    store
+        .answer_human_request(answer(
+            &format!("req-{n}"),
+            &format!("ans-{n}"),
+            json!({"decision":"approve"}),
+        ))
+        .await
+        .unwrap();
+}
+
+fn long_claim(now: i64) -> ClaimInput {
+    ClaimInput {
+        ttl_ms: 1_000_000,
+        ..claim(now)
+    }
+}
+
+#[tokio::test]
+async fn parks_count_as_parked_attempts_and_do_not_use_the_retry_budget() {
+    let store = store();
+    let mut lease = running_turn(&store, "run").await;
+    // max_attempts is 3: five clean parks must all stay claimable.
+    for n in 1..=5 {
+        park_and_approve(&store, &lease, n).await;
+        let parked = store.get_task("run").await.unwrap().unwrap();
+        assert_eq!(
+            (parked.attempt_count, parked.parked_attempts),
+            (n as u32, n as u32)
+        );
+        assert_eq!(parked.consumed_attempts(), 0);
+        lease = store
+            .claim_with_concurrency(long_claim(4000 + n * 1000), 1)
+            .await
+            .unwrap()
+            .expect("a parked turn is never dead-lettered as attempts_exhausted")
+            .lease;
+    }
+    // Failed attempts still spend it: two parks above leave 3 failures.
+    let mut now = 20_000;
+    for failure in 1..=3 {
+        let retried = store
+            .retry_task(RetryTask {
+                fence: lease.fence(),
+                now,
+                available_at: now + 1,
+                max_attempts: 3,
+                error: "flaky".into(),
+            })
+            .await
+            .unwrap();
+        if failure < 3 {
+            assert_eq!(retried.dead_lettered_at, None);
+            now += 1000;
+            lease = store
+                .claim_with_concurrency(long_claim(now), 1)
+                .await
+                .unwrap()
+                .unwrap()
+                .lease;
+        } else {
+            assert_eq!(retried.dead_lettered_at, Some(now));
+        }
+    }
+}
+
 #[tokio::test]
 async fn deny_appends_one_tool_record_and_remembers_the_note() {
     let store = store();

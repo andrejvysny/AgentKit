@@ -475,6 +475,7 @@ impl SqliteStore {
                 return Ok(false);
             }
             task.status = TaskStatus::WaitingChild;
+            task.parked_attempts = task.parked_attempts.saturating_add(1);
             crate::tasks::save(&transaction, &task)?;
             crate::tasks::lifecycle_event(&transaction, &task, "task.waiting_child", now)?;
             crate::tasks::end_attempt(&transaction, &lease, "completed", now, None)?;

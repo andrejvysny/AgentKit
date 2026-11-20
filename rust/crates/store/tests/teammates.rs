@@ -1065,6 +1065,7 @@ fn bare(task_id: &str, status: TaskStatus) -> TaskRecord {
         depends_on: vec![],
         parent_task_id: None,
         attempt_count: 0,
+        parked_attempts: 0,
         poison_count: 0,
         dead_lettered_at: None,
         dead_letter_reason: None,

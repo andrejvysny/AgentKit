@@ -816,6 +816,7 @@ fn insert_task(state: &mut State, input: SubmitTask) -> Result<TaskRecord> {
         depends_on: input.depends_on,
         parent_task_id: input.parent_task_id,
         attempt_count: 0,
+        parked_attempts: 0,
         poison_count: 0,
         dead_lettered_at: None,
         dead_letter_reason: None,

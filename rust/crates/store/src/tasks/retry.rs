@@ -25,7 +25,7 @@ impl SqliteStore {
                 save(&transaction, &task)?;
                 lifecycle_event(&transaction, &task, "task.settled", input.now)?;
                 "cancelled"
-            } else if task.attempt_count >= input.max_attempts {
+            } else if task.consumed_attempts() >= input.max_attempts {
                 lifecycle::dead_letter(&transaction, &mut task, input.now, &input.error)?;
                 "failed"
             } else {

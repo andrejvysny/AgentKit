@@ -889,6 +889,7 @@ impl SqliteStore {
                 return Err(StoreError::LeaseLost(input.fence.task_id.clone()));
             }
             let now = input.now;
+            task.parked_attempts = task.parked_attempts.saturating_add(1);
             if let Some(request) = &input.request {
                 check_child_wait_park(&request.input_id, &request.content)?;
             }

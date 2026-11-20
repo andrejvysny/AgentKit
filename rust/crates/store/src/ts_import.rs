@@ -1157,6 +1157,7 @@ impl<'a> Importer<'a> {
                 depends_on,
                 parent_task_id: Row::text(&row, "parent_task_id"),
                 attempt_count,
+                parked_attempts: 0,
                 poison_count,
                 dead_lettered_at: self.opt_millis("task", &task_id, "dead_lettered_at", &row)?,
                 dead_letter_reason: Row::text(&row, "dead_letter_reason"),

@@ -69,6 +69,7 @@ suite!(
     recover_refuses_bad_limits,
     submit_child_requires_live_lease_and_parent,
     wait_for_children_parks_parent,
+    parked_attempts_do_not_consume_retry_budget,
     check_dispatch_requires_live_running_lease,
 );
 
@@ -1160,6 +1161,23 @@ async fn wait_for_children_parks_parent<R: TaskRepository>(repo: R) {
     repo.cancel_task("cancelling", 1008).await.unwrap();
     let refused = repo.wait_for_children(cancelling.lease.fence(), 1009).await;
     assert!(refused.unwrap_err().is_lease_lost());
+}
+
+async fn parked_attempts_do_not_consume_retry_budget<R: TaskRepository>(repo: R) {
+    let parent = running(&repo, "parent").await;
+    let mut child = task("child", "child");
+    child.parent_task_id = Some("parent".into());
+    repo.submit_child(parent.lease.fence(), child, 1001)
+        .await
+        .unwrap();
+    assert!(
+        repo.wait_for_children(parent.lease.fence(), 1002)
+            .await
+            .unwrap()
+    );
+    let parked = repo.get_task("parent").await.unwrap().unwrap();
+    assert_eq!((parked.attempt_count, parked.parked_attempts), (1, 1));
+    assert_eq!(parked.consumed_attempts(), 0);
 }
 
 async fn check_dispatch_requires_live_running_lease<R: TaskRepository>(repo: R) {

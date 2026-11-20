@@ -335,6 +335,7 @@ impl State {
             depends_on: input.depends_on,
             parent_task_id: input.parent_task_id,
             attempt_count: 0,
+            parked_attempts: 0,
             poison_count: 0,
             dead_lettered_at: None,
             dead_letter_reason: None,
@@ -504,7 +505,7 @@ impl State {
             if !self.dependencies(&mut task, input.now) {
                 continue;
             }
-            if task.attempt_count >= input.max_attempts {
+            if task.consumed_attempts() >= input.max_attempts {
                 self.dead_letter(&mut task, input.now, "attempts_exhausted");
                 continue;
             }
@@ -691,7 +692,7 @@ impl State {
             task.finished_at = Some(now);
         } else if mode == RecoveryMode::Manual {
             task.status = TaskStatus::Interrupted;
-        } else if task.attempt_count >= max_attempts {
+        } else if task.consumed_attempts() >= max_attempts {
             self.dead_letter(task, now, "attempts_exhausted");
             return Ok(());
         } else {
@@ -723,7 +724,7 @@ impl State {
             task.error = None;
             self.save(&task);
             "cancelled"
-        } else if task.attempt_count >= input.max_attempts {
+        } else if task.consumed_attempts() >= input.max_attempts {
             self.dead_letter(&mut task, input.now, &input.error);
             "failed"
         } else {
@@ -770,6 +771,7 @@ impl State {
             return Ok(false);
         }
         task.status = TaskStatus::WaitingChild;
+        task.parked_attempts = task.parked_attempts.saturating_add(1);
         self.save(&task);
         self.end_attempt(&lease.attempt_id, "completed", now, None);
         self.drop_lease(&task.task_id);

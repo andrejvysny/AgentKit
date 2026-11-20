@@ -373,7 +373,7 @@ fn recover_task(
         task.finished_at = Some(now);
     } else if mode == RecoveryMode::Manual {
         task.status = TaskStatus::Interrupted;
-    } else if task.attempt_count >= max_attempts {
+    } else if task.consumed_attempts() >= max_attempts {
         return dead_letter(db, task, now, "attempts_exhausted");
     } else {
         task.status = TaskStatus::Queued;

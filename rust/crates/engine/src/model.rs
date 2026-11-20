@@ -69,6 +69,11 @@ pub struct TaskRecord {
     pub depends_on: Vec<String>,
     pub parent_task_id: Option<String>,
     pub attempt_count: u32,
+    /// Attempts that ended by parking on a human request or a child wait,
+    /// not by failing. They keep their attempt number but do not consume
+    /// the `max_attempts` retry budget; see [`TaskRecord::consumed_attempts`].
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub parked_attempts: u32,
     pub poison_count: u32,
     pub dead_lettered_at: Option<i64>,
     pub dead_letter_reason: Option<String>,
@@ -114,6 +119,18 @@ pub struct TaskRecord {
     /// and most rows never have one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_profile: Option<Box<PinnedRunProfile>>,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+impl TaskRecord {
+    /// Attempts charged against `max_attempts`: every claimed attempt except
+    /// those that parked cleanly. Attempt numbers still count every claim.
+    pub fn consumed_attempts(&self) -> u32 {
+        self.attempt_count.saturating_sub(self.parked_attempts)
+    }
 }
 
 /// AGENTKIT-89: the ONE immutable effective run profile pinned to an

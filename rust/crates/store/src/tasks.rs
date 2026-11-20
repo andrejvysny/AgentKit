@@ -164,6 +164,7 @@ pub(crate) fn insert_bound(
         depends_on: input.depends_on,
         parent_task_id: input.parent_task_id,
         attempt_count: 0,
+        parked_attempts: 0,
         poison_count: 0,
         dead_lettered_at: None,
         dead_letter_reason: None,
@@ -457,7 +458,7 @@ impl SqliteStore {
                 if crate::run_profiles::dispatch_fenced(&transaction, &task) {
                     continue;
                 }
-                if task.attempt_count >= input.max_attempts {
+                if task.consumed_attempts() >= input.max_attempts {
                     lifecycle::dead_letter(
                         &transaction,
                         &mut task,
