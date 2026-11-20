@@ -349,6 +349,10 @@ async fn mem_04_the_extractor_sees_only_the_owners_typed_words() {
     let request = &requests[0];
     assert_eq!(request.model, "bg-model");
     assert!(request.tools.is_empty(), "tool-less");
+    // Sampling is the provider's and the model profile's: current Claude
+    // models refuse any `temperature` with HTTP 400, which left capture
+    // silently doing nothing.
+    assert_eq!(request.temperature, None, "no forced temperature");
     let roles: Vec<_> = request.messages.iter().map(|m| m.role.as_str()).collect();
     assert_eq!(roles, ["system", "user"]);
     let input = request.messages[1].content.as_str().expect("text input");

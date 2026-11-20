@@ -194,7 +194,8 @@ impl MemoryExtractExecutor {
                 ChatMessage::text("user", &eligible.replace(REMOVED, OMITTED)),
             ],
             tools: vec![],
-            temperature: Some(0.0),
+            // No forced temperature: current Claude models refuse the field
+            // (HTTP 400), and a model profile's sampling already applies.
             max_output_tokens: Some(EXTRACT_MAX_OUTPUT_TOKENS),
             ..Default::default()
         };
