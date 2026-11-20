@@ -57,6 +57,25 @@ impl State {
             suspension,
         }
     }
+
+    /// Audit symmetry for deferred tools: `tool_call` refuses inner arguments
+    /// that miss the schema before any tool runs, so the inner tool records
+    /// the refusal exactly as `tool_execution` does for a direct call.
+    pub(super) async fn record_inner_schema_refusal(
+        &self,
+        registry: &crate::ToolRegistry,
+        call: &crate::ToolCall,
+        message: &str,
+    ) {
+        let Some(tool) = registry.get(&call.name) else {
+            return;
+        };
+        let Ok(args) = agentkit_contracts::parse_javascript_json(&call.arguments_json) else {
+            return;
+        };
+        tool.record_schema_refusal(&self.tool_context(call, None), &args, message)
+            .await;
+    }
 }
 
 impl State {

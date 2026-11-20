@@ -47,6 +47,7 @@ pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
         aliases_used: vec![],
         values_converted: 0,
         failure: None,
+        schema_refusal: false,
     };
     let refuse = |error: CoreError| Prepared {
         failure: Some(error),
@@ -98,6 +99,7 @@ pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
     let mut prepared = prepare_resolved(registry, &inner, true);
     if prepared.failure.is_none() {
         prepared.failure = invalid_inner(registry, &prepared.call);
+        prepared.schema_refusal = prepared.failure.is_some();
     }
     prepared.outer = Some(call.clone());
     prepared

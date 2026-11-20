@@ -370,6 +370,10 @@ pub(crate) struct Prepared {
     pub aliases_used: Vec<String>,
     pub values_converted: u32,
     pub failure: Option<CoreError>,
+    /// `failure` is the inner call's schema refusal (`tool_call`, CE-09): the
+    /// run records it with the inner tool like a direct `schema_invalid`, so
+    /// the execution ledger has a row for it either way.
+    pub schema_refusal: bool,
 }
 
 pub(crate) fn prepare(registry: &ToolRegistry, call: &ToolCall) -> Prepared {
@@ -477,6 +481,7 @@ pub(crate) fn prepare_resolved(
         aliases_used: vec![],
         values_converted: 0,
         failure: refused,
+        schema_refusal: false,
     };
     if prepared.failure.is_some() {
         return prepared;

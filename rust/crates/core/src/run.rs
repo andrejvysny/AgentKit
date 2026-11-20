@@ -894,6 +894,10 @@ impl State {
                     )
                 } else if let Some(error) = &prepared.failure {
                     executed = true;
+                    if prepared.schema_refusal {
+                        self.record_inner_schema_refusal(registry, call, &error.message)
+                            .await;
+                    }
                     tool_execution::failed(call, error, self.options.limits.max_bytes, json!({}))
                 } else if let Some(message) = gate {
                     tool_execution::failed(

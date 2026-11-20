@@ -29,6 +29,8 @@ struct Echo {
     definition: ToolDefinition,
     ran: Arc<Mutex<Vec<String>>>,
     loading: ToolLoading,
+    /// Pre-body schema refusals the run asked this tool to record.
+    refused: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
@@ -38,6 +40,12 @@ impl Tool for Echo {
     }
     fn loading(&self) -> ToolLoading {
         self.loading
+    }
+    async fn record_schema_refusal(&self, _context: &ToolContext, args: &Value, _message: &str) {
+        self.refused
+            .lock()
+            .unwrap()
+            .push(format!("{}:{args}", self.definition.name));
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         self.ran
@@ -66,6 +74,7 @@ fn tool(name: &str, description: &str, params: &[&str], ran: &Ran) -> Arc<Echo> 
         definition: definition(name, description, params),
         ran: ran.clone(),
         loading: ToolLoading::Direct,
+        refused: Ran::default(),
     })
 }
 
@@ -293,6 +302,7 @@ fn a_tool_flag_defers_when_no_direct_set_is_given() {
         definition: definition("heavy_tool", "A rarely used tool.", &["x"]),
         ran: ran.clone(),
         loading: ToolLoading::Deferred,
+        refused: Ran::default(),
     }));
     let classification = Classification {
         max_tokens: 0,
@@ -484,6 +494,41 @@ async fn tool_call_normalises_the_inner_arguments_like_a_direct_call() {
     assert_eq!(
         outcome.of("run.tool.record")[0]["aliasesUsed"],
         json!(["path->file_path"])
+    );
+}
+
+#[tokio::test]
+async fn ce09_the_inner_tool_records_its_schema_refusal() {
+    // Audit symmetry with a direct `schema_invalid`: a durable host keeps a
+    // ledger row for a refusal raised before the body, also via tool_call.
+    let ran = Ran::default();
+    let refused = Ran::default();
+    let mut tools = catalog_tools(&ran);
+    tools.retain(|tool| tool.definition.name != "calendar_create_event");
+    tools.push(Arc::new(Echo {
+        definition: definition(
+            "calendar_create_event",
+            "Create a calendar event.",
+            &["title", "day"],
+        ),
+        ran: ran.clone(),
+        loading: ToolLoading::Direct,
+        refused: refused.clone(),
+    }));
+    let (registry, _) = session(tools, &classification(&["read_file"]), None);
+    let outcome = run(
+        registry,
+        vec![via("c1", "calendar_create_event", json!({"title": "x"}))],
+    )
+    .await;
+    assert!(ran.lock().unwrap().is_empty(), "no tool ran");
+    assert_eq!(
+        outcome.of("run.tool.failed")[0]["errorCode"],
+        "invalid_arguments"
+    );
+    assert_eq!(
+        *refused.lock().unwrap(),
+        [r#"calendar_create_event:{"title":"x"}"#]
     );
 }
 
