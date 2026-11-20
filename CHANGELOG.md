@@ -2,6 +2,8 @@
 
 ## 0.8.0 — unreleased
 
+**Fix: the generic model profile demoted `run_command`.** Its direct set is five coding tools, and once anything is deferred the four meta tools take visible slots too, so the bound of 8 pushed `run_command` (last in priority order) into the deferred set. A model on the generic profile could reach the shell only through `tool_call`. `max_visible_tools` is now 9. A new test checks every built-in profile: its non-meta direct tools plus all meta tools fit its bound.
+
 **Unified agent, AgentKit half of spec 10 slices S1 to S3** ([evidence](docs/evidence/unified-agent/S1-S3-agentkit.md)).
 
 - **Renamed (U17):** `ChatExecutor` is now `AgentExecutor` and `ChatExecutorOptions` is now `AgentExecutorOptions`. The old names stay for one release as `#[deprecated]` type aliases at `agentkit_chat::ChatExecutor` and `agentkit_chat::ChatExecutorOptions`. Behaviour is unchanged. The crate, `run_chat`, `ChatSession`, `ChatRequest` and the option fields keep their names.

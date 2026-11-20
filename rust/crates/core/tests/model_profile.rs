@@ -6,9 +6,10 @@ use agentkit_contracts::{
     AiModelToolChoicePolicy, AiSessionPrefix, Optional,
 };
 use agentkit_core::{
-    AiModelToolProfile, GENERIC_PROFILE_ID, LimitFacts, ModelFacts, PrefixDigests, ProfileError,
-    ProfileQuery, PromptLayout, QWEN_PROFILE_ID, builtin_profile, freeze, frozen_profile,
-    model_profile_digest, resolve_profile, stamp_model_profile, validate_profile_json,
+    AiModelToolProfile, GENERIC_PROFILE_ID, LimitFacts, META_TOOLS, ModelFacts, PrefixDigests,
+    ProfileError, ProfileQuery, PromptLayout, QWEN_PROFILE_ID, builtin_profile, freeze,
+    frozen_profile, is_meta_tool, model_profile_digest, resolve_profile, stamp_model_profile,
+    validate_profile_json,
 };
 use serde_json::{Value, json};
 
@@ -74,6 +75,27 @@ fn every_builtin_profile_is_valid_configuration() {
         );
     }
     assert!(builtin_profile("nope").is_none());
+}
+
+/// Once anything is deferred the meta tools take visible slots, so the
+/// bound must hold every non-meta direct tool plus all of them; otherwise
+/// the last direct tools are silently demoted.
+#[test]
+fn every_builtin_profile_shows_all_its_direct_tools() {
+    for id in ["anthropic", "openai", "generic", QWEN_PROFILE_ID] {
+        let profile = builtin_profile(id).expect(id);
+        let direct = profile
+            .direct_tools
+            .iter()
+            .filter(|name| !is_meta_tool(name))
+            .count();
+        assert!(
+            (direct + META_TOOLS.len()) as f64 <= profile.max_visible_tools,
+            "{id}: {direct} direct + {} meta > {}",
+            META_TOOLS.len(),
+            profile.max_visible_tools
+        );
+    }
 }
 
 #[test]

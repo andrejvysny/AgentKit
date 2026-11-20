@@ -133,7 +133,9 @@ fn generic() -> AiModelToolProfile {
         ],
         &META,
     ]);
-    profile.max_visible_tools = 8.0;
+    // Five direct coding tools plus the four meta tools, which take slots
+    // once anything is deferred: at 8, `run_command` was demoted.
+    profile.max_visible_tools = 9.0;
     profile.message_rules.system_first_only = true;
     profile.message_rules.image_positions = vec![AiModelImagePosition::User];
     profile
