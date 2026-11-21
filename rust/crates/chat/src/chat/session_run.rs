@@ -423,6 +423,8 @@ pub(crate) async fn resolve_approved_calls(
     // declared, and what the history already answers.
     let mut answered: HashSet<String> = HashSet::new();
     let mut declared: Vec<ToolCall> = vec![];
+    // The assistant record each declared call came from.
+    let mut message_of: HashMap<String, String> = HashMap::new();
     let mut current: Option<String> = records
         .iter()
         .rev()
@@ -450,8 +452,11 @@ pub(crate) async fn resolve_approved_calls(
                 .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or_default();
             // Walking backwards: a later visit (earlier declaration) of a
-            // repeated call id overwrites, matching the TS map rebuild.
-            for call in calls {
+            // repeated call id overwrites, matching the TS map rebuild. A
+            // record's own calls are taken last-first too, so the final
+            // reverse restores the order the model sent them in.
+            for call in calls.into_iter().rev() {
+                message_of.insert(call.id.clone(), record.id.clone());
                 if let Some(existing) = declared.iter_mut().find(|existing| existing.id == call.id)
                 {
                     *existing = call;
@@ -485,6 +490,8 @@ pub(crate) async fn resolve_approved_calls(
     // (or older) answer authorized exactly it.
     let mut approvals = HashMap::new();
     let mut resume = vec![];
+    // Calls the park left unrun: no record and no ask of their own.
+    let mut unrun: HashSet<String> = HashSet::new();
     for call in &declared {
         let call_id = call.id.as_str();
         if answered.contains(call_id) {
@@ -550,13 +557,44 @@ pub(crate) async fn resolve_approved_calls(
                 .any(|request| request.tool_call_id.as_deref() == Some(call_id))
             {
                 append_approval_mismatch(context, chat_id, anchor, call).await?;
+            } else {
+                unrun.insert(call_id.to_owned());
+                resume.push(call.clone());
             }
             continue;
         };
         approvals.insert(call_id.to_owned(), grant);
         resume.push(call.clone());
     }
+    let resume = with_unrun_siblings(resume, &approvals, &unrun, &message_of);
     Ok((approvals, resume))
+}
+
+/// The resumed calls in declaration order: every approved call, plus each
+/// call the park left unrun in the same assistant message as an approved
+/// one. A message's calls run in order, so the calls after the one that
+/// asked never started; dropping them made the model redo their work.
+/// They carry no grant, so the guards decide them as on first dispatch (a
+/// sibling that needs its own approval parks again).
+fn with_unrun_siblings(
+    resume: Vec<ToolCall>,
+    approvals: &HashMap<String, agentkit_governance::ApprovalGrant>,
+    unrun: &HashSet<String>,
+    message_of: &HashMap<String, String>,
+) -> Vec<ToolCall> {
+    let approved_messages: HashSet<&String> = approvals
+        .keys()
+        .filter_map(|call_id| message_of.get(call_id))
+        .collect();
+    resume
+        .into_iter()
+        .filter(|call| {
+            !unrun.contains(&call.id)
+                || message_of
+                    .get(&call.id)
+                    .is_some_and(|message| approved_messages.contains(message))
+        })
+        .collect()
 }
 
 /// Emit the tool outcome of each call this turn's owner denied (H1.1c).
