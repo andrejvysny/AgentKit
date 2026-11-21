@@ -443,6 +443,11 @@ async fn anthropic_never_widens_authority() {
             json!({"command": "create", "path": "a", "file_text": "x"}),
             "write_file",
         ),
+        (
+            editor,
+            json!({"command": "insert", "path": "a", "insert_line": 0, "insert_text": "x"}),
+            "edit_file",
+        ),
         ("bash", json!({"command": "ls"}), "run_command"),
     ] {
         let translated = registry.translate(wire, args).expect("translates");
@@ -461,12 +466,11 @@ async fn anthropic_never_widens_authority() {
         "read"
     );
     // Calls with no canonical equivalent are refused before any guard.
-    for args in [
-        json!({"command": "insert", "path": "a", "insert_line": 0, "insert_text": "x"}),
-        json!({"command": "undo_edit", "path": "a"}),
-    ] {
-        assert!(registry.translate(editor, args).is_err());
-    }
+    assert!(
+        registry
+            .translate(editor, json!({"command": "undo_edit", "path": "a"}))
+            .is_err()
+    );
     assert!(
         registry
             .translate("bash", json!({"restart": true}))

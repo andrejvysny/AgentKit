@@ -231,6 +231,25 @@
             "command": "ls -la *.py"
           }
         }
+      },
+      {
+        "wire": {
+          "name": "str_replace_based_edit_tool",
+          "arguments": {
+            "command": "insert",
+            "path": "primes.py",
+            "insert_line": 0,
+            "insert_text": "\"\"\"Module.\"\"\"\n"
+          }
+        },
+        "canonical": {
+          "name": "edit_file",
+          "arguments": {
+            "file_path": "primes.py",
+            "insert_line": 0,
+            "insert_text": "\"\"\"Module.\"\"\"\n"
+          }
+        }
       }
     ],
     "ranges": [
@@ -257,16 +276,6 @@
       }
     ],
     "refused": [
-      {
-        "name": "str_replace_based_edit_tool",
-        "arguments": {
-          "command": "insert",
-          "path": "primes.py",
-          "insert_line": 0,
-          "insert_text": "\"\"\"Module.\"\"\"\n"
-        },
-        "says": "str_replace"
-      },
       {
         "name": "str_replace_based_edit_tool",
         "arguments": {

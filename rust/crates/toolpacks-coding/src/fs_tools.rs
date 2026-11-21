@@ -15,11 +15,11 @@ use agentkit_core::{Tool, ToolContext};
 
 use crate::apply_patch::{FileOp, Hunk, apply_hunks, parse_hunks, parse_patch};
 use crate::args::{as_record, opt_bool, opt_int, opt_string, req_string};
-use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
+use crate::context::{ConstraintSpec, Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
 use crate::coordination::{AcquireFileInput, LeaseHolder};
 use crate::diff::unified_diff;
 use crate::edit_engine::{
-    AppliedEdits, Edit, apply_edits, apply_replace_all, normalize_to_lf, split_bom,
+    AppliedEdits, Edit, apply_edits, apply_insert, apply_replace_all, normalize_to_lf, split_bom,
 };
 use crate::errors::{CodingError, file_changed_error, file_not_read_error};
 use crate::fs_util::{
@@ -1026,6 +1026,41 @@ fn parse_edit_request(input: &Map<String, Value>) -> Result<(Vec<Edit>, bool, bo
     Ok((vec![Edit { old_text, new_text }], replace_all, true))
 }
 
+/// The insert call: `insert_text` after line `insert_line`, or `None` when the
+/// call is not one. It takes no other edit form.
+fn parse_insert_request(
+    input: &Map<String, Value>,
+) -> Result<Option<(usize, String)>, CodingError> {
+    if !input.contains_key("insert_line") && !input.contains_key("insert_text") {
+        return Ok(None);
+    }
+    if ["old_string", "new_string", "replace_all", "edits", "patch"]
+        .iter()
+        .any(|key| input.contains_key(*key))
+    {
+        return Err(CodingError::new(
+            "invalid_arguments",
+            "pass either insert_line and insert_text or another edit form, not both",
+        ));
+    }
+    let Some(line) = opt_int(input, "insert_line", 0, i64::from(u32::MAX))? else {
+        return Err(CodingError::new(
+            "invalid_arguments",
+            "insert_text needs insert_line: the line to insert after (0 = top)",
+        ));
+    };
+    let Some(Value::String(text)) = input.get("insert_text") else {
+        return Err(CodingError::new(
+            "invalid_arguments",
+            "\"insert_text\" must be a string",
+        ));
+    };
+    Ok(Some((
+        usize::try_from(line).unwrap_or(usize::MAX),
+        text.clone(),
+    )))
+}
+
 /// The `patch` call: apply_patch hunks for `file_path`, bare or inside a
 /// `*** Begin Patch` envelope holding one in-place update of that file.
 fn parse_patch_request(input: &Map<String, Value>, path: &str) -> Result<Vec<Hunk>, CodingError> {
@@ -1133,6 +1168,16 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         "type": "string",
                         "description": "Alternative to a single replacement: apply_patch hunks for this file (@@ anchor, then lines starting with space, - or +), matched by whole lines.",
                     },
+                    "insert_line": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10_000_000,
+                        "description": "Alternative: insert insert_text after this line number (0 = top of the file).",
+                    },
+                    "insert_text": {
+                        "type": "string",
+                        "description": "The text insert_line inserts.",
+                    },
                 },
                 "required": ["file_path"],
                 "additionalProperties": false,
@@ -1151,7 +1196,16 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     "replace_all": true,
                 }),
             ],
-            constraints: vec![],
+            constraints: vec![ConstraintSpec {
+                constraint: agentkit_core::ToolConstraint {
+                    code: "edit_insert_pair".to_owned(),
+                    params: vec!["insert_line".to_owned(), "insert_text".to_owned()],
+                    rule: "insert_line and insert_text are given together".to_owned(),
+                    teaching_error: "edit_insert_pair: insert_line and insert_text go together. Why: one names where to insert, the other what. Next: send both, or use old_string and new_string instead.".to_owned(),
+                    violating_example: json!({ "file_path": "a.txt", "insert_line": 0 }),
+                },
+                violated: |input| input.contains_key("insert_line") != input.contains_key("insert_text"),
+            }],
             aliases: &[],
         },
         move |ctx: ToolContext, raw: Value| {
@@ -1159,7 +1213,10 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             async move {
                 let input = as_record(&raw)?;
                 let path = req_string(input, "file_path", 4096)?;
-                let (edits, replace_all, flat, hunks) = if input.contains_key("patch") {
+                let insert = parse_insert_request(input)?;
+                let (edits, replace_all, flat, hunks) = if insert.is_some() {
+                    (vec![], false, false, None)
+                } else if input.contains_key("patch") {
                     (
                         vec![],
                         false,
@@ -1196,6 +1253,7 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     &edits,
                     replace_all,
                     hunks.as_deref(),
+                    insert.as_ref(),
                     &explicit,
                     &target,
                     options,
@@ -1221,6 +1279,7 @@ async fn edit_file_body(
     edits: &[Edit],
     replace_all: bool,
     hunks: Option<&[Hunk]>,
+    insert: Option<&(usize, String)>,
     explicit: &Option<String>,
     target: &ConfinedPath,
     options: ConfineOptions,
@@ -1263,8 +1322,11 @@ async fn edit_file_body(
         path.to_owned(),
     );
     let hunks_owned = hunks.map(<[Hunk]>::to_vec);
+    let insert_owned = insert.cloned();
     let applied = tokio::task::spawn_blocking(move || {
-        if let Some(hunks) = hunks_owned {
+        if let Some((line, added)) = insert_owned {
+            apply_insert(&text, line, &added, &path_owned)
+        } else if let Some(hunks) = hunks_owned {
             apply_patch_hunks(&text, &hunks, &path_owned)
         } else if replace_all {
             apply_replace_all(
@@ -1293,7 +1355,11 @@ async fn edit_file_body(
     atomic_write_in_root(Some(&target.root), &target.path, &out, path, Some(verify)).await?;
     let after = sha256(&out);
     ledger::record_write(ctx.chat_id.as_deref(), &target.path, &after);
-    let count = hunks.map_or(edits.len(), <[Hunk]>::len);
+    let count = if insert.is_some() {
+        1
+    } else {
+        hunks.map_or(edits.len(), <[Hunk]>::len)
+    };
     let patch = unified_diff(
         &target.relative_path,
         &applied.base_content,
@@ -2300,6 +2366,53 @@ mod tests {
             .await;
         assert!(Harness::text(&mixed).contains("one replacement per call"));
         assert_eq!(h.contents("f.txt"), b"a\n");
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn edit_insert_adds_text_after_a_line_and_refuses_mixed_forms() {
+        let h = Harness::new(CodingLimits::default());
+        h.put("f.txt", b"one\ntwo\n");
+        let r = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "insert_line": 1, "insert_text": "1.5" }),
+            )
+            .await;
+        assert!(r.ok, "{}", Harness::text(&r));
+        assert_eq!(h.contents("f.txt"), b"one\n1.5\ntwo\n");
+        let beyond = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "insert_line": 9, "insert_text": "x" }),
+            )
+            .await;
+        assert!(Harness::text(&beyond).contains("edit_insert_out_of_range"));
+        let mixed = h
+            .run(
+                &h.edit_file,
+                json!({
+                    "file_path": "f.txt",
+                    "insert_line": 0,
+                    "insert_text": "x",
+                    "old_string": "one",
+                    "new_string": "ONE",
+                }),
+            )
+            .await;
+        assert!(
+            Harness::text(&mixed).contains("not both"),
+            "{}",
+            Harness::text(&mixed)
+        );
+        let no_line = h
+            .run(
+                &h.edit_file,
+                json!({ "file_path": "f.txt", "insert_text": "x" }),
+            )
+            .await;
+        assert!(Harness::text(&no_line).contains("edit_insert_pair"));
+        assert_eq!(h.contents("f.txt"), b"one\n1.5\ntwo\n");
         h.remove();
     }
 

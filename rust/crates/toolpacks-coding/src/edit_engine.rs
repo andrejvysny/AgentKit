@@ -813,6 +813,57 @@ pub fn apply_replace_all(
     })
 }
 
+/// Inserts `text` after line `after_line` (0 = before the first line), in
+/// the file's dominant line ending. Untouched lines stay byte-identical. A
+/// last line without a terminator gets one when text goes after it.
+pub fn apply_insert(
+    original: &str,
+    after_line: usize,
+    text: &str,
+    path: &str,
+) -> Result<AppliedEdits, CodingError> {
+    let eol = dominant_eol(original);
+    if eol == Eol::Cr {
+        return Err(CodingError::new(
+            "edit_insert_unsupported",
+            format!(
+                "{path} uses CR-only line endings; insert with old_string and new_string instead"
+            ),
+        ));
+    }
+    let lines: Vec<&str> = original.split_inclusive('\n').collect();
+    if after_line > lines.len() {
+        return Err(CodingError::new(
+            "edit_insert_out_of_range",
+            format!(
+                "insert_line {after_line} is beyond the end of {path} ({} lines)",
+                lines.len()
+            ),
+        ));
+    }
+    let mut inserted = normalize_to_lf(text).replace('\n', eol.as_str());
+    if inserted.is_empty() {
+        return Err(CodingError::new(
+            "edit_no_change",
+            format!("No changes made to {path}: insert_text is empty."),
+        ));
+    }
+    if !inserted.ends_with('\n') {
+        inserted.push_str(eol.as_str());
+    }
+    let mut output = lines[..after_line].concat();
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push_str(eol.as_str());
+    }
+    output.push_str(&inserted);
+    output.push_str(&lines[after_line..].concat());
+    Ok(AppliedEdits {
+        base_content: normalize_to_lf(original),
+        new_content: normalize_to_lf(&output),
+        output,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,6 +1029,29 @@ mod tests {
         let applied =
             apply_edits("a\r\nb\r\nc\n", &[edit("b", "b\nb2\nb3")], "d.txt").expect("applied");
         assert_eq!(applied.output, "a\r\nb\r\nb2\r\nb3\r\nc\n");
+    }
+
+    #[test]
+    fn insert_goes_after_the_named_line_in_the_files_line_ending() {
+        let at = |text: &str, line: usize, add: &str| {
+            apply_insert(text, line, add, "f").map(|applied| applied.output)
+        };
+        assert_eq!(at("a\nb\n", 0, "x").unwrap(), "x\na\nb\n");
+        assert_eq!(at("a\nb\n", 1, "x\ny").unwrap(), "a\nx\ny\nb\n");
+        assert_eq!(at("a\nb\n", 2, "x\n").unwrap(), "a\nb\nx\n");
+        assert_eq!(at("a\r\nb\r\n", 1, "x\n").unwrap(), "a\r\nx\r\nb\r\n");
+        // A last line without a terminator gets one before the new text.
+        assert_eq!(at("a\nb", 2, "x").unwrap(), "a\nb\nx\n");
+        assert_eq!(at("", 0, "x").unwrap(), "x\n");
+        assert_eq!(
+            at("a\n", 2, "x").unwrap_err().code,
+            "edit_insert_out_of_range"
+        );
+        assert_eq!(at("a\n", 1, "").unwrap_err().code, "edit_no_change");
+        assert_eq!(
+            at("a\rb\r", 1, "x").unwrap_err().code,
+            "edit_insert_unsupported"
+        );
     }
 
     #[test]

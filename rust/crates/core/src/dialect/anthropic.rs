@@ -20,9 +20,9 @@
 //! The text editor reaches the canonical read, write and edit tools. It is
 //! offered only when all three are present, so the model never holds a wider
 //! tool than the session has; otherwise those tools keep their common form.
-//! Nothing is invented: a call the canonical tools cannot express (`insert`,
-//! `undo_edit`, bash `restart`) is refused with text that tells the model
-//! what to do instead.
+//! Nothing is invented: a call the canonical tools cannot express
+//! (`undo_edit`, bash `restart`) is refused with text that tells the model
+//! what to do instead. `insert` maps to `edit_file`'s insert form.
 
 use super::{Dialect, DialectError, Translated, WireTool, common};
 use crate::ToolDefinition;
@@ -222,7 +222,7 @@ fn translate_editor(args: &Value) -> Result<Translated, DialectError> {
     let object = object(tool, args)?;
     let Some(command) = object.get("command").and_then(Value::as_str) else {
         return Err(fail(format!(
-            "Tool {tool} needs command: one of view, str_replace, create. Send command."
+            "Tool {tool} needs command: one of view, str_replace, create, insert. Send command."
         )));
     };
     match command {
@@ -257,14 +257,32 @@ fn translate_editor(args: &Value) -> Result<Translated, DialectError> {
                 }),
             ))
         }
-        "insert" => Err(fail(format!(
-            "Tool {tool} insert is not available here. Use str_replace: view the file, then send old_str with the line next to the insertion point and new_str with that line plus the text to add. For a new file use create."
-        ))),
+        "insert" => {
+            only(
+                tool,
+                "insert",
+                object,
+                &["command", "path", "insert_line", "insert_text"],
+            )?;
+            let Some(line) = object.get("insert_line").and_then(Value::as_u64) else {
+                return Err(fail(format!(
+                    "Tool {tool} insert needs insert_line as a whole number (0 = top of the file). Send insert_line."
+                )));
+            };
+            Ok(translated(
+                "edit_file",
+                json!({
+                    "file_path": text(tool, command, object, "path")?,
+                    "insert_line": line,
+                    "insert_text": text(tool, command, object, "insert_text")?,
+                }),
+            ))
+        }
         "undo_edit" => Err(fail(format!(
             "Tool {tool} undo_edit is not available. Undo a change with str_replace: send the new text as old_str and the previous text as new_str."
         ))),
         other => Err(fail(format!(
-            "Tool {tool} does not know command {other}. Use view, str_replace or create."
+            "Tool {tool} does not know command {other}. Use view, str_replace, create or insert."
         ))),
     }
 }
@@ -377,6 +395,12 @@ fn wire_args(canonical: &str, args: &Value) -> Option<(String, Value)> {
                 "new_str": string("new_string")?,
             }))
         }
+        "edit_file" if allowed(&["file_path", "insert_line", "insert_text"]) => editor(json!({
+            "command": "insert",
+            "path": string("file_path")?,
+            "insert_line": object.get("insert_line")?.as_u64()?,
+            "insert_text": string("insert_text")?,
+        })),
         "list_dir" if allowed(&["path"]) => {
             let path = string("path").unwrap_or(".");
             let path = if path == "." || path.ends_with('/') {

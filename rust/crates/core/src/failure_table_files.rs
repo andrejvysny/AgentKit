@@ -168,6 +168,27 @@ pub(crate) static FILES: &[Spec] = &[
         "Read the file again and copy oldText exactly from it.",
     ),
     s(
+        "edit_insert_pair",
+        C::InvalidValue,
+        true,
+        "insert_line and insert_text must be sent together.",
+        "Send both insert_line and insert_text, or use old_string and new_string.",
+    ),
+    s(
+        "edit_insert_out_of_range",
+        C::Precondition,
+        true,
+        "insert_line is past the end of the file.",
+        "Read the file to get its line count, then insert at a line that exists (0 = top).",
+    ),
+    s(
+        "edit_insert_unsupported",
+        C::Precondition,
+        false,
+        "This file's line endings do not support inserting by line number.",
+        "Insert with old_string and new_string instead: replace a nearby line with itself plus the new text.",
+    ),
+    s(
         "edit_ambiguous",
         C::Precondition,
         true,
