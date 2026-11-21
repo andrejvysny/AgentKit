@@ -161,7 +161,7 @@ pub fn memory_tool_definitions() -> Vec<ToolDefinition> {
                 "properties": {
                     "text": {"type": "string", "minLength": 1, "maxLength": 600, "description": "The statement, one or two sentences."},
                     "kind": {"type": "string", "enum": kind_names(), "description": "What sort of statement it is."},
-                    "scope": {"type": "string", "enum": ["user", "project", "agent"], "description": "Whom it applies to: the owner, this project or this agent."},
+                    "scope": {"type": "string", "enum": ["user", "project", "agent"], "description": "Whom it applies to: the owner, this project or this agent. Project and agent exist only in a chat that has one; otherwise use user. A fact about the owner's work still belongs to user unless this chat is inside that project."},
                     "rationale": {"type": "string", "minLength": 1, "maxLength": 300, "description": "Why it is worth remembering."},
                     "owner_requested": {"type": "boolean", "description": "True when the owner asked in this turn to remember it. Advisory: the proposed content itself is checked against the owner's words."}
                 },
