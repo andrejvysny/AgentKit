@@ -272,12 +272,66 @@ impl ContextBudget {
         }
         let mut admission = json!({"requestId": request_id, "windowTokens": self.window, "windowSource": self.source,
             "reserveTokens": self.reserve, "toolTokens": tools, "extraTokens": 0,
-            "estimatedInputTokens": estimated, "budgetTokens": budget as i64});
+            "estimatedInputTokens": estimated, "budgetTokens": budget as i64,
+            // Extra key (the event data keeps unknown keys): how the request
+            // divides across prompt segments, for the host's context details.
+            "composition": composition(input)});
         if forwards_limit {
             admission["maxOutputTokens"] = output.into();
         }
         Ok(admission)
     }
+}
+
+/// Where a request's tokens go, by prompt segment, at `chars / 4`. The host
+/// scales these against the provider's own count; they say how the request is
+/// divided, not how big it is. Tagged system blocks are the system prompt
+/// (S2), project rules (S3) and core memory (S4); selected content that is not
+/// tagged is managed instructions and skills; everything else is the
+/// conversation.
+pub(crate) fn composition(input: &ChatRequest) -> Value {
+    let mut system = 0u64;
+    let mut rules = 0u64;
+    let mut memory = 0u64;
+    let mut selected = 0u64;
+    let mut messages = 0u64;
+    let mut place = |message: &ChatMessage, rest: &mut u64| {
+        let tokens = message_tokens(message);
+        match agentkit_core::segment_of(message) {
+            Some(agentkit_core::Segment::System) => system += tokens,
+            Some(agentkit_core::Segment::Rules) => rules += tokens,
+            Some(agentkit_core::Segment::Memory) => memory += tokens,
+            _ => *rest += tokens,
+        }
+    };
+    for message in &input.selected_content {
+        place(message, &mut selected);
+    }
+    for message in &input.messages {
+        place(message, &mut messages);
+    }
+    let tool_tokens = |tool: &agentkit_core::ToolDefinition| {
+        chars(&serde_json::to_string(tool).unwrap_or_default()).div_ceil(4)
+    };
+    let is_mcp = |tool: &&agentkit_core::ToolDefinition| {
+        tool.name.starts_with("mcp.") || tool.name.starts_with("mcp__")
+    };
+    let tools: u64 = input.tools.iter().map(tool_tokens).sum();
+    let mcp: Vec<&agentkit_core::ToolDefinition> = input.tools.iter().filter(is_mcp).collect();
+    json!({
+        "tools": {
+            "tokens": tools,
+            "count": input.tools.len(),
+            "mcpTokens": mcp.iter().copied().map(tool_tokens).sum::<u64>(),
+            "mcpCount": mcp.len(),
+        },
+        "system": system,
+        "rules": rules,
+        "memory": memory,
+        "selected": selected,
+        "messages": messages,
+        "estimatedInputTokens": tools + system + rules + memory + selected + messages,
+    })
 }
 
 fn chars(text: &str) -> u64 {
@@ -568,6 +622,7 @@ mod tests {
         let event = budget.admit(&mut request, "two".into(), true).unwrap();
         assert_eq!(request.max_output_tokens, Some(5));
         assert_eq!(event["maxOutputTokens"], 5);
+        assert_eq!(event["composition"]["messages"], 2);
     }
 
     #[test]
@@ -663,5 +718,36 @@ mod tests {
         assert_eq!(budget(0.5).message_budget(&[]), 1600);
         // Tools come off the room before it is scaled: (1000 - 200 - 300) / 2.
         assert_eq!(budget(2.0).room_after(300), 250);
+    }
+
+    #[test]
+    fn composition_splits_a_request_by_segment() {
+        let mut system = ChatMessage::text("system", "abcd");
+        system.metadata = json!({"agentkit.segment": "S2"}).as_object().cloned();
+        let mut memory = ChatMessage::text("system", "abcdefgh");
+        memory.metadata = json!({"agentkit.segment": "S4"}).as_object().cloned();
+        let tool = |name: &str| -> agentkit_core::ToolDefinition {
+            serde_json::from_value(json!({"name":name,"version":"1","effect":"read","capability":"read","description":"","inputSchema":{}})).unwrap()
+        };
+        let request = ChatRequest {
+            messages: vec![system, memory, ChatMessage::text("user", "abcdefghijkl")],
+            selected_content: vec![ChatMessage::text("system", "skill!!!")],
+            tools: vec![tool("core.read"), tool("mcp.exa.search")],
+            ..Default::default()
+        };
+        let parts = composition(&request);
+        assert_eq!(parts["system"], 1);
+        assert_eq!(parts["memory"], 2);
+        assert_eq!(parts["rules"], 0);
+        assert_eq!(parts["selected"], 2);
+        assert_eq!(parts["messages"], 3);
+        assert_eq!(parts["tools"]["count"], 2);
+        assert_eq!(parts["tools"]["mcpCount"], 1);
+        let tools = parts["tools"]["tokens"].as_u64().unwrap();
+        assert!(tools > 0 && parts["tools"]["mcpTokens"].as_u64().unwrap() < tools);
+        assert_eq!(
+            parts["estimatedInputTokens"].as_u64().unwrap(),
+            tools + 1 + 2 + 2 + 3
+        );
     }
 }
