@@ -816,6 +816,16 @@ fn matches_read_only(tokens: &[&str]) -> bool {
     if rest.iter().any(|token| names_sensitive_path(token)) {
         return false;
     }
+    // A `*` glob may expand to any file, a secret included, so only `ls`
+    // (names, never contents) takes one, and never a dot-file glob.
+    if rest.iter().any(|token| token.contains('*'))
+        && (first != "ls"
+            || rest
+                .iter()
+                .any(|token| token.starts_with('.') && token.contains('*')))
+    {
+        return false;
+    }
     match first {
         "git" => read_only_git(rest),
         "find" => !rest.iter().any(|token| find_action_flags().contains(token)),
@@ -919,16 +929,26 @@ fn safe_script() -> &'static regex::Regex {
 /// `read_only` and `eligible` each need their full allowlist; there is no
 /// "looks read-only" path to either.
 pub fn classify_shell_command(command: &str) -> CommandClass {
+    // `*` is plain here only so `ls` can take a glob; `matches_read_only`
+    // refuses it everywhere else and the allow-list never sees one.
     static PLAIN_CHARS: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, -]+\z"));
+        std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, *-]+\z"));
     // The same set plus the four separator characters; redirections,
     // substitutions, quotes and newlines stay outside it.
     static COMPOUND_CHARS: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, ;&|-]+\z"));
+        std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z0-9_./:=@%+, *;&|-]+\z"));
     static ASSIGNMENT: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z_][A-Za-z0-9_]*="));
     if is_high_risk(command) {
         return CommandClass::HighRisk;
+    }
+    if let Some(kept) = without_discarded_output(command) {
+        // Discarding output changes nothing a read-only command touches, but
+        // the trimmed text is not the command a standing approval would key.
+        return match classify_shell_command(&kept) {
+            CommandClass::ReadOnly => CommandClass::ReadOnly,
+            _ => CommandClass::Unknown,
+        };
     }
     if !PLAIN_CHARS.is_match(command) {
         if COMPOUND_CHARS.is_match(command) && read_only_compound(command, &ASSIGNMENT) {
@@ -946,11 +966,29 @@ pub fn classify_shell_command(command: &str) -> CommandClass {
     }
     if matches_read_only(&tokens) {
         CommandClass::ReadOnly
-    } else if matches_allowlist(&tokens) {
+    } else if !command.contains('*') && matches_allowlist(&tokens) {
         CommandClass::Eligible
     } else {
         CommandClass::Unknown
     }
+}
+
+/// `command` without the words that only discard or merge output
+/// (`2>/dev/null`, `>/dev/null`, `2>&1`), or `None` when it has none. Only a
+/// whole space-separated word matches, so `2>/dev/nullx` or `2>file` stay.
+fn without_discarded_output(command: &str) -> Option<String> {
+    const DISCARD: [&str; 4] = ["2>/dev/null", ">/dev/null", "1>/dev/null", "2>&1"];
+    let words: Vec<&str> = command.split(' ').collect();
+    if !words.iter().any(|word| DISCARD.contains(word)) {
+        return None;
+    }
+    Some(
+        words
+            .into_iter()
+            .filter(|word| !DISCARD.contains(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// True when `command` (already limited to plain characters and `;&|`) is
@@ -1434,6 +1472,53 @@ mod tests {
                 "{command}"
             );
         }
+    }
+
+    #[test]
+    fn discarded_output_and_ls_globs_stay_read_only() {
+        // Seen asking for approval in the Code evals (21 Nov 2026).
+        for command in [
+            "cat src/lib.rs; ls . tests 2>/dev/null",
+            "cat src/paginate.ts; ls; ls test* src; cat package.json",
+            "ls src/*.ts",
+            "git status 2>&1",
+            "cat a >/dev/null",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "{command}"
+            );
+        }
+        for command in [
+            // A glob that reads contents may expand to a secret.
+            "cat *",
+            "head -20 test/*",
+            "cat src/*.json",
+            // Dot-file globs, other redirects, and redirect look-alikes.
+            "ls .*",
+            "ls .env*",
+            "cat a 2>err.txt",
+            "cat a >/dev/nullx",
+            "cat a 2>/dev/null; rm b",
+            // Trimming never upgrades a command to a standing key.
+            "cargo test 2>&1",
+            "npm test 2>/dev/null",
+        ] {
+            assert_ne!(
+                classify_shell_command(command),
+                CommandClass::ReadOnly,
+                "{command}"
+            );
+        }
+        assert_eq!(
+            classify_shell_command("cargo test 2>&1"),
+            CommandClass::Unknown
+        );
+        assert_eq!(
+            classify_shell_command("rm -rf * 2>/dev/null"),
+            CommandClass::HighRisk
+        );
     }
 
     #[test]
