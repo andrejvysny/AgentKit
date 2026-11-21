@@ -60,6 +60,7 @@ pub struct CodingPermissionGuard {
     configured_mode: CodingMode,
     authority: Option<Arc<dyn CodingPermissionAuthority>>,
     plan_tools: Vec<String>,
+    tests_in_auto_edit: bool,
 }
 
 impl CodingPermissionGuard {
@@ -71,7 +72,20 @@ impl CodingPermissionGuard {
             plan_tools: options
                 .plan_tool_names
                 .unwrap_or_else(|| vec![SUBMIT_PLAN_TOOL_NAME.to_owned()]),
+            tests_in_auto_edit: false,
         }
+    }
+
+    /// Lets `run_tests` run without a prompt in `auto_edit` (off by default).
+    /// The tool can only run the commands the host configured for the
+    /// workspace, but those are repository scripts, so a host turns this on
+    /// only when its user agreed to run them unprompted. `ask`, `plan` and
+    /// `read_only` are unchanged, and the high-risk command guard still asks
+    /// for a high-risk configured command.
+    #[must_use]
+    pub fn allow_tests_in_auto_edit(mut self, allow: bool) -> Self {
+        self.tests_in_auto_edit = allow;
+        self
     }
 }
 
@@ -118,6 +132,9 @@ impl ToolGuard for CodingPermissionGuard {
             && !is_plan_tool
             && is_read_only_command(&name, context.arguments.as_ref())
         {
+            return Ok(ToolGuardVerdict::Allowed);
+        }
+        if self.tests_in_auto_edit && matches!(mode, CodingMode::AutoEdit) && name == "run_tests" {
             return Ok(ToolGuardVerdict::Allowed);
         }
         match decide(mode, tool_class, is_plan_tool) {
@@ -473,6 +490,49 @@ mod tests {
                 "session store unreachable".into(),
             ))
         }
+    }
+
+    #[tokio::test]
+    async fn run_tests_skips_the_prompt_in_auto_edit_only_when_allowed() {
+        let exec = |guard: CodingPermissionGuard| async move {
+            verdict(&guard, "process.exec", "run_tests").await
+        };
+        assert_eq!(
+            exec(guard(CodingMode::AutoEdit, None)).await,
+            "approval_required: run_tests",
+            "off by default"
+        );
+        let allowed = |mode| guard(mode, None).allow_tests_in_auto_edit(true);
+        assert_eq!(exec(allowed(CodingMode::AutoEdit)).await, "");
+        assert_eq!(
+            exec(allowed(CodingMode::Ask)).await,
+            "approval_required: run_tests"
+        );
+        // Plan and read-only still refuse it ("" would mean allowed).
+        assert_ne!(exec(allowed(CodingMode::Plan)).await, "");
+        assert_eq!(
+            exec(allowed(CodingMode::ReadOnly)).await,
+            "read_only: run_tests is not allowed"
+        );
+        // Only the test tool: any other command still asks.
+        assert_eq!(
+            verdict(
+                &allowed(CodingMode::AutoEdit),
+                "process.exec",
+                "run_command"
+            )
+            .await,
+            "approval_required: run_command"
+        );
+        // A role ceiling still wins.
+        assert!(
+            exec(
+                guard(CodingMode::AutoEdit, Some(CodingRole::Supervisor))
+                    .allow_tests_in_auto_edit(true)
+            )
+            .await
+            .starts_with("role_ceiling")
+        );
     }
 
     #[tokio::test]
