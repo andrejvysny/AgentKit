@@ -49,6 +49,8 @@ pub enum BackendId {
     SearXng,
     Brave,
     Exa,
+    /// Keyless default backend; the vendor behind it is not exposed.
+    Builtin,
 }
 
 impl BackendId {
@@ -57,6 +59,7 @@ impl BackendId {
             Self::SearXng => "searxng",
             Self::Brave => "brave",
             Self::Exa => "exa",
+            Self::Builtin => "builtin",
         }
     }
 }

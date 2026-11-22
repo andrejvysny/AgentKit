@@ -1,0 +1,3 @@
+event: message
+data: {"result": {"content": [{"type": "text", "text": "Title: tokio::runtime - Rust\nURL: https://docs.rs/tokio/latest/tokio/runtime/\nPublished: N/A\nAuthor: N/A\nHighlights:\nThe Tokio runtime.\n\nSection\n\n---\n\nstill the same highlight\n\n---\n\nTitle: Tutorial | Tokio\nURL: https://tokio.rs/tokio/tutorial\nPublished: 2024-05-01\nAuthor: N/A\nHighlights:\nGetting started."}]}, "jsonrpc": "2.0", "id": 1}
+

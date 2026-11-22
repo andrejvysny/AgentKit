@@ -12,6 +12,7 @@ pub const DEFAULT_TOTAL_TIMEOUT: Duration = Duration::from_secs(14);
 pub const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
 const EXA_ENDPOINT: &str = "https://api.exa.ai/search";
+const BUILTIN_ENDPOINT: &str = "https://mcp.exa.ai/mcp";
 
 #[derive(Clone, Debug)]
 pub struct WebPackConfig {
@@ -106,6 +107,7 @@ pub enum BackendConfig {
     SearXng(SearXngConfig),
     Brave(BraveConfig),
     Exa(ExaConfig),
+    Builtin(BuiltinConfig),
 }
 
 impl BackendConfig {
@@ -114,6 +116,7 @@ impl BackendConfig {
             Self::SearXng(_) => BackendId::SearXng,
             Self::Brave(_) => BackendId::Brave,
             Self::Exa(_) => BackendId::Exa,
+            Self::Builtin(_) => BackendId::Builtin,
         }
     }
 }
@@ -319,6 +322,30 @@ impl fmt::Debug for ExaConfig {
             .field("endpoint", &redacted_url(&self.endpoint))
             .field("search_type", &self.search_type)
             .finish()
+    }
+}
+
+/// Keyless built-in backend; only the endpoint is configurable (tests).
+#[derive(Clone, Debug)]
+pub struct BuiltinConfig {
+    pub endpoint: Url,
+}
+
+impl BuiltinConfig {
+    pub fn new() -> Self {
+        Self {
+            endpoint: default_endpoint(BUILTIN_ENDPOINT),
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
+        validate_endpoint(&self.endpoint)
+    }
+}
+
+impl Default for BuiltinConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

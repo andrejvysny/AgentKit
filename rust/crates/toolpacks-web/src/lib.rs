@@ -26,12 +26,13 @@ pub use backend::{
     SearchResponse,
 };
 pub use backends::brave::BraveBackend;
+pub use backends::builtin::BuiltinBackend;
 pub use backends::exa::ExaBackend;
 pub use backends::searxng::SearXngBackend;
 pub use config::{
-    BackendConfig, BraveConfig, BraveSafesearch, CacheConfig, ConfigError, DEFAULT_MAX_BODY_BYTES,
-    DEFAULT_REQUEST_TIMEOUT, DEFAULT_TOTAL_TIMEOUT, ExaConfig, ExaSearchType, RunLimits,
-    SearXngAuth, SearXngConfig, WebPackConfig,
+    BackendConfig, BraveConfig, BraveSafesearch, BuiltinConfig, CacheConfig, ConfigError,
+    DEFAULT_MAX_BODY_BYTES, DEFAULT_REQUEST_TIMEOUT, DEFAULT_TOTAL_TIMEOUT, ExaConfig,
+    ExaSearchType, RunLimits, SearXngAuth, SearXngConfig, WebPackConfig,
 };
 pub use contributor::WebToolContributor;
 pub use guard::{NetDecision, NetPolicy, WebGuard};
@@ -55,6 +56,7 @@ fn build_backend(
         BackendConfig::SearXng(c) => Arc::new(SearXngBackend::new(c, timeout, max_body)?),
         BackendConfig::Brave(c) => Arc::new(BraveBackend::new(c, timeout, max_body)?),
         BackendConfig::Exa(c) => Arc::new(ExaBackend::new(c, timeout, max_body)?),
+        BackendConfig::Builtin(c) => Arc::new(BuiltinBackend::new(c, timeout, max_body)?),
     })
 }
 
