@@ -1,0 +1,42 @@
+{
+  "type": "search",
+  "query": {"original": "tokio runtime"},
+  "web": {
+    "type": "search",
+    "results": [
+      {
+        "title": "Tokio - <strong>Rust</strong> async runtime",
+        "url": "https://docs.rs/tokio/latest/tokio/?utm_source=x#top",
+        "description": "A <strong>runtime</strong> for writing reliable &amp; fast network apps &quot;fast&quot; it&#39;s &lt;b&gt;ok&lt;/b&gt;.",
+        "page_age": "2026-02-03T10:00:00",
+        "age": "February 3, 2026",
+        "extra_snippets": ["First <strong>extra</strong> &amp; more", "Second extra", "Third extra dropped"]
+      },
+      {
+        "title": "Tokio tutorial",
+        "url": "https://tokio.rs/tokio/tutorial",
+        "description": "Learn Tokio step by step."
+      },
+      {
+        "title": "Duplicate",
+        "url": "https://docs.rs/tokio/latest/tokio",
+        "description": "Same as first after canonicalisation."
+      },
+      {
+        "title": "Sub docs",
+        "url": "https://sub.docs.rs/x",
+        "description": "Subdomain of docs.rs."
+      },
+      {
+        "title": "Look-alike",
+        "url": "https://notdocs.rs/y",
+        "description": "Not docs.rs."
+      },
+      {
+        "title": "Bad scheme",
+        "url": "ftp://example.com/file",
+        "description": "Skipped."
+      }
+    ]
+  }
+}

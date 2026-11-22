@@ -28,6 +28,7 @@ const LAYERS = {
   "agentkit-store": 4,
   "agentkit-providers": 4,
   "agentkit-toolpacks-coding": 4,
+  "agentkit-toolpacks-web": 4,
   "agentkit-lsp": 4,
   "agentkit-mcp": 4,
   "agentkit-connections": 4,

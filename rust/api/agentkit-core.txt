@@ -50,6 +50,7 @@ pub agentkit_core::permission::PermissionDecision::BlockedFinal(agentkit_core::p
 pub agentkit_core::permission::PermissionDecision::PlanApprovalRequired
 pub enum agentkit_core::permission::ToolClass
 pub agentkit_core::permission::ToolClass::Exec
+pub agentkit_core::permission::ToolClass::Net
 pub agentkit_core::permission::ToolClass::Read
 pub agentkit_core::permission::ToolClass::Write
 impl agentkit_core::permission::ToolClass

@@ -1,0 +1,34 @@
+{
+  "requestId": "abc123",
+  "resolvedSearchType": "neural",
+  "results": [
+    {
+      "title": "Tokio - An asynchronous Rust runtime",
+      "url": "https://tokio.rs/?utm_medium=m",
+      "publishedDate": "2026-01-15T00:00:00.000Z",
+      "highlights": ["Tokio is an event-driven, non-blocking I/O platform.", "It provides a multi-threaded scheduler.", "Third highlight kept as extra.", "Fourth dropped."],
+      "text": "ignored because highlights exist"
+    },
+    {
+      "title": null,
+      "url": "https://www.example.com/untitled",
+      "highlights": [],
+      "text": "Fallback   text\nfrom the page body."
+    },
+    {
+      "title": "Sub docs",
+      "url": "https://sub.docs.rs/x",
+      "highlights": ["Subdomain hit."]
+    },
+    {
+      "title": "Look-alike",
+      "url": "https://notdocs.rs/y",
+      "highlights": ["Not docs.rs."]
+    },
+    {
+      "title": "Dup",
+      "url": "https://tokio.rs",
+      "highlights": ["Duplicate of first."]
+    }
+  ]
+}

@@ -296,6 +296,8 @@ fn explorer_tool_set() -> Vec<String> {
         "lsp_symbols",
         "lsp_implementation",
         "lsp_diagnostics",
+        "web:web_search",
+        "web:web_fetch",
     ]
     .into_iter()
     .map(str::to_owned)

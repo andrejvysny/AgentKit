@@ -1,0 +1,335 @@
+pub mod agentkit_toolpacks_web
+pub mod agentkit_toolpacks_web::fetch
+pub mod agentkit_toolpacks_web::fetch::client
+pub struct agentkit_toolpacks_web::fetch::client::FetchedBody
+pub agentkit_toolpacks_web::fetch::client::FetchedBody::bytes: alloc::vec::Vec<u8>
+pub agentkit_toolpacks_web::fetch::client::FetchedBody::charset: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::fetch::client::FetchedBody::content_type: alloc::string::String
+pub agentkit_toolpacks_web::fetch::client::FetchedBody::final_url: url::Url
+pub agentkit_toolpacks_web::fetch::client::FetchedBody::truncated_body: bool
+pub struct agentkit_toolpacks_web::fetch::client::SafeHttpClient
+impl agentkit_toolpacks_web::fetch::client::SafeHttpClient
+pub fn agentkit_toolpacks_web::fetch::client::SafeHttpClient::config(&self) -> &agentkit_toolpacks_web::fetch::FetchConfig
+pub async fn agentkit_toolpacks_web::fetch::client::SafeHttpClient::get(&self, url::Url, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<agentkit_toolpacks_web::fetch::client::FetchedBody, agentkit_toolpacks_web::fetch::FetchError>
+pub fn agentkit_toolpacks_web::fetch::client::SafeHttpClient::new(agentkit_toolpacks_web::fetch::FetchConfig, alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::fetch::ssrf::HostResolver>) -> core::result::Result<Self, agentkit_toolpacks_web::fetch::FetchError>
+pub fn agentkit_toolpacks_web::fetch::client::is_downgrade(&url::Url, &url::Url) -> bool
+pub mod agentkit_toolpacks_web::fetch::extract
+pub struct agentkit_toolpacks_web::fetch::extract::ExtractedPage
+pub agentkit_toolpacks_web::fetch::extract::ExtractedPage::markdown: alloc::string::String
+pub agentkit_toolpacks_web::fetch::extract::ExtractedPage::title: core::option::Option<alloc::string::String>
+pub fn agentkit_toolpacks_web::fetch::extract::extract(&agentkit_toolpacks_web::fetch::client::FetchedBody) -> agentkit_toolpacks_web::fetch::extract::ExtractedPage
+pub mod agentkit_toolpacks_web::fetch::page
+pub fn agentkit_toolpacks_web::fetch::page::slice(&str, usize, usize) -> (alloc::string::String, core::option::Option<usize>)
+pub fn agentkit_toolpacks_web::fetch::page::wrap(&str, core::option::Option<&str>, &str, usize, core::option::Option<usize>, &str) -> alloc::string::String
+pub mod agentkit_toolpacks_web::fetch::ssrf
+pub struct agentkit_toolpacks_web::fetch::ssrf::GuardedResolver
+impl agentkit_toolpacks_web::fetch::ssrf::GuardedResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::GuardedResolver::new(alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::fetch::ssrf::HostResolver>, alloc::vec::Vec<core::net::ip_addr::IpAddr>) -> Self
+impl reqwest::dns::resolve::Resolve for agentkit_toolpacks_web::fetch::ssrf::GuardedResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::GuardedResolver::resolve(&self, reqwest::dns::resolve::Name) -> reqwest::dns::resolve::Resolving
+pub struct agentkit_toolpacks_web::fetch::ssrf::SystemResolver
+impl agentkit_toolpacks_web::fetch::ssrf::HostResolver for agentkit_toolpacks_web::fetch::ssrf::SystemResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::SystemResolver::resolve(&self, &str, u16) -> agentkit_toolpacks_web::fetch::ssrf::BoxFuture<core::io::error::Result<alloc::vec::Vec<core::net::socket_addr::SocketAddr>>>
+pub trait agentkit_toolpacks_web::fetch::ssrf::HostResolver: core::marker::Send + core::marker::Sync + 'static
+pub fn agentkit_toolpacks_web::fetch::ssrf::HostResolver::resolve(&self, &str, u16) -> agentkit_toolpacks_web::fetch::ssrf::BoxFuture<core::io::error::Result<alloc::vec::Vec<core::net::socket_addr::SocketAddr>>>
+impl agentkit_toolpacks_web::fetch::ssrf::HostResolver for agentkit_toolpacks_web::fetch::ssrf::SystemResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::SystemResolver::resolve(&self, &str, u16) -> agentkit_toolpacks_web::fetch::ssrf::BoxFuture<core::io::error::Result<alloc::vec::Vec<core::net::socket_addr::SocketAddr>>>
+pub fn agentkit_toolpacks_web::fetch::ssrf::check_url(&url::Url, &agentkit_toolpacks_web::fetch::FetchConfig) -> core::result::Result<(), agentkit_toolpacks_web::fetch::FetchError>
+pub fn agentkit_toolpacks_web::fetch::ssrf::is_blocked(core::net::ip_addr::IpAddr) -> bool
+pub type agentkit_toolpacks_web::fetch::ssrf::BoxFuture<T> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = T> + core::marker::Send)>>
+pub enum agentkit_toolpacks_web::fetch::FetchError
+pub agentkit_toolpacks_web::fetch::FetchError::Blocked(alloc::string::String)
+pub agentkit_toolpacks_web::fetch::FetchError::Cancelled
+pub agentkit_toolpacks_web::fetch::FetchError::Http(u16)
+pub agentkit_toolpacks_web::fetch::FetchError::InvalidUrl(alloc::string::String)
+pub agentkit_toolpacks_web::fetch::FetchError::Network(alloc::string::String)
+pub agentkit_toolpacks_web::fetch::FetchError::Timeout
+pub agentkit_toolpacks_web::fetch::FetchError::TooManyRedirects
+pub agentkit_toolpacks_web::fetch::FetchError::UnsupportedType(alloc::string::String)
+pub struct agentkit_toolpacks_web::fetch::ExtractedPage
+pub agentkit_toolpacks_web::fetch::ExtractedPage::markdown: alloc::string::String
+pub agentkit_toolpacks_web::fetch::ExtractedPage::title: core::option::Option<alloc::string::String>
+pub struct agentkit_toolpacks_web::fetch::FetchConfig
+pub agentkit_toolpacks_web::fetch::FetchConfig::allowed_ports: alloc::vec::Vec<u16>
+pub agentkit_toolpacks_web::fetch::FetchConfig::extra_allowed_ips: alloc::vec::Vec<core::net::ip_addr::IpAddr>
+pub agentkit_toolpacks_web::fetch::FetchConfig::max_body_bytes: usize
+pub agentkit_toolpacks_web::fetch::FetchConfig::max_redirects: u8
+pub agentkit_toolpacks_web::fetch::FetchConfig::timeout: core::time::Duration
+pub agentkit_toolpacks_web::fetch::FetchConfig::total_timeout: core::time::Duration
+pub agentkit_toolpacks_web::fetch::FetchConfig::user_agent: alloc::string::String
+impl core::default::Default for agentkit_toolpacks_web::fetch::FetchConfig
+pub fn agentkit_toolpacks_web::fetch::FetchConfig::default() -> Self
+pub struct agentkit_toolpacks_web::fetch::FetchedBody
+pub agentkit_toolpacks_web::fetch::FetchedBody::bytes: alloc::vec::Vec<u8>
+pub agentkit_toolpacks_web::fetch::FetchedBody::charset: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::fetch::FetchedBody::content_type: alloc::string::String
+pub agentkit_toolpacks_web::fetch::FetchedBody::final_url: url::Url
+pub agentkit_toolpacks_web::fetch::FetchedBody::truncated_body: bool
+pub struct agentkit_toolpacks_web::fetch::GuardedResolver
+impl agentkit_toolpacks_web::fetch::ssrf::GuardedResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::GuardedResolver::new(alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::fetch::ssrf::HostResolver>, alloc::vec::Vec<core::net::ip_addr::IpAddr>) -> Self
+impl reqwest::dns::resolve::Resolve for agentkit_toolpacks_web::fetch::ssrf::GuardedResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::GuardedResolver::resolve(&self, reqwest::dns::resolve::Name) -> reqwest::dns::resolve::Resolving
+pub struct agentkit_toolpacks_web::fetch::SafeHttpClient
+impl agentkit_toolpacks_web::fetch::client::SafeHttpClient
+pub fn agentkit_toolpacks_web::fetch::client::SafeHttpClient::config(&self) -> &agentkit_toolpacks_web::fetch::FetchConfig
+pub async fn agentkit_toolpacks_web::fetch::client::SafeHttpClient::get(&self, url::Url, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<agentkit_toolpacks_web::fetch::client::FetchedBody, agentkit_toolpacks_web::fetch::FetchError>
+pub fn agentkit_toolpacks_web::fetch::client::SafeHttpClient::new(agentkit_toolpacks_web::fetch::FetchConfig, alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::fetch::ssrf::HostResolver>) -> core::result::Result<Self, agentkit_toolpacks_web::fetch::FetchError>
+pub struct agentkit_toolpacks_web::fetch::SystemResolver
+impl agentkit_toolpacks_web::fetch::ssrf::HostResolver for agentkit_toolpacks_web::fetch::ssrf::SystemResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::SystemResolver::resolve(&self, &str, u16) -> agentkit_toolpacks_web::fetch::ssrf::BoxFuture<core::io::error::Result<alloc::vec::Vec<core::net::socket_addr::SocketAddr>>>
+pub struct agentkit_toolpacks_web::fetch::WebFetchTool
+impl agentkit_toolpacks_web::WebFetchTool
+pub fn agentkit_toolpacks_web::WebFetchTool::new(alloc::rcs::arc::Arc<agentkit_toolpacks_web::fetch::client::SafeHttpClient>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::fetch::FetchBudget>>) -> Self
+impl agentkit_core::types::Tool for agentkit_toolpacks_web::WebFetchTool
+pub fn agentkit_toolpacks_web::WebFetchTool::definition(&self) -> &agentkit_core::types::ToolDefinition
+pub fn agentkit_toolpacks_web::WebFetchTool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::types::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::types::ToolResult, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::WebFetchTool::toolset(&self) -> core::option::Option<&str>
+pub trait agentkit_toolpacks_web::fetch::FetchBudget: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_web::fetch::FetchBudget::try_consume_fetch(&self, &str) -> bool
+impl agentkit_toolpacks_web::fetch::FetchBudget for agentkit_toolpacks_web::BackendRouter
+pub fn agentkit_toolpacks_web::BackendRouter::try_consume_fetch(&self, &str) -> bool
+pub trait agentkit_toolpacks_web::fetch::HostResolver: core::marker::Send + core::marker::Sync + 'static
+pub fn agentkit_toolpacks_web::fetch::HostResolver::resolve(&self, &str, u16) -> agentkit_toolpacks_web::fetch::ssrf::BoxFuture<core::io::error::Result<alloc::vec::Vec<core::net::socket_addr::SocketAddr>>>
+impl agentkit_toolpacks_web::fetch::ssrf::HostResolver for agentkit_toolpacks_web::fetch::ssrf::SystemResolver
+pub fn agentkit_toolpacks_web::fetch::ssrf::SystemResolver::resolve(&self, &str, u16) -> agentkit_toolpacks_web::fetch::ssrf::BoxFuture<core::io::error::Result<alloc::vec::Vec<core::net::socket_addr::SocketAddr>>>
+#[non_exhaustive] pub enum agentkit_toolpacks_web::BackendConfig
+pub agentkit_toolpacks_web::BackendConfig::Brave(agentkit_toolpacks_web::BraveConfig)
+pub agentkit_toolpacks_web::BackendConfig::Exa(agentkit_toolpacks_web::ExaConfig)
+pub agentkit_toolpacks_web::BackendConfig::SearXng(agentkit_toolpacks_web::SearXngConfig)
+impl agentkit_toolpacks_web::BackendConfig
+pub fn agentkit_toolpacks_web::BackendConfig::id(&self) -> agentkit_toolpacks_web::BackendId
+pub enum agentkit_toolpacks_web::BackendError
+pub agentkit_toolpacks_web::BackendError::BadResponse(alloc::string::String)
+pub agentkit_toolpacks_web::BackendError::Cancelled
+pub agentkit_toolpacks_web::BackendError::EnginesUnavailable(alloc::vec::Vec<alloc::string::String>)
+pub agentkit_toolpacks_web::BackendError::FormatDisabled
+pub agentkit_toolpacks_web::BackendError::InvalidRequest(alloc::string::String)
+pub agentkit_toolpacks_web::BackendError::Network(alloc::string::String)
+pub agentkit_toolpacks_web::BackendError::QuotaExhausted
+pub agentkit_toolpacks_web::BackendError::RateLimited
+pub agentkit_toolpacks_web::BackendError::RateLimited::retry_after: core::option::Option<core::time::Duration>
+pub agentkit_toolpacks_web::BackendError::Rejected(alloc::string::String)
+pub agentkit_toolpacks_web::BackendError::Timeout
+pub agentkit_toolpacks_web::BackendError::Unauthorized
+pub agentkit_toolpacks_web::BackendError::Unavailable(u16)
+impl agentkit_toolpacks_web::BackendError
+pub fn agentkit_toolpacks_web::BackendError::is_retryable(&self) -> bool
+impl agentkit_toolpacks_web::BackendError
+pub fn agentkit_toolpacks_web::BackendError::stops_fallback(&self) -> bool
+pub enum agentkit_toolpacks_web::BackendId
+pub agentkit_toolpacks_web::BackendId::Brave
+pub agentkit_toolpacks_web::BackendId::Exa
+pub agentkit_toolpacks_web::BackendId::SearXng
+impl agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::BackendId::as_str(self) -> &'static str
+pub enum agentkit_toolpacks_web::BraveSafesearch
+pub agentkit_toolpacks_web::BraveSafesearch::Moderate
+pub agentkit_toolpacks_web::BraveSafesearch::Off
+pub agentkit_toolpacks_web::BraveSafesearch::Strict
+pub enum agentkit_toolpacks_web::ConfigError
+pub agentkit_toolpacks_web::ConfigError::DuplicateBackend(&'static str)
+pub agentkit_toolpacks_web::ConfigError::Http(alloc::string::String)
+pub agentkit_toolpacks_web::ConfigError::InsecureAuth(&'static str)
+pub agentkit_toolpacks_web::ConfigError::InvalidBaseUrl(alloc::string::String)
+pub agentkit_toolpacks_web::ConfigError::InvalidHeaderName(alloc::string::String)
+pub agentkit_toolpacks_web::ConfigError::InvalidLimit(&'static str)
+pub agentkit_toolpacks_web::ConfigError::InvalidSafesearch(u8)
+pub agentkit_toolpacks_web::ConfigError::MissingApiKey(&'static str)
+pub agentkit_toolpacks_web::ConfigError::NoBackends
+pub enum agentkit_toolpacks_web::ExaSearchType
+pub agentkit_toolpacks_web::ExaSearchType::Auto
+pub agentkit_toolpacks_web::ExaSearchType::Fast
+pub agentkit_toolpacks_web::ExaSearchType::Neural
+impl agentkit_toolpacks_web::ExaSearchType
+pub fn agentkit_toolpacks_web::ExaSearchType::as_str(self) -> &'static str
+pub enum agentkit_toolpacks_web::Freshness
+pub agentkit_toolpacks_web::Freshness::Day
+pub agentkit_toolpacks_web::Freshness::Month
+pub agentkit_toolpacks_web::Freshness::Week
+pub agentkit_toolpacks_web::Freshness::Year
+impl agentkit_toolpacks_web::Freshness
+pub fn agentkit_toolpacks_web::Freshness::parse(&str) -> core::option::Option<Self>
+pub enum agentkit_toolpacks_web::NetDecision
+pub agentkit_toolpacks_web::NetDecision::Allow
+pub agentkit_toolpacks_web::NetDecision::Ask
+pub agentkit_toolpacks_web::NetDecision::Deny
+pub enum agentkit_toolpacks_web::RouterError
+pub agentkit_toolpacks_web::RouterError::AllFailed(alloc::vec::Vec<(agentkit_toolpacks_web::BackendId, agentkit_toolpacks_web::BackendError)>)
+pub agentkit_toolpacks_web::RouterError::BudgetExhausted
+impl core::error::Error for agentkit_toolpacks_web::RouterError
+impl core::fmt::Display for agentkit_toolpacks_web::RouterError
+pub fn agentkit_toolpacks_web::RouterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum agentkit_toolpacks_web::SearXngAuth
+pub agentkit_toolpacks_web::SearXngAuth::Basic
+pub agentkit_toolpacks_web::SearXngAuth::Basic::password: zeroize::Zeroizing<alloc::string::String>
+pub agentkit_toolpacks_web::SearXngAuth::Basic::username: alloc::string::String
+pub agentkit_toolpacks_web::SearXngAuth::Header
+pub agentkit_toolpacks_web::SearXngAuth::Header::name: alloc::string::String
+pub agentkit_toolpacks_web::SearXngAuth::Header::value: zeroize::Zeroizing<alloc::string::String>
+pub agentkit_toolpacks_web::SearXngAuth::None
+impl core::fmt::Debug for agentkit_toolpacks_web::SearXngAuth
+pub fn agentkit_toolpacks_web::SearXngAuth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_toolpacks_web::BackendRouter
+impl agentkit_toolpacks_web::BackendRouter
+pub fn agentkit_toolpacks_web::BackendRouter::backend(&self, agentkit_toolpacks_web::BackendId) -> core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::SearchBackend>>
+pub fn agentkit_toolpacks_web::BackendRouter::new(alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::SearchBackend>>, agentkit_toolpacks_web::RunLimits, agentkit_toolpacks_web::CacheConfig, core::time::Duration) -> Self
+pub async fn agentkit_toolpacks_web::BackendRouter::search(&self, &str, &agentkit_toolpacks_web::SearchRequest, &tokio_util::sync::cancellation_token::CancellationToken) -> core::result::Result<agentkit_toolpacks_web::Routed, agentkit_toolpacks_web::RouterError>
+pub fn agentkit_toolpacks_web::BackendRouter::try_consume_fetch(&self, &str) -> bool
+impl agentkit_toolpacks_web::fetch::FetchBudget for agentkit_toolpacks_web::BackendRouter
+pub fn agentkit_toolpacks_web::BackendRouter::try_consume_fetch(&self, &str) -> bool
+pub struct agentkit_toolpacks_web::BraveBackend
+impl agentkit_toolpacks_web::BraveBackend
+pub fn agentkit_toolpacks_web::BraveBackend::new(agentkit_toolpacks_web::BraveConfig, core::time::Duration, usize) -> core::result::Result<Self, agentkit_toolpacks_web::ConfigError>
+impl agentkit_toolpacks_web::SearchBackend for agentkit_toolpacks_web::BraveBackend
+pub fn agentkit_toolpacks_web::BraveBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::BraveBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::BraveBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_toolpacks_web::BraveConfig
+pub agentkit_toolpacks_web::BraveConfig::api_key: zeroize::Zeroizing<alloc::string::String>
+pub agentkit_toolpacks_web::BraveConfig::country: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::BraveConfig::endpoint: url::Url
+pub agentkit_toolpacks_web::BraveConfig::safesearch: agentkit_toolpacks_web::BraveSafesearch
+impl agentkit_toolpacks_web::BraveConfig
+pub fn agentkit_toolpacks_web::BraveConfig::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Debug for agentkit_toolpacks_web::BraveConfig
+pub fn agentkit_toolpacks_web::BraveConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_toolpacks_web::CacheConfig
+pub agentkit_toolpacks_web::CacheConfig::entries_per_run: usize
+pub agentkit_toolpacks_web::CacheConfig::max_runs: usize
+pub agentkit_toolpacks_web::CacheConfig::ttl: core::time::Duration
+impl core::default::Default for agentkit_toolpacks_web::CacheConfig
+pub fn agentkit_toolpacks_web::CacheConfig::default() -> Self
+pub struct agentkit_toolpacks_web::ExaBackend
+impl agentkit_toolpacks_web::ExaBackend
+pub fn agentkit_toolpacks_web::ExaBackend::new(agentkit_toolpacks_web::ExaConfig, core::time::Duration, usize) -> core::result::Result<Self, agentkit_toolpacks_web::ConfigError>
+impl agentkit_toolpacks_web::SearchBackend for agentkit_toolpacks_web::ExaBackend
+pub fn agentkit_toolpacks_web::ExaBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::ExaBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::ExaBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_toolpacks_web::ExaConfig
+pub agentkit_toolpacks_web::ExaConfig::api_key: zeroize::Zeroizing<alloc::string::String>
+pub agentkit_toolpacks_web::ExaConfig::endpoint: url::Url
+pub agentkit_toolpacks_web::ExaConfig::search_type: agentkit_toolpacks_web::ExaSearchType
+impl agentkit_toolpacks_web::ExaConfig
+pub fn agentkit_toolpacks_web::ExaConfig::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Debug for agentkit_toolpacks_web::ExaConfig
+pub fn agentkit_toolpacks_web::ExaConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_toolpacks_web::NetPolicy
+pub agentkit_toolpacks_web::NetPolicy::fetch: agentkit_toolpacks_web::NetDecision
+pub agentkit_toolpacks_web::NetPolicy::search: agentkit_toolpacks_web::NetDecision
+impl agentkit_toolpacks_web::NetPolicy
+pub fn agentkit_toolpacks_web::NetPolicy::allow_all() -> Self
+pub fn agentkit_toolpacks_web::NetPolicy::deny_all() -> Self
+pub struct agentkit_toolpacks_web::ProbeReport
+pub agentkit_toolpacks_web::ProbeReport::latency_ms: u64
+pub agentkit_toolpacks_web::ProbeReport::result_count: usize
+pub struct agentkit_toolpacks_web::Routed
+pub agentkit_toolpacks_web::Routed::cached: bool
+pub agentkit_toolpacks_web::Routed::failed: alloc::vec::Vec<(agentkit_toolpacks_web::BackendId, agentkit_toolpacks_web::BackendError)>
+pub agentkit_toolpacks_web::Routed::response: agentkit_toolpacks_web::SearchResponse
+pub struct agentkit_toolpacks_web::RunLimits
+pub agentkit_toolpacks_web::RunLimits::fetches_per_run: u32
+pub agentkit_toolpacks_web::RunLimits::searches_per_run: u32
+impl core::default::Default for agentkit_toolpacks_web::RunLimits
+pub fn agentkit_toolpacks_web::RunLimits::default() -> Self
+pub struct agentkit_toolpacks_web::SearXngBackend
+impl agentkit_toolpacks_web::SearXngBackend
+pub fn agentkit_toolpacks_web::SearXngBackend::new(agentkit_toolpacks_web::SearXngConfig, core::time::Duration, usize) -> core::result::Result<Self, agentkit_toolpacks_web::ConfigError>
+impl agentkit_toolpacks_web::SearchBackend for agentkit_toolpacks_web::SearXngBackend
+pub fn agentkit_toolpacks_web::SearXngBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::SearXngBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::SearXngBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct agentkit_toolpacks_web::SearXngConfig
+pub agentkit_toolpacks_web::SearXngConfig::auth: agentkit_toolpacks_web::SearXngAuth
+pub agentkit_toolpacks_web::SearXngConfig::base_url: url::Url
+pub agentkit_toolpacks_web::SearXngConfig::categories: alloc::string::String
+pub agentkit_toolpacks_web::SearXngConfig::language: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::SearXngConfig::safesearch: u8
+impl agentkit_toolpacks_web::SearXngConfig
+pub fn agentkit_toolpacks_web::SearXngConfig::new(url::Url) -> Self
+impl core::fmt::Debug for agentkit_toolpacks_web::SearXngConfig
+pub fn agentkit_toolpacks_web::SearXngConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_toolpacks_web::SearchHit
+pub agentkit_toolpacks_web::SearchHit::engine: alloc::string::String
+pub agentkit_toolpacks_web::SearchHit::extra: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_web::SearchHit::published: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::SearchHit::snippet: alloc::string::String
+pub agentkit_toolpacks_web::SearchHit::title: alloc::string::String
+pub agentkit_toolpacks_web::SearchHit::url: url::Url
+pub struct agentkit_toolpacks_web::SearchRequest
+pub agentkit_toolpacks_web::SearchRequest::freshness: core::option::Option<agentkit_toolpacks_web::Freshness>
+pub agentkit_toolpacks_web::SearchRequest::include_domains: alloc::vec::Vec<alloc::string::String>
+pub agentkit_toolpacks_web::SearchRequest::language: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::SearchRequest::max_results: u8
+pub agentkit_toolpacks_web::SearchRequest::query: alloc::string::String
+pub struct agentkit_toolpacks_web::SearchResponse
+pub agentkit_toolpacks_web::SearchResponse::answer: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_web::SearchResponse::backend: agentkit_toolpacks_web::BackendId
+pub agentkit_toolpacks_web::SearchResponse::hits: alloc::vec::Vec<agentkit_toolpacks_web::SearchHit>
+pub agentkit_toolpacks_web::SearchResponse::suggestions: alloc::vec::Vec<alloc::string::String>
+pub struct agentkit_toolpacks_web::WebFetchTool
+impl agentkit_toolpacks_web::WebFetchTool
+pub fn agentkit_toolpacks_web::WebFetchTool::new(alloc::rcs::arc::Arc<agentkit_toolpacks_web::fetch::client::SafeHttpClient>, core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_toolpacks_web::fetch::FetchBudget>>) -> Self
+impl agentkit_core::types::Tool for agentkit_toolpacks_web::WebFetchTool
+pub fn agentkit_toolpacks_web::WebFetchTool::definition(&self) -> &agentkit_core::types::ToolDefinition
+pub fn agentkit_toolpacks_web::WebFetchTool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::types::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::types::ToolResult, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::WebFetchTool::toolset(&self) -> core::option::Option<&str>
+pub struct agentkit_toolpacks_web::WebGuard
+impl agentkit_toolpacks_web::WebGuard
+pub fn agentkit_toolpacks_web::WebGuard::new(agentkit_toolpacks_web::NetPolicy) -> Self
+impl agentkit_governance::guard::ToolGuard for agentkit_toolpacks_web::WebGuard
+pub fn agentkit_toolpacks_web::WebGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_web::WebGuard::is_visible<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_web::WebPackConfig
+pub agentkit_toolpacks_web::WebPackConfig::backends: alloc::vec::Vec<agentkit_toolpacks_web::BackendConfig>
+pub agentkit_toolpacks_web::WebPackConfig::cache: agentkit_toolpacks_web::CacheConfig
+pub agentkit_toolpacks_web::WebPackConfig::fetch: core::option::Option<agentkit_toolpacks_web::fetch::FetchConfig>
+pub agentkit_toolpacks_web::WebPackConfig::limits: agentkit_toolpacks_web::RunLimits
+pub agentkit_toolpacks_web::WebPackConfig::max_body_bytes: usize
+pub agentkit_toolpacks_web::WebPackConfig::request_timeout: core::time::Duration
+pub agentkit_toolpacks_web::WebPackConfig::total_timeout: core::time::Duration
+impl agentkit_toolpacks_web::WebPackConfig
+pub fn agentkit_toolpacks_web::WebPackConfig::new(alloc::vec::Vec<agentkit_toolpacks_web::BackendConfig>) -> Self
+pub struct agentkit_toolpacks_web::WebSearchTool
+impl agentkit_toolpacks_web::WebSearchTool
+pub fn agentkit_toolpacks_web::WebSearchTool::new(alloc::rcs::arc::Arc<agentkit_toolpacks_web::BackendRouter>, core::time::Duration) -> Self
+pub fn agentkit_toolpacks_web::WebSearchTool::with_fetch_hint(self) -> Self
+impl agentkit_core::types::Tool for agentkit_toolpacks_web::WebSearchTool
+pub fn agentkit_toolpacks_web::WebSearchTool::definition(&self) -> &agentkit_core::types::ToolDefinition
+pub fn agentkit_toolpacks_web::WebSearchTool::execute<'life0, 'async_trait>(&'life0 self, agentkit_core::types::ToolContext, serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_core::types::ToolResult, agentkit_core::types::CoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::WebSearchTool::toolset(&self) -> core::option::Option<&str>
+pub struct agentkit_toolpacks_web::WebToolContributor
+impl agentkit_toolpacks_web::WebToolContributor
+pub fn agentkit_toolpacks_web::WebToolContributor::new(alloc::vec::Vec<alloc::rcs::arc::Arc<dyn agentkit_core::types::Tool>>) -> Self
+pub fn agentkit_toolpacks_web::WebToolContributor::tool_names(&self) -> alloc::vec::Vec<alloc::string::String>
+impl agentkit_governance::contribution::ToolContributor for agentkit_toolpacks_web::WebToolContributor
+pub fn agentkit_toolpacks_web::WebToolContributor::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_web::WebToolContributor::namespace(&self) -> &str
+pub fn agentkit_toolpacks_web::WebToolContributor::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
+pub struct agentkit_toolpacks_web::WebToolPack
+impl agentkit_toolpacks_web::WebToolPack
+pub fn agentkit_toolpacks_web::WebToolPack::contributor(&self) -> alloc::rcs::arc::Arc<dyn agentkit_governance::contribution::ToolContributor>
+pub async fn agentkit_toolpacks_web::WebToolPack::probe(&self, agentkit_toolpacks_web::BackendId) -> core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>
+pub fn agentkit_toolpacks_web::WebToolPack::router(&self) -> alloc::rcs::arc::Arc<agentkit_toolpacks_web::BackendRouter>
+pub fn agentkit_toolpacks_web::WebToolPack::tool_names(&self) -> alloc::vec::Vec<alloc::string::String>
+pub const agentkit_toolpacks_web::DEFAULT_MAX_BODY_BYTES: usize
+pub const agentkit_toolpacks_web::DEFAULT_REQUEST_TIMEOUT: core::time::Duration
+pub const agentkit_toolpacks_web::DEFAULT_TOTAL_TIMEOUT: core::time::Duration
+pub trait agentkit_toolpacks_web::SearchBackend: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_web::SearchBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::SearchBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::SearchBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_toolpacks_web::SearchBackend for agentkit_toolpacks_web::BraveBackend
+pub fn agentkit_toolpacks_web::BraveBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::BraveBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::BraveBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_toolpacks_web::SearchBackend for agentkit_toolpacks_web::ExaBackend
+pub fn agentkit_toolpacks_web::ExaBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::ExaBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::ExaBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl agentkit_toolpacks_web::SearchBackend for agentkit_toolpacks_web::SearXngBackend
+pub fn agentkit_toolpacks_web::SearXngBackend::id(&self) -> agentkit_toolpacks_web::BackendId
+pub fn agentkit_toolpacks_web::SearXngBackend::probe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::ProbeReport, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_toolpacks_web::SearXngBackend::search<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_web::SearchRequest, &'life2 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_web::SearchResponse, agentkit_toolpacks_web::BackendError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_toolpacks_web::create_web_tool_pack(agentkit_toolpacks_web::WebPackConfig) -> core::result::Result<agentkit_toolpacks_web::WebToolPack, agentkit_toolpacks_web::ConfigError>

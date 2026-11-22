@@ -306,6 +306,9 @@ fn effective_class_is_the_stricter_of_capability_and_effect() {
     assert_eq!(effective_class("fs.write", "read"), ToolClass::Write);
     assert_eq!(effective_class("process.exec", "write"), ToolClass::Exec);
     assert_eq!(effective_class("fs.read", "read"), ToolClass::Read);
+    // Network tools classify as Net; a write effect still makes them Write.
+    assert_eq!(effective_class("net.fetch", "read"), ToolClass::Net);
+    assert_eq!(effective_class("net.search", "write"), ToolClass::Write);
     // Unknown capabilities fall back to the declared effect alone.
     assert_eq!(effective_class("general", "read"), ToolClass::Read);
     assert_eq!(effective_class("general", "write"), ToolClass::Write);

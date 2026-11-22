@@ -79,8 +79,8 @@ pub(super) fn mode_is_read_only(mode: Option<&str>) -> bool {
 /// `read` too, so `write`, `execute`, `external` and anything unknown fail
 /// closed.
 pub(super) fn is_read_tool(definition: &ToolDefinition) -> bool {
-    let capability_reads =
-        classify_capability(&definition.capability).is_none_or(|class| class == ToolClass::Read);
+    let capability_reads = classify_capability(&definition.capability)
+        .is_none_or(|class| matches!(class, ToolClass::Read | ToolClass::Net));
     capability_reads && definition.effect == "read"
 }
 

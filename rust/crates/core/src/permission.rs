@@ -13,6 +13,10 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolClass {
     Read,
+    /// Network egress without workspace effects (web search/fetch). Judged
+    /// like Read by the mode matrix and role ceilings; hosts gate egress with
+    /// their own guard.
+    Net,
     Write,
     /// Command execution. `auto_edit` does NOT cover it: a command is not
     /// an edit, and only `full_auto` (or a per-call approval) runs one.
@@ -23,6 +27,7 @@ impl ToolClass {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::Net => "net",
             Self::Write => "write",
             Self::Exec => "exec",
         }
@@ -40,6 +45,8 @@ pub const PROCESS_EXEC_CAPABILITY: &str = "process.exec";
 /// The plan-submission capability: the tool's whole effect is the human
 /// decision, so it classifies as Read.
 pub const PLAN_CAPABILITY: &str = "plan";
+const NET_SEARCH_CAPABILITY: &str = "net.search";
+const NET_FETCH_CAPABILITY: &str = "net.fetch";
 
 /// Capability-based classification, the coding pack's table; `None` means
 /// "not a recognized capability" — the caller decides between refusal
@@ -50,6 +57,7 @@ pub fn classify_capability(capability: &str) -> Option<ToolClass> {
         FS_WRITE_CAPABILITY => ToolClass::Write,
         PROCESS_EXEC_CAPABILITY => ToolClass::Exec,
         PLAN_CAPABILITY => ToolClass::Read,
+        NET_SEARCH_CAPABILITY | NET_FETCH_CAPABILITY => ToolClass::Net,
         _ => return None,
     })
 }
@@ -124,8 +132,13 @@ impl CodingRole {
 /// approval a human could answer.
 pub fn role_ceiling_allows(role: CodingRole, tool_class: ToolClass) -> bool {
     match role {
-        CodingRole::Supervisor => tool_class == ToolClass::Read,
-        CodingRole::Reviewer => matches!(tool_class, ToolClass::Read | ToolClass::Exec),
+        CodingRole::Supervisor => matches!(tool_class, ToolClass::Read | ToolClass::Net),
+        CodingRole::Reviewer => {
+            matches!(
+                tool_class,
+                ToolClass::Read | ToolClass::Net | ToolClass::Exec
+            )
+        }
         CodingRole::Implementer => true,
     }
 }
@@ -169,22 +182,22 @@ pub fn decide(mode: CodingMode, tool_class: ToolClass, is_plan_tool: bool) -> Pe
                 return PermissionDecision::PlanApprovalRequired;
             }
             match tool_class {
-                ToolClass::Read => PermissionDecision::Allowed,
+                ToolClass::Read | ToolClass::Net => PermissionDecision::Allowed,
                 tool_class => {
                     PermissionDecision::BlockedFinal(BlockedFinal::PlanMode { tool_class })
                 }
             }
         }
         CodingMode::ReadOnly => match tool_class {
-            ToolClass::Read => PermissionDecision::Allowed,
+            ToolClass::Read | ToolClass::Net => PermissionDecision::Allowed,
             _ => PermissionDecision::BlockedFinal(BlockedFinal::ReadOnly),
         },
         CodingMode::Ask => match tool_class {
-            ToolClass::Read => PermissionDecision::Allowed,
+            ToolClass::Read | ToolClass::Net => PermissionDecision::Allowed,
             _ => PermissionDecision::ApprovalRequired,
         },
         CodingMode::AutoEdit => match tool_class {
-            ToolClass::Read | ToolClass::Write => PermissionDecision::Allowed,
+            ToolClass::Read | ToolClass::Net | ToolClass::Write => PermissionDecision::Allowed,
             // Command execution is NOT an edit: auto_edit asks.
             ToolClass::Exec => PermissionDecision::ApprovalRequired,
         },
@@ -203,6 +216,38 @@ mod tests {
         assert_eq!(classify_capability("plan"), Some(ToolClass::Read));
         assert_eq!(classify_capability("git.read"), Some(ToolClass::Read));
         assert_eq!(classify_capability("whatever"), None);
+        assert_eq!(classify_capability("net.search"), Some(ToolClass::Net));
+        assert_eq!(classify_capability("net.fetch"), Some(ToolClass::Net));
+        assert_eq!(classify_capability("net.other"), None);
+        assert_eq!(classify_capability("net."), None);
+    }
+
+    #[test]
+    fn net_is_judged_exactly_like_read() {
+        for mode in [
+            CodingMode::Plan,
+            CodingMode::ReadOnly,
+            CodingMode::Ask,
+            CodingMode::AutoEdit,
+            CodingMode::FullAuto,
+        ] {
+            for plan_tool in [false, true] {
+                assert_eq!(
+                    decide(mode, ToolClass::Net, plan_tool),
+                    decide(mode, ToolClass::Read, plan_tool)
+                );
+            }
+        }
+        for role in [
+            CodingRole::Supervisor,
+            CodingRole::Reviewer,
+            CodingRole::Implementer,
+        ] {
+            assert_eq!(
+                role_ceiling_allows(role, ToolClass::Net),
+                role_ceiling_allows(role, ToolClass::Read)
+            );
+        }
     }
 
     #[test]

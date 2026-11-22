@@ -1,0 +1,20 @@
+{
+  "query": "tokio",
+  "number_of_results": 0,
+  "results": [
+    {"url": "https://docs.rs/tokio/latest/tokio/", "title": "tokio - Rust", "content": "A runtime for writing   reliable\nasynchronous applications.", "engine": "google", "engines": ["google", "bing"], "score": 9.0, "publishedDate": null},
+    {"url": "https://docs.rs/tokio/latest/tokio/?utm_source=newsletter#intro", "title": "tokio - Rust (dup)", "content": "duplicate differing only by utm param", "engine": "bing", "score": 3.0},
+    {"url": "https://www.example.com/a/", "title": "Example A", "content": "Plain example result.", "engine": "duckduckgo", "score": 2.0},
+    {"url": "ftp://files.example.com/x", "title": "FTP result", "content": "non-http url must be skipped", "engine": "google"},
+    {"url": "https://blog.rust-lang.org/2026/01/01/release/", "title": "Rust release", "content": "Release notes.", "engine": "google", "publishedDate": "2026-01-01T00:00:00"},
+    {"url": "https://doc.rust-lang.org/std/", "title": "std", "content": "Standard library docs.", "engine": "google"},
+    {"url": "https://sub.docs.rs/x", "title": "Subdomain of docs.rs", "content": "host ends with .docs.rs", "engine": "google"},
+    {"url": "https://notdocs.rs/y", "title": "Not docs.rs", "content": "must not match docs.rs filter", "engine": "google"},
+    {"url": "https://github.com/tokio-rs/tokio", "title": "tokio-rs/tokio", "content": "GitHub repository.", "engine": "google"},
+    {"url": "https://news.ycombinator.com/item?id=1", "title": "HN thread", "content": "Discussion.", "engine": "google"},
+    {"url": "", "title": "empty url", "content": "skipped"}
+  ],
+  "answers": [{"answer": "tokio is an async runtime", "url": "https://x"}],
+  "suggestions": ["tokio tutorial", "tokio vs async-std", "tokio runtime", "tokio fourth"],
+  "unresponsive_engines": [["brave", "timeout"]]
+}

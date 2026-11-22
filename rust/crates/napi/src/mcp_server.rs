@@ -144,8 +144,10 @@ impl Backend for BindingBackend {
                 // Same stricter-of classification as the run-scoped JS guard,
                 // so a write/exec capability under a "read" effect (or the
                 // reverse) is still a write for the gate.
-                writes: effective_class(&definition.capability, &definition.effect)
-                    != ToolClass::Read,
+                writes: matches!(
+                    effective_class(&definition.capability, &definition.effect),
+                    ToolClass::Write | ToolClass::Exec
+                ),
             })
             .collect())
     }
@@ -164,8 +166,10 @@ impl Backend for BindingBackend {
         let Some(definition) = self.contributor.lookup(name) else {
             return Err(ErrorData::invalid_params("Unknown tool", None));
         };
-        if effective_class(&definition.capability, &definition.effect) != ToolClass::Read
-            && !self.writes_enabled
+        if matches!(
+            effective_class(&definition.capability, &definition.effect),
+            ToolClass::Write | ToolClass::Exec
+        ) && !self.writes_enabled
         {
             return Err(ErrorData::invalid_params("Unknown tool", None));
         }

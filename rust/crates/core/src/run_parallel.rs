@@ -50,6 +50,7 @@ impl State {
         }
         match classify_capability(&definition.capability) {
             Some(ToolClass::Read) => definition.capability != PLAN_CAPABILITY,
+            Some(ToolClass::Net) => definition.effect == "read",
             Some(_) => false,
             None => definition.effect == "read",
         }

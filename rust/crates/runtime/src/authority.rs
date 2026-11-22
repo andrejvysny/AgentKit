@@ -94,7 +94,7 @@ impl CodingPermissionAuthority for BindingAuthority {
 
 /// The ONE classification every JS-tool gate uses (the JS guard and the MCP
 /// server's write gate): the STRICTER of the capability class and the
-/// declared-effect class (`Exec` > `Write` > `Read`). Unknown capabilities
+/// declared-effect class (`Exec` > `Write` > `Net` > `Read`). Unknown capabilities
 /// fall back to the effect alone; a tool can never downgrade itself by
 /// declaring a benign capability with a write effect, or the reverse.
 pub fn effective_class(capability: &str, effect: &str) -> ToolClass {
@@ -113,8 +113,9 @@ fn stricter(left: ToolClass, right: ToolClass) -> ToolClass {
     fn rank(class: ToolClass) -> u8 {
         match class {
             ToolClass::Read => 0,
-            ToolClass::Write => 1,
-            ToolClass::Exec => 2,
+            ToolClass::Net => 1,
+            ToolClass::Write => 2,
+            ToolClass::Exec => 3,
         }
     }
     if rank(left) >= rank(right) {

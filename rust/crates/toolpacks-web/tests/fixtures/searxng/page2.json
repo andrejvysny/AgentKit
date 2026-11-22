@@ -1,0 +1,10 @@
+{
+  "results": [
+    {"url": "https://github.com/tokio-rs/tokio?utm_campaign=x", "title": "dup of page 1", "content": "dup", "engine": "google"},
+    {"url": "https://tokio.rs/", "title": "Tokio", "content": "Official site.", "engine": "google"},
+    {"url": "https://docs.rs/tokio-util/latest/", "title": "tokio-util", "content": "Utilities.", "engine": "google"}
+  ],
+  "answers": [],
+  "suggestions": [],
+  "unresponsive_engines": []
+}

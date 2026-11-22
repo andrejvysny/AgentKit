@@ -2,6 +2,23 @@
 
 ## 0.8.0 — unreleased
 
+**New crate `agentkit-toolpacks-web`: `web_search` and `web_fetch`.**
+- **`web_search`** (read effect, capability `net.search`, namespace `web`) is routed over SearXNG (optional basic or header auth), Brave and Exa.
+  - Fallback is ordered. The router moves to the next backend on any error except cancellation or a bad request from the caller.
+  - Each run has a search and fetch budget (8 and 12 by default) and a cache (10 minutes, 32 entries, 64 runs), and each call has a 14 s deadline.
+  - Results come back inside an escaped `<web_results trust="untrusted">` block of at most 6 KB. `data` and `sources` hold only the hits the model saw.
+- **`web_fetch`** (read effect, capability `net.fetch`) reads a public page as markdown, in parts selected by `offset`.
+  - The client refuses private, loopback, link-local, CGNAT, metadata, multicast, reserved and documentation ranges. This includes IPv4-mapped, compatible, SIIT, NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 and Teredo forms. Both IP literals and every DNS answer are checked, and the connection uses only the checked addresses.
+  - Redirects are followed by hand, at most 5, re-checked on every hop, and never from https to http. Only ports 80 and 443 are allowed. The client sends `Accept-Encoding: identity`, caps bodies at 3 MB and applies an 18 s deadline to the whole fetch.
+  - Pages are converted with `htmd` plus a main/article heuristic. Deeply nested HTML falls back to plain text, and extraction runs on a blocking thread with a 5 s limit.
+  - Results come back inside an escaped `<web_page trust="untrusted">` block. Private and unreachable hosts report the same `fetch_unreachable` error, so a page cannot probe internal hostnames.
+- **Host API:**
+  - `create_web_tool_pack(WebPackConfig)` returns a `WebToolPack`, which provides `contributor()`, `router()`, `probe(BackendId)` and `tool_names()`.
+  - `WebGuard` with `NetPolicy { search, fetch }` set to Allow, Ask or Deny lets a host gate egress for each surface. Ask parks the run, and the preview shows the real host of the URL.
+  - SearXNG credentials over plain http are refused unless the host is local.
+- **Breaking: new tool class `ToolClass::Net`.** It applies to exactly `net.search` and `net.fetch`, and is judged like `Read` in every coding mode and role ceiling. Net tools with `effect: "read"` batch in parallel like reads. The napi MCP server no longer treats `Net` as a write. Subagent roles built on the explorer set (`researcher`, `explorer`, `reviewer`, `implementer`) admit `web:web_search` and `web:web_fetch`. `ToolClass` is not `#[non_exhaustive]`, so exhaustive matches outside AgentKit need a `Net` arm.
+- **Layer:** `rust/scripts/check-arch.mjs` puts the crate in layer 4. The public API baseline is `rust/api/agentkit-toolpacks-web.txt`.
+
 **`edit_file` inserts by line, and the Anthropic editor's `insert` works.** `edit_file` takes a third form: `insert_line` (0 = top) and `insert_text` insert the text after that line, in the file's line ending, and nothing else may be combined with them. New failure codes: `edit_insert_out_of_range` and `edit_insert_unsupported` (CR-only files). The Anthropic dialect now maps `str_replace_based_edit_tool` `insert` onto it instead of refusing the call. Because `edit_file`'s schema gained two properties, a live session's frozen tool list changes once on upgrade.
 
 **Read-only commands: discarded output and `ls` globs.** A command whose only extra words are `2>/dev/null`, `>/dev/null`, `1>/dev/null` or `2>&1` now classifies by the rest, but only as `read_only`, never as a standing-approval key. `*` globs are allowed in `ls` arguments (names only), except dot-file globs. Any other command with a `*` is still not `read_only`, because a glob could expand to a secret.

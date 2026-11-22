@@ -213,8 +213,13 @@ impl AgentProfile {
             let writes = definition.effect != "read";
             if self.role.as_deref() == Some("supervisor")
                 && (writes
-                    || class
-                        .is_some_and(|value| value != agentkit_core::permission::ToolClass::Read))
+                    || class.is_some_and(|value| {
+                        !matches!(
+                            value,
+                            agentkit_core::permission::ToolClass::Read
+                                | agentkit_core::permission::ToolClass::Net
+                        )
+                    }))
                 && definition.name != "submit_plan"
             {
                 continue;
