@@ -13,6 +13,9 @@
  *   --session <id>       stable id; reusing it continues the same session
  *   --db <path>          default ./.agentkit/coding-agent.db
  *   --yes                approve every request (still inside the role ceiling)
+ *   --sandbox <mode>     required (default) | off; off only where the host itself
+ *                        isolates the process (a benchmark container)
+ *   --test-command <cmd> a command run_tests may run (repeatable; default: bun test)
  *   --resume             continue a turn a previous process left interrupted
  *   --effort <level>     reasoning effort: minimal | low | medium | high
  *   --transcript         print the session transcript and exit
@@ -55,6 +58,8 @@ interface Cli {
   apiKeyEnv?: string;
   task?: string;
   yes: boolean;
+  sandbox?: "required" | "off";
+  testCommands: string[];
   effort?: SessionReasoningEffort;
   resume: boolean;
   transcript: boolean;
@@ -80,6 +85,8 @@ function usage(message?: string): never {
       "  --session <id>       session id to continue (default: coding-agent)",
       "  --db <path>          state file (default: ./.agentkit/coding-agent.db)",
       "  --yes                approve every tool request",
+      "  --sandbox <mode>     required | off (off: the host isolates the process)",
+      "  --test-command <cmd> a command run_tests may run (repeatable)",
       "  --resume             continue a turn a previous process left interrupted",
       `  --effort <level>     ${REASONING_EFFORTS.join(" | ")}`,
       "  --transcript         print the transcript and exit",
@@ -101,6 +108,7 @@ function parse(argv: string[]): Cli {
     model: process.env["AGENTKIT_MODEL"] ?? "qwen3-coder",
     baseUrl: process.env["AGENTKIT_BASE_URL"] ?? "http://127.0.0.1:8000/v1",
     yes: false,
+    testCommands: [],
     resume: false,
     transcript: false,
     listProfiles: false,
@@ -148,6 +156,16 @@ function parse(argv: string[]): Cli {
         break;
       case "--yes":
         cli.yes = true;
+        break;
+      case "--sandbox": {
+        const mode = next();
+        if (mode !== "required" && mode !== "off")
+          usage("--sandbox must be required or off");
+        cli.sandbox = mode;
+        break;
+      }
+      case "--test-command":
+        cli.testCommands.push(next());
         break;
       case "--resume":
         cli.resume = true;
@@ -293,6 +311,8 @@ async function main(): Promise<void> {
     ...(cli.apiKeyEnv === undefined ? {} : { apiKeyEnv: cli.apiKeyEnv }),
     ...(cli.mode === undefined ? {} : { mode: cli.mode }),
     ...(cli.effort === undefined ? {} : { reasoningEffort: cli.effort }),
+    ...(cli.sandbox === undefined ? {} : { sandbox: cli.sandbox }),
+    ...(cli.testCommands.length === 0 ? {} : { testCommands: cli.testCommands }),
   });
   installSignalHandlers(app);
 
