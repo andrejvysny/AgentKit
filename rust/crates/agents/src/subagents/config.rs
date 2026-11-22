@@ -224,7 +224,7 @@ pub fn default_role_specs() -> BTreeMap<String, RoleSpec> {
             prompt: "You are an exploration subagent. Locate and summarize; never modify files \
                      or run commands. Return precise paths and line references."
                 .into(),
-            allowed_tools: explorer_tool_set(),
+            allowed_tools: read_only_tool_set(),
             read_only: true,
             can_spawn: false,
             capability: Some("read-only orientation".into()),
@@ -272,7 +272,7 @@ pub fn default_role_specs() -> BTreeMap<String, RoleSpec> {
                      Findings must be concrete and evidenced (file, location, why it matters); \
                      say nothing you have not read. You cannot modify anything."
                 .into(),
-            allowed_tools: explorer_tool_set(),
+            allowed_tools: read_only_tool_set(),
             read_only: true,
             can_spawn: false,
             capability: Some("read-only review".into()),
@@ -296,16 +296,18 @@ fn explorer_tool_set() -> Vec<String> {
         "lsp_symbols",
         "lsp_implementation",
         "lsp_diagnostics",
-        "web:web_search",
-        "web:web_fetch",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect()
 }
 
+/// Read-only roles may look things up on the web; the implementer works from
+/// its brief and the workspace only.
 fn read_only_tool_set() -> Vec<String> {
-    explorer_tool_set()
+    let mut set = explorer_tool_set();
+    set.extend(["web:web_search", "web:web_fetch"].map(str::to_owned));
+    set
 }
 
 /// The delegation guidance for segment S2 of the system prompt (roadmap 4.1,
@@ -345,6 +347,11 @@ mod tests {
         );
         assert!(roles["reviewer"].read_only);
         assert!(!roles["reviewer"].can_spawn);
+        let web = "web:web_search".to_owned();
+        for id in ["researcher", "explorer", "reviewer"] {
+            assert!(roles[id].allowed_tools.contains(&web), "{id} lacks web");
+        }
+        assert!(!roles["implementer"].allowed_tools.contains(&web));
     }
 
     #[test]
