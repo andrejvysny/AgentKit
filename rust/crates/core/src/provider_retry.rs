@@ -53,6 +53,7 @@ fn retryable(code: &str) -> bool {
     matches!(
         code,
         "network_error"
+            | "provider_unreachable"
             | "empty_body"
             | "incomplete_stream"
             | "provider_error"
