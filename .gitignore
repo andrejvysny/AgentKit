@@ -23,3 +23,4 @@ packages/native/generated/*.node
 
 # Gate battery logs (scripts/gates.mjs)
 .gate-logs/
+eval-results/
