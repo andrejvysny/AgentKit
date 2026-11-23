@@ -180,6 +180,9 @@ struct State {
     step_salvaged: bool,
     /// The latest step's finish reason; empty for resumed calls.
     step_finish: String,
+    /// A call in the latest step failed for the third time with identical
+    /// arguments; the run ends once the step's results are recorded.
+    repeated_failure: bool,
 }
 /// How long a terminal/usage event may wait for a full channel after the run
 /// was cancelled.
@@ -236,6 +239,7 @@ impl State {
             step_reasoning: None,
             step_salvaged: false,
             step_finish: String::new(),
+            repeated_failure: false,
             options,
             sender,
         }
@@ -390,6 +394,9 @@ impl State {
             if self.suspended {
                 return Ok(Terminal::Completed);
             }
+            if self.repeated_failure && !self.interrupted() {
+                return self.end_repeated_failure().await;
+            }
             // The resumed batch is a tool boundary like any other: a steer
             // sent while the call waited for its approval is read before the
             // next model call.
@@ -486,6 +493,11 @@ impl State {
                     // The turn is durably parked; this attempt ends quietly.
                     return Ok(Terminal::Completed);
                 }
+                // An interrupted step may have unanswered calls; the resumed
+                // attempt answers them first.
+                if self.repeated_failure && !self.interrupted() {
+                    return self.end_repeated_failure().await;
+                }
                 // Steers are polled ONLY here: after tools ran and another
                 // model call follows. Not before the first request, after a
                 // final answer, or on the last iteration; leftovers stay
@@ -527,6 +539,21 @@ impl State {
         self.emit(
             "run.completed",
             json!({"iterations":self.iteration,"finishReason":"max_iterations"}),
+        )
+        .await?;
+        Ok(Terminal::Completed)
+    }
+    /// Asking again would only repeat the call that already failed three
+    /// times, so the run completes instead of spending its iterations.
+    async fn end_repeated_failure(&mut self) -> Result<Terminal, CoreError> {
+        self.warning(
+            "repeated_failure",
+            "The same tool call failed three times with identical arguments; the run was stopped.",
+        )
+        .await?;
+        self.emit(
+            "run.completed",
+            json!({"iterations":self.iteration,"finishReason":"repeated_failure"}),
         )
         .await?;
         Ok(Terminal::Completed)
@@ -1035,6 +1062,13 @@ impl State {
                 error_code: outcome.data["errorCode"].as_str(),
                 error_message: outcome.data["errorMessage"].as_str(),
             });
+            // The class counts cancelled and skipped calls too; only a call
+            // the model's arguments decided may end the run.
+            if verdict.class == agentkit_contracts::AiToolOutcomeClass::RepeatIdentical
+                && !crate::tool_record::outside_budget(outcome.data["errorCode"].as_str())
+            {
+                self.repeated_failure = true;
+            }
             if self.step_finish == "length"
                 && matches!(
                     outcome.data["errorCode"].as_str(),

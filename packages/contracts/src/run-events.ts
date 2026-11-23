@@ -354,6 +354,8 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `tool_deferred` — As a warning: tools joined after the session's tool list was fixed and are in the deferred catalog (`data.tools`); with `data.reason: "visible_bound"`, tools the model profile's visible-tool bound had no room for (at the freeze, or a toolset promotion refused at a turn boundary, `data.toolset`) stay deferred and are run with `tool_call`. As an `errorCode`: a call named a deferred tool directly; the message says to use `tool_call`.
  * - `tool_unavailable` — As a warning: tools in the session's frozen tool list are not offered by any contributor this turn (`data.tools`). As an `errorCode`: a call named a tool that is not available now.
  * - `tool_name_collision` — More than one tool would be offered under the same name in the session's dialect; only the first is in the tool list. `data.tools` names them.
+ * - `repeated_failure` — A tool call failed for the third time with identical arguments (cancelled calls and calls skipped by a cap or budget do not count). The run completed after that step's results with `finishReason: "repeated_failure"` instead of asking the model again.
+ * - `finish_normalized` — The server reported a finish reason other than `length`, but the output reached the max-output-token limit, so the turn is treated as cut off (`length`). The message names the reported reason and the limit.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -402,7 +404,9 @@ export type AiRunWarningCode =
   | "tool_deferred"
   | "tool_unavailable"
   | "tool_name_collision"
-  | "prefix_refrozen";
+  | "prefix_refrozen"
+  | "repeated_failure"
+  | "finish_normalized";
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),
@@ -847,7 +851,9 @@ export const AiRunCompletedEventSchema = Type.Object({
      * Why the run stopped: the last turn's provider `finish_reason`, or one of
      * the loop's own — `"max_iterations"` (budget spent), `"incomplete"` (the
      * stream was cut before the provider said why; never normalized to
-     * `"stop"`, which would claim an answer that never finished).
+     * `"stop"`, which would claim an answer that never finished),
+     * `"repeated_failure"` (a tool call failed three times with identical
+     * arguments, so the model was not asked again).
      */
     finishReason: Type.Optional(Type.String()),
   }),

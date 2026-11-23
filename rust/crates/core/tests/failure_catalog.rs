@@ -227,8 +227,10 @@ async fn run(calls: Vec<ToolCall>) -> (Vec<Value>, Vec<ChatMessage>) {
         .into_iter()
         .map(|event| serde_json::to_value(event).unwrap())
         .collect();
-    let next = provider.requests.lock().unwrap()[1].clone();
-    (events, next)
+    // The results the run recorded: a repeated identical failure ends the
+    // run before the provider is asked again.
+    let messages = handle.result.await.unwrap().appended_messages;
+    (events, messages)
 }
 
 fn envelopes(messages: &[ChatMessage]) -> Vec<Value> {

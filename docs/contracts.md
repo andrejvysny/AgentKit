@@ -36,7 +36,7 @@ Thirteen event types, all discriminated on `type`
 | `run.progress` | `{ phase, step }` — what a streaming provider is busy with: `reasoning`, `generating` or `tool_args` (the kind of its latest delta). Emitted on provider activity when the phase changed since the last report, else at most every 5 s while no other event was persisted. Informational; a run event only. |
 | `run.input.applied` | `{ inputId, kind, step }` — a durable input was placed before provider step `step` (1-based). `inputId` is the input's idempotency key; `kind` is an open vocabulary, today only `"steer"`. |
 | `run.waiting` | `{ requestId, toolCallId, toolName, step, prompt, expiresAt? }` — the run paused for human input; the task parks in `waiting_approval` and continues on a later attempt. **Not a terminal event.** |
-| `run.completed` | `{ iterations, finishReason? }` — the run ended with an answer. Carries the same possibly-synthetic `"incomplete"` as `run.message.completed`. |
+| `run.completed` | `{ iterations, finishReason? }` — the run ended with an answer. Carries the same possibly-synthetic `"incomplete"` as `run.message.completed`, or one of the loop's own: `"max_iterations"` (iterations spent) or `"repeated_failure"` (a tool call failed three times with identical arguments; see the `repeated_failure` warning). |
 | `run.failed` | `{ errorMessage, errorCode? }` — the run ended in a provider or transport error. |
 | `run.cancelled` | `{ reason? }` — the run was aborted. |
 
@@ -128,6 +128,8 @@ TS type narrows it to the union below while still accepting any string.
 | `tool_deferred` | Rust (`chat/prefix.rs`, `core/run.rs`; also `errorCode` of `run.tool.failed`) | As a warning: tools joined after the session's tool list was fixed and are in the deferred catalog (`data.tools`); with `data.reason: "visible_bound"`, tools the model profile's visible-tool bound had no room for (at the freeze, or a toolset promotion refused at a turn boundary, `data.toolset`) stay deferred and are run with `tool_call`. As an `errorCode`: a call named a deferred tool directly; the message says to use `tool_call`. |
 | `tool_unavailable` | Rust (`chat/prefix.rs`; also `errorCode` of `run.tool.failed`) | As a warning: tools in the session's frozen tool list are not offered by any contributor this turn (`data.tools`). As an `errorCode`: a call named a tool that is not available now. |
 | `tool_name_collision` | Rust (`chat/prefix.rs`) | More than one tool would be offered under the same name in the session's dialect; only the first is in the tool list. `data.tools` names them. |
+| `repeated_failure` | Rust (`core/run.rs`) | A tool call failed for the third time with identical arguments (cancelled calls and calls skipped by a cap or budget do not count). Every call of that step is still answered; then the run completes with `finishReason: "repeated_failure"` instead of asking the model again. |
+| `finish_normalized` | Rust (`providers/chat_completions.rs`) | The server reported a finish reason other than `length`, but the output reached the max-output-token limit, so the turn is treated as cut off (`length`). The message names the reported reason and the limit. |
 
 **Removed, never emitted**: `duplicate_loop`, `stall`, `tool_cap`,
 `timeout`. These were declared in an earlier iteration as reserved for

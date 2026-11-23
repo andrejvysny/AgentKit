@@ -76,7 +76,7 @@ pub struct Verdict {
 
 /// Codes that say nothing about the model's call, so they never spend the
 /// repair budget.
-fn outside_budget(code: Option<&str>) -> bool {
+pub(crate) fn outside_budget(code: Option<&str>) -> bool {
     matches!(
         code,
         Some("cancelled" | "tool_call_cap" | "execution_budget_exhausted" | "execution_timeout")
