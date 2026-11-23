@@ -130,6 +130,7 @@ TS type narrows it to the union below while still accepting any string.
 | `tool_name_collision` | Rust (`chat/prefix.rs`) | More than one tool would be offered under the same name in the session's dialect; only the first is in the tool list. `data.tools` names them. |
 | `repeated_failure` | Rust (`core/run.rs`) | A tool call failed for the third time with identical arguments (cancelled calls and calls skipped by a cap or budget do not count). Every call of that step is still answered; then the run completes with `finishReason: "repeated_failure"` instead of asking the model again. |
 | `finish_normalized` | Rust (`providers/chat_completions.rs`) | The server reported a finish reason other than `length`, but the output reached the max-output-token limit, so the turn is treated as cut off (`length`). The message names the reported reason and the limit. |
+| `quoted_call_refused` | Rust (`core/run.rs`, `core/quoted_call/`; the call's `run.tool.failed` carries `errorCode: "quoted_call"`) | A tool call was not run because it is identical (name and every argument, after the type conversions a server applies) to a tool-call block in content read during the current turn — tool output or host-attached turn context, also when escaped, entity-encoded or line-prefixed — so it looks like quoted data a server turned into a call. The message names the tool, never its arguments. Output of earlier turns does not count, so the user can confirm the action in a new message; a steer or correction follow-up does not start a new turn when the host sets `RunOptions::turn_start`. Not covered: a block split across two tool outputs or two string values; output read before any new user message; `resume_calls` (approved by a human through the host, not checked); what a parent run read, for its child run. |
 
 **Removed, never emitted**: `duplicate_loop`, `stall`, `tool_cap`,
 `timeout`. These were declared in an earlier iteration as reserved for
@@ -274,7 +275,7 @@ A failed call's `envelope.data` is `AiToolErrorData`:
 
 | Field | What it says |
 | --- | --- |
-| `errorCode` | Machine-readable cause — `tool_missing`, `bad_args`, `schema_invalid`, `exec_failed`, `tool_call_cap`, `cancelled`, `tool_guard_refused`, `result_unserializable`, or a tool's own code. A tool that blew its **deadline** reports `exec_failed` like any other executor failure; there is no distinct timeout code, and the deadline is named in `errorMessage` (`Tool <name> timed out after <n>ms`). |
+| `errorCode` | Machine-readable cause — `tool_missing`, `bad_args`, `schema_invalid`, `exec_failed`, `tool_call_cap`, `cancelled`, `tool_guard_refused`, `quoted_call`, `result_unserializable`, or a tool's own code. A tool that blew its **deadline** reports `exec_failed` like any other executor failure; there is no distinct timeout code, and the deadline is named in `errorMessage` (`Tool <name> timed out after <n>ms`). |
 | `errorMessage` | The human/model-facing explanation; also the envelope's `summary`. |
 | `phase?` | `"validation" \| "guard" \| "execution"` — WHERE it died: the argument schema, the guard chain, or the tool's own body. |
 | `retryable?` | Whether another attempt could plausibly succeed. Advice for whoever is deciding; nothing in this repository retries a tool call by itself. |
@@ -287,6 +288,7 @@ producer actually knows them — absent means "unrecorded", never "false":
 | `AiToolRegistry` input-schema validation (`schema_invalid`) | `validation` | `false` — the same arguments fail the same way; the model must write different ones |
 | `ToolGuard.canExecute` refusal (`tool_guard_refused`) | `guard` | `false` — a decision, not a fault |
 | `ToolGuard.canExecute` THREW (`tool_guard_refused`, message `"guard error"`) | `guard` | `false` — the guard failed closed; the thrown message is deliberately not forwarded, since a guard's reason reaches the model verbatim |
+| A call identical to a tool-call block in content read this turn, tool output or attached material (`quoted_call`, see the `quoted_call_refused` warning) | `guard` | `false` — the same call is refused again for the rest of the run |
 | A tool's `execute` threw, or blew its deadline (`exec_failed`) | `execution` | the error's own `retryable` property, default `false` |
 | The tool ran but its result would not serialize (`result_unserializable`) | `execution` | `false` — the same value fails the same way; the side effects already happened |
 | Everything else (`tool_missing`, `bad_args`, `tool_call_cap`, `cancelled`) | absent | absent |

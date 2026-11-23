@@ -74,6 +74,12 @@ pub struct RunOptions {
     /// (at most four at a time). Results, events and records keep the call
     /// order, and every other call stays sequential. On by default.
     pub parallel_read_tools: bool,
+    /// Index in `request.messages` of the current turn's user message, when
+    /// the host knows it. The quoted-call guard reads the turn's output from
+    /// there, so a user message seeded after it (a steer, a correction
+    /// follow-up) does not start a new turn. `None`, or an index that does
+    /// not name a user message: the last user message of the history.
+    pub turn_start: Option<usize>,
 }
 impl Default for RunOptions {
     fn default() -> Self {
@@ -108,6 +114,7 @@ impl Default for RunOptions {
             record_identity: crate::RecordIdentity::default(),
             output: None,
             parallel_read_tools: true,
+            turn_start: None,
         }
     }
 }
@@ -840,6 +847,28 @@ impl State {
             .iter()
             .map(|call| crate::call_pipeline::prepare(registry, call))
             .collect();
+        // Judged before this step's own results join the history: a call
+        // cannot quote output its model had not read. Resumed calls (no
+        // assistant record to push) were approved by a human; not rechecked.
+        let quoted = if push_assistant {
+            let pairs: Vec<_> = calls
+                .iter()
+                .zip(&prepared_calls)
+                .map(|(call, prepared)| (call, &prepared.call))
+                .collect();
+            crate::quoted_call::quoted_calls(
+                &self.messages,
+                crate::quoted_call::turn_bound(
+                    &self.messages,
+                    self.initial_length,
+                    self.options.turn_start,
+                ),
+                &self.options.request.selected_content,
+                &pairs,
+            )
+        } else {
+            vec![false; calls.len()]
+        };
         if push_assistant {
             let mut assistant = ChatMessage::text("assistant", content);
             // The stored call is the canonical prepared identity (dialect,
@@ -878,7 +907,7 @@ impl State {
                 && budget_error.is_none()
                 && !self.options.cancellation.is_cancelled()
             {
-                let end = self.read_batch_end(registry, &prepared_calls, index, cap);
+                let end = self.read_batch_end(registry, &prepared_calls, &quoted, index, cap);
                 if end > index {
                     batch = self
                         .run_read_batch(registry, &prepared_calls, index..end)
@@ -930,7 +959,10 @@ impl State {
                 .await?;
                 let gate = if let Some(gate) = batch.gates.remove(&index) {
                     gate
-                } else if self.options.hooks.is_some() && prepared.failure.is_none() {
+                } else if self.options.hooks.is_some()
+                    && prepared.failure.is_none()
+                    && !quoted[index]
+                {
                     self.tool_gate(registry, call).await?
                 } else {
                     None
@@ -953,6 +985,16 @@ impl State {
                         self.options.limits.max_bytes,
                         json!({}),
                     )
+                } else if quoted[index] {
+                    // Ahead of the pipeline failures: "fix the arguments"
+                    // would invite the model to repair a quoted call.
+                    executed = true;
+                    self.warning(
+                        "quoted_call_refused",
+                        &crate::quoted_call::warning(&call.name),
+                    )
+                    .await?;
+                    crate::quoted_call::refusal(call, self.options.limits.max_bytes)
                 } else if let Some(error) = &prepared.failure {
                     executed = true;
                     if prepared.schema_refusal {

@@ -266,6 +266,11 @@ impl ChatSession {
     ) -> ChatResult<Pass> {
         self.context.check_cancelled()?;
         let mut options = self.base.clone();
+        // The turn's index holds only in a transcript that extends the first
+        // request (a private follow-up); a rebuilt one has its own turn.
+        if !messages.starts_with(&self.base.request.messages) {
+            options.turn_start = None;
+        }
         options.request.messages = messages.clone();
         options.first_seq = self
             .context

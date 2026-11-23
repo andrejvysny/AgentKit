@@ -57,11 +57,13 @@ impl State {
     }
 
     /// End (exclusive) of the read batch starting at `start`, within `cap`;
-    /// `start` itself when it is not a batch of two or more.
+    /// `start` itself when it is not a batch of two or more. A `refused`
+    /// call ends the batch: the batch would run it before the refusal.
     pub(super) fn read_batch_end(
         &self,
         registry: &ToolRegistry,
         prepared: &[Prepared],
+        refused: &[bool],
         start: usize,
         cap: usize,
     ) -> usize {
@@ -70,7 +72,9 @@ impl State {
         }
         let limit = prepared.len().min(cap);
         let end = (start..limit)
-            .take_while(|index| self.parallel_readable(registry, &prepared[*index]))
+            .take_while(|index| {
+                !refused[*index] && self.parallel_readable(registry, &prepared[*index])
+            })
             .last()
             .map_or(start, |last| last + 1);
         if end - start >= 2 { end } else { start }

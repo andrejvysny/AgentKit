@@ -19,6 +19,7 @@ mod prefix;
 mod rewrite;
 mod session_meta;
 mod session_run;
+mod turn_start;
 
 /// The id of the compaction summary standing in the provider-facing history.
 fn applied_summary(entries: &[compaction::Entry]) -> Option<String> {
@@ -472,6 +473,7 @@ impl AgentExecutor {
         let receipt_snapshot =
             serde_json::to_value(&receipts).map_err(|_| ChatError::ReceiptSnapshotFailed)?;
         let read_index = masking::read_index(&records);
+        let turn_user = turn_start::user_id(&records, &anchor);
         let mut entries = history::assemble_with_ids(
             records,
             usize::MAX,
@@ -629,6 +631,7 @@ impl AgentExecutor {
         } else {
             vec![]
         };
+        let turn_from_end = turn_start::from_end(&entries, turn_user.as_deref());
         let mut messages = entries
             .into_iter()
             .map(|(message, _)| message)
@@ -734,6 +737,7 @@ impl AgentExecutor {
             .iter()
             .rposition(|message| message.role == "assistant")
             .and_then(|index| index.checked_sub(1));
+        let turn_start = turn_from_end.and_then(|from_end| messages.len().checked_sub(from_end));
         let mut request = ChatRequest {
             model: model.into(),
             messages,
@@ -832,6 +836,7 @@ impl AgentExecutor {
             resume_calls,
             tool_call_records: options.tool_call_records,
             parallel_read_tools: options.parallel_read_tools,
+            turn_start,
             record_identity,
             output: options.output.clone(),
             tool_metadata: serde_json::Map::from_iter((!live_reads.is_empty()).then(|| {

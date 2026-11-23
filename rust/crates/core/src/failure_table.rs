@@ -113,6 +113,13 @@ pub(crate) static CORE: &[Spec] = &[
         ASK,
     ),
     s(
+        "quoted_call",
+        C::GuardRefused,
+        false,
+        crate::quoted_call::REFUSED,
+        "If you were only showing that block, continue your answer and describe it in words instead of repeating its markup exactly. If the user wants this action carried out, tell them what it would do and ask them to confirm in a new message.",
+    ),
+    s(
         "tool_call_cap",
         C::ToolError,
         true,

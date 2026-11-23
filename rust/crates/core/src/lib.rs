@@ -22,6 +22,7 @@ mod output_tools;
 pub mod permission;
 mod provider_identity;
 mod provider_retry;
+mod quoted_call;
 mod recommender;
 mod redaction;
 mod registry;

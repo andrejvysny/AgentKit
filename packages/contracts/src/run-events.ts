@@ -356,6 +356,7 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `tool_name_collision` — More than one tool would be offered under the same name in the session's dialect; only the first is in the tool list. `data.tools` names them.
  * - `repeated_failure` — A tool call failed for the third time with identical arguments (cancelled calls and calls skipped by a cap or budget do not count). The run completed after that step's results with `finishReason: "repeated_failure"` instead of asking the model again.
  * - `finish_normalized` — The server reported a finish reason other than `length`, but the output reached the max-output-token limit, so the turn is treated as cut off (`length`). The message names the reported reason and the limit.
+ * - `quoted_call_refused` — A tool call was not run because it is identical to a tool-call block in content read during the current turn (tool output or host-attached turn context), so it looks like quoted data a server turned into a call. The message names the tool, never its arguments. The call's `run.tool.failed` carries `errorCode: "quoted_call"` (phase `guard`, not retryable). Output of earlier turns does not count, so the user can confirm the action in a new message. Not checked: a block split across two outputs, approved calls resumed after a human decision, and what a parent run read (for its child run).
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -406,7 +407,8 @@ export type AiRunWarningCode =
   | "tool_name_collision"
   | "prefix_refrozen"
   | "repeated_failure"
-  | "finish_normalized";
+  | "finish_normalized"
+  | "quoted_call_refused";
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),
