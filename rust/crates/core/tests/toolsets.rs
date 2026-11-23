@@ -771,6 +771,27 @@ fn the_qwen_profile_bounds_the_rendered_array_after_dialect_expansion() {
 }
 
 #[test]
+fn the_generic_profile_sends_its_coding_tools_directly() {
+    let profile = builtin_profile(GENERIC_PROFILE_ID).expect("generic profile");
+    let bound = profile.max_visible_tools as usize;
+    let dialect = session_dialect(None, Some(&profile), ToolLane::ChatCompletions).unwrap();
+    let mut canonical = coding_definitions();
+    canonical.extend(meta_definitions());
+    let classification = Classification::from_profile(&profile, Some(&dialect));
+    let surface =
+        ToolSurface::reconcile_with(None, &dialect.render(&canonical), Some(&classification));
+    assert!(surface.manifest.definitions().len() <= bound);
+    assert!(surface.demoted.is_empty(), "{:?}", surface.demoted);
+    // Wire names of the common dialect for list_dir, write_file, run_command.
+    for name in ["list_directory", "write_file", "run_shell_command"] {
+        assert!(surface.manifest.contains(name), "{name}");
+    }
+    for meta in META_TOOLS {
+        assert!(surface.manifest.contains(meta), "{meta} is reserved a slot");
+    }
+}
+
+#[test]
 fn a_bound_that_the_direct_tools_fit_demotes_nothing() {
     let profile = builtin_profile(QWEN_PROFILE_ID).expect("qwen profile");
     let dialect = session_dialect(None, Some(&profile), ToolLane::ChatCompletions).unwrap();

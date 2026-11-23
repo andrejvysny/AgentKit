@@ -126,16 +126,20 @@ fn generic() -> AiModelToolProfile {
     profile.direct_tools = names(&[
         &[
             "read_file",
+            "write_file",
             "edit_file",
+            "list_dir",
             "code_search",
             "find_files",
             "run_command",
         ],
         &META,
     ]);
-    // Five direct coding tools plus the four meta tools, which take slots
-    // once anything is deferred: at 8, `run_command` was demoted.
-    profile.max_visible_tools = 9.0;
+    // Seven direct coding tools plus the four meta tools, which take slots
+    // once anything is deferred; a smaller bound demotes the last direct
+    // tools. `list_dir` and `write_file` are direct because tool descriptions
+    // name them and models call them by name.
+    profile.max_visible_tools = 11.0;
     profile.message_rules.system_first_only = true;
     profile.message_rules.image_positions = vec![AiModelImagePosition::User];
     profile

@@ -104,7 +104,17 @@ fn the_generic_profile_is_conservative() {
     assert_eq!(generic.family, AiModelFamily::Generic);
     assert_eq!(generic.tool_choice, AiModelToolChoicePolicy::AutoOnly);
     assert_eq!(generic.load_mode, AiModelLoadMode::Indirect);
-    assert!(generic.direct_tools.len() <= 8);
+    // Smaller than the Qwen profile's set, but with every tool that tool
+    // descriptions name, so the model can call them directly.
+    let qwen = builtin_profile(QWEN_PROFILE_ID).unwrap();
+    assert!(generic.direct_tools.len() <= 10);
+    assert!(generic.direct_tools.len() < qwen.direct_tools.len());
+    for name in ["list_dir", "write_file"] {
+        assert!(
+            generic.direct_tools.iter().any(|tool| tool == name),
+            "{name}"
+        );
+    }
     assert_eq!(generic.limits.source, AiModelLimitSource::Estimated);
     assert!(generic.qualified_toolsets.is_empty());
 }
