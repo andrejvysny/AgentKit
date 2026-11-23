@@ -7,7 +7,9 @@ use agentkit_core::{ChatMessage, ChatProvider, RunOptions, Terminal, ToolRegistr
 use agentkit_store::MessageInput;
 use futures::StreamExt;
 use std::collections::HashSet;
+mod empty_after_tools;
 mod messages;
+use empty_after_tools::{reply_is_empty, unanswered_after_tools};
 use messages::*;
 #[derive(Clone)]
 pub struct CorrectionConfig {
@@ -85,6 +87,14 @@ struct Pass {
     tool_calls: usize,
     failure: Option<ExecutionFailure>,
     messages: Vec<ChatMessage>,
+    /// `run.completed`'s `finishReason`; `None` when the run never completed.
+    finish_reason: Option<String>,
+    iterations: u32,
+    /// The run's last message is an assistant reply with no text and no
+    /// tool calls. Read from the messages, not `content`: a completion event
+    /// without `content` leaves `content` blank while the reply kept the
+    /// streamed text.
+    final_empty: bool,
 }
 impl ChatSession {
     pub async fn execute(mut self) -> ChatResult<()> {
@@ -203,13 +213,17 @@ impl ChatSession {
             pass = self
                 .run_pass(messages, Arc::new(ToolRegistry::new()), 1)
                 .await?;
+        } else if self.reask_after_tools_due(&pass) {
+            passes += 1;
+            pass = self.reask_after_tools(pass, passes).await?;
         }
         if pass.suspended {
             return Ok(pass);
         }
-        if pass.terminal != Terminal::Cancelled
+        if (pass.terminal != Terminal::Cancelled
             && pass.content.trim().is_empty()
-            && pass.tool_calls == 0
+            && pass.tool_calls == 0)
+            || unanswered_after_tools(&pass)
         {
             self.context
                 .emit(
@@ -264,6 +278,18 @@ impl ChatSession {
         registry: Arc<ToolRegistry>,
         iterations: u32,
     ) -> ChatResult<Pass> {
+        self.run_pass_from(messages, registry, iterations, None)
+            .await
+    }
+    /// `turn_start` stands in for the turn's index when the kept options
+    /// have none.
+    async fn run_pass_from(
+        &mut self,
+        messages: Vec<ChatMessage>,
+        registry: Arc<ToolRegistry>,
+        iterations: u32,
+        turn_start: Option<usize>,
+    ) -> ChatResult<Pass> {
         self.context.check_cancelled()?;
         let mut options = self.base.clone();
         // The turn's index holds only in a transcript that extends the first
@@ -271,6 +297,7 @@ impl ChatSession {
         if !messages.starts_with(&self.base.request.messages) {
             options.turn_start = None;
         }
+        options.turn_start = options.turn_start.or(turn_start);
         options.request.messages = messages.clone();
         options.first_seq = self
             .context
@@ -284,6 +311,7 @@ impl ChatSession {
         let mut content = String::new();
         let mut calls = HashSet::new();
         let mut failure = None;
+        let mut finish_reason = None;
         while let Some(event) = handle.events.next().await {
             let event = serde_json::to_value(event).map_err(ChatError::Json)?;
             match event["type"].as_str() {
@@ -302,6 +330,7 @@ impl ChatSession {
                     // Authoritative: appended atomically with the answer's
                     // messages (see `answer_committed`).
                     self.answer_committed = true;
+                    finish_reason = event["data"]["finishReason"].as_str().map(str::to_owned);
                 }
                 Some("run.failed") => {
                     failure = Some(ExecutionFailure {
@@ -321,6 +350,7 @@ impl ChatSession {
             self.base.request.continuation = Some(state);
             self.base.request.continuation_required = true;
         }
+        let final_empty = reply_is_empty(&result.appended_messages);
         let mut transcript = messages;
         transcript.extend(result.appended_messages);
         Ok(Pass {
@@ -330,6 +360,9 @@ impl ChatSession {
             tool_calls: calls.len(),
             failure,
             messages: transcript,
+            finish_reason,
+            iterations: result.iterations,
+            final_empty,
         })
     }
     fn can_retry_chat_only(&self, pass: &Pass) -> bool {

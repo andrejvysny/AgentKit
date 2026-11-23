@@ -305,12 +305,14 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  *   late result is dropped without an event).
  * - `retry_pass` — host-emitted immediately BEFORE a recovery or correction
  *   pass. A run is NOT one pass: the host re-asks after a failed pass
- *   (`chat_only`), after a completed-but-empty one (`empty_response`), and once
- *   more per correction round (`correction`), and each pass writes its own
- *   `run.started` … terminal pair onto the same log. This warning is the
- *   boundary between them: `data.pass` is the 1-based number of the pass about
- *   to run and `data.reason` is `"chat_only" | "empty_response" |
- *   "correction"`. A consumer must treat the run as LIVE again — the terminal
+ *   (`chat_only`), after a completed-but-empty one with no tool use
+ *   (`empty_response`), after an empty final reply that followed tool use
+ *   (`empty_after_tools`: asked once to continue, with its tools and only the
+ *   steps it has left), and once more per correction round (`correction`), and
+ *   each pass writes its own `run.started` … terminal pair onto the same log.
+ *   This warning is the boundary between them: `data.pass` is the 1-based
+ *   number of the pass about to run and `data.reason` is `"chat_only" |
+ *   "empty_response" | "empty_after_tools" | "correction"`. A consumer must treat the run as LIVE again — the terminal
  *   event it just saw belonged to the previous pass — and RESET the text it has
  *   streamed so far, mirroring the host's own reset of the stored answer.
  * - `hook_timeout` — host-emitted: one of the host's own hooks
@@ -357,9 +359,15 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `repeated_failure` — A tool call failed with identical arguments in three separate model steps (identical calls in one step count once; cancelled calls and calls skipped by a cap or budget do not count). The run completed after that step's results with `finishReason: "repeated_failure"` instead of asking the model again.
  * - `finish_normalized` — The server reported a finish reason other than `length`, but the output reached the max-output-token limit, so the turn is treated as cut off (`length`). The message names the reported reason and the limit.
  * - `quoted_call_refused` — A tool call was not run because it is identical to a tool-call block in content read during the current turn (tool output or host-attached turn context), so it looks like quoted data a server turned into a call. The message names the tool, never its arguments. The call's `run.tool.failed` carries `errorCode: "quoted_call"` (phase `guard`, not retryable). Output of earlier turns does not count, so the user can confirm the action in a new message. Not checked: a block split across two outputs, approved calls resumed after a human decision, and what a parent run read (for its child run).
- * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
- *   produce them, but hosts layering their own provider adapters on top of this
- *   contract do, so they are part of the shared vocabulary.
+ * - `empty_response` — emitted by the Rust chat host, not by core: the turn
+ *   completed with an empty final answer. With no tool use, after one tool-less
+ *   re-ask (`retry_pass` reason `empty_response`); after tool use, when the
+ *   final reply is empty on a `stop` or `length` end, after one re-ask with
+ *   tools (`retry_pass` reason `empty_after_tools`, made for `stop` only).
+ *   Never for a step-limit (`max_iterations`) or `repeated_failure` end.
+ * - `emulated_tool_call` — host-emitted. The runtime does not produce it, but
+ *   hosts layering their own provider adapters on top of this contract do, so
+ *   it is part of the shared vocabulary.
  *
  * Removed: `duplicate_loop` | `stall` | `tool_cap` | `timeout`. They were
  * declared as "P6, not emitted this iteration" and never were; reserved for
