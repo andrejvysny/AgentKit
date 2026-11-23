@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 struct Script {
     calls: Vec<ToolCall>,
+    finish: &'static str,
     requests: Mutex<Vec<Vec<ChatMessage>>>,
 }
 #[async_trait]
@@ -21,7 +22,7 @@ impl ChatProvider for Script {
             ProviderEvent::Completed {
                 content: String::new(),
                 tool_calls: self.calls.clone(),
-                finish_reason: "tool_calls".into(),
+                finish_reason: self.finish.into(),
             }
         } else {
             ProviderEvent::Completed {
@@ -98,8 +99,16 @@ struct Outcome {
     requests: Vec<Vec<ChatMessage>>,
 }
 async fn run(registry: ToolRegistry, calls: Vec<ToolCall>) -> Outcome {
+    run_finishing(registry, calls, "tool_calls").await
+}
+async fn run_finishing(
+    registry: ToolRegistry,
+    calls: Vec<ToolCall>,
+    finish: &'static str,
+) -> Outcome {
     let provider = Arc::new(Script {
         calls,
+        finish,
         requests: Mutex::new(vec![]),
     });
     let handle = run_chat(
@@ -259,4 +268,40 @@ async fn results_of_one_turn_are_contiguous_and_in_call_order() {
             .contains("tool_search"),
         "the failing call carries its own failure in place"
     );
+}
+
+const CUT_OFF_HINT: &str = "Your output reached its limit before this call was complete.";
+fn tool_result(outcome: &Outcome) -> String {
+    let message = outcome.requests[1]
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("tool result message");
+    message.content.as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn cut_off_call_tells_the_model_to_send_smaller_parts() {
+    let received = Arc::new(Mutex::new(vec![]));
+    let cut = call("c1", "write_file", r#"{"file_path":"a.txt","content":"par"#);
+    let outcome = run_finishing(registry(&received), vec![cut], "length").await;
+    assert_eq!(
+        of_type(&outcome, "run.tool.failed")[0]["errorCode"],
+        "bad_args"
+    );
+    let result = tool_result(&outcome);
+    assert!(result.contains(CUT_OFF_HINT), "{result}");
+    assert!(result.contains("several shorter calls"), "{result}");
+}
+
+#[tokio::test]
+async fn bad_arguments_without_a_cut_off_get_no_cut_off_hint() {
+    let received = Arc::new(Mutex::new(vec![]));
+    let cut = call("c1", "write_file", r#"{"file_path":"a.txt","content":"par"#);
+    let outcome = run_finishing(registry(&received), vec![cut], "tool_calls").await;
+    assert_eq!(
+        of_type(&outcome, "run.tool.failed")[0]["errorCode"],
+        "bad_args"
+    );
+    let result = tool_result(&outcome);
+    assert!(!result.contains(CUT_OFF_HINT), "{result}");
 }

@@ -36,6 +36,21 @@ pub(crate) fn append_stop_retrying(outcome: &mut ToolOutcome) {
     model["summary"] = crate::failure_catalog::with_stop_retrying(&current).into();
     outcome.model_json = envelope::stringify(&model);
 }
+const CUT_OFF_HINT: &str = "Your output reached its limit before this call was complete. Send the content in smaller parts, for example several shorter calls.";
+/// A call whose arguments broke because the output limit cut the turn: tell
+/// the model why, so it splits the work instead of resending the same call.
+pub(crate) fn append_cut_off_hint(outcome: &mut ToolOutcome) {
+    let Ok(mut model) = serde_json::from_str::<Value>(&outcome.model_json) else {
+        return;
+    };
+    let current = model["summary"]
+        .as_str()
+        .or_else(|| outcome.data["errorMessage"].as_str())
+        .unwrap_or("The tool call failed.")
+        .to_owned();
+    model["summary"] = format!("{current}\n{CUT_OFF_HINT}").into();
+    outcome.model_json = envelope::stringify(&model);
+}
 pub(crate) async fn execute(
     registry: &ToolRegistry,
     call: &ToolCall,

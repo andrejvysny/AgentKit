@@ -141,6 +141,9 @@ impl ChatCompletionsProvider {
         let provider = self.clone();
         Box::pin(async_stream::try_stream! {
             let (body, roles, notes) = build_body(&input)?;
+            // The compatibility fallback only renames this key, so the value
+            // read here is the cap the server received.
+            let cap = body.get("max_tokens").and_then(Value::as_u64);
             provider.transport.check_authority().await?;
             yield ProviderEvent::Started;
             for note in notes {
@@ -332,6 +335,10 @@ impl ChatCompletionsProvider {
                     ),
                 };
             }
+            if let Some(warning) = state.normalize_finish(cap) {
+                provider.transport.check_authority().await?;
+                yield warning;
+            }
             let mut data = json!({
                 "content": content,
                 "toolCallCount": calls.len(),
@@ -486,7 +493,19 @@ impl ChatState {
         }
         let choice = &value["choices"][0];
         let delta = &choice["delta"];
-        if let Some(content) = delta["content"].as_str().filter(|text| !text.is_empty()) {
+        // Servers open the answer with blank lines after the reasoning; until
+        // visible text has been emitted, leading whitespace is dropped.
+        if let Some(content) = delta["content"]
+            .as_str()
+            .map(|text| {
+                if self.content.is_empty() {
+                    text.trim_start()
+                } else {
+                    text
+                }
+            })
+            .filter(|text| !text.is_empty())
+        {
             self.content.push_str(content);
             events.push(ProviderEvent::Delta(content.into()));
         }
@@ -533,6 +552,25 @@ impl ChatState {
             self.finish = Some(reason.into());
         }
         Ok(events)
+    }
+    /// Some servers (vLLM) report `tool_calls` or `stop` when the output
+    /// limit cut the response mid-call; usage at the cap is the real signal.
+    /// Rewrites the finish to `length` and returns the warning saying so.
+    fn normalize_finish(&mut self, cap: Option<u64>) -> Option<ProviderEvent> {
+        let cap = cap?;
+        let used = self.usage.as_ref()?["completion_tokens"].as_u64()?;
+        let original = self.finish.as_deref()?;
+        if used < cap || original == "length" {
+            return None;
+        }
+        let message = format!(
+            "The server reported finish_reason={original}, but the output reached the limit of {cap} tokens, so it is treated as cut off."
+        );
+        self.finish = Some("length".into());
+        Some(ProviderEvent::Warning {
+            code: "finish_normalized".into(),
+            message,
+        })
     }
     /// Fold every citation the chunk attests into the per-call set and
     /// return the ones not seen before. Accepted shapes: an `annotations`

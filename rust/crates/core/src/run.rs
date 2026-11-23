@@ -178,6 +178,8 @@ struct State {
     step_reasoning: Option<String>,
     /// The latest step's calls were parsed from reply text (TU-21).
     step_salvaged: bool,
+    /// The latest step's finish reason; empty for resumed calls.
+    step_finish: String,
 }
 /// How long a terminal/usage event may wait for a full channel after the run
 /// was cancelled.
@@ -233,6 +235,7 @@ impl State {
             tool_records: Default::default(),
             step_reasoning: None,
             step_salvaged: false,
+            step_finish: String::new(),
             options,
             sender,
         }
@@ -448,6 +451,7 @@ impl State {
             let turn = self.provider_turn(provider.clone(), &registry).await?;
             self.step_reasoning = turn.reasoning.clone();
             self.step_salvaged = turn.salvaged;
+            self.step_finish = turn.finish.clone();
             let content = turn.content.clone().unwrap_or(turn.delta.clone());
             let mut calls = if turn.calls.is_empty() {
                 turn.requested.clone()
@@ -1031,6 +1035,14 @@ impl State {
                 error_code: outcome.data["errorCode"].as_str(),
                 error_message: outcome.data["errorMessage"].as_str(),
             });
+            if self.step_finish == "length"
+                && matches!(
+                    outcome.data["errorCode"].as_str(),
+                    Some("bad_args" | "schema_invalid")
+                )
+            {
+                tool_execution::append_cut_off_hint(&mut outcome);
+            }
             if verdict.stop_retrying {
                 tool_execution::append_stop_retrying(&mut outcome);
             }

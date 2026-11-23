@@ -1177,6 +1177,116 @@ async fn chat_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
     // (and sloppy providers strings) for details they do not track.
     assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==1&&data.get("cachedPromptTokens").is_none()&&data.get("reasoningTokens").is_none())));
 }
+async fn chat_events(stream: String, cap: Option<u64>) -> Vec<Result<ProviderEvent, CoreError>> {
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, stream)]))
+            .unwrap();
+    let mut input = request();
+    input.max_output_tokens = cap;
+    provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await
+}
+fn completed(events: &[Result<ProviderEvent, CoreError>]) -> &Value {
+    events
+        .iter()
+        .find_map(|event| match event {
+            Ok(ProviderEvent::Event { kind, data }) if kind == "run.message.completed" => {
+                Some(data)
+            }
+            _ => None,
+        })
+        .expect("completed event")
+}
+fn warning<'a>(events: &'a [Result<ProviderEvent, CoreError>], code: &str) -> Option<&'a str> {
+    events.iter().find_map(|event| match event {
+        Ok(ProviderEvent::Warning {
+            code: seen,
+            message,
+        }) if seen == code => Some(message.as_str()),
+        _ => None,
+    })
+}
+/// A server that stops mid-call at the output limit yet says `tool_calls`.
+fn cut_tool_call(usage: bool) -> String {
+    let mut frames = vec![
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write","arguments":"{\"content\":\"par"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ];
+    if usage {
+        frames.push(json!({"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":16,"total_tokens":21}}));
+    }
+    sse(&frames) + "data: [DONE]\n\n"
+}
+#[tokio::test]
+async fn chat_output_at_the_cap_is_reported_as_cut_off() {
+    let events = chat_events(cut_tool_call(true), Some(16)).await;
+    assert!(events.iter().all(Result::is_ok));
+    assert_eq!(completed(&events)["finishReason"], "length");
+    let message = warning(&events, "finish_normalized").expect("finish_normalized warning");
+    assert!(message.contains("tool_calls"), "{message}");
+    assert!(message.contains("16 tokens"), "{message}");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(ProviderEvent::ToolRequested(call)) if call.arguments_json == "{\"content\":\"par"
+    )));
+}
+#[tokio::test]
+async fn chat_finish_stays_when_the_cap_was_not_reached_or_is_unknown() {
+    for (stream, cap) in [
+        (cut_tool_call(true), Some(32)),
+        (cut_tool_call(true), None),
+        (cut_tool_call(false), Some(16)),
+    ] {
+        let events = chat_events(stream, cap).await;
+        assert!(events.iter().all(Result::is_ok));
+        assert_eq!(completed(&events)["finishReason"], "tool_calls", "{cap:?}");
+        assert!(warning(&events, "finish_normalized").is_none(), "{cap:?}");
+    }
+}
+#[tokio::test]
+async fn chat_answer_drops_leading_whitespace_only() {
+    let stream = sse(&[
+        json!({"choices":[{"delta":{"reasoning_content":"\n think "}}]}),
+        json!({"choices":[{"delta":{"content":"\n"}}]}),
+        json!({"choices":[{"delta":{"content":"\n  Hel"}}]}),
+        json!({"choices":[{"delta":{"content":"lo\n\nworld"},"finish_reason":"stop"}]}),
+    ]) + "data: [DONE]\n\n";
+    let events = chat_events(stream, None).await;
+    assert!(events.iter().all(Result::is_ok));
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ProviderEvent::Delta(delta)) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, ["Hel", "lo\n\nworld"]);
+    assert_eq!(deltas.concat(), "Hello\n\nworld");
+    assert_eq!(completed(&events)["content"], "Hello\n\nworld");
+    assert_eq!(completed(&events)["reasoningContent"], "\n think ");
+}
+#[tokio::test]
+async fn chat_whitespace_only_answer_with_a_tool_call_ends_empty() {
+    let stream = sse(&[
+        json!({"choices":[{"delta":{"content":"\n\n"}}]}),
+        json!({"choices":[{"delta":{"content":" ","tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ]) + "data: [DONE]\n\n";
+    let events = chat_events(stream, None).await;
+    assert!(events.iter().all(Result::is_ok));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Ok(ProviderEvent::Delta(_))))
+    );
+    let data = completed(&events);
+    assert_eq!(data["content"], "");
+    assert_eq!(data["toolCallCount"], 1);
+    assert_eq!(data["toolCalls"][0]["argumentsJson"], "{\"path\":\"a\"}");
+    assert_eq!(data["toolCalls"][0]["name"], "read");
+}
 struct FailingTransport;
 #[async_trait]
 impl TrustedTransport for FailingTransport {
