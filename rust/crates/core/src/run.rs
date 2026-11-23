@@ -187,9 +187,12 @@ struct State {
     step_salvaged: bool,
     /// The latest step's finish reason; empty for resumed calls.
     step_finish: String,
-    /// A call in the latest step failed for the third time with identical
-    /// arguments; the run ends once the step's results are recorded.
+    /// A call in the latest step failed with identical arguments in a third
+    /// separate model step; the run ends once the step's results are recorded.
     repeated_failure: bool,
+    /// Per identical call (`tool_record::call_identity`): the last step it
+    /// failed in and how many separate steps it failed in.
+    failed_steps: HashMap<(String, String), (u32, u32)>,
 }
 /// How long a terminal/usage event may wait for a full channel after the run
 /// was cancelled.
@@ -247,6 +250,7 @@ impl State {
             step_salvaged: false,
             step_finish: String::new(),
             repeated_failure: false,
+            failed_steps: HashMap::new(),
             options,
             sender,
         }
@@ -564,6 +568,18 @@ impl State {
         )
         .await?;
         Ok(Terminal::Completed)
+    }
+    /// Note that `call` failed in the current step and say whether it has now
+    /// failed in three separate model steps. Identical calls in one reply
+    /// count once, so the model has read the failure before it repeats.
+    fn failed_in_third_step(&mut self, call: &ToolCall) -> bool {
+        let key = crate::tool_record::call_identity(&call.name, &call.arguments_json);
+        let (last_step, steps) = self.failed_steps.entry(key).or_insert((0, 0));
+        if *last_step != self.iteration {
+            *last_step = self.iteration;
+            *steps += 1;
+        }
+        *steps >= 3
     }
     async fn provider_turn(
         &mut self,
@@ -1105,9 +1121,10 @@ impl State {
                 error_message: outcome.data["errorMessage"].as_str(),
             });
             // The class counts cancelled and skipped calls too; only a call
-            // the model's arguments decided may end the run.
-            if verdict.class == agentkit_contracts::AiToolOutcomeClass::RepeatIdentical
+            // the model's arguments decided counts toward ending the run.
+            if outcome.kind != "run.tool.succeeded"
                 && !crate::tool_record::outside_budget(outcome.data["errorCode"].as_str())
+                && self.failed_in_third_step(call)
             {
                 self.repeated_failure = true;
             }

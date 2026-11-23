@@ -83,6 +83,12 @@ pub(crate) fn outside_budget(code: Option<&str>) -> bool {
     )
 }
 
+/// What makes two calls identical for `repeat_identical`: the tool name and
+/// the exact arguments text.
+pub(crate) fn call_identity(tool: &str, arguments_json: &str) -> (String, String) {
+    (tool.to_string(), arguments_json.to_string())
+}
+
 impl ToolRecords {
     /// Classify a finished call and update the run's counters. Runs for every
     /// call, whether or not records are emitted, because the repair budget
@@ -106,7 +112,7 @@ impl ToolRecords {
         failure: Option<(Class, bool)>,
     ) -> Verdict {
         let tool = tool.to_string();
-        let key = (tool.clone(), arguments_json.to_string());
+        let key = call_identity(&tool, arguments_json);
         let prior = self.failures.get(&tool).copied().unwrap_or(0);
         let Some((base, spends)) = failure else {
             self.streaks.remove(&tool);

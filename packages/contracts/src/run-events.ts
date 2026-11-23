@@ -354,7 +354,7 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `tool_deferred` — As a warning: tools joined after the session's tool list was fixed and are in the deferred catalog (`data.tools`); with `data.reason: "visible_bound"`, tools the model profile's visible-tool bound had no room for (at the freeze, or a toolset promotion refused at a turn boundary, `data.toolset`) stay deferred and are run with `tool_call`. As an `errorCode`: a call named a deferred tool directly; the message says to use `tool_call`.
  * - `tool_unavailable` — As a warning: tools in the session's frozen tool list are not offered by any contributor this turn (`data.tools`). As an `errorCode`: a call named a tool that is not available now.
  * - `tool_name_collision` — More than one tool would be offered under the same name in the session's dialect; only the first is in the tool list. `data.tools` names them.
- * - `repeated_failure` — A tool call failed for the third time with identical arguments (cancelled calls and calls skipped by a cap or budget do not count). The run completed after that step's results with `finishReason: "repeated_failure"` instead of asking the model again.
+ * - `repeated_failure` — A tool call failed with identical arguments in three separate model steps (identical calls in one step count once; cancelled calls and calls skipped by a cap or budget do not count). The run completed after that step's results with `finishReason: "repeated_failure"` instead of asking the model again.
  * - `finish_normalized` — The server reported a finish reason other than `length`, but the output reached the max-output-token limit, so the turn is treated as cut off (`length`). The message names the reported reason and the limit.
  * - `quoted_call_refused` — A tool call was not run because it is identical to a tool-call block in content read during the current turn (tool output or host-attached turn context), so it looks like quoted data a server turned into a call. The message names the tool, never its arguments. The call's `run.tool.failed` carries `errorCode: "quoted_call"` (phase `guard`, not retryable). Output of earlier turns does not count, so the user can confirm the action in a new message. Not checked: a block split across two outputs, approved calls resumed after a human decision, and what a parent run read (for its child run).
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
@@ -854,8 +854,8 @@ export const AiRunCompletedEventSchema = Type.Object({
      * the loop's own — `"max_iterations"` (budget spent), `"incomplete"` (the
      * stream was cut before the provider said why; never normalized to
      * `"stop"`, which would claim an answer that never finished),
-     * `"repeated_failure"` (a tool call failed three times with identical
-     * arguments, so the model was not asked again).
+     * `"repeated_failure"` (a tool call failed with identical arguments in
+     * three separate model steps, so the model was not asked again).
      */
     finishReason: Type.Optional(Type.String()),
   }),

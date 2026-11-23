@@ -1,5 +1,6 @@
-//! A tool call that fails three times with identical arguments ends the run
-//! (`finishReason: "repeated_failure"`) once its step's results are recorded.
+//! A tool call that fails with identical arguments in three separate model
+//! steps ends the run (`finishReason: "repeated_failure"`) once that step's
+//! results are recorded.
 use agentkit_core::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -168,28 +169,51 @@ async fn three_identical_failures_across_steps_end_the_run() {
 }
 
 #[tokio::test]
-async fn three_identical_failures_in_one_step_end_the_run_after_that_step() {
+async fn identical_failures_in_one_step_count_once_and_the_model_is_asked_again() {
     let outcome = run(
-        vec![vec![
-            call("c1", "edit_file", "{}"),
-            call("c2", "edit_file", "{}"),
-            call("c3", "edit_file", "{}"),
-        ]],
+        vec![
+            (1..=4)
+                .map(|n| call(&format!("c{n}"), "edit_file", "{}"))
+                .collect(),
+        ],
         8,
     )
     .await;
-    assert_eq!(outcome.requests, 1);
-    assert!(outcome.stopped());
-    assert_eq!(outcome.finish(), "repeated_failure");
-    // Every call of the step is still answered, in order.
+    // Every call of the step is answered, in order, and the model reads them.
     let answered: Vec<&str> = outcome
         .messages
         .iter()
         .filter(|message| message.role == "tool")
         .map(|message| message.tool_call_id.as_deref().unwrap())
         .collect();
-    assert_eq!(answered, ["c1", "c2", "c3"]);
-    assert_eq!(outcome.of("run.tool.failed").len(), 3);
+    assert_eq!(answered, ["c1", "c2", "c3", "c4"]);
+    assert_eq!(outcome.of("run.tool.failed").len(), 4);
+    assert_eq!(outcome.requests, 2);
+    assert!(!outcome.stopped());
+    assert_eq!(outcome.finish(), "stop");
+}
+
+#[tokio::test]
+async fn identical_failures_end_the_run_in_the_third_separate_step() {
+    let outcome = run(
+        vec![
+            vec![call("c1", "edit_file", "{}"), call("c2", "edit_file", "{}")],
+            vec![call("c3", "edit_file", "{}")],
+            vec![call("c4", "edit_file", "{}")],
+            vec![call("c5", "read_file", r#"{"file_path":"a"}"#)],
+        ],
+        8,
+    )
+    .await;
+    assert_eq!(
+        outcome.requests, 3,
+        "step 2 does not end the run, step 3 does"
+    );
+    assert_eq!(outcome.of("run.tool.failed").len(), 4);
+    assert!(outcome.stopped());
+    let completed = outcome.of("run.completed");
+    assert_eq!(completed[0]["finishReason"], "repeated_failure");
+    assert_eq!(completed[0]["iterations"], 3);
 }
 
 #[tokio::test]
