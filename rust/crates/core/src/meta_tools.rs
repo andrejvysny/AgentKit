@@ -21,6 +21,8 @@ use std::sync::Arc;
 const DEFAULT_LIMIT: usize = 5;
 const MAX_LIMIT: usize = 8;
 const SUMMARY_CHARS: usize = 160;
+const LIMIT_ENUM_VALUES: usize = 8;
+const LIMIT_ENUM_CHARS: usize = 24;
 
 fn definition(name: &str, description: &str, schema: Value, example: Value) -> ToolDefinition {
     ToolDefinition {
@@ -259,10 +261,57 @@ fn compact(entry: &CatalogEntry) -> Value {
         "effect": definition.effect,
         "params": params,
     });
+    if let Some(limits) = parameter_limits(&definition.input_schema) {
+        value["limits"] = limits;
+    }
     if !entry.available {
         value["available"] = false.into();
     }
     value
+}
+
+/// Allowed values and numeric bounds of the top-level parameters, so a model
+/// calling through `tool_call` does not guess them; `None` when no parameter
+/// has any.
+fn parameter_limits(schema: &Value) -> Option<Value> {
+    let limits: serde_json::Map<String, Value> = schema["properties"]
+        .as_object()?
+        .iter()
+        .filter_map(|(name, property)| Some((name.clone(), limit_of(property)?.into())))
+        .collect();
+    (!limits.is_empty()).then_some(Value::Object(limits))
+}
+
+fn limit_of(property: &Value) -> Option<String> {
+    if let Some(values) = short_enum(property) {
+        return Some(values);
+    }
+    match (
+        property["minimum"].as_number(),
+        property["maximum"].as_number(),
+    ) {
+        (Some(min), Some(max)) => Some(format!("{min}..{max}")),
+        (None, Some(max)) => Some(format!("max {max}")),
+        (Some(min), None) => Some(format!("min {min}")),
+        (None, None) => None,
+    }
+}
+
+/// An enum short enough to list: a few short strings, joined by `|`.
+fn short_enum(property: &Value) -> Option<String> {
+    let values = property["enum"].as_array()?;
+    if values.is_empty() || values.len() > LIMIT_ENUM_VALUES {
+        return None;
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|text| text.chars().count() <= LIMIT_ENUM_CHARS)
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|texts| texts.join("|"))
 }
 
 fn search(

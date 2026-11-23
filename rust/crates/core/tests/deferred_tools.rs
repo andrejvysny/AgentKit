@@ -384,6 +384,79 @@ async fn tool_search_ranks_name_over_parameters_over_description() {
     assert!(first.get("input_schema").is_none(), "entries are compact");
 }
 
+/// The compact entries `tool_search` returns for `query`.
+async fn search_matches(registry: ToolRegistry, query: &str) -> Vec<Value> {
+    let found = run(
+        registry,
+        vec![call("s1", "tool_search", json!({"query": query}))],
+    )
+    .await;
+    let result = &found.of("run.tool.succeeded")[0];
+    let model: Value = serde_json::from_str(result["modelResultJson"].as_str().unwrap()).unwrap();
+    model["data"]["matches"].as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn tool_search_shows_short_enums_and_numeric_bounds_as_limits() {
+    let ran = Ran::default();
+    let many: Vec<String> = (1..=9).map(|n| format!("v{n}")).collect();
+    let bounded: ToolDefinition = serde_json::from_value(json!({
+        "name": "shell_run", "version": "1", "effect": "read", "capability": "shell.read",
+        "description": "Run a shell job.",
+        "inputSchema": {"type": "object", "required": ["mode"], "properties": {
+            "mode": {"type": "string", "enum": ["fast", "slow"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 8},
+            "depth": {"type": "integer", "maximum": 5},
+            "offset": {"type": "integer", "minimum": 0},
+            "many": {"type": "string", "enum": many},
+            "long": {"type": "string", "enum": ["a", "x".repeat(25)]},
+            "numeric": {"type": "integer", "enum": [1, 2]},
+            "query": {"type": "string"},
+            "nested": {"type": "object", "properties": {"n": {"type": "integer", "maximum": 3}}}
+        }}
+    }))
+    .unwrap();
+    let mut tools = catalog_tools(&ran);
+    tools.push(Arc::new(Echo {
+        definition: bounded,
+        ran: ran.clone(),
+        loading: ToolLoading::Direct,
+        refused: Ran::default(),
+    }));
+    let direct = classification(&["read_file"]);
+    let (registry, surface) = session(tools, &direct, None);
+    let matches = search_matches(registry, "shell").await;
+    let entry = &matches[0];
+    assert_eq!(entry["name"], "shell_run");
+    assert_eq!(
+        entry["limits"],
+        json!({"mode": "fast|slow", "limit": "1..8", "depth": "max 5", "offset": "min 0"})
+    );
+    assert_eq!(
+        entry["params"],
+        json!([
+            "mode*", "limit", "depth", "offset", "many", "long", "numeric", "query", "nested"
+        ])
+    );
+    // The prompt index is built separately and does not carry limits.
+    let index = surface.index().expect("an index");
+    assert!(
+        !index.contains("1..8") && !index.contains("fast|slow"),
+        "{index}"
+    );
+}
+
+#[tokio::test]
+async fn tool_search_omits_limits_when_no_parameter_has_any() {
+    let ran = Ran::default();
+    let (registry, _) = session(catalog_tools(&ran), &classification(&["read_file"]), None);
+    let matches = search_matches(registry, "calendar").await;
+    assert_eq!(matches.len(), 2);
+    for entry in &matches {
+        assert!(entry.get("limits").is_none(), "{entry}");
+    }
+}
+
 #[test]
 fn search_limit_namespace_and_ties() {
     let ran = Ran::default();
