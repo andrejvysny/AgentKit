@@ -81,7 +81,7 @@ function parseNonStream(
   const message = asObject(choice.message) ?? {};
   return {
     content: str(message.content) ?? "",
-    reasoning: str(message.reasoning_content) ?? "",
+    reasoning: str(message.reasoning_content) ?? str(message.reasoning) ?? "",
     toolCalls: readToolCalls(message.tool_calls, anomalies),
     finishReason: str(choice.finish_reason),
     usage: asObject(body.usage),
@@ -114,7 +114,7 @@ function applyDelta(
     state.content += content;
     produced = true;
   }
-  const reasoning = str(delta.reasoning_content);
+  const reasoning = str(delta.reasoning_content) ?? str(delta.reasoning);
   if (reasoning) {
     state.reasoning += reasoning;
     produced = true;
@@ -304,6 +304,13 @@ export const DEFAULT_MODEL =
 /** Result folder root: EVAL_OUT if set, else ./eval-results in the current directory. */
 export function outRoot(): string {
   return process.env.EVAL_OUT ?? "eval-results";
+}
+
+/** Thinking tokens from usage.completion_tokens_details.reasoning_tokens, when the server reports them. */
+export function reasoningTokens(usage: JsonObject | null): number | null {
+  const details = asObject(usage?.completion_tokens_details);
+  const n = details?.reasoning_tokens;
+  return typeof n === "number" ? n : null;
 }
 
 export function parseArgs(call: ToolCall): JsonObject | null {

@@ -22,13 +22,20 @@ export interface ProbeCase {
   check: (completion: Completion) => Verdict;
   modes?: ("stream" | "nonstream")[];
   repeats?: number;
+  /** When set, the runner reports the case as skipped with this reason and sends nothing. */
+  skip?: string;
 }
 
-const ok = (detail = "ok"): Verdict => ({ pass: true, detail });
-const fail = (detail: string): Verdict => ({ pass: false, detail });
-const user = (content: string): JsonObject => ({ role: "user", content });
+export const ok = (detail = "ok"): Verdict => ({ pass: true, detail });
+export const fail = (detail: string): Verdict => ({ pass: false, detail });
+export const httpFail = (c: Completion): Verdict =>
+  fail(`http ${c.status}: ${(c.errorBody ?? "").slice(0, 200)}`);
+export const user = (content: string): JsonObject => ({
+  role: "user",
+  content,
+});
 
-const weatherSchema: JsonObject = {
+export const weatherSchema: JsonObject = {
   type: "object",
   properties: {
     city: { type: "string" },
@@ -37,7 +44,7 @@ const weatherSchema: JsonObject = {
   required: ["city"],
   additionalProperties: false,
 };
-const weather = tool(
+export const weather = tool(
   "get_weather",
   "Get current weather for one city.",
   weatherSchema,
@@ -96,13 +103,13 @@ const memoryPropose = tool(
   memorySchema,
 );
 
-const writeFileSchema: JsonObject = {
+export const writeFileSchema: JsonObject = {
   type: "object",
   properties: { path: { type: "string" }, content: { type: "string" } },
   required: ["path", "content"],
   additionalProperties: false,
 };
-const writeFile = tool(
+export const writeFile = tool(
   "write_file",
   "Create or overwrite a file with the given content.",
   writeFileSchema,
@@ -154,7 +161,7 @@ const catalog: Json[] = catalogNames.map((name) =>
   }),
 );
 
-function singleCall(
+export function singleCall(
   completion: Completion,
   name: string,
   schema: JsonObject,
@@ -182,7 +189,11 @@ function singleCall(
 const tricky = String.raw`print("tab\there", 'quote"s', r"C:\new\table")`;
 const slovak = "Žltý kôň úpel ďábelské ódy – 12 € za „čaj“";
 
-function filler(tokens: number, needle: string, position: number): string {
+export function filler(
+  tokens: number,
+  needle: string,
+  position: number,
+): string {
   // The needle sits at `position` (0..1) of the document.
   // Measured on Qwen: one filler line is about 21.6 tokens.
   const lines = Math.round(tokens / 21.6);

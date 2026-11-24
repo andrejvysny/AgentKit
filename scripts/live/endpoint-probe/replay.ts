@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Replay one recorded OneMind request at the endpoint N times, unchanged or with one change,
 // to see whether a failure is stable and whether a setting OneMind controls moves its rate.
-// bun scripts/live/endpoint-probe/replay.ts <NNNNN-request.json> [--repeats 10] [--set '{"temperature":0.7}'] [--label name] [--model id]
+// bun scripts/live/endpoint-probe/replay.ts <NNNNN-request.json> [--repeats 10] [--set '{"temperature":0.7}'] [--label name] [--model id] [--timeout-sec 300] [--out dir]
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
@@ -35,6 +35,7 @@ const label = flag(
   Object.keys(override).length ? "changed" : "unchanged",
 );
 const repeats = Number(flag("repeats", "10"));
+const timeoutMs = Number(flag("timeout-sec", "300")) * 1000;
 const model = flag(
   "model",
   typeof body.model === "string" ? body.model : DEFAULT_MODEL,
@@ -61,7 +62,15 @@ const bump = (key: string) => {
   tally[key] = (tally[key] ?? 0) + 1;
 };
 for (let trial = 0; trial < repeats; trial += 1) {
-  const response = await complete(endpoint, request, true, 300_000);
+  let response: Awaited<ReturnType<typeof complete>>;
+  try {
+    response = await complete(endpoint, request, true, timeoutMs);
+  } catch (error) {
+    // A slow or dropped trial is counted, not fatal: the other trials still say something.
+    bump("transport_error");
+    appendJsonl(tracePath, { trial, error: String(error).slice(0, 200) });
+    continue;
+  }
   const names = response.toolCalls.map((call) => call.name ?? "?");
   bump(
     names.length

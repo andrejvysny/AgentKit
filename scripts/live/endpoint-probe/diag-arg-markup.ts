@@ -68,6 +68,19 @@ const writeFile = tool("write_file", "Write text to a file.", {
   required: ["path", "content"],
 });
 
+// A thinking model can spend minutes on the 200-line variant; one slow trial must not end the run.
+async function attempt(
+  request: JsonObject,
+  stream: boolean,
+): Promise<Awaited<ReturnType<typeof complete>> | null> {
+  try {
+    return await complete(endpoint, request, stream, 900_000);
+  } catch (error) {
+    console.log(`  transport error: ${String(error).slice(0, 120)}`);
+    return null;
+  }
+}
+
 const table: JsonObject[] = [];
 for (const [name, text] of Object.entries(variants)) {
   const messages = [
@@ -81,13 +94,14 @@ for (const [name, text] of Object.entries(variants)) {
     trials: repeats,
     parsedCall: 0,
     parsedExact: 0,
+    parsedExactBody: 0,
+    transportErrors: 0,
     rawHasCall: 0,
     finish: {} as Record<string, number>,
   };
   for (let trial = 0; trial < repeats; trial += 1) {
     for (const stream of [true, false]) {
-      const parsed = await complete(
-        endpoint,
+      const parsed = await attempt(
         {
           messages,
           tools: [writeFile],
@@ -96,11 +110,18 @@ for (const [name, text] of Object.entries(variants)) {
         },
         stream,
       );
+      if (!parsed) {
+        row.transportErrors += 1;
+        continue;
+      }
       const got = parsed.toolCalls[0]
         ? parseArgs(parsed.toolCalls[0])?.content
         : undefined;
       if (parsed.toolCalls.length) row.parsedCall += 1;
       if (got === text) row.parsedExact += 1;
+      // The closing marker sits on its own line, so one trailing newline is a fair reading.
+      const exactBody = got === text || got === `${text}\n`;
+      if (exactBody) row.parsedExactBody += 1;
       row.finish[String(parsed.finishReason)] =
         (row.finish[String(parsed.finishReason)] ?? 0) + 1;
       appendJsonl(tracePath, {
@@ -109,14 +130,18 @@ for (const [name, text] of Object.entries(variants)) {
         kind: "parsed",
         stream,
         exact: got === text,
+        exactBody,
         response: parsed as unknown as JsonObject,
       });
     }
-    const raw = await complete(
-      endpoint,
+    const raw = await attempt(
       { messages, tools: [writeFile], tool_choice: "none", max_tokens: 16000 },
       false,
     );
+    if (!raw) {
+      row.transportErrors += 1;
+      continue;
+    }
     if (
       raw.content.includes("<tool_call>") ||
       raw.content.includes("<function=")
@@ -132,7 +157,7 @@ for (const [name, text] of Object.entries(variants)) {
   }
   table.push({ ...row, parsedTrials: repeats * 2 });
   console.log(
-    `${name}: parsed call ${row.parsedCall}/${repeats * 2}, exact text ${row.parsedExact}/${repeats * 2}, raw text shows a call ${row.rawHasCall}/${repeats}, finish ${JSON.stringify(row.finish)}`,
+    `${name}: parsed call ${row.parsedCall}/${repeats * 2}, exact text ${row.parsedExact}/${repeats * 2} (${row.parsedExactBody} allowing one trailing newline), transport errors ${row.transportErrors}, raw text shows a call ${row.rawHasCall}/${repeats}, finish ${JSON.stringify(row.finish)}`,
   );
 }
 writeFileSync(

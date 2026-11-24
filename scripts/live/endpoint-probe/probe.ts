@@ -3,7 +3,8 @@
 // Needs AGENTKIT_LIVE_BASE_URL and AGENTKIT_LIVE_API_KEY (or LITELLM_*) in the environment. Keys are never written to disk.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cases } from "./cases";
+import { cases, type ProbeCase } from "./cases";
+import { templateCases } from "./cases-template";
 import {
   appendJsonl,
   complete,
@@ -22,15 +23,49 @@ function flag(name: string, fallback: string): string {
 const model = flag("model", DEFAULT_MODEL);
 const repeats = Number(flag("repeats", "5"));
 const only = flag("only", "").split(",").filter(Boolean);
+const caseSet = process.env.AGENTKIT_LIVE_CASE_SET ?? "base";
+if (!["base", "template", "all"].includes(caseSet))
+  throw new Error(
+    `AGENTKIT_LIVE_CASE_SET must be base, template or all, got ${caseSet}`,
+  );
+// A non-base set gets its own folder so it never overwrites a base run in the same EVAL_OUT.
 const outDir = flag(
   "out",
-  join(outRoot(), "probe", model.replace(/[^\w.-]/g, "_")),
+  join(
+    outRoot(),
+    caseSet === "base" ? "probe" : `probe-${caseSet}`,
+    model.replace(/[^\w.-]/g, "_"),
+  ),
 );
 mkdirSync(outDir, { recursive: true });
 const tracePath = join(outDir, "trials.jsonl");
 writeFileSync(tracePath, "");
 
 const endpoint = endpointFromEnv(model);
+
+async function fetchMaxModelLen(): Promise<number | null> {
+  try {
+    const response = await fetch(`${endpoint.baseUrl}/models`, {
+      headers: { authorization: `Bearer ${endpoint.apiKey}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = (await response.json()) as { data?: JsonObject[] };
+    const entry = body.data?.find((m) => m.id === model) ?? body.data?.[0];
+    return typeof entry?.max_model_len === "number"
+      ? entry.max_model_len
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const selected: ProbeCase[] =
+  caseSet === "base"
+    ? cases
+    : [
+        ...(caseSet === "all" ? cases : []),
+        ...templateCases({ maxModelLen: await fetchMaxModelLen() }),
+      ];
 interface Row {
   id: string;
   what: string;
@@ -48,8 +83,12 @@ const bump = (bag: Record<string, number>, key: string) => {
   bag[key] = (bag[key] ?? 0) + 1;
 };
 
-for (const probe of cases) {
+for (const probe of selected) {
   if (only.length && !only.includes(probe.id)) continue;
+  if (probe.skip) {
+    console.log(`SKIP ${probe.id} ${probe.skip}`);
+    continue;
+  }
   for (const mode of probe.modes ?? ["stream", "nonstream"]) {
     const row: Row = {
       id: probe.id,
