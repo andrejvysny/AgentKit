@@ -34,4 +34,5 @@ pub fn agentkit_kernel::SystemRuntime::random(&self) -> f64
 pub fn agentkit_kernel::SystemRuntime::timestamp(&self) -> alloc::string::String
 pub fn agentkit_kernel::canonical_json(&serde_json::value::Value) -> alloc::string::String
 pub fn agentkit_kernel::canonical_sha256(&serde_json::value::Value) -> alloc::string::String
+pub fn agentkit_kernel::is_blocked(core::net::ip_addr::IpAddr) -> bool
 pub fn agentkit_kernel::sha256_hex(impl core::convert::AsRef<[u8]>) -> alloc::string::String

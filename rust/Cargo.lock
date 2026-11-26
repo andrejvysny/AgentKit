@@ -688,6 +688,7 @@ dependencies = [
  "agentkit-core",
  "agentkit-engine",
  "agentkit-governance",
+ "agentkit-kernel",
  "agentkit-sessions",
  "agentkit-store",
  "async-trait",

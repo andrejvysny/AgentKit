@@ -6,11 +6,13 @@
 
 mod canonical;
 mod hash;
+mod net;
 mod runtime;
 mod timestamp;
 
 pub use canonical::{canonical_json, canonical_sha256};
 pub use hash::sha256_hex;
+pub use net::is_blocked;
 pub use runtime::Runtime;
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::SystemRuntime;
