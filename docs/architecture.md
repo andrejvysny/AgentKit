@@ -36,6 +36,7 @@ rules (R1–R13) over `cargo metadata`; violations live in
 |---|---|---|
 | 1 | `agentkit-kernel` | SHA-256 hex, canonical JSON, and the single `Runtime` clock/identity port shared by every layer |
 | 1 | `agentkit-contracts` | Wire DTOs, JSON Schema bundle with offline validation, REST route table, identity hashing |
+| 1 | `agentkit-sandbox-proto` | Track B sandbox wire protocol: frame codec, guest and launcher messages ([ADR 0039](adr/0039-sandbox-track-b-server-backend.md)); no async runtime |
 | 2 | `agentkit-core` | Model/tool loop and its ports: provider streams, bounded tool execution, budgets |
 | 2 | `agentkit-governance` | Ports only: tool guards, approvals, execution authority, receipts, proposals |
 | 2 | `agentkit-native` | Versioned execution contracts, capability policy and injected ports for vendor agent runtimes ([ADR 0025](adr/0025-claude-code-native-backend-contracts.md)); also declares the native-lane ports `AttemptBrokerHandle` and `NativeRunRepository` (ADR 0024 addendum) |
@@ -50,6 +51,10 @@ rules (R1–R13) over `cargo metadata`; violations live in
 | 4 | `agentkit-providers` | Concrete LLM provider adapters and provider HTTP plumbing |
 | 4 | `agentkit-toolpacks-coding` | Confined coding tools: filesystem read/search/edit, read-only git, sandboxed commands |
 | 4 | `agentkit-toolpacks-sandbox` | Sandbox tool pack over `agentkit-workspaces`: the six `sandbox` tools, their guide and `SandboxPermissionGuard`, with the host ports `SandboxBindingResolver` and `SandboxExportSink` ([ADR 0038](adr/0038-agent-sandbox-workspaces.md)) |
+| 4 | `agentkit-sandboxd` | Guest supervisor binary (PID 1 of a sandbox container): commands, file operations, process sweep, egress shim ([ADR 0039](adr/0039-sandbox-track-b-server-backend.md)) |
+| 4 | `agentkit-egress` | Host-side CONNECT proxy, one unix socket per sandbox machine, grants by host and port, public-address rules from `agentkit-kernel` (ADR 0039) |
+| 4 | `agentkit-sandbox-launcher` | Fixed-template container launcher service; the only holder of the Docker or Podman socket (ADR 0039) |
+| 4 | `agentkit-sandbox-container` | Track B server `SandboxBackend` over the launcher, the guest channel and the egress proxy (ADR 0039) |
 | 4 | `agentkit-lsp` | LSP client, language-server lifecycle, code-intelligence tools |
 | 4 | `agentkit-mcp` | MCP client and server transports on `rmcp` |
 | 4 | `agentkit-connections` | App-scoped connections, consent, secret-store and network ports |

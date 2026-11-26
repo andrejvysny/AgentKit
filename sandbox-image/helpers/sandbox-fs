@@ -1,0 +1,371 @@
+#!/usr/bin/python3 -I
+"""sandbox-fs: file helpers of the agent sandbox image.
+
+    sandbox-fs write --path P --sha256 HEX --size N [--mode 0644] [--cwd DIR]  < data
+    sandbox-fs read  --path P [--offset N] [--limit N] [--cwd DIR]             > data
+    sandbox-fs list  --path P [--depth N] [--limit N] [--cwd DIR]              > JSON lines
+
+Paths live under one of two roots, /workspace and /home/agent; a relative
+path is taken against --cwd (default /workspace). Resolution walks one
+component at a time from an open root descriptor with O_NOFOLLOW, so no
+path string is ever handed to the kernel whole:
+
+- `..` moves to the parent descriptor and is refused above the root.
+- A symlink is followed only when its target stays inside a root: a
+  relative target is walked from the link's directory, an absolute one
+  must start with /workspace or /home/agent and is walked from that root.
+  Anything else is refused as symlink_escape. At most 40 links per path.
+- write never follows a symlink at the final name: the atomic rename
+  replaces the link itself.
+
+write streams stdin into a temp file in the target directory, checks size
+and SHA-256, then fsyncs and renames over the target. On any mismatch the
+temp file is removed and the target is untouched. Missing parent
+directories are created (and stay if the write is refused).
+
+read prints raw bytes on stdout and a JSON line on stderr:
+{"size", "offset", "returned", "eof"}. Only regular files are read.
+
+list prints one JSON object per entry, depth-first in name order, never
+descending into symlinks, then {"summary": {"count", "truncated"}}.
+
+Errors: one JSON line on stderr {"error": code, "message"}, exit 2 for a
+refusal, 1 for an I/O error. Codes: invalid_path, outside_roots,
+path_escape, symlink_escape, too_many_links, not_found, not_a_directory,
+not_a_file, is_a_directory, size_mismatch, hash_mismatch, io_error.
+(invalid_path also covers malformed arguments such as --mode or --sha256.)
+"""
+
+import argparse
+import errno
+import hashlib
+import json
+import os
+import secrets
+import stat
+import sys
+
+sys.path.insert(0, "/usr/local/lib/sandbox")
+from sandboxlib import fail  # noqa: E402
+
+ROOTS = ("/workspace", "/home/agent")
+MAX_LINKS = 40
+CHUNK = 1 << 16
+O_DIR_PATH = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+class Refused(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def match_root(path):
+    """Split an absolute path into (root, components) or None."""
+    for root in ROOTS:
+        if path == root or path.startswith(root + "/"):
+            return root, [c for c in path[len(root):].split("/") if c not in ("", ".")]
+    return None
+
+
+def split_path(path, cwd):
+    if not path or "\0" in path:
+        raise Refused("invalid_path", "empty path or NUL byte")
+    if not path.startswith("/"):
+        path = cwd.rstrip("/") + "/" + path
+    found = match_root(path)
+    if found is None:
+        raise Refused("outside_roots", "path is not under /workspace or /home/agent")
+    return found
+
+
+class Walk:
+    """A stack of O_PATH directory descriptors from a root downwards."""
+
+    def __init__(self, root):
+        self.stack = [os.open(root, O_DIR_PATH)]
+
+    @property
+    def fd(self):
+        return self.stack[-1]
+
+    def reset(self, root):
+        self.close()
+        self.stack = [os.open(root, O_DIR_PATH)]
+
+    def close(self):
+        for fd in self.stack:
+            os.close(fd)
+        self.stack = []
+
+
+def resolve(path, cwd, follow_last, create_dirs=False):
+    """Return (walk, name): name is the last component inside walk.fd, or
+    None when the path is a root itself. The caller closes the walk."""
+    root, pending = split_path(path, cwd)
+    walk = Walk(root)
+    links = 0
+    try:
+        while pending:
+            comp = pending.pop(0)
+            if comp in ("", "."):
+                continue
+            if comp == "..":
+                if len(walk.stack) == 1:
+                    raise Refused("path_escape", "'..' leaves the root")
+                os.close(walk.stack.pop())
+                continue
+            last = not pending
+            try:
+                fd = os.open(comp, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=walk.fd)
+            except FileNotFoundError:
+                if last:
+                    return walk, comp
+                if not create_dirs:
+                    raise Refused("not_found", "no such directory: %s" % comp)
+                try:
+                    os.mkdir(comp, 0o755, dir_fd=walk.fd)
+                except FileExistsError:
+                    pass
+                fd = os.open(comp, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=walk.fd)
+            mode = os.fstat(fd).st_mode
+            if stat.S_ISLNK(mode):
+                os.close(fd)
+                if last and not follow_last:
+                    return walk, comp
+                links += 1
+                if links > MAX_LINKS:
+                    raise Refused("too_many_links", "more than %d symlinks" % MAX_LINKS)
+                target = os.readlink(comp, dir_fd=walk.fd)
+                if target.startswith("/"):
+                    found = match_root(target)
+                    if found is None:
+                        raise Refused("symlink_escape", "symlink %s points outside the roots" % comp)
+                    walk.reset(found[0])
+                    pending = found[1] + pending
+                else:
+                    pending = target.split("/") + pending
+                continue
+            if last:
+                os.close(fd)
+                return walk, comp
+            if not stat.S_ISDIR(mode):
+                os.close(fd)
+                raise Refused("not_a_directory", "%s is not a directory" % comp)
+            walk.stack.append(fd)
+        return walk, None
+    except BaseException:
+        walk.close()
+        raise
+
+
+def write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+def cmd_write(a):
+    expected = a.sha256.lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise Refused("invalid_path", "--sha256 must be 64 hex digits")
+    if a.size < 0:
+        raise Refused("size_mismatch", "--size must be non-negative")
+    mode = int(a.mode, 8) & 0o777
+    walk, name = resolve(a.path, a.cwd, follow_last=False, create_dirs=True)
+    try:
+        if name is None:
+            raise Refused("is_a_directory", "cannot write a root")
+        try:
+            if stat.S_ISDIR(os.stat(name, dir_fd=walk.fd, follow_symlinks=False).st_mode):
+                raise Refused("is_a_directory", "%s is a directory" % name)
+        except FileNotFoundError:
+            pass
+        tmp = ".sandbox-write-%s.tmp" % secrets.token_hex(8)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+        fd = os.open(tmp, flags, 0o600, dir_fd=walk.fd)
+        try:
+            digest, size = copy_stdin(fd, a.size)
+            if size != a.size:
+                raise Refused("size_mismatch", "expected %d bytes, got %d" % (a.size, size))
+            if digest != expected:
+                raise Refused("hash_mismatch", "expected sha256 %s, got %s" % (expected, digest))
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            os.rename(tmp, name, src_dir_fd=walk.fd, dst_dir_fd=walk.fd)
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            try:
+                os.unlink(tmp, dir_fd=walk.fd)
+            except FileNotFoundError:
+                pass
+            raise
+        dfd = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=walk.fd)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    finally:
+        walk.close()
+    print(json.dumps({"path": a.path, "size": size, "sha256": digest}))
+
+
+def copy_stdin(fd, limit):
+    """Copy stdin into fd; stop reading one byte past limit."""
+    h = hashlib.sha256()
+    size = 0
+    src = sys.stdin.buffer
+    while True:
+        chunk = src.read(min(CHUNK, limit + 1 - size))
+        if not chunk:
+            break
+        size += len(chunk)
+        h.update(chunk)
+        write_all(fd, chunk)
+        if size > limit:
+            break
+    return h.hexdigest(), size
+
+
+def open_final(walk, name, flags):
+    try:
+        return os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=walk.fd)
+    except FileNotFoundError:
+        raise Refused("not_found", "no such file: %s" % name) from None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise Refused("symlink_escape", "%s changed to a symlink" % name) from None
+        if exc.errno == errno.ENOTDIR:
+            raise Refused("not_a_directory", "%s is not a directory" % name) from None
+        raise
+
+
+def cmd_read(a):
+    if a.offset < 0 or a.limit < 0:
+        raise Refused("invalid_path", "offset and limit must be non-negative")
+    walk, name = resolve(a.path, a.cwd, follow_last=True)
+    try:
+        if name is None:
+            raise Refused("not_a_file", "a root is a directory")
+        fd = open_final(walk, name, os.O_RDONLY | os.O_NONBLOCK)
+    finally:
+        walk.close()
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused("not_a_file", "%s is not a regular file" % name)
+        os.set_blocking(fd, True)
+        returned = 0
+        out = sys.stdout.buffer
+        while returned < a.limit:
+            chunk = os.pread(fd, min(CHUNK, a.limit - returned), a.offset + returned)
+            if not chunk:
+                break
+            out.write(chunk)
+            returned += len(chunk)
+        out.flush()
+    finally:
+        os.close(fd)
+    eof = a.offset + returned >= st.st_size
+    sys.stderr.write(json.dumps({"size": st.st_size, "offset": a.offset,
+                                 "returned": returned, "eof": eof}) + "\n")
+
+
+def entry_type(mode):
+    if stat.S_ISREG(mode):
+        return "file"
+    if stat.S_ISDIR(mode):
+        return "dir"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "other"
+
+
+def list_dir(dfd, prefix, depth, state):
+    for name in sorted(os.listdir(dfd)):
+        if state["count"] >= state["limit"]:
+            state["truncated"] = True
+            return
+        try:
+            st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        entry = {"path": prefix + name, "type": entry_type(st.st_mode), "size": st.st_size,
+                 "mode": "%04o" % stat.S_IMODE(st.st_mode), "mtime": int(st.st_mtime)}
+        if stat.S_ISLNK(st.st_mode):
+            entry["target"] = os.readlink(name, dir_fd=dfd)
+        print(json.dumps(entry))
+        state["count"] += 1
+        if stat.S_ISDIR(st.st_mode) and depth > 1:
+            try:
+                sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+            except OSError:
+                continue
+            try:
+                list_dir(sub, prefix + name + "/", depth - 1, state)
+            finally:
+                os.close(sub)
+
+
+def cmd_list(a):
+    if a.depth < 1 or a.limit < 0:
+        raise Refused("invalid_path", "depth must be >= 1, limit >= 0")
+    walk, name = resolve(a.path, a.cwd, follow_last=True)
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY
+        if name is None:
+            dfd = os.open(".", flags | os.O_CLOEXEC, dir_fd=walk.fd)
+        else:
+            dfd = open_final(walk, name, flags)
+    finally:
+        walk.close()
+    state = {"count": 0, "limit": a.limit, "truncated": False}
+    try:
+        list_dir(dfd, "", a.depth, state)
+    finally:
+        os.close(dfd)
+    print(json.dumps({"summary": {"count": state["count"], "truncated": state["truncated"]}}))
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(prog="sandbox-fs")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    w = sub.add_parser("write")
+    w.add_argument("--sha256", required=True)
+    w.add_argument("--size", type=int, required=True)
+    w.add_argument("--mode", default="0644")
+    r = sub.add_parser("read")
+    r.add_argument("--offset", type=int, default=0)
+    r.add_argument("--limit", type=int, default=1 << 20)
+    ls = sub.add_parser("list")
+    ls.add_argument("--depth", type=int, default=1)
+    ls.add_argument("--limit", type=int, default=1000)
+    for s in (w, r, ls):
+        s.add_argument("--path", required=True)
+        s.add_argument("--cwd", default="/workspace")
+    return p.parse_args(argv)
+
+
+def main():
+    a = parse_args(sys.argv[1:])
+    try:
+        if not a.cwd.startswith("/") or match_root(a.cwd) is None:
+            raise Refused("outside_roots", "--cwd is not under /workspace or /home/agent")
+        {"write": cmd_write, "read": cmd_read, "list": cmd_list}[a.cmd](a)
+    except Refused as exc:
+        fail(exc.code, str(exc), 2)
+    except ValueError as exc:
+        fail("invalid_path", "bad argument: %s" % exc, 2)
+    except BrokenPipeError:
+        sys.exit(1)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            fail("too_many_links", str(exc), 2)
+        fail("io_error", "%s: %s" % (type(exc).__name__, exc), 1)
+
+
+if __name__ == "__main__":
+    main()

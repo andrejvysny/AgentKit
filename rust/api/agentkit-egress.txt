@@ -1,0 +1,112 @@
+pub mod agentkit_egress
+pub enum agentkit_egress::DenialReason
+pub agentkit_egress::DenialReason::BlockedAddress
+pub agentkit_egress::DenialReason::Limit
+pub agentkit_egress::DenialReason::NotGranted
+pub agentkit_egress::DenialReason::SniMismatch
+impl agentkit_egress::DenialReason
+pub fn agentkit_egress::DenialReason::as_str(self) -> &'static str
+impl core::fmt::Display for agentkit_egress::DenialReason
+pub fn agentkit_egress::DenialReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum agentkit_egress::EgressError
+pub agentkit_egress::EgressError::Bind(core::io::error::Error)
+pub agentkit_egress::EgressError::InvalidConfig(&'static str)
+pub agentkit_egress::EgressError::Permissions(core::io::error::Error)
+pub enum agentkit_egress::TargetError
+pub agentkit_egress::TargetError::EmptyHost
+pub agentkit_egress::TargetError::HostTooLong
+pub agentkit_egress::TargetError::InvalidAddress
+pub agentkit_egress::TargetError::InvalidCharacter(char)
+pub agentkit_egress::TargetError::InvalidLabel(alloc::string::String)
+pub agentkit_egress::TargetError::PortZero
+pub agentkit_egress::TargetError::Wildcard
+pub struct agentkit_egress::DenialBatch
+pub agentkit_egress::DenialBatch::cursor: u64
+pub agentkit_egress::DenialBatch::denials: alloc::vec::Vec<agentkit_egress::DenialRecord>
+pub agentkit_egress::DenialBatch::missed: u64
+pub struct agentkit_egress::DenialRecord
+pub agentkit_egress::DenialRecord::at_ms: i64
+pub agentkit_egress::DenialRecord::host: alloc::string::String
+pub agentkit_egress::DenialRecord::operation_id: core::option::Option<alloc::string::String>
+pub agentkit_egress::DenialRecord::port: u16
+pub agentkit_egress::DenialRecord::reason: agentkit_egress::DenialReason
+pub agentkit_egress::DenialRecord::seq: u64
+pub struct agentkit_egress::EgressConfig
+pub agentkit_egress::EgressConfig::connect_timeout: core::time::Duration
+pub agentkit_egress::EgressConfig::denial_buffer: usize
+pub agentkit_egress::EgressConfig::extra_blocked: alloc::vec::Vec<agentkit_egress::IpNet>
+pub agentkit_egress::EgressConfig::head_max_bytes: usize
+pub agentkit_egress::EgressConfig::head_timeout: core::time::Duration
+pub agentkit_egress::EgressConfig::max_bytes_per_tunnel: u64
+pub agentkit_egress::EgressConfig::max_pending: usize
+pub agentkit_egress::EgressConfig::max_tunnels: usize
+pub agentkit_egress::EgressConfig::tunnel_lifetime: core::time::Duration
+impl agentkit_egress::EgressConfig
+pub fn agentkit_egress::EgressConfig::validate(&self) -> core::result::Result<(), agentkit_egress::EgressError>
+impl core::default::Default for agentkit_egress::EgressConfig
+pub fn agentkit_egress::EgressConfig::default() -> Self
+pub struct agentkit_egress::EgressPorts
+pub agentkit_egress::EgressPorts::connector: alloc::rcs::arc::Arc<dyn agentkit_egress::Connector>
+pub agentkit_egress::EgressPorts::resolver: alloc::rcs::arc::Arc<dyn agentkit_egress::Resolver>
+pub agentkit_egress::EgressPorts::runtime: alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>
+impl agentkit_egress::EgressPorts
+pub fn agentkit_egress::EgressPorts::system() -> Self
+impl core::fmt::Debug for agentkit_egress::EgressPorts
+pub fn agentkit_egress::EgressPorts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_egress::EgressProxy
+impl agentkit_egress::EgressProxy
+pub fn agentkit_egress::EgressProxy::bind(&std::path::Path, agentkit_egress::EgressConfig, agentkit_egress::EgressPorts) -> core::result::Result<Self, agentkit_egress::EgressError>
+pub fn agentkit_egress::EgressProxy::drain(&self, u64) -> agentkit_egress::DenialBatch
+pub fn agentkit_egress::EgressProxy::path(&self) -> &std::path::Path
+pub fn agentkit_egress::EgressProxy::set_current_operation(&self, core::option::Option<alloc::string::String>)
+pub fn agentkit_egress::EgressProxy::set_policy(&self, alloc::vec::Vec<agentkit_egress::Target>)
+pub async fn agentkit_egress::EgressProxy::shutdown(self)
+pub fn agentkit_egress::EgressProxy::stats(&self) -> agentkit_egress::EgressStats
+impl core::fmt::Debug for agentkit_egress::EgressProxy
+pub fn agentkit_egress::EgressProxy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for agentkit_egress::EgressProxy
+pub fn agentkit_egress::EgressProxy::drop(&mut self)
+pub struct agentkit_egress::EgressStats
+pub agentkit_egress::EgressStats::accept_errors: u64
+pub agentkit_egress::EgressStats::bad_requests: u64
+pub agentkit_egress::EgressStats::bytes_down: u64
+pub agentkit_egress::EgressStats::bytes_up: u64
+pub agentkit_egress::EgressStats::closed_bytes: u64
+pub agentkit_egress::EgressStats::closed_lifetime: u64
+pub agentkit_egress::EgressStats::closed_revoked: u64
+pub agentkit_egress::EgressStats::connect_failures: u64
+pub agentkit_egress::EgressStats::connections: u64
+pub agentkit_egress::EgressStats::denials: u64
+pub agentkit_egress::EgressStats::open_tunnels: u64
+pub agentkit_egress::EgressStats::resolve_failures: u64
+pub agentkit_egress::EgressStats::tunnels_established: u64
+pub struct agentkit_egress::IpNet
+impl agentkit_egress::IpNet
+pub fn agentkit_egress::IpNet::addr(&self) -> core::net::ip_addr::IpAddr
+pub fn agentkit_egress::IpNet::contains(&self, core::net::ip_addr::IpAddr) -> bool
+pub fn agentkit_egress::IpNet::host(core::net::ip_addr::IpAddr) -> Self
+pub fn agentkit_egress::IpNet::new(core::net::ip_addr::IpAddr, u8) -> core::option::Option<Self>
+pub fn agentkit_egress::IpNet::prefix_len(&self) -> u8
+impl core::fmt::Display for agentkit_egress::IpNet
+pub fn agentkit_egress::IpNet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_egress::SystemResolver
+impl agentkit_egress::Resolver for agentkit_egress::SystemResolver
+pub fn agentkit_egress::SystemResolver::resolve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_egress::Target
+impl agentkit_egress::Target
+pub fn agentkit_egress::Target::host(&self) -> &str
+pub fn agentkit_egress::Target::new(&str, u16) -> core::result::Result<Self, agentkit_egress::TargetError>
+pub fn agentkit_egress::Target::port(&self) -> u16
+impl core::fmt::Display for agentkit_egress::Target
+pub fn agentkit_egress::Target::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_egress::TcpConnector
+impl agentkit_egress::Connector for agentkit_egress::TcpConnector
+pub fn agentkit_egress::TcpConnector::connect<'life0, 'async_trait>(&'life0 self, core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<tokio::net::tcp::stream::TcpStream>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_egress::Connector: core::marker::Send + core::marker::Sync
+pub fn agentkit_egress::Connector::connect<'life0, 'async_trait>(&'life0 self, core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<tokio::net::tcp::stream::TcpStream>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_egress::Connector for agentkit_egress::TcpConnector
+pub fn agentkit_egress::TcpConnector::connect<'life0, 'async_trait>(&'life0 self, core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<tokio::net::tcp::stream::TcpStream>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_egress::Resolver: core::marker::Send + core::marker::Sync
+pub fn agentkit_egress::Resolver::resolve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl agentkit_egress::Resolver for agentkit_egress::SystemResolver
+pub fn agentkit_egress::SystemResolver::resolve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait

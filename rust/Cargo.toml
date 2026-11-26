@@ -23,6 +23,10 @@ async-trait = "=0.1.89"
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
 axum = "=0.8.8"
 http = "=1.5.0"
+# Engine API client of the sandbox launcher; crates opt into features.
+hyper = { version = "=1.12.0", default-features = false }
+hyper-util = { version = "=0.1.21", default-features = false }
+http-body-util = "=0.1.5"
 url = "=2.5.8"
 tokio-util = "=0.7.20"
 uuid = { version = "=1.28.0", features = ["v4", "v7"] }
@@ -68,6 +72,11 @@ agentkit-native-exec = { path = "crates/native-exec", version = "0.1.0" }
 agentkit-native-broker = { path = "crates/native-broker", version = "0.1.0" }
 agentkit-claude = { path = "crates/claude", version = "0.1.0" }
 agentkit-sys = { path = "crates/sys", version = "0.1.0" }
+agentkit-sandbox-proto = { path = "crates/sandbox-proto", version = "0.1.0" }
+agentkit-sandboxd = { path = "crates/sandboxd", version = "0.1.0" }
+agentkit-egress = { path = "crates/egress", version = "0.1.0" }
+agentkit-sandbox-launcher = { path = "crates/sandbox-launcher", version = "0.1.0" }
+agentkit-sandbox-container = { path = "crates/sandbox-container", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -1,0 +1,518 @@
+#!/usr/bin/python3 -I
+"""sandbox-selftest: behavioural checks of the image and its helpers.
+
+Run as the agent user (uid 1000) with /workspace and /home/agent mounted,
+ideally as `--network none --read-only --tmpfs /tmp`. Prints PASS/FAIL per
+check and exits 1 if any check failed. Leaves nothing behind in the roots.
+"""
+
+import hashlib
+import io
+import json
+import os
+import pwd
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import time
+import traceback
+import zipfile
+
+sys.path.insert(0, "/usr/local/lib/sandbox")
+import sandboxlib  # noqa: E402
+
+ROOTS = ("/workspace", "/home/agent")
+DOC = "/usr/share/doc/sandbox-image"
+TOOLS = ["bash", "ls", "find", "grep", "sed", "gawk", "less", "file", "git", "curl",
+         "zip", "unzip", "tar", "jq", "rg", "tree", "python3", "pip3", "node", "npm", "npx",
+         "setsid", "timeout", "head"]
+RESULTS = []
+
+
+def check(name):
+    def deco(fn):
+        def run():
+            t0 = time.monotonic()
+            try:
+                detail = fn()
+                RESULTS.append((True, name))
+                extra = (" (%s)" % detail) if detail else ""
+                print("PASS %s%s [%.1fs]" % (name, extra, time.monotonic() - t0), flush=True)
+            except Exception as exc:  # noqa: BLE001 - report every failure and go on
+                RESULTS.append((False, name))
+                print("FAIL %s: %s" % (name, exc), flush=True)
+                traceback.print_exc(limit=2, file=sys.stdout)
+        run.__name__ = fn.__name__
+        CHECKS.append(run)
+        return run
+    return deco
+
+
+CHECKS = []
+
+
+def expect(cond, message):
+    if not cond:
+        raise AssertionError(message)
+
+
+def sh(argv, data=None, timeout=60, env=None):
+    return subprocess.run(argv, input=data, capture_output=True, timeout=timeout, env=env)
+
+
+def exec_(command, marker, *opts, timeout=60):
+    """Run sandbox-exec and split off its status trailer."""
+    r = sh(["sandbox-exec", "--marker", marker, *opts, "--", command], timeout=timeout)
+    err = r.stderr.decode(errors="replace")
+    lines = err.rstrip("\n").split("\n")
+    expect(lines[-1].startswith("SANDBOX_EXEC_STATUS "), "no status trailer: %r" % err[-300:])
+    status = json.loads(lines[-1][len("SANDBOX_EXEC_STATUS "):])
+    return r.returncode, r.stdout, "\n".join(lines[:-1]), status
+
+
+def marker_alive(marker):
+    return sandboxlib.matching_pids(marker)
+
+
+def fs(*args, data=None):
+    r = sh(["sandbox-fs", *args], data=data)
+    err = r.stderr.decode(errors="replace").strip().split("\n")[-1] if r.stderr else ""
+    info = json.loads(err) if err.startswith("{") else {}
+    return r.returncode, r.stdout, info
+
+
+def write(path, data, digest=None, size=None, mode=None):
+    args = ["write", "--path", path, "--sha256", digest or hashlib.sha256(data).hexdigest(),
+            "--size", str(len(data) if size is None else size)]
+    if mode:
+        args += ["--mode", mode]
+    return fs(*args, data=data)
+
+
+# ---------------------------------------------------------------- identity
+
+@check("identity: uid/gid 1000, user agent, no extra groups")
+def _identity():
+    expect(os.getuid() == 1000 and os.geteuid() == 1000, "uid %d" % os.getuid())
+    expect(os.getgid() == 1000 and os.getegid() == 1000, "gid %d" % os.getgid())
+    pw = pwd.getpwuid(1000)
+    expect(pw.pw_name == "agent" and pw.pw_dir == "/home/agent", repr(pw))
+    expect(set(os.getgroups()) <= {1000}, "groups %r" % os.getgroups())
+    for root in ROOTS:
+        st = os.stat(root)
+        expect(st.st_uid == 1000 and st.st_gid == 1000, "%s owned by %d" % (root, st.st_uid))
+
+
+@check("no sudo, su or doas usable")
+def _no_sudo():
+    for name in ("sudo", "doas"):
+        expect(shutil.which(name) is None, "%s present" % name)
+    r = sh(["su", "-c", "id", "root"], data=b"", timeout=10)
+    expect(r.returncode != 0, "su succeeded")
+
+
+def walk_root_fs():
+    """Files on the root filesystem, skipping other mounts like -xdev."""
+    root_dev = os.lstat("/").st_dev
+    unreadable = []
+    for dirpath, dirnames, filenames in os.walk("/", onerror=lambda e: unreadable.append(e.filename)):
+        keep = []
+        for d in dirnames:
+            p = os.path.join(dirpath, d)
+            try:
+                if os.lstat(p).st_dev == root_dev:
+                    keep.append(d)
+            except OSError:
+                pass
+        dirnames[:] = keep
+        for name in filenames + dirnames:
+            p = os.path.join(dirpath, name)
+            try:
+                yield p, os.lstat(p)
+            except OSError:
+                pass
+    if unreadable:
+        print("  note: %d directories unreadable as uid 1000 (the build checks them as root)"
+              % len(unreadable))
+
+
+@check("no setuid/setgid files, no file capabilities, nothing owned by agent or world-writable outside the roots")
+def _no_privileged_files():
+    bad = []
+    count = 0
+    for path, st in walk_root_fs():
+        count += 1
+        mode = st.st_mode
+        if stat.S_ISREG(mode) and mode & (stat.S_ISUID | stat.S_ISGID):
+            bad.append("setuid/setgid " + path)
+        if st.st_uid == 1000 and path not in ROOTS:
+            bad.append("owned by 1000 " + path)
+        if not stat.S_ISLNK(mode) and mode & stat.S_IWOTH:
+            if not (stat.S_ISDIR(mode) and mode & stat.S_ISVTX):
+                bad.append("world-writable " + path)
+        if stat.S_ISREG(mode):
+            try:
+                os.getxattr(path, "security.capability", follow_symlinks=False)
+                bad.append("file capability " + path)
+            except OSError:
+                pass
+    expect(not bad, "; ".join(bad[:10]))
+    return "%d paths scanned" % count
+
+
+@check("root filesystem is not writable")
+def _root_ro():
+    for target in ("/usr/local/bin/.selftest", "/etc/.selftest", "/.selftest"):
+        try:
+            fd = os.open(target, os.O_CREAT | os.O_WRONLY, 0o600)
+            os.close(fd)
+            os.unlink(target)
+            raise AssertionError("created " + target)
+        except PermissionError:
+            pass
+        except OSError as exc:
+            expect(exc.errno == 30, "unexpected %r" % exc)  # EROFS
+    ro = "read-only" if os.statvfs("/").f_flag & os.ST_RDONLY else "writable mount, no permission"
+    return ro
+
+
+# ---------------------------------------------------------------- contents
+
+@check("tools present")
+def _tools():
+    missing = [t for t in TOOLS if shutil.which(t) is None]
+    expect(not missing, "missing %r" % missing)
+    versions = []
+    for argv in (["git", "--version"], ["rg", "--version"], ["jq", "--version"],
+                 ["node", "--version"], ["npm", "--version"], ["python3", "--version"]):
+        r = sh(argv)
+        expect(r.returncode == 0, "%s failed" % argv[0])
+        versions.append(r.stdout.decode().split("\n")[0].strip())
+    return ", ".join(versions)
+
+
+@check("python packages match the lock and work")
+def _python_packages():
+    from importlib import metadata
+    locked = {}
+    with open(os.path.join(DOC, "requirements.lock"), encoding="utf-8") as fh:
+        for line in fh:
+            if "==" in line and not line.startswith((" ", "#")):
+                name, _, rest = line.partition("==")
+                locked[name.strip().lower()] = rest.split()[0].rstrip("\\").strip()
+    for name, version in locked.items():
+        got = metadata.version(name)
+        expect(got == version, "%s %s != locked %s" % (name, got, version))
+    code = (
+        "import matplotlib; matplotlib.use('Agg');"
+        "import matplotlib.pyplot as plt, numpy as np, pandas as pd, openpyxl, requests;"
+        "df = pd.DataFrame({'x': np.arange(5), 'y': np.arange(5) ** 2});"
+        "df.to_excel('/tmp/st.xlsx', index=False);"
+        "assert openpyxl.load_workbook('/tmp/st.xlsx').active['B6'].value == 16;"
+        "df.plot(x='x', y='y'); plt.savefig('/tmp/st.png');"
+        "print(pd.__version__)"
+    )
+    r = sh(["python3", "-c", code], timeout=120,
+           env={"HOME": "/home/agent", "PATH": os.environ["PATH"], "MPLCONFIGDIR": "/tmp/mpl"})
+    expect(r.returncode == 0, r.stderr.decode()[-500:])
+    with open("/tmp/st.png", "rb") as fh:
+        expect(fh.read(8) == b"\x89PNG\r\n\x1a\n", "not a PNG")
+    return "%d locked distributions" % len(locked)
+
+
+@check("python venv works")
+def _venv():
+    r = sh(["python3", "-m", "venv", "/tmp/st-venv"], timeout=120)
+    expect(r.returncode == 0, r.stderr.decode()[-300:])
+    r = sh(["/tmp/st-venv/bin/python", "-m", "pip", "--version"])
+    expect(r.returncode == 0, r.stderr.decode()[-300:])
+    shutil.rmtree("/tmp/st-venv")
+
+
+def tiny_wheel(path):
+    name = "sandbox_selftest_pkg"
+    files = {
+        "%s.py" % name: b"VALUE = 42\n",
+        "%s-0.1.dist-info/METADATA" % name: b"Metadata-Version: 2.1\nName: sandbox-selftest-pkg\nVersion: 0.1\n",
+        "%s-0.1.dist-info/WHEEL" % name: b"Wheel-Version: 1.0\nGenerator: selftest\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    record = "".join("%s,,\n" % n for n in files) + "%s-0.1.dist-info/RECORD,,\n" % name
+    with zipfile.ZipFile(path, "w") as z:
+        for n, data in files.items():
+            z.writestr(n, data)
+        z.writestr("%s-0.1.dist-info/RECORD" % name, record)
+
+
+def tiny_npm_tgz(path):
+    pkg = {"name": "sandbox-selftest-cli", "version": "0.1.0", "bin": {"sandbox-selftest-cli": "cli.js"}}
+    files = {"package/package.json": json.dumps(pkg).encode(),
+             "package/cli.js": b"#!/usr/bin/env node\nconsole.log('npm-user-ok')\n"}
+    with tarfile.open(path, "w:gz") as t:
+        for n, data in files.items():
+            info = tarfile.TarInfo(n)
+            info.size = len(data)
+            info.mode = 0o755
+            t.addfile(info, io.BytesIO(data))
+
+
+@check("user-level pip and npm installs land under /home/agent")
+def _user_installs():
+    env = sandboxlib.load_environment()
+    tiny_wheel("/tmp/sandbox_selftest_pkg-0.1-py3-none-any.whl")
+    r = sh(["python3", "-m", "pip", "install", "--no-index", "--no-cache-dir",
+            "/tmp/sandbox_selftest_pkg-0.1-py3-none-any.whl"], env=env, timeout=120)
+    expect(r.returncode == 0, (r.stdout + r.stderr).decode()[-500:])
+    r = sh(["python3", "-c", "import sandbox_selftest_pkg as m; print(m.__file__)"], env=env)
+    where = r.stdout.decode().strip()
+    expect(r.returncode == 0 and where.startswith("/home/agent/.local/"), "imported from %r" % where)
+    sh(["python3", "-m", "pip", "uninstall", "-y", "sandbox-selftest-pkg"], env=env)
+    tiny_npm_tgz("/tmp/sandbox-selftest-cli-0.1.0.tgz")
+    r = sh(["npm", "install", "-g", "--offline", "--no-audit", "--no-fund",
+            "/tmp/sandbox-selftest-cli-0.1.0.tgz"], env=env, timeout=120)
+    expect(r.returncode == 0, (r.stdout + r.stderr).decode()[-500:])
+    r = sh(["bash", "-c", "command -v sandbox-selftest-cli; sandbox-selftest-cli"], env=env)
+    out = r.stdout.decode().split()
+    expect(out[:1] == ["/home/agent/.npm-global/bin/sandbox-selftest-cli"] and "npm-user-ok" in out,
+           "npm bin %r" % out)
+    sh(["npm", "uninstall", "-g", "sandbox-selftest-cli"], env=env, timeout=120)
+    return "pip -> ~/.local, npm -> ~/.npm-global"
+
+
+# ---------------------------------------------------------------- sandbox-exec
+
+@check("exec: output, exit code, cwd, clean environment, image rc only")
+def _exec_basic():
+    home = "/home/agent"
+    poison = {".bashrc": "export POISON=bashrc\n", ".profile": "export POISON=profile\n",
+              ".bash_profile": "export POISON=bash_profile\n"}
+    for n, text in poison.items():
+        with open(os.path.join(home, n), "w") as fh:
+            fh.write(text)
+    try:
+        os.environ["LEAK_CHECK"] = "leaked"
+        cmd = ("echo out; echo err >&2; pwd; echo ${LEAK_CHECK-unset} ${POISON-unset}; "
+               "echo $HOME $SANDBOX_OP_MARKER $TZ; umask; echo \"$PATH\"; exit 3")
+        rc, out, err, st = exec_(cmd, "st-basic", "--cwd", "/tmp", "--tz", "Europe/Bratislava")
+    finally:
+        os.environ.pop("LEAK_CHECK", None)
+        for n in poison:
+            os.unlink(os.path.join(home, n))
+    lines = out.decode().split("\n")
+    expect(rc == 3 and st["exit_code"] == 3, "rc %d status %r" % (rc, st))
+    expect(lines[0] == "out" and err.strip() == "err", "streams %r %r" % (lines, err))
+    expect(lines[1] == "/tmp", "cwd %r" % lines[1])
+    expect(lines[2] == "unset unset", "env leak or rc sourced: %r" % lines[2])
+    expect(lines[3] == "/home/agent st-basic Europe/Bratislava", "env %r" % lines[3])
+    expect(lines[4] == "0022", "image rc not sourced, umask %r" % lines[4])
+    expect(lines[5] == sandboxlib.load_environment()["PATH"], "PATH %r" % lines[5])
+
+
+@check("exec: deadline ends the whole tree, including a setsid escapee")
+def _exec_deadline():
+    t0 = time.monotonic()
+    rc, _, _, st = exec_("sleep 30 & setsid sleep 31 & sleep 32", "st-deadline",
+                         "--deadline-ms", "500", "--grace-ms", "500", timeout=30)
+    took = time.monotonic() - t0
+    expect(rc == 124 and st["timed_out"], "rc %d status %r" % (rc, st))
+    expect(took < 5, "took %.1fs" % took)
+    expect(st["remaining_processes"] == 0, "remaining %r" % st)
+    expect(not marker_alive("st-deadline"), "processes still alive")
+    return "returned in %.2fs" % took
+
+
+@check("exec: deadline escalates to SIGKILL for a process ignoring SIGTERM")
+def _exec_sigkill():
+    rc, _, _, st = exec_("trap '' TERM; sleep 30 & trap '' TERM; wait", "st-kill9",
+                         "--deadline-ms", "300", "--grace-ms", "300", timeout=30)
+    expect(rc == 124 and st["remaining_processes"] == 0, "status %r" % st)
+    expect(not marker_alive("st-kill9"), "processes still alive")
+
+
+@check("exec: output cap forwards exactly the limit and drains the rest")
+def _exec_cap():
+    t0 = time.monotonic()
+    rc, out, _, st = exec_("head -c 5000000 /dev/zero; echo done >&2", "st-cap",
+                           "--output-limit", "1000")
+    expect(rc == 0 and len(out) == 1000, "rc %d, %d bytes" % (rc, len(out)))
+    expect(st["truncated"] and st["output_bytes"] == 5000005 and st["forwarded_bytes"] == 1000,
+           "status %r" % st)
+    rc, out, _, st = exec_("yes", "st-cap-yes", "--output-limit", "100", "--deadline-ms", "700")
+    expect(rc == 124 and len(out) == 100 and st["truncated"], "yes: rc %d %r" % (rc, st))
+    return "5 MB drained in %.2fs" % (time.monotonic() - t0)
+
+
+@check("exec: a background job holding stdout does not hold the op open")
+def _exec_background():
+    t0 = time.monotonic()
+    rc, out, _, st = exec_("sleep 30 & echo started", "st-bg", "--deadline-ms", "20000")
+    took = time.monotonic() - t0
+    expect(rc == 0 and out == b"started\n", "rc %d out %r" % (rc, out))
+    expect(took < 5 and not marker_alive("st-bg"), "took %.1fs" % took)
+
+
+@check("kill by marker ends a running op and its escapees")
+def _kill_marker():
+    p = subprocess.Popen(["sandbox-exec", "--marker", "st-cancel", "--deadline-ms", "60000", "--",
+                          "setsid sleep 60 & sleep 61"],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    end = time.monotonic() + 10
+    while len(marker_alive("st-cancel")) < 2 and time.monotonic() < end:
+        time.sleep(0.05)
+    expect(len(marker_alive("st-cancel")) >= 2, "op did not start")
+    r = sh(["sandbox-kill", "--grace-ms", "500", "st-cancel"])
+    report = json.loads(r.stdout)
+    expect(r.returncode == 0 and report["remaining"] == 0, "kill %r" % report)
+    _, err = p.communicate(timeout=10)
+    trailer = json.loads(err.decode().rstrip("\n").split("\n")[-1][len("SANDBOX_EXEC_STATUS "):])
+    expect(trailer["exit_code"] in (128 + 15, 128 + 9), "status %r" % trailer)
+    expect(not marker_alive("st-cancel"), "processes still alive")
+    return "signalled %d" % report["signalled"]
+
+
+@check("exec: SIGTERM to the wrapper ends the tree")
+def _exec_wrapper_term():
+    p = subprocess.Popen(["sandbox-exec", "--marker", "st-term", "--", "sleep 60"],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    end = time.monotonic() + 10
+    while not marker_alive("st-term") and time.monotonic() < end:
+        time.sleep(0.05)
+    p.terminate()
+    p.communicate(timeout=10)
+    expect(p.returncode == 128 + 15, "wrapper rc %r" % p.returncode)
+    expect(not marker_alive("st-term"), "processes still alive")
+
+
+# ---------------------------------------------------------------- sandbox-fs
+
+T = "/workspace/.selftest-%d" % os.getpid()
+DATA = b"hello sandbox\n" * 1000
+
+
+@check("fs write: hash-checked atomic write creates parents and sets mode")
+def _fs_write():
+    rc, out, info = write(T + "/sub/dir/a.txt", DATA, mode="0640")
+    expect(rc == 0, "rc %d %r" % (rc, info))
+    with open(T + "/sub/dir/a.txt", "rb") as fh:
+        expect(fh.read() == DATA, "content differs")
+    expect(stat.S_IMODE(os.stat(T + "/sub/dir/a.txt").st_mode) == 0o640, "mode")
+    expect(json.loads(out)["sha256"] == hashlib.sha256(DATA).hexdigest(), "reported hash")
+
+
+def no_temp_files():
+    for _, _, files in os.walk(T):
+        expect(not [f for f in files if f.startswith(".sandbox-write-")], "temp file left")
+
+
+@check("fs write: hash or size mismatch is refused and leaves the target untouched")
+def _fs_write_mismatch():
+    rc, _, info = write(T + "/b.txt", DATA, digest="0" * 64)
+    expect(rc == 2 and info.get("error") == "hash_mismatch", "%d %r" % (rc, info))
+    expect(not os.path.exists(T + "/b.txt"), "b.txt created")
+    rc, _, info = write(T + "/sub/dir/a.txt", b"other", digest="1" * 64)
+    expect(rc == 2 and info.get("error") == "hash_mismatch", "%d %r" % (rc, info))
+    with open(T + "/sub/dir/a.txt", "rb") as fh:
+        expect(fh.read() == DATA, "existing target changed")
+    rc, _, info = write(T + "/c.txt", DATA, size=len(DATA) - 1)
+    expect(rc == 2 and info.get("error") == "size_mismatch", "%d %r" % (rc, info))
+    rc, _, info = write(T + "/c.txt", DATA, size=len(DATA) + 1)
+    expect(rc == 2 and info.get("error") == "size_mismatch", "%d %r" % (rc, info))
+    no_temp_files()
+
+
+@check("fs: symlink, '..' and outside-root escapes are refused")
+def _fs_escapes():
+    os.symlink("/etc", T + "/esc")
+    os.symlink("/etc/passwd", T + "/escf")
+    os.symlink("../../../../../etc", T + "/sub/rel")
+    os.symlink("loop", T + "/loop")
+    cases = [
+        (("write", T + "/esc/x"), "symlink_escape"),
+        (("read", T + "/esc/passwd"), "symlink_escape"),
+        (("read", T + "/escf"), "symlink_escape"),
+        (("read", T + "/sub/rel/passwd"), "path_escape"),
+        (("list", T + "/esc"), "symlink_escape"),
+        (("read", "/workspace/../etc/passwd"), "path_escape"),
+        (("read", "/etc/passwd"), "outside_roots"),
+        (("read", "/workspacex/a"), "outside_roots"),
+        (("read", T + "/loop"), "too_many_links"),
+    ]
+    for (op, path), code in cases:
+        if op == "write":
+            rc, _, info = write(path, b"x")
+        else:
+            rc, _, info = fs(op, "--path", path)
+        expect(rc == 2 and info.get("error") == code, "%s %s -> %d %r" % (op, path, rc, info))
+    expect(not os.path.exists("/etc/x"), "wrote through a symlink")
+
+
+@check("fs: in-root symlinks are followed; write replaces a final symlink")
+def _fs_inroot_links():
+    os.symlink("sub/dir", T + "/inroot")
+    os.symlink("/home/agent", T + "/home")
+    rc, out, _ = fs("read", "--path", T + "/inroot/a.txt")
+    expect(rc == 0 and out == DATA, "relative in-root link: %d" % rc)
+    rc, out, _ = fs("read", "--path", "a.txt", "--cwd", T + "/inroot")
+    expect(rc == 0 and out == DATA, "relative path through cwd link: %d" % rc)
+    name = ".selftest-%d" % os.getpid()
+    rc, _, info = write(T + "/home/" + name, b"cross-root")
+    expect(rc == 0 and os.path.isfile("/home/agent/" + name), "cross-root write %r" % info)
+    os.unlink("/home/agent/" + name)
+    rc, _, info = write(T + "/escf", b"replaced")
+    expect(rc == 0, "write over link %r" % info)
+    expect(not os.path.islink(T + "/escf"), "link not replaced")
+    with open("/etc/passwd", "rb") as fh:
+        expect(b"replaced" not in fh.read(), "wrote through to /etc/passwd")
+
+
+@check("fs read: offset and limit; only regular files")
+def _fs_read():
+    rc, out, info = fs("read", "--path", T + "/sub/dir/a.txt", "--offset", "6", "--limit", "7")
+    expect(rc == 0 and out == DATA[6:13], "slice %r" % out)
+    expect(info == {"size": len(DATA), "offset": 6, "returned": 7, "eof": False}, repr(info))
+    rc, out, info = fs("read", "--path", T + "/sub/dir/a.txt", "--offset", str(len(DATA) - 3))
+    expect(rc == 0 and out == DATA[-3:] and info["eof"], repr(info))
+    os.mkfifo(T + "/fifo")
+    rc, _, info = fs("read", "--path", T + "/fifo")
+    expect(rc == 2 and info.get("error") == "not_a_file", repr(info))
+    rc, _, info = fs("read", "--path", T + "/sub")
+    expect(rc == 2 and info.get("error") == "not_a_file", repr(info))
+    rc, _, info = fs("read", "--path", T + "/missing")
+    expect(rc == 2 and info.get("error") == "not_found", repr(info))
+
+
+@check("fs list: depth, limit, symlinks not descended")
+def _fs_list():
+    def entries(*args):
+        rc, out, _ = fs("list", "--path", T, *args)
+        expect(rc == 0, "rc %d" % rc)
+        rows = [json.loads(line) for line in out.decode().splitlines()]
+        return rows[:-1], rows[-1]["summary"]
+
+    rows, summary = entries("--depth", "1")
+    names = [r["path"] for r in rows]
+    expect(names == sorted(names) and "sub" in names and "sub/dir" not in names, repr(names))
+    esc = [r for r in rows if r["path"] == "esc"][0]
+    expect(esc["type"] == "symlink" and esc["target"] == "/etc", repr(esc))
+    rows, _ = entries("--depth", "3")
+    names = [r["path"] for r in rows]
+    expect("sub/dir/a.txt" in names and not any(n.startswith("esc/") for n in names), repr(names))
+    rows, summary = entries("--depth", "3", "--limit", "2")
+    expect(len(rows) == 2 and summary == {"count": 2, "truncated": True}, repr(summary))
+
+
+def main():
+    os.makedirs(T)
+    try:
+        for run in CHECKS:
+            run()
+    finally:
+        shutil.rmtree(T, ignore_errors=True)
+    failed = [n for ok, n in RESULTS if not ok]
+    print("%d checks, %d passed, %d failed" % (len(RESULTS), len(RESULTS) - len(failed), len(failed)))
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

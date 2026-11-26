@@ -1,0 +1,9 @@
+# Allow-list: only these files reach the build context.
+*
+!apt-packages.txt
+!requirements.lock
+!helpers/
+!rootfs/
+!notice/generate-notice.py
+!notice/agentkit-sandboxd-crates.txt
+!out/agentkit-sandboxd-*

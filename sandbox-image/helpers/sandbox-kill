@@ -1,0 +1,38 @@
+#!/usr/bin/python3 -I
+"""sandbox-kill: end every process of one sandbox-exec op.
+
+    sandbox-kill [--grace-ms N] OP
+
+Matches processes whose environment holds SANDBOX_OP_MARKER=OP exactly,
+plus the op's process group from /tmp/sandbox-ops/OP.json while the op is
+running. Sends SIGTERM, then SIGKILL after the grace period, and repeats
+until nothing matches. Prints one JSON line; exits 0 when nothing is left.
+A process that both left the group and cleared its environment is not
+found (the marker is a convention, not a kernel boundary).
+"""
+
+import argparse
+import json
+import sys
+
+sys.path.insert(0, "/usr/local/lib/sandbox")
+import sandboxlib  # noqa: E402
+
+
+def main():
+    p = argparse.ArgumentParser(prog="sandbox-kill")
+    p.add_argument("--grace-ms", type=int, default=2000)
+    p.add_argument("marker")
+    a = p.parse_args()
+    marker = sandboxlib.check_marker(a.marker)
+    status = sandboxlib.read_status(marker) or {}
+    pgid = status.get("pgid") if status.get("state") == "running" else None
+    if not isinstance(pgid, int) or pgid <= 1:
+        pgid = None
+    signalled, remaining = sandboxlib.kill_tree(marker, pgid, grace_s=max(a.grace_ms, 0) / 1000.0)
+    print(json.dumps({"marker": marker, "signalled": signalled, "remaining": remaining}))
+    sys.exit(0 if remaining == 0 else 1)
+
+
+if __name__ == "__main__":
+    main()

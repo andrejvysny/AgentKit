@@ -1,0 +1,5 @@
+# The image's own rc for sandbox commands, sourced through BASH_ENV by the
+# non-interactive bash that sandbox-exec starts. It lives on the read-only
+# image, so a command cannot change what later commands source; files in
+# /home/agent (.bashrc, .profile) are never read by sandbox-exec.
+umask 022

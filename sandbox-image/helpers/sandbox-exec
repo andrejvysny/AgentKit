@@ -1,0 +1,242 @@
+#!/usr/bin/python3 -I
+"""sandbox-exec: the fixed exec wrapper of the agent sandbox image.
+
+    sandbox-exec --marker OP [--deadline-ms N] [--output-limit BYTES]
+                 [--cwd DIR] [--tz ZONE] [--grace-ms N] -- COMMAND
+
+Runs COMMAND with `bash --noprofile --norc -c` from an empty environment
+plus /etc/sandbox/environment (BASH_ENV points at the image's own rc), in a
+new session and process group, with stdin at /dev/null.
+
+- Marker: SANDBOX_OP_MARKER=OP is in the command's environment and is
+  inherited by everything it starts; `sandbox-kill OP` ends that tree even
+  if this wrapper is gone. /tmp/sandbox-ops/OP.json holds the group id
+  while the command runs and the final status afterwards.
+- Deadline: at --deadline-ms the tree gets SIGTERM, then SIGKILL after
+  --grace-ms; the exit code is 124.
+- Output cap: stdout and stderr are forwarded until --output-limit bytes
+  (both streams together) have passed; the rest is read and discarded so
+  the command never blocks on a full pipe.
+- When the shell exits, anything it left running in the tree is ended, so
+  a background job cannot hold the op open.
+
+The last stderr line is always `SANDBOX_EXEC_STATUS {json}`. The exit
+code is the command's, 128+N for a signal, 124 for the deadline.
+"""
+
+import argparse
+import json
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, "/usr/local/lib/sandbox")
+import sandboxlib  # noqa: E402
+
+STATUS_PREFIX = "SANDBOX_EXEC_STATUS "
+DRAIN_AFTER_EXIT_S = 0.2
+# Child exit is polled: pidfd_open is missing under some emulators (Rosetta).
+POLL_S = 0.05
+CHUNK = 65536
+
+
+class Interrupted(Exception):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _on_signal(signum, _frame):
+    raise Interrupted(signum)
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(prog="sandbox-exec")
+    p.add_argument("--marker", required=True)
+    p.add_argument("--deadline-ms", type=int, default=600_000)
+    p.add_argument("--output-limit", type=int, default=1 << 20)
+    p.add_argument("--cwd", default="/workspace")
+    p.add_argument("--tz")
+    p.add_argument("--grace-ms", type=int, default=2000)
+    p.add_argument("command", nargs=argparse.REMAINDER)
+    a = p.parse_args(argv)
+    if a.command[:1] == ["--"]:
+        a.command = a.command[1:]
+    if len(a.command) != 1:
+        sandboxlib.fail("invalid_args", "expected exactly one COMMAND string after --")
+    if a.deadline_ms <= 0 or a.output_limit < 0 or a.grace_ms < 0:
+        sandboxlib.fail("invalid_args", "deadline must be positive, limits non-negative")
+    sandboxlib.check_marker(a.marker)
+    return a
+
+
+def build_env(a):
+    env = sandboxlib.load_environment()
+    if a.tz:
+        env["TZ"] = a.tz
+    env[sandboxlib.MARKER_VAR] = a.marker
+    return env
+
+
+def write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        view = view[n:]
+
+
+class Pump:
+    """Forwards child output to our stdout/stderr up to a shared byte cap."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.total = 0
+        self.forwarded = 0
+        self.stderr_ends_line = True
+
+    def feed(self, out_fd, data):
+        self.total += len(data)
+        room = self.limit - self.forwarded
+        if room > 0:
+            part = data[:room]
+            write_all(out_fd, part)
+            self.forwarded += len(part)
+            if out_fd == 2:
+                self.stderr_ends_line = part.endswith(b"\n")
+
+    @property
+    def truncated(self):
+        return self.total > self.forwarded
+
+
+def start(a):
+    child = subprocess.Popen(
+        ["/bin/bash", "--noprofile", "--norc", "-c", a.command[0]],
+        cwd=a.cwd,
+        env=build_env(a),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+        close_fds=True,
+    )
+    sandboxlib.write_status(
+        a.marker,
+        {"marker": a.marker, "state": "running", "pid": child.pid, "pgid": child.pid,
+         "wrapper_pid": os.getpid()},
+    )
+    return child
+
+
+def run(a):
+    if not os.path.isdir(a.cwd):
+        sandboxlib.fail("invalid_cwd", "cwd is not a directory: %s" % a.cwd)
+    started = time.monotonic()
+    try:
+        child = start(a)
+    except Interrupted as exc:
+        # Popen returns before any signal handler can run; a signal here
+        # arrived before the child existed or right after. Either way the
+        # marker finds it.
+        sandboxlib.kill_tree(a.marker, None, grace_s=a.grace_ms / 1000.0)
+        return 128 + int(exc.signum)
+    pgid = child.pid
+    pump = Pump(a.output_limit)
+    sel = selectors.DefaultSelector()
+    sel.register(child.stdout, selectors.EVENT_READ, 1)
+    sel.register(child.stderr, selectors.EVENT_READ, 2)
+    deadline = started + a.deadline_ms / 1000.0
+    timed_out = False
+    interrupted = None
+    exited_at = None
+    try:
+        while True:
+            now = time.monotonic()
+            if exited_at is None and child.poll() is not None:
+                exited_at = now
+            if exited_at is not None and (not sel.get_map() or now >= exited_at + DRAIN_AFTER_EXIT_S):
+                break
+            if now >= deadline:
+                timed_out = True
+                break
+            wake = now + POLL_S if exited_at is None else exited_at + DRAIN_AFTER_EXIT_S
+            for key, _ in sel.select(max(0.0, min(deadline, wake) - now)):
+                pump_key(sel, pump, key)
+    except Interrupted as exc:
+        interrupted = exc.signum
+    except BrokenPipeError:
+        interrupted = signal.SIGPIPE
+    # Deadline, interruption or stragglers: end whatever is left of the tree.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _, remaining = sandboxlib.kill_tree(a.marker, pgid, grace_s=a.grace_ms / 1000.0)
+    if child.returncode is None:
+        child.wait()
+    drain(sel, pump)
+    return finish(a, child, pump, started, timed_out, interrupted, remaining)
+
+
+def pump_key(sel, pump, key):
+    data = os.read(key.fd, CHUNK)
+    if data:
+        pump.feed(key.data, data)
+    else:
+        sel.unregister(key.fileobj)
+
+
+def drain(sel, pump):
+    """Read what the killed tree left in the pipes, without waiting long."""
+    end = time.monotonic() + DRAIN_AFTER_EXIT_S
+    try:
+        while sel.get_map() and time.monotonic() < end:
+            for key, _ in sel.select(max(0.0, end - time.monotonic())):
+                pump_key(sel, pump, key)
+    except BrokenPipeError:
+        pass
+
+
+def finish(a, child, pump, started, timed_out, interrupted, remaining):
+    rc = child.returncode
+    sig = -rc if rc < 0 else None
+    if timed_out:
+        exit_code = 124
+    elif interrupted is not None:
+        exit_code = 128 + int(interrupted)
+    else:
+        exit_code = 128 + sig if sig else rc
+    status = {
+        "marker": a.marker,
+        "state": "exited",
+        "exit_code": exit_code,
+        "command_exit": rc,
+        "signal": sig,
+        "timed_out": timed_out,
+        "interrupted": int(interrupted) if interrupted is not None else None,
+        "output_bytes": pump.total,
+        "forwarded_bytes": pump.forwarded,
+        "truncated": pump.truncated,
+        "remaining_processes": remaining,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+    sandboxlib.write_status(a.marker, status)
+    lead = "" if pump.stderr_ends_line else "\n"
+    try:
+        write_all(2, (lead + STATUS_PREFIX + json.dumps(status, sort_keys=True) + "\n").encode())
+    except OSError:
+        pass
+    return exit_code
+
+
+def main():
+    a = parse_args(sys.argv[1:])
+    for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(s, _on_signal)
+    sys.exit(run(a))
+
+
+if __name__ == "__main__":
+    main()

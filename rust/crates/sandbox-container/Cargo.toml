@@ -1,0 +1,33 @@
+[package]
+name = "agentkit-sandbox-container"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Track B server sandbox backend (ADR 0039): SandboxBackend over the launcher, the guest channel and the egress proxy"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-workspaces.workspace = true
+agentkit-sandbox-proto.workspace = true
+agentkit-egress.workspace = true
+# The backend port is an object-safe async trait.
+async-trait.workspace = true
+thiserror.workspace = true
+# Launcher and guest sockets, the channel's reader and writer tasks, timeouts.
+tokio.workspace = true
+# One token closes a guest channel's reader and writer together.
+tokio-util.workspace = true
+
+[dev-dependencies]
+# The backend conformance suite and the fake backend.
+agentkit-testkit.workspace = true
+# The guest supervisor, run in-process behind a fake launcher.
+agentkit-sandboxd.workspace = true
+# A private directory for each test's sockets and volumes.
+tempfile.workspace = true

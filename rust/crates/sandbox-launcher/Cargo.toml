@@ -1,0 +1,35 @@
+[package]
+name = "agentkit-sandbox-launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Fixed-template container launcher of the Track B sandbox (ADR 0039): the only holder of the container runtime socket"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-sandbox-proto.workspace = true
+# Per-machine socket directories are created without following links.
+agentkit-sys.workspace = true
+# The runtime client is a trait so tests drive a fake runtime.
+async-trait.workspace = true
+# Engine API over the runtime's unix socket (HTTP/1.1, one call per connection).
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Listener, per-workspace locks, timeouts and the Engine API connections.
+tokio.workspace = true
+# A fresh random channel token for each created container (v4).
+uuid.workspace = true
+
+[dev-dependencies]
+# Scratch socket, state and runtime-socket directories.
+tempfile.workspace = true

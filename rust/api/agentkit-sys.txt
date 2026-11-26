@@ -1,4 +1,24 @@
 pub mod agentkit_sys
+pub mod agentkit_sys::dir
+pub enum agentkit_sys::dir::EntryType
+pub agentkit_sys::dir::EntryType::Directory
+pub agentkit_sys::dir::EntryType::File
+pub agentkit_sys::dir::EntryType::Other
+pub agentkit_sys::dir::EntryType::Symlink
+pub struct agentkit_sys::dir::DirNames
+pub agentkit_sys::dir::DirNames::names: alloc::vec::Vec<std::ffi::os_str::OsString>
+pub agentkit_sys::dir::DirNames::truncated: bool
+pub struct agentkit_sys::dir::EntryStat
+pub agentkit_sys::dir::EntryStat::allocated: u64
+pub agentkit_sys::dir::EntryStat::kind: agentkit_sys::dir::EntryType
+pub agentkit_sys::dir::EntryStat::mtime_ms: i64
+pub agentkit_sys::dir::EntryStat::size: u64
+pub fn agentkit_sys::dir::create_dir_at(&std::fs::File, &str, u32) -> core::io::error::Result<()>
+pub fn agentkit_sys::dir::create_new_rw_file_at(&std::fs::File, &str, u32) -> core::io::error::Result<std::fs::File>
+pub fn agentkit_sys::dir::open_dir_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<std::fs::File>
+pub fn agentkit_sys::dir::read_dir_names(&std::fs::File, usize) -> core::io::error::Result<agentkit_sys::dir::DirNames>
+pub fn agentkit_sys::dir::stat_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<agentkit_sys::dir::EntryStat>
+pub fn agentkit_sys::dir::sync_dir(&std::fs::File) -> core::io::error::Result<()>
 pub mod agentkit_sys::fs
 pub fn agentkit_sys::fs::create_new_file_at(&std::fs::File, &str, u32) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::fs::dir_real_path(&std::fs::File) -> core::io::error::Result<core::option::Option<std::path::PathBuf>>
@@ -67,6 +87,22 @@ pub fn agentkit_sys::process::real_uid() -> core::result::Result<u32, agentkit_s
 pub fn agentkit_sys::process::signal_process(u32, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
 pub fn agentkit_sys::process::spawn_in_new_group(&mut std::process::Command)
 pub fn agentkit_sys::process::spawn_in_new_group_tokio(&mut tokio::process::Command)
+pub mod agentkit_sys::supervisor
+pub enum agentkit_sys::supervisor::Reaped
+pub agentkit_sys::supervisor::Reaped::Child
+pub agentkit_sys::supervisor::Reaped::Child::exit: agentkit_sys::process::ChildExit
+pub agentkit_sys::supervisor::Reaped::Child::pid: u32
+pub agentkit_sys::supervisor::Reaped::NoChildren
+pub agentkit_sys::supervisor::Reaped::NoneReady
+pub fn agentkit_sys::supervisor::descendants(u32) -> core::io::error::Result<alloc::vec::Vec<u32>>
+pub fn agentkit_sys::supervisor::is_init() -> bool
+pub fn agentkit_sys::supervisor::kill_all_processes(agentkit_sys::process::Signal) -> core::io::error::Result<agentkit_sys::process::SignalOutcome>
+pub fn agentkit_sys::supervisor::reap_any() -> core::io::error::Result<agentkit_sys::supervisor::Reaped>
+pub fn agentkit_sys::supervisor::reap_child(u32) -> core::io::error::Result<agentkit_sys::process::ChildExit>
+pub fn agentkit_sys::supervisor::set_child_subreaper() -> core::io::error::Result<()>
+pub fn agentkit_sys::supervisor::set_non_dumpable() -> core::io::error::Result<()>
+pub fn agentkit_sys::supervisor::spawn_in_new_session(&mut std::process::Command, std::fs::File) -> core::io::error::Result<()>
+pub fn agentkit_sys::supervisor::sync_filesystems()
 pub enum agentkit_sys::ChildExit
 pub agentkit_sys::ChildExit::Dumped
 pub agentkit_sys::ChildExit::Dumped::signal: i32
@@ -76,10 +112,21 @@ pub agentkit_sys::ChildExit::Killed
 pub agentkit_sys::ChildExit::Killed::signal: i32
 pub agentkit_sys::ChildExit::NoSuchChild
 pub agentkit_sys::ChildExit::Running
+pub enum agentkit_sys::EntryType
+pub agentkit_sys::EntryType::Directory
+pub agentkit_sys::EntryType::File
+pub agentkit_sys::EntryType::Other
+pub agentkit_sys::EntryType::Symlink
 pub enum agentkit_sys::KillProbe
 pub agentkit_sys::KillProbe::Alive
 pub agentkit_sys::KillProbe::Gone
 pub agentkit_sys::KillProbe::NotPermitted
+pub enum agentkit_sys::Reaped
+pub agentkit_sys::Reaped::Child
+pub agentkit_sys::Reaped::Child::exit: agentkit_sys::process::ChildExit
+pub agentkit_sys::Reaped::Child::pid: u32
+pub agentkit_sys::Reaped::NoChildren
+pub agentkit_sys::Reaped::NoneReady
 pub enum agentkit_sys::Signal
 pub agentkit_sys::Signal::Cont
 pub agentkit_sys::Signal::Int
@@ -104,19 +151,33 @@ pub agentkit_sys::SysError::Signal::pgid: u32
 pub agentkit_sys::SysError::Signal::signal: i32
 pub agentkit_sys::SysError::Signal::source: core::io::error::Error
 pub agentkit_sys::SysError::Unsupported
+pub struct agentkit_sys::DirNames
+pub agentkit_sys::DirNames::names: alloc::vec::Vec<std::ffi::os_str::OsString>
+pub agentkit_sys::DirNames::truncated: bool
+pub struct agentkit_sys::EntryStat
+pub agentkit_sys::EntryStat::allocated: u64
+pub agentkit_sys::EntryStat::kind: agentkit_sys::dir::EntryType
+pub agentkit_sys::EntryStat::mtime_ms: i64
+pub agentkit_sys::EntryStat::size: u64
 pub struct agentkit_sys::ProcessGroup
 impl agentkit_sys::process::ProcessGroup
 pub fn agentkit_sys::process::ProcessGroup::from_leader_pid(u32) -> core::result::Result<Self, agentkit_sys::process::SysError>
 pub fn agentkit_sys::process::ProcessGroup::is_gone(&self) -> bool
 pub fn agentkit_sys::process::ProcessGroup::signal(&self, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
+pub fn agentkit_sys::create_dir_at(&std::fs::File, &str, u32) -> core::io::error::Result<()>
 pub fn agentkit_sys::create_new_file_at(&std::fs::File, &str, u32) -> core::io::error::Result<std::fs::File>
+pub fn agentkit_sys::create_new_rw_file_at(&std::fs::File, &str, u32) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::create_private_dir(&std::path::Path) -> core::io::error::Result<()>
 pub fn agentkit_sys::create_private_file(&std::path::Path) -> core::io::error::Result<std::fs::File>
+pub fn agentkit_sys::descendants(u32) -> core::io::error::Result<alloc::vec::Vec<u32>>
 pub fn agentkit_sys::dir_real_path(&std::fs::File) -> core::io::error::Result<core::option::Option<std::path::PathBuf>>
 pub fn agentkit_sys::effective_uid() -> core::result::Result<u32, agentkit_sys::process::SysError>
+pub fn agentkit_sys::is_init() -> bool
+pub fn agentkit_sys::kill_all_processes(agentkit_sys::process::Signal) -> core::io::error::Result<agentkit_sys::process::SignalOutcome>
 pub fn agentkit_sys::kill_probe(i32) -> agentkit_sys::process::KillProbe
 pub fn agentkit_sys::link_at(&std::fs::File, &str, &str) -> core::io::error::Result<()>
 pub fn agentkit_sys::lock_exclusive(&std::fs::File) -> core::result::Result<(), agentkit_sys::process::SysError>
+pub fn agentkit_sys::open_dir_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::open_dir_nofollow(&std::path::Path) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::open_file_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::open_parent_dir(&std::fs::File) -> core::io::error::Result<std::fs::File>
@@ -124,11 +185,20 @@ pub fn agentkit_sys::own_parent_pid() -> core::result::Result<u32, agentkit_sys:
 pub fn agentkit_sys::own_process_group() -> u32
 pub fn agentkit_sys::peek_child_exit(u32) -> core::result::Result<agentkit_sys::process::ChildExit, core::io::error::Error>
 pub fn agentkit_sys::pid_alive(u32) -> bool
+pub fn agentkit_sys::read_dir_names(&std::fs::File, usize) -> core::io::error::Result<agentkit_sys::dir::DirNames>
 pub fn agentkit_sys::real_uid() -> core::result::Result<u32, agentkit_sys::process::SysError>
+pub fn agentkit_sys::reap_any() -> core::io::error::Result<agentkit_sys::supervisor::Reaped>
+pub fn agentkit_sys::reap_child(u32) -> core::io::error::Result<agentkit_sys::process::ChildExit>
 pub fn agentkit_sys::rename_at(&std::fs::File, &str, &str) -> core::io::error::Result<()>
+pub fn agentkit_sys::set_child_subreaper() -> core::io::error::Result<()>
+pub fn agentkit_sys::set_non_dumpable() -> core::io::error::Result<()>
 pub fn agentkit_sys::signal_process(u32, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
 pub fn agentkit_sys::spawn_in_new_group(&mut std::process::Command)
 pub fn agentkit_sys::spawn_in_new_group_tokio(&mut tokio::process::Command)
+pub fn agentkit_sys::spawn_in_new_session(&mut std::process::Command, std::fs::File) -> core::io::error::Result<()>
+pub fn agentkit_sys::stat_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<agentkit_sys::dir::EntryStat>
+pub fn agentkit_sys::sync_dir(&std::fs::File) -> core::io::error::Result<()>
+pub fn agentkit_sys::sync_filesystems()
 pub fn agentkit_sys::try_lock_exclusive(&std::fs::File) -> core::result::Result<bool, agentkit_sys::process::SysError>
 pub fn agentkit_sys::unlink_at(&std::fs::File, &str) -> core::io::error::Result<()>
 pub fn agentkit_sys::unlock_exclusive(&std::fs::File) -> core::result::Result<(), agentkit_sys::process::SysError>

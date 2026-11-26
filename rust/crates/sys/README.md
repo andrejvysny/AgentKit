@@ -13,6 +13,16 @@ platform `unsafe`.
   (`waitid` WNOWAIT|WNOHANG); `own_process_group`, `own_parent_pid` and
   `effective_uid` answer identity questions; `pid_alive` probes a single
   pid.
+- `dir`: one-component directory-descriptor steps for walking a tree
+  without following links (`open_dir_at_nofollow`, `create_dir_at`,
+  `stat_at_nofollow`, `read_dir_names`, `create_new_rw_file_at`,
+  `sync_dir`).
+- `supervisor`: init-process primitives for the sandbox supervisor
+  (ADR 0039): `prctl` non-dumpable and child-subreaper (Linux),
+  `spawn_in_new_session` (`setsid` + `fchdir` before exec),
+  `kill_all_processes` (`kill(-1)`, refused unless PID 1), `reap_any` /
+  `reap_child` (`waitpid` WNOHANG), `descendants` (`/proc`, Linux) and
+  `sync_filesystems`.
 - `private_fs`: `create_private_dir` (0700) and `create_private_file` (0600)
   for state directories holding secret material.
 

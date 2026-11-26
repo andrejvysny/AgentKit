@@ -20,6 +20,11 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-sessions` | Durable agent-session service (steering, human input, plan grants, receipts), agent/run profiles and run-content freezing |
 | `agentkit-memory` | Long-term memory context: records, supersession, the four retrieval ports and `MemoryService` (no storage) |
 | `agentkit-workspaces` | Sandbox workspaces context: workspace types and the `SandboxBackend` and `WorkspaceRepository` ports (no storage, no backend) |
+| `agentkit-sandbox-proto` | Track B sandbox wire protocol: frame codec, guest and launcher messages |
+| `agentkit-sandboxd` | Guest supervisor binary run inside each sandbox container |
+| `agentkit-egress` | Host-side CONNECT proxy applying a sandbox's network grants |
+| `agentkit-sandbox-launcher` | Fixed-template container launcher; the only holder of the runtime socket |
+| `agentkit-sandbox-container` | Server `SandboxBackend` over the launcher, guest channel and egress proxy |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
 | `agentkit-testkit` | Dev-only test fakes (`InMemoryTaskRepository`) and the `TaskRepository` conformance suite run against SQLite and in-memory; never a normal dependency |
 | `agentkit-chat` | Chat execution, tool governance and proposal application |

@@ -25,7 +25,7 @@ use crate::process::SysError;
 /// A NUL-terminated working name; a name containing a NUL byte is refused
 /// with the same `InvalidInput` the callers classified before the move.
 #[cfg(unix)]
-fn cstr(name: &str) -> io::Result<std::ffi::CString> {
+pub(crate) fn cstr(name: &str) -> io::Result<std::ffi::CString> {
     std::ffi::CString::new(name).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }
 
@@ -41,7 +41,7 @@ fn cpath(path: &Path) -> io::Result<std::ffi::CString> {
 /// Wrap a fresh descriptor from a successful `open(2)`/`openat(2)` into an
 /// owning `File`; `-1` maps to the last OS error.
 #[cfg(unix)]
-fn from_fd(fd: std::os::fd::RawFd) -> io::Result<File> {
+pub(crate) fn from_fd(fd: std::os::fd::RawFd) -> io::Result<File> {
     use std::os::fd::FromRawFd;
     if fd == -1 {
         return Err(io::Error::last_os_error());
@@ -53,7 +53,7 @@ fn from_fd(fd: std::os::fd::RawFd) -> io::Result<File> {
 
 /// Map a `-1` return of the path syscalls to the last OS error.
 #[cfg(unix)]
-fn check(result: libc::c_int) -> io::Result<()> {
+pub(crate) fn check(result: libc::c_int) -> io::Result<()> {
     if result == -1 {
         Err(io::Error::last_os_error())
     } else {

@@ -1,0 +1,25 @@
+# The fixed environment of every sandbox command (KEY=VALUE, no quoting).
+# agentkit-sandboxd and sandbox-exec start from an empty environment and
+# apply exactly these, then TZ (when given; sandbox-exec also adds
+# SANDBOX_OP_MARKER). System directories come first in PATH, the
+# user-level prefixes under /home/agent last.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/home/agent/.npm-global/bin
+HOME=/home/agent
+USER=agent
+LOGNAME=agent
+SHELL=/bin/bash
+LANG=C.UTF-8
+TERM=dumb
+TMPDIR=/tmp
+PYTHONUSERBASE=/home/agent/.local
+NPM_CONFIG_PREFIX=/home/agent/.npm-global
+BASH_ENV=/etc/sandbox/bashrc
+# The container has no network: everything leaves through the supervisor's
+# egress shim, which pipes to the host's proxy (ADR 0039). curl, pip
+# (requests) and npm read these; a program that ignores them fails closed.
+HTTP_PROXY=http://127.0.0.1:3128
+HTTPS_PROXY=http://127.0.0.1:3128
+http_proxy=http://127.0.0.1:3128
+https_proxy=http://127.0.0.1:3128
+NO_PROXY=localhost,127.0.0.1,::1
+no_proxy=localhost,127.0.0.1,::1

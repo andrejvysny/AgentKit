@@ -1,0 +1,20 @@
+[package]
+name = "agentkit-sandbox-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Sandbox guest and launcher wire protocol (ADR 0039, layer 1): frame codec and message types; no async runtime"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# `sha256_hex` names machine socket directories.
+agentkit-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

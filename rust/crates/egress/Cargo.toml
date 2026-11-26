@@ -1,0 +1,27 @@
+[package]
+name = "agentkit-egress"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Host-side CONNECT proxy of the Track B sandbox (ADR 0039): one unix socket per machine, grants by host and port"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-kernel.workspace = true
+# Resolver and connector ports are object-safe async traits.
+async-trait.workspace = true
+thiserror.workspace = true
+# Listener, tunnels, timeouts and the live policy channel.
+tokio.workspace = true
+# Shutdown token shared by the accept loop and every connection.
+tokio-util.workspace = true
+
+[dev-dependencies]
+# Integration tests only: a private directory for each test's socket.
+tempfile.workspace = true

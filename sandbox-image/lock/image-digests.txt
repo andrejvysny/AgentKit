@@ -1,0 +1,6 @@
+# Output of ./build.sh verify: two builds from manifest.env, the second cold
+# (fresh builder, --no-cache), produced these identical digests.
+# Columns: platform, image manifest digest, image config digest (= docker image id).
+index sha256:78e813b333317aef6ad8bdc4cf3682b9752b05f54f88eb8051535dd27a07de93
+linux/amd64 sha256:c0eec9f411447d46d6b38ffba549464234a31679f6a21cabe5ca0f8752973959 sha256:687fe67511222c7fbb32c7f7230a929cd77038c88ab82169c3501841eae935d9
+linux/arm64 sha256:6fcb57337145e46cf39809c40041793093920ca1e729bc89a958531518dbfa16 sha256:2a4258daebe0a62554ef7d23f12089cd4e20e0edfb0dfe61504006a29a308f32

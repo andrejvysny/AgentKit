@@ -14,6 +14,7 @@ const update = process.argv.includes("--update-allowlist");
 const LAYERS = {
   "agentkit-kernel": 1,
   "agentkit-contracts": 1,
+  "agentkit-sandbox-proto": 1,
   "agentkit-core": 2,
   "agentkit-native": 2,
   "agentkit-engine": 3,
@@ -38,6 +39,10 @@ const LAYERS = {
   "agentkit-sys": 4,
   "agentkit-native-broker": 4,
   "agentkit-claude": 4,
+  "agentkit-sandboxd": 4,
+  "agentkit-egress": 4,
+  "agentkit-sandbox-launcher": 4,
+  "agentkit-sandbox-container": 4,
   "agentkit-runtime": 5,
   "agentkit-napi": 6,
   "agentkit-http": 6,

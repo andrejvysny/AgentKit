@@ -179,6 +179,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-egress"
+version = "0.1.0"
+dependencies = [
+ "agentkit-kernel",
+ "async-trait",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "agentkit-egui-host"
 version = "0.1.0"
 dependencies = [
@@ -552,6 +564,64 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "agentkit-sandbox-container"
+version = "0.1.0"
+dependencies = [
+ "agentkit-egress",
+ "agentkit-sandbox-proto",
+ "agentkit-sandboxd",
+ "agentkit-testkit",
+ "agentkit-workspaces",
+ "async-trait",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "agentkit-sandbox-launcher"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-proto",
+ "agentkit-sys",
+ "async-trait",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "agentkit-sandbox-proto"
+version = "0.1.0"
+dependencies = [
+ "agentkit-kernel",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "agentkit-sandboxd"
+version = "0.1.0"
+dependencies = [
+ "agentkit-sandbox-proto",
+ "agentkit-sys",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -1,0 +1,320 @@
+pub mod agentkit_sandbox_proto
+pub mod agentkit_sandbox_proto::frame
+pub enum agentkit_sandbox_proto::frame::Frame
+pub agentkit_sandbox_proto::frame::Frame::Control(alloc::string::String)
+pub agentkit_sandbox_proto::frame::Frame::Data(agentkit_sandbox_proto::frame::DataFrame)
+impl agentkit_sandbox_proto::frame::Frame
+pub fn agentkit_sandbox_proto::frame::Frame::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_sandbox_proto::frame::FrameError>
+pub enum agentkit_sandbox_proto::frame::FrameError
+pub agentkit_sandbox_proto::frame::FrameError::DataTooShort
+pub agentkit_sandbox_proto::frame::FrameError::DataTooShort::len: u64
+pub agentkit_sandbox_proto::frame::FrameError::EmptyFrame
+pub agentkit_sandbox_proto::frame::FrameError::InvalidJson(serde_json::error::Error)
+pub agentkit_sandbox_proto::frame::FrameError::InvalidMessage(serde_json::error::Error)
+pub agentkit_sandbox_proto::frame::FrameError::InvalidUtf8
+pub agentkit_sandbox_proto::frame::FrameError::Io(core::io::error::Error)
+pub agentkit_sandbox_proto::frame::FrameError::Poisoned
+pub agentkit_sandbox_proto::frame::FrameError::Serialize(serde_json::error::Error)
+pub agentkit_sandbox_proto::frame::FrameError::TooLarge
+pub agentkit_sandbox_proto::frame::FrameError::TooLarge::len: u64
+pub agentkit_sandbox_proto::frame::FrameError::TooLarge::max: u64
+pub agentkit_sandbox_proto::frame::FrameError::Truncated
+pub agentkit_sandbox_proto::frame::FrameError::UnknownKind(u8)
+pub struct agentkit_sandbox_proto::frame::DataFrame
+pub agentkit_sandbox_proto::frame::DataFrame::bytes: alloc::vec::Vec<u8>
+pub agentkit_sandbox_proto::frame::DataFrame::id: u64
+pub agentkit_sandbox_proto::frame::DataFrame::seq: u64
+pub struct agentkit_sandbox_proto::frame::FrameDecoder
+impl agentkit_sandbox_proto::frame::FrameDecoder
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::buffered(&self) -> usize
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::new() -> Self
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::next_frame(&mut self) -> core::result::Result<core::option::Option<agentkit_sandbox_proto::frame::Frame>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::push(&mut self, &[u8])
+pub const agentkit_sandbox_proto::frame::CONTROL_MAX_BYTES: usize
+pub const agentkit_sandbox_proto::frame::DATA_HEADER_BYTES: usize
+pub const agentkit_sandbox_proto::frame::DATA_MAX_BYTES: usize
+pub const agentkit_sandbox_proto::frame::KIND_CONTROL: u8
+pub const agentkit_sandbox_proto::frame::KIND_DATA: u8
+pub const agentkit_sandbox_proto::frame::LENGTH_BYTES: usize
+pub const agentkit_sandbox_proto::frame::PROTOCOL_VERSION: u32
+pub fn agentkit_sandbox_proto::frame::encode_control<T: serde_core::ser::Serialize>(&T) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::frame::encode_data(u64, u64, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::frame::parse_control<T: serde_core::de::DeserializeOwned>(&str) -> core::result::Result<T, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::frame::read_frame<R: alloc::io::read::Read>(&mut R) -> core::result::Result<core::option::Option<agentkit_sandbox_proto::frame::Frame>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::frame::write_frame<W: core::io::write::Write>(&mut W, &agentkit_sandbox_proto::frame::Frame) -> core::result::Result<(), agentkit_sandbox_proto::frame::FrameError>
+pub mod agentkit_sandbox_proto::guest
+pub enum agentkit_sandbox_proto::guest::EntryKind
+pub agentkit_sandbox_proto::guest::EntryKind::Directory
+pub agentkit_sandbox_proto::guest::EntryKind::File
+pub agentkit_sandbox_proto::guest::EntryKind::Other
+pub agentkit_sandbox_proto::guest::EntryKind::Symlink
+pub enum agentkit_sandbox_proto::guest::GuestErrorCode
+pub agentkit_sandbox_proto::guest::GuestErrorCode::Busy
+pub agentkit_sandbox_proto::guest::GuestErrorCode::DigestMismatch
+pub agentkit_sandbox_proto::guest::GuestErrorCode::FileTooLarge
+pub agentkit_sandbox_proto::guest::GuestErrorCode::FileTooLarge::size: u64
+pub agentkit_sandbox_proto::guest::GuestErrorCode::GenerationMismatch
+pub agentkit_sandbox_proto::guest::GuestErrorCode::Internal
+pub agentkit_sandbox_proto::guest::GuestErrorCode::InvalidPath
+pub agentkit_sandbox_proto::guest::GuestErrorCode::InvalidRequest
+pub agentkit_sandbox_proto::guest::GuestErrorCode::NoSpace
+pub agentkit_sandbox_proto::guest::GuestErrorCode::NotADirectory
+pub agentkit_sandbox_proto::guest::GuestErrorCode::NotARegularFile
+pub agentkit_sandbox_proto::guest::GuestErrorCode::NotFound
+pub agentkit_sandbox_proto::guest::GuestErrorCode::ProtocolMismatch
+pub agentkit_sandbox_proto::guest::GuestErrorCode::SizeMismatch
+pub enum agentkit_sandbox_proto::guest::OperationState
+pub agentkit_sandbox_proto::guest::OperationState::Accepted
+pub agentkit_sandbox_proto::guest::OperationState::Cancelled
+pub agentkit_sandbox_proto::guest::OperationState::Failed
+pub agentkit_sandbox_proto::guest::OperationState::Failed::exit: core::option::Option<i32>
+pub agentkit_sandbox_proto::guest::OperationState::Failed::signal: core::option::Option<i32>
+pub agentkit_sandbox_proto::guest::OperationState::OutputLimit
+pub agentkit_sandbox_proto::guest::OperationState::Running
+pub agentkit_sandbox_proto::guest::OperationState::Succeeded
+pub agentkit_sandbox_proto::guest::OperationState::Succeeded::exit: i32
+pub agentkit_sandbox_proto::guest::OperationState::TimedOut
+pub agentkit_sandbox_proto::guest::OperationState::Unknown
+pub enum agentkit_sandbox_proto::guest::PathRoot
+pub agentkit_sandbox_proto::guest::PathRoot::Home
+pub agentkit_sandbox_proto::guest::PathRoot::Workspace
+pub enum agentkit_sandbox_proto::guest::Reply
+pub agentkit_sandbox_proto::guest::Reply::Accepted
+pub agentkit_sandbox_proto::guest::Reply::Accepted::existing: bool
+pub agentkit_sandbox_proto::guest::Reply::Accepted::state: agentkit_sandbox_proto::guest::OperationState
+pub agentkit_sandbox_proto::guest::Reply::Bye
+pub agentkit_sandbox_proto::guest::Reply::Conflict
+pub agentkit_sandbox_proto::guest::Reply::Entries
+pub agentkit_sandbox_proto::guest::Reply::Entries::entries: alloc::vec::Vec<agentkit_sandbox_proto::guest::Entry>
+pub agentkit_sandbox_proto::guest::Reply::Entries::truncated: bool
+pub agentkit_sandbox_proto::guest::Reply::Error(agentkit_sandbox_proto::guest::GuestError)
+pub agentkit_sandbox_proto::guest::Reply::FileData(agentkit_sandbox_proto::guest::FileData)
+pub agentkit_sandbox_proto::guest::Reply::Hello
+pub agentkit_sandbox_proto::guest::Reply::Hello::channel_token: alloc::string::String
+pub agentkit_sandbox_proto::guest::Reply::Hello::generation: u64
+pub agentkit_sandbox_proto::guest::Reply::Hello::image_digest: alloc::string::String
+pub agentkit_sandbox_proto::guest::Reply::Hello::protocol: u32
+pub agentkit_sandbox_proto::guest::Reply::OutputData(agentkit_sandbox_proto::guest::OutputData)
+pub agentkit_sandbox_proto::guest::Reply::State
+pub agentkit_sandbox_proto::guest::Reply::State::state: agentkit_sandbox_proto::guest::OperationState
+pub agentkit_sandbox_proto::guest::Reply::Unknown
+pub agentkit_sandbox_proto::guest::Reply::Usage
+pub agentkit_sandbox_proto::guest::Reply::Usage::complete: bool
+pub agentkit_sandbox_proto::guest::Reply::Usage::home_bytes: u64
+pub agentkit_sandbox_proto::guest::Reply::Usage::workspace_bytes: u64
+pub enum agentkit_sandbox_proto::guest::Request
+pub agentkit_sandbox_proto::guest::Request::Cancel
+pub agentkit_sandbox_proto::guest::Request::Cancel::op: alloc::string::String
+pub agentkit_sandbox_proto::guest::Request::Exec(agentkit_sandbox_proto::guest::ExecRequest)
+pub agentkit_sandbox_proto::guest::Request::Hello
+pub agentkit_sandbox_proto::guest::Request::Hello::generation: u64
+pub agentkit_sandbox_proto::guest::Request::Hello::protocol: u32
+pub agentkit_sandbox_proto::guest::Request::List(agentkit_sandbox_proto::guest::ListRequest)
+pub agentkit_sandbox_proto::guest::Request::Output
+pub agentkit_sandbox_proto::guest::Request::Output::after_seq: u64
+pub agentkit_sandbox_proto::guest::Request::Output::max_bytes: u64
+pub agentkit_sandbox_proto::guest::Request::Output::op: alloc::string::String
+pub agentkit_sandbox_proto::guest::Request::Read(agentkit_sandbox_proto::guest::ReadRequest)
+pub agentkit_sandbox_proto::guest::Request::Shutdown
+pub agentkit_sandbox_proto::guest::Request::Status
+pub agentkit_sandbox_proto::guest::Request::Status::op: alloc::string::String
+pub agentkit_sandbox_proto::guest::Request::Usage
+pub agentkit_sandbox_proto::guest::Request::Write(agentkit_sandbox_proto::guest::WriteRequest)
+pub struct agentkit_sandbox_proto::guest::Entry
+pub agentkit_sandbox_proto::guest::Entry::kind: agentkit_sandbox_proto::guest::EntryKind
+pub agentkit_sandbox_proto::guest::Entry::path: alloc::string::String
+pub agentkit_sandbox_proto::guest::Entry::size: core::option::Option<u64>
+pub struct agentkit_sandbox_proto::guest::ExecRequest
+pub agentkit_sandbox_proto::guest::ExecRequest::args_sha256: alloc::string::String
+pub agentkit_sandbox_proto::guest::ExecRequest::command: alloc::string::String
+pub agentkit_sandbox_proto::guest::ExecRequest::cwd: alloc::string::String
+pub agentkit_sandbox_proto::guest::ExecRequest::op: alloc::string::String
+pub agentkit_sandbox_proto::guest::ExecRequest::output_limit: agentkit_sandbox_proto::guest::OutputLimit
+pub agentkit_sandbox_proto::guest::ExecRequest::timeout_ms: u64
+pub agentkit_sandbox_proto::guest::ExecRequest::tz: core::option::Option<alloc::string::String>
+pub struct agentkit_sandbox_proto::guest::FileData
+pub agentkit_sandbox_proto::guest::FileData::binary: bool
+pub agentkit_sandbox_proto::guest::FileData::eof: bool
+pub agentkit_sandbox_proto::guest::FileData::len: u64
+pub agentkit_sandbox_proto::guest::FileData::mtime_ms: i64
+pub agentkit_sandbox_proto::guest::FileData::size: u64
+pub struct agentkit_sandbox_proto::guest::GuestError
+pub agentkit_sandbox_proto::guest::GuestError::code: agentkit_sandbox_proto::guest::GuestErrorCode
+pub agentkit_sandbox_proto::guest::GuestError::message: alloc::string::String
+pub struct agentkit_sandbox_proto::guest::ListRequest
+pub agentkit_sandbox_proto::guest::ListRequest::depth: u8
+pub agentkit_sandbox_proto::guest::ListRequest::max_entries: u32
+pub agentkit_sandbox_proto::guest::ListRequest::path: alloc::string::String
+pub agentkit_sandbox_proto::guest::ListRequest::root: agentkit_sandbox_proto::guest::PathRoot
+pub struct agentkit_sandbox_proto::guest::OutputData
+pub agentkit_sandbox_proto::guest::OutputData::eof: bool
+pub agentkit_sandbox_proto::guest::OutputData::len: u64
+pub agentkit_sandbox_proto::guest::OutputData::next_seq: u64
+pub agentkit_sandbox_proto::guest::OutputData::state: agentkit_sandbox_proto::guest::OperationState
+pub agentkit_sandbox_proto::guest::OutputData::truncated: bool
+pub struct agentkit_sandbox_proto::guest::OutputLimit
+pub agentkit_sandbox_proto::guest::OutputLimit::max_bytes: u64
+pub agentkit_sandbox_proto::guest::OutputLimit::max_lines: core::option::Option<u64>
+pub struct agentkit_sandbox_proto::guest::ReadRequest
+pub agentkit_sandbox_proto::guest::ReadRequest::limit_bytes: u64
+pub agentkit_sandbox_proto::guest::ReadRequest::max_file_bytes: u64
+pub agentkit_sandbox_proto::guest::ReadRequest::offset: u64
+pub agentkit_sandbox_proto::guest::ReadRequest::path: alloc::string::String
+pub agentkit_sandbox_proto::guest::ReadRequest::raw: bool
+pub agentkit_sandbox_proto::guest::ReadRequest::root: agentkit_sandbox_proto::guest::PathRoot
+pub struct agentkit_sandbox_proto::guest::WriteRequest
+pub agentkit_sandbox_proto::guest::WriteRequest::args_sha256: alloc::string::String
+pub agentkit_sandbox_proto::guest::WriteRequest::mode: u32
+pub agentkit_sandbox_proto::guest::WriteRequest::op: alloc::string::String
+pub agentkit_sandbox_proto::guest::WriteRequest::path: alloc::string::String
+pub agentkit_sandbox_proto::guest::WriteRequest::root: agentkit_sandbox_proto::guest::PathRoot
+pub agentkit_sandbox_proto::guest::WriteRequest::sha256: alloc::string::String
+pub agentkit_sandbox_proto::guest::WriteRequest::size: u64
+pub type agentkit_sandbox_proto::guest::ReplyEnvelope = agentkit_sandbox_proto::Envelope<agentkit_sandbox_proto::guest::Reply>
+pub type agentkit_sandbox_proto::guest::RequestEnvelope = agentkit_sandbox_proto::Envelope<agentkit_sandbox_proto::guest::Request>
+pub mod agentkit_sandbox_proto::launcher
+pub enum agentkit_sandbox_proto::launcher::LauncherErrorCode
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::Busy
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::ImageMismatch
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::InvalidRequest
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::NotFound
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::RuntimeFailed
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::StaleGeneration
+pub agentkit_sandbox_proto::launcher::LauncherErrorCode::StaleGeneration::current: u64
+pub enum agentkit_sandbox_proto::launcher::Reply
+pub agentkit_sandbox_proto::launcher::Reply::Done
+pub agentkit_sandbox_proto::launcher::Reply::Ensured
+pub agentkit_sandbox_proto::launcher::Reply::Ensured::channel_token: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Reply::Ensured::container_id: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Reply::Error(agentkit_sandbox_proto::launcher::LauncherError)
+pub agentkit_sandbox_proto::launcher::Reply::Inspected
+pub agentkit_sandbox_proto::launcher::Reply::Inspected::running: core::option::Option<u64>
+pub agentkit_sandbox_proto::launcher::Reply::Inspected::stopped_through: core::option::Option<u64>
+pub agentkit_sandbox_proto::launcher::Reply::Stopped
+pub agentkit_sandbox_proto::launcher::Reply::Stopped::proven: bool
+pub agentkit_sandbox_proto::launcher::Reply::Stopped::reason: core::option::Option<alloc::string::String>
+pub agentkit_sandbox_proto::launcher::Reply::Usage
+pub agentkit_sandbox_proto::launcher::Reply::Usage::home_bytes: u64
+pub agentkit_sandbox_proto::launcher::Reply::Usage::workspace_bytes: u64
+pub enum agentkit_sandbox_proto::launcher::Request
+pub agentkit_sandbox_proto::launcher::Request::Destroy
+pub agentkit_sandbox_proto::launcher::Request::Destroy::workspace_id: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Request::Ensure
+pub agentkit_sandbox_proto::launcher::Request::Ensure::generation: u64
+pub agentkit_sandbox_proto::launcher::Request::Ensure::image_digest: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Request::Ensure::tier: agentkit_sandbox_proto::launcher::Tier
+pub agentkit_sandbox_proto::launcher::Request::Ensure::workspace_id: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Request::Inspect
+pub agentkit_sandbox_proto::launcher::Request::Inspect::workspace_id: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Request::ResetHome
+pub agentkit_sandbox_proto::launcher::Request::ResetHome::workspace_id: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Request::Stop
+pub agentkit_sandbox_proto::launcher::Request::Stop::generation: u64
+pub agentkit_sandbox_proto::launcher::Request::Stop::grace_ms: u64
+pub agentkit_sandbox_proto::launcher::Request::Stop::workspace_id: alloc::string::String
+pub agentkit_sandbox_proto::launcher::Request::Usage
+pub agentkit_sandbox_proto::launcher::Request::Usage::workspace_id: alloc::string::String
+pub struct agentkit_sandbox_proto::launcher::LauncherError
+pub agentkit_sandbox_proto::launcher::LauncherError::code: agentkit_sandbox_proto::launcher::LauncherErrorCode
+pub agentkit_sandbox_proto::launcher::LauncherError::message: alloc::string::String
+pub struct agentkit_sandbox_proto::launcher::Tier
+pub agentkit_sandbox_proto::launcher::Tier::cpus_milli: u32
+pub agentkit_sandbox_proto::launcher::Tier::memory_bytes: u64
+pub agentkit_sandbox_proto::launcher::Tier::pids: u32
+pub type agentkit_sandbox_proto::launcher::ReplyEnvelope = agentkit_sandbox_proto::Envelope<agentkit_sandbox_proto::launcher::Reply>
+pub type agentkit_sandbox_proto::launcher::RequestEnvelope = agentkit_sandbox_proto::Envelope<agentkit_sandbox_proto::launcher::Request>
+pub mod agentkit_sandbox_proto::stream
+pub enum agentkit_sandbox_proto::stream::StreamError
+pub agentkit_sandbox_proto::stream::StreamError::Finished
+pub agentkit_sandbox_proto::stream::StreamError::OutOfOrder
+pub agentkit_sandbox_proto::stream::StreamError::OutOfOrder::expected: u64
+pub agentkit_sandbox_proto::stream::StreamError::OutOfOrder::got: u64
+pub agentkit_sandbox_proto::stream::StreamError::TooLong
+pub agentkit_sandbox_proto::stream::StreamError::TooLong::expected: u64
+pub agentkit_sandbox_proto::stream::StreamError::TooShort
+pub agentkit_sandbox_proto::stream::StreamError::TooShort::expected: u64
+pub agentkit_sandbox_proto::stream::StreamError::TooShort::got: u64
+pub agentkit_sandbox_proto::stream::StreamError::WrongRequest
+pub agentkit_sandbox_proto::stream::StreamError::WrongRequest::expected: u64
+pub agentkit_sandbox_proto::stream::StreamError::WrongRequest::got: u64
+pub struct agentkit_sandbox_proto::stream::DataReceiver
+impl agentkit_sandbox_proto::stream::DataReceiver
+pub fn agentkit_sandbox_proto::stream::DataReceiver::accept(&mut self, agentkit_sandbox_proto::frame::DataFrame) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, agentkit_sandbox_proto::stream::StreamError>
+pub fn agentkit_sandbox_proto::stream::DataReceiver::new(u64, u64) -> Self
+pub fn agentkit_sandbox_proto::stream::data_frames(u64, &[u8]) -> impl core::iter::traits::iterator::Iterator<Item = agentkit_sandbox_proto::frame::DataFrame> + '_
+pub mod agentkit_sandbox_proto::validate
+pub const agentkit_sandbox_proto::validate::MACHINE_DIR_NAME_BYTES: usize
+pub const agentkit_sandbox_proto::validate::OPERATION_ID_MAX_BYTES: usize
+pub const agentkit_sandbox_proto::validate::PATH_MAX_BYTES: usize
+pub const agentkit_sandbox_proto::validate::SHA256_HEX_LEN: usize
+pub const agentkit_sandbox_proto::validate::WORKSPACE_ID_MAX_BYTES: usize
+pub fn agentkit_sandbox_proto::validate::machine_dir_name(&str, u64) -> alloc::string::String
+pub fn agentkit_sandbox_proto::validate::valid_operation_id(&str) -> bool
+pub fn agentkit_sandbox_proto::validate::valid_sha256(&str) -> bool
+pub fn agentkit_sandbox_proto::validate::valid_workspace_id(&str) -> bool
+pub enum agentkit_sandbox_proto::Frame
+pub agentkit_sandbox_proto::Frame::Control(alloc::string::String)
+pub agentkit_sandbox_proto::Frame::Data(agentkit_sandbox_proto::frame::DataFrame)
+impl agentkit_sandbox_proto::frame::Frame
+pub fn agentkit_sandbox_proto::frame::Frame::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_sandbox_proto::frame::FrameError>
+pub enum agentkit_sandbox_proto::FrameError
+pub agentkit_sandbox_proto::FrameError::DataTooShort
+pub agentkit_sandbox_proto::FrameError::DataTooShort::len: u64
+pub agentkit_sandbox_proto::FrameError::EmptyFrame
+pub agentkit_sandbox_proto::FrameError::InvalidJson(serde_json::error::Error)
+pub agentkit_sandbox_proto::FrameError::InvalidMessage(serde_json::error::Error)
+pub agentkit_sandbox_proto::FrameError::InvalidUtf8
+pub agentkit_sandbox_proto::FrameError::Io(core::io::error::Error)
+pub agentkit_sandbox_proto::FrameError::Poisoned
+pub agentkit_sandbox_proto::FrameError::Serialize(serde_json::error::Error)
+pub agentkit_sandbox_proto::FrameError::TooLarge
+pub agentkit_sandbox_proto::FrameError::TooLarge::len: u64
+pub agentkit_sandbox_proto::FrameError::TooLarge::max: u64
+pub agentkit_sandbox_proto::FrameError::Truncated
+pub agentkit_sandbox_proto::FrameError::UnknownKind(u8)
+pub enum agentkit_sandbox_proto::StreamError
+pub agentkit_sandbox_proto::StreamError::Finished
+pub agentkit_sandbox_proto::StreamError::OutOfOrder
+pub agentkit_sandbox_proto::StreamError::OutOfOrder::expected: u64
+pub agentkit_sandbox_proto::StreamError::OutOfOrder::got: u64
+pub agentkit_sandbox_proto::StreamError::TooLong
+pub agentkit_sandbox_proto::StreamError::TooLong::expected: u64
+pub agentkit_sandbox_proto::StreamError::TooShort
+pub agentkit_sandbox_proto::StreamError::TooShort::expected: u64
+pub agentkit_sandbox_proto::StreamError::TooShort::got: u64
+pub agentkit_sandbox_proto::StreamError::WrongRequest
+pub agentkit_sandbox_proto::StreamError::WrongRequest::expected: u64
+pub agentkit_sandbox_proto::StreamError::WrongRequest::got: u64
+pub struct agentkit_sandbox_proto::DataFrame
+pub agentkit_sandbox_proto::DataFrame::bytes: alloc::vec::Vec<u8>
+pub agentkit_sandbox_proto::DataFrame::id: u64
+pub agentkit_sandbox_proto::DataFrame::seq: u64
+pub struct agentkit_sandbox_proto::DataReceiver
+impl agentkit_sandbox_proto::stream::DataReceiver
+pub fn agentkit_sandbox_proto::stream::DataReceiver::accept(&mut self, agentkit_sandbox_proto::frame::DataFrame) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, agentkit_sandbox_proto::stream::StreamError>
+pub fn agentkit_sandbox_proto::stream::DataReceiver::new(u64, u64) -> Self
+pub struct agentkit_sandbox_proto::Envelope<B>
+pub agentkit_sandbox_proto::Envelope::body: B
+pub agentkit_sandbox_proto::Envelope::id: u64
+impl<B> agentkit_sandbox_proto::Envelope<B>
+pub fn agentkit_sandbox_proto::Envelope<B>::new(u64, B) -> Self
+pub struct agentkit_sandbox_proto::FrameDecoder
+impl agentkit_sandbox_proto::frame::FrameDecoder
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::buffered(&self) -> usize
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::new() -> Self
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::next_frame(&mut self) -> core::result::Result<core::option::Option<agentkit_sandbox_proto::frame::Frame>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::frame::FrameDecoder::push(&mut self, &[u8])
+pub const agentkit_sandbox_proto::CONTROL_MAX_BYTES: usize
+pub const agentkit_sandbox_proto::DATA_MAX_BYTES: usize
+pub const agentkit_sandbox_proto::MACHINE_DIR_NAME_BYTES: usize
+pub const agentkit_sandbox_proto::PROTOCOL_VERSION: u32
+pub fn agentkit_sandbox_proto::data_frames(u64, &[u8]) -> impl core::iter::traits::iterator::Iterator<Item = agentkit_sandbox_proto::frame::DataFrame> + '_
+pub fn agentkit_sandbox_proto::encode_control<T: serde_core::ser::Serialize>(&T) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::encode_data(u64, u64, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::machine_dir_name(&str, u64) -> alloc::string::String
+pub fn agentkit_sandbox_proto::parse_control<T: serde_core::de::DeserializeOwned>(&str) -> core::result::Result<T, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::read_frame<R: alloc::io::read::Read>(&mut R) -> core::result::Result<core::option::Option<agentkit_sandbox_proto::frame::Frame>, agentkit_sandbox_proto::frame::FrameError>
+pub fn agentkit_sandbox_proto::valid_operation_id(&str) -> bool
+pub fn agentkit_sandbox_proto::valid_sha256(&str) -> bool
+pub fn agentkit_sandbox_proto::valid_workspace_id(&str) -> bool
+pub fn agentkit_sandbox_proto::write_frame<W: core::io::write::Write>(&mut W, &agentkit_sandbox_proto::frame::Frame) -> core::result::Result<(), agentkit_sandbox_proto::frame::FrameError>

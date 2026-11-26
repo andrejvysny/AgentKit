@@ -1,0 +1,27 @@
+# Top-level Debian packages (installed with --no-install-recommends).
+# Versions come from the snapshot named by DEBIAN_SNAPSHOT in manifest.env;
+# lock/dpkg-linux-<arch>.txt records every resolved package and version.
+# libatomic1 is the one runtime library the official Node.js binary needs
+# beyond the slim base.
+bash
+ca-certificates
+coreutils
+curl
+file
+findutils
+gawk
+git
+grep
+jq
+less
+libatomic1
+python3
+python3-pip
+python3-venv
+ripgrep
+sed
+tar
+tree
+tzdata
+unzip
+zip

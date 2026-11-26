@@ -1,0 +1,32 @@
+pub mod agentkit_sandbox_launcher
+pub enum agentkit_sandbox_launcher::ConfigError
+pub agentkit_sandbox_launcher::ConfigError::Invalid(alloc::string::String)
+pub agentkit_sandbox_launcher::ConfigError::Parse(serde_json::error::Error)
+pub agentkit_sandbox_launcher::ConfigError::Read(core::io::error::Error)
+pub enum agentkit_sandbox_launcher::StartupError
+pub agentkit_sandbox_launcher::StartupError::Listen(core::io::error::Error)
+pub agentkit_sandbox_launcher::StartupError::Serve(core::io::error::Error)
+pub agentkit_sandbox_launcher::StartupError::SocketDir(alloc::string::String)
+pub agentkit_sandbox_launcher::StartupError::State(alloc::string::String)
+pub struct agentkit_sandbox_launcher::Config
+pub agentkit_sandbox_launcher::Config::image_digest: alloc::string::String
+pub agentkit_sandbox_launcher::Config::image_reference: alloc::string::String
+pub agentkit_sandbox_launcher::Config::listen_gid: core::option::Option<u32>
+pub agentkit_sandbox_launcher::Config::listen_mode: u32
+pub agentkit_sandbox_launcher::Config::listen_socket: std::path::PathBuf
+pub agentkit_sandbox_launcher::Config::max_connections: usize
+pub agentkit_sandbox_launcher::Config::max_containers: usize
+pub agentkit_sandbox_launcher::Config::name_prefix: alloc::string::String
+pub agentkit_sandbox_launcher::Config::runtime_socket: std::path::PathBuf
+pub agentkit_sandbox_launcher::Config::server_gid: u32
+pub agentkit_sandbox_launcher::Config::server_uid: u32
+pub agentkit_sandbox_launcher::Config::socket_host_dir: std::path::PathBuf
+pub agentkit_sandbox_launcher::Config::state_dir: std::path::PathBuf
+pub agentkit_sandbox_launcher::Config::stop_grace_max_ms: u64
+pub agentkit_sandbox_launcher::Config::tiers: alloc::collections::btree::map::BTreeMap<alloc::string::String, agentkit_sandbox_proto::launcher::Tier>
+pub agentkit_sandbox_launcher::Config::tmp_size_bytes: u64
+pub agentkit_sandbox_launcher::Config::var_tmp_size_bytes: u64
+impl agentkit_sandbox_launcher::Config
+pub fn agentkit_sandbox_launcher::Config::load(&std::path::Path) -> core::result::Result<Self, agentkit_sandbox_launcher::ConfigError>
+pub fn agentkit_sandbox_launcher::Config::validate(&self) -> core::result::Result<(), agentkit_sandbox_launcher::ConfigError>
+pub async fn agentkit_sandbox_launcher::run(agentkit_sandbox_launcher::Config) -> core::result::Result<(), agentkit_sandbox_launcher::StartupError>

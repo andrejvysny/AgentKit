@@ -24,10 +24,10 @@ disagrees with the script, the script wins.
 
 | Layer | Crates (`agentkit-` prefix omitted) |
 |---|---|
-| 1 foundation | `kernel`, `contracts` |
+| 1 foundation | `kernel`, `contracts`, `sandbox-proto` |
 | 2 execution-owner ports | `core` (model/tool loop), `native` (vendor runtime ports) |
 | 3 contexts | `engine`, `governance`, `sessions`, `chat`, `agents`, `memory`, `native-exec`, `workspaces` |
-| 4 driven adapters | `store`, `providers`, `toolpacks-coding`, `toolpacks-web`, `lsp`, `mcp`, `connections`, `embed-local`, `sys`, `native-broker`, `claude`, `toolpacks-sandbox` |
+| 4 driven adapters | `store`, `providers`, `toolpacks-coding`, `toolpacks-web`, `lsp`, `mcp`, `connections`, `embed-local`, `sys`, `native-broker`, `claude`, `toolpacks-sandbox`, `sandboxd`, `egress`, `sandbox-launcher`, `sandbox-container` |
 | 5 composition | `runtime` |
 | 6 driving adapters | `napi`, `http`, `client`, `eval`, and the facade `agentkit-rust` (in `crates/agentkit`) |
 
