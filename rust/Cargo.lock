@@ -507,6 +507,8 @@ dependencies = [
  "agentkit-sys",
  "agentkit-testkit",
  "agentkit-toolpacks-coding",
+ "agentkit-toolpacks-sandbox",
+ "agentkit-workspaces",
  "async-trait",
  "axum",
  "chrono",
@@ -587,6 +589,7 @@ dependencies = [
  "agentkit-sessions",
  "agentkit-sys",
  "agentkit-testkit",
+ "agentkit-workspaces",
  "async-trait",
  "chrono",
  "ring",
@@ -640,6 +643,7 @@ dependencies = [
  "agentkit-native",
  "agentkit-providers",
  "agentkit-sessions",
+ "agentkit-workspaces",
  "async-trait",
  "futures",
  "http",
@@ -681,6 +685,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentkit-toolpacks-sandbox"
+version = "0.1.0"
+dependencies = [
+ "agentkit-core",
+ "agentkit-engine",
+ "agentkit-governance",
+ "agentkit-kernel",
+ "agentkit-store",
+ "agentkit-testkit",
+ "agentkit-workspaces",
+ "async-trait",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "agentkit-toolpacks-web"
 version = "0.1.0"
 dependencies = [
@@ -704,6 +726,20 @@ dependencies = [
  "tokio-util",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "agentkit-workspaces"
+version = "0.1.0"
+dependencies = [
+ "agentkit-kernel",
+ "agentkit-testkit",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

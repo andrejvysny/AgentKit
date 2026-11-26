@@ -19,6 +19,7 @@ pub use lanes::advisor::AdvisorLane;
 pub use lanes::coding::CodingLane;
 pub use lanes::lsp::LspLane;
 pub use lanes::native::NativeLane;
+pub use lanes::sandbox::SandboxLane;
 pub use lanes::subagent::SubagentLane;
 pub use runtime::AgentRuntime;
 pub use session_execution_authority::SessionExecutionAuthority;

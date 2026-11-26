@@ -366,15 +366,6 @@ impl DurableExecution {
                 Some(&ts_args),
             )
         };
-        // An answer only reauthorizes the exact unresolved generation it
-        // named: grant.uncertainty_generation must equal the pending
-        // receipt's execution id. An unrelated (or stale) grant never
-        // opens an uncertain effect.
-        let covers = |previous: &agentkit_store::ExecutionReceiptRecord| {
-            self.approvals.get(&tool_call_id).is_some_and(|grant| {
-                grant.uncertainty_generation.as_deref() == Some(previous.execution_id.as_str())
-            })
-        };
         // 1. Replay barrier: the last receipt for this exact tool call.
         //    (Only the newest receipt counts: a newest-admitted call must
         //    read as uncertain even if an older attempt completed.)
@@ -409,98 +400,17 @@ impl DurableExecution {
             })?;
             return Ok(PreGuard::Replay(stored));
         }
-        // 2. Uncertainty probe within this run: the human must explicitly
-        //    reauthorize the unresolved generation (or the call proceeds
-        //    when an answered grant already covers it).
-        if let Some(previous) = receipts
-            .iter()
-            .rev()
-            .find(|r| r.tool_name == tool.name && args_match(r))
-            .filter(|r| r.status == agentkit_store::ExecutionReceiptStatus::Admitted)
-            && !covers(previous)
-        {
-            return Ok(PreGuard::Uncertain {
-                refusal: receipt_refusal(
-                    context,
-                    "tool_result_uncertain",
-                    &uncertain_message(),
-                    Some(json!({"approvalGeneration": previous.execution_id})),
-                ),
-                generation: previous.execution_id.clone(),
-            });
-        }
-        // 3. Cross-run uncertainty guard (same chat): an uncertain mutation
-        // under any run of this chat blocks an identical reissue even under a
-        // fresh tool-call id. An identical completed operation is not blocked;
-        // neither is a reissue whose answer names exactly this pending
-        // generation.
-        if let Some(previous) = self
-            .context
-            .store
-            .list_executions_by_chat(self.chat_id.clone())
-            .await
-            .map_err(receipt_unreadable)?
-            .iter()
-            .rev()
-            .filter(|r| r.run_id != self.context.task.task_id)
-            .find(|r| {
-                r.tool_name == tool.name
-                    && args_match(r)
-                    && r.status == agentkit_store::ExecutionReceiptStatus::Admitted
-            })
-            && !covers(previous)
-        {
-            return Ok(PreGuard::Uncertain {
-                refusal: receipt_refusal(
-                    context,
-                    "tool_result_uncertain",
-                    &format!(
-                        "{}; the pending execution belongs to run {}",
-                        uncertain_message(),
-                        previous.run_id
-                    ),
-                    Some(
-                        json!({"approvalGeneration": previous.execution_id, "pendingRunId": previous.run_id}),
-                    ),
-                ),
-                generation: previous.execution_id.clone(),
-            });
-        }
-        // 4. Durable uncertainty barriers: admitted effects whose receipt
-        //    could not be placed (the tolerant TypeScript import records
-        //    one instead of silently omitting the row) block the identical
-        //    reissue too, keyed by tool name plus best-known identity. A
-        //    barrier with no argument fingerprint blocks the tool by name;
-        //    only an answer naming the barrier's exact id opens it.
-        let barriers = self
-            .context
-            .store
-            .list_uncertainty_barriers(self.chat_id.clone(), self.context.task.task_id.clone())
-            .await
-            .map_err(receipt_unreadable)?;
-        if let Some(barrier) = barriers
-            .iter()
-            .rev()
-            .find(|barrier| barrier.blocks(&tool.name, &args, Some(&ts_args)))
-            && !self.approvals.get(&tool_call_id).is_some_and(|grant| {
-                grant.uncertainty_generation.as_deref() == Some(barrier.barrier_id.as_str())
-            })
-        {
-            return Ok(PreGuard::Uncertain {
-                refusal: receipt_refusal(
-                    context,
-                    "tool_result_uncertain",
-                    &format!(
-                        "{}; the unresolved evidence is a barrier: {}",
-                        uncertain_message(),
-                        barrier.reason
-                    ),
-                    Some(json!({"approvalGeneration": barrier.barrier_id})),
-                ),
-                generation: barrier.barrier_id.clone(),
-            });
-        }
-        Ok(PreGuard::Proceed)
+        // 2.-4. The unresolved executions that block this operation. An
+        //    answer reauthorizes exactly the generation it named, and only
+        //    on a card that showed the uncertainty (`uncertainty::decide`).
+        let blocking = self
+            .blocking(context, tool, &receipts, &args, &ts_args)
+            .await?;
+        Ok(uncertainty::decide(
+            context,
+            blocking,
+            self.approvals.get(&tool_call_id),
+        ))
     }
 
     /// Atomic admission after the guard chain, before the body. Only a newly
@@ -683,14 +593,19 @@ impl DurableExecution {
                 {
                     // Our own crashed admit→complete gap: under THIS attempt
                     // a schema-invalid call never reached a body, so an
-                    // Admitted row with this attempt id under this key can
-                    // only be the recorder's unfinished write. Any other
-                    // Admitted row is a genuine uncertainty and stays with
-                    // the audited operator route.
+                    // Admitted row with this attempt id under this key, for
+                    // these very arguments, can only be the recorder's
+                    // unfinished write. Any other Admitted row (a body of
+                    // this call id that ran with valid arguments and left
+                    // its outcome unknown) is a genuine uncertainty and
+                    // stays with the audited operator route.
+                    let args = args_sha256(input);
                     if rows.iter().any(|row| {
                         row.execution_id == execution
                             && row.status == agentkit_store::ExecutionReceiptStatus::Admitted
                             && row.attempt_id == self.context.attempt_id
+                            && row.tool_name == tool.name
+                            && row.args_sha256 == args
                     }) {
                         let _ = self.complete(&execution, &refusal).await;
                     }
@@ -948,8 +863,8 @@ impl agentkit_core::Tool for ReceiptedTool {
             // operator route (`resolve_uncertain_execution` in this module);
             // the refusal's `approvalGeneration` names the exact execution
             // an operator resolves. Only the session wrapper can ask a human.
-            PreGuard::Uncertain { refusal, .. } => return Ok(refusal),
-            PreGuard::Proceed => {}
+            PreGuard::Uncertain { refusal, .. } | PreGuard::Refused(refusal) => return Ok(refusal),
+            PreGuard::Proceed | PreGuard::Reauthorized { .. } => {}
         }
         if let Some(guard) = &context.dispatch_guard {
             guard.check().await?;
@@ -988,6 +903,8 @@ impl agentkit_core::Tool for ReceiptedTool {
 
 #[cfg(test)]
 mod tests;
+
+mod uncertainty;
 
 /// Wrap the write-effect tools of a static registry in [`ReceiptedTool`],
 /// leaving read tools (and definitions, ordering, and identity) untouched.

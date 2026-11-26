@@ -8,6 +8,10 @@ fn result() -> Value {
 }
 
 async fn admitted(store: &SqliteStore) -> Lease {
+    admitted_as(store, "run_command").await
+}
+
+async fn admitted_as(store: &SqliteStore, tool_name: &str) -> Lease {
     store.submit(task("run", "chat")).await.unwrap();
     let lease = store.claim(claim(1000)).await.unwrap().unwrap().lease;
     assert!(
@@ -19,7 +23,7 @@ async fn admitted(store: &SqliteStore) -> Lease {
                     run_id: "run".into(),
                     chat_id: "chat".into(),
                     tool_call_id: "call".into(),
-                    tool_name: "run_command".into(),
+                    tool_name: tool_name.into(),
                     args_sha256: "a".repeat(64),
                     ts_args_sha256: None,
                     args_hash_provenance: ArgsHashProvenance::Canonical,
@@ -210,4 +214,35 @@ async fn no_start_preserves_a_prior_operator_resolution() {
         store.list_executions("run".into()).await.unwrap(),
         vec![resolved]
     );
+}
+
+#[tokio::test]
+async fn no_start_is_kept_only_for_tools_that_can_prove_it() {
+    for (tool, kept) in [
+        ("run_tests", true),
+        ("sandbox_run", true),
+        ("sandbox_write_file", true),
+        ("write_file", false),
+        ("sandbox_export_file", false),
+    ] {
+        let store = SqliteStore::memory(8).unwrap();
+        let lease = admitted_as(&store, tool).await;
+        let recorded = store
+            .complete_execution_not_started(
+                lease.fence(),
+                lease.attempt_id.clone(),
+                "exec".into(),
+                result(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recorded, kept, "{tool}");
+        let status = store.list_executions("run".into()).await.unwrap()[0].status;
+        let expected = if kept {
+            ExecutionReceiptStatus::Completed
+        } else {
+            ExecutionReceiptStatus::Admitted
+        };
+        assert_eq!(status, expected, "{tool}");
+    }
 }

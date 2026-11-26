@@ -31,10 +31,14 @@ pub agentkit_governance::GovernanceError::WriteToolRequiresChat
 pub agentkit_governance::GovernanceError::WriteToolRequiresWriteEffectAndTrustedActor
 impl agentkit_governance::GovernanceError
 pub fn agentkit_governance::GovernanceError::context_classification(&self) -> agentkit_engine::error::ContextClassification
-pub enum agentkit_governance::PreGuard
+#[non_exhaustive] pub enum agentkit_governance::PreGuard
 pub agentkit_governance::PreGuard::Proceed
+pub agentkit_governance::PreGuard::Reauthorized
+pub agentkit_governance::PreGuard::Reauthorized::generation: alloc::string::String
+pub agentkit_governance::PreGuard::Refused(agentkit_core::types::ToolResult)
 pub agentkit_governance::PreGuard::Replay(agentkit_core::types::ToolResult)
 pub agentkit_governance::PreGuard::Uncertain
+pub agentkit_governance::PreGuard::Uncertain::arguments_unknown: bool
 pub agentkit_governance::PreGuard::Uncertain::generation: alloc::string::String
 pub agentkit_governance::PreGuard::Uncertain::refusal: agentkit_core::types::ToolResult
 pub enum agentkit_governance::ToolGuardVerdict
@@ -64,6 +68,7 @@ pub struct agentkit_governance::ApprovalGrant
 pub agentkit_governance::ApprovalGrant::args_sha256: alloc::string::String
 pub agentkit_governance::ApprovalGrant::context_sha256: core::option::Option<alloc::string::String>
 pub agentkit_governance::ApprovalGrant::request_id: alloc::string::String
+pub agentkit_governance::ApprovalGrant::uncertainty_card: bool
 pub agentkit_governance::ApprovalGrant::uncertainty_generation: core::option::Option<alloc::string::String>
 pub struct agentkit_governance::ContributorFailure
 pub agentkit_governance::ContributorFailure::namespace: alloc::string::String
@@ -211,7 +216,10 @@ pub agentkit_governance::WriteQuery::risk: agentkit_governance::WriteRisk
 pub agentkit_governance::WriteQuery::scope_key: alloc::string::String
 pub agentkit_governance::WriteQuery::tool_name: alloc::string::String
 pub const agentkit_governance::AUTO_APPLY_FAILED_MESSAGE: &str
+pub const agentkit_governance::CARD_KIND_KEY: &str
+pub const agentkit_governance::EXECUTION_ID_METADATA_KEY: &str
 pub const agentkit_governance::NATIVE_GOVERNANCE_IDENTITY_VERSION: &str
+pub const agentkit_governance::UNCERTAIN_CARD_KIND: &str
 pub trait agentkit_governance::Authorization: core::marker::Send + core::marker::Sync
 pub fn agentkit_governance::Authorization::authorize<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 serde_json::value::Value, &'life2 str, &'life3 serde_json::value::Value) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::GovernanceResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub trait agentkit_governance::CodingPermissionAuthority: core::marker::Send + core::marker::Sync

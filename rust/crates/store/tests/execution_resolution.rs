@@ -287,3 +287,70 @@ async fn a_late_completion_cannot_overwrite_a_resolved_receipt() {
     );
     assert_eq!(store.list_executions("run".into()).await.unwrap(), before);
 }
+
+/// A barrier for `write` with the arguments `admission` uses, left by the
+/// tolerant import for execution `source`, scoped to `chat` (or to nothing).
+fn barrier(source: &str, chat: Option<&str>) -> UncertaintyBarrierRecord {
+    let args = "a".repeat(64);
+    UncertaintyBarrierRecord {
+        barrier_id: barrier_id_of(Some(source), None, "write", Some(&args)),
+        chat_id: chat.map(str::to_owned),
+        run_id: None,
+        tool_name: "write".into(),
+        args_sha256: Some(args),
+        args_hash_provenance: ArgsHashProvenance::Canonical,
+        reason: "unplaceable".into(),
+    }
+}
+
+/// An operator lifts a barrier the chat sees by its id, and only that one:
+/// another chat's barrier and a missing one are both not found. Once the
+/// barriers that held the operation are gone, it is admitted.
+#[tokio::test]
+async fn an_operator_lifts_a_barrier_the_chat_sees_and_no_other() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("barriers.db");
+    let store = SqliteStore::open(&path, 8).unwrap();
+    let mine = barrier("exec-1", Some("chat"));
+    let other = barrier("exec-2", Some("other-chat"));
+    let global = barrier("exec-3", None);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    for seeded in [&mine, &other, &global] {
+        assert!(insert_barrier(&db, seeded).unwrap());
+    }
+    store.submit(task("run", "chat")).await.unwrap();
+    let lease = store.claim(claim(1000)).await.unwrap().unwrap().lease;
+    let admit = || store.admit_execution(lease.fence(), admission("exec"));
+    assert!(!admit().await.unwrap(), "held by the barriers");
+    for id in [other.barrier_id.as_str(), "barrier:missing"] {
+        let refused = store
+            .resolve_uncertainty_barrier("chat".into(), id.into())
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, StoreError::NotFound(_)), "{refused:?}");
+    }
+    let lifted = store
+        .resolve_uncertainty_barrier("chat".into(), mine.barrier_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(lifted, mine, "the lifted barrier is returned");
+    assert!(
+        !admit().await.unwrap(),
+        "the unattributed barrier still holds"
+    );
+    store
+        .resolve_uncertainty_barrier("chat".into(), global.barrier_id.clone())
+        .await
+        .unwrap();
+    assert!(admit().await.unwrap(), "nothing holds the operation now");
+    let left = store
+        .list_uncertainty_barriers("other-chat".into(), "other-run".into())
+        .await
+        .unwrap();
+    assert_eq!(left, vec![other], "another chat's barrier is untouched");
+    let repeat = store
+        .resolve_uncertainty_barrier("chat".into(), mine.barrier_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(repeat, StoreError::NotFound(_)), "{repeat:?}");
+}

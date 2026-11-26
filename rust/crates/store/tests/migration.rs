@@ -21,6 +21,12 @@ fn version_one(path: &Path) {
         DROP TABLE managed_skills;
         DROP TABLE run_content_records;
         DROP TABLE uncertainty_barriers;
+        DROP TABLE sandbox_network_request;
+        DROP TABLE sandbox_network_grant;
+        DROP TABLE sandbox_operation;
+        DROP TABLE sandbox_member;
+        DROP TABLE sandbox_workspace_lease;
+        DROP TABLE sandbox_workspace;
         DROP TABLE memory_vectors;
         DROP TABLE memory_index_items;
         DROP TABLE memory_fts;

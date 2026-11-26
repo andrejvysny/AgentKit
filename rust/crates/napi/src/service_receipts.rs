@@ -1,6 +1,8 @@
 //! Operator surface over uncertain execution receipts: list them and resolve
-//! one explicitly. Policy (ownership, active-run refusal, idempotency) lives
-//! in the host session service; this file only parses and serializes.
+//! one explicitly, or lift an uncertainty barrier by its id. Policy
+//! (ownership, active-run refusal, idempotency) lives in the host session
+//! service and, for barriers, in the store; this file only parses and
+//! serializes.
 use super::{SessionService, optional_string, parse_object};
 use crate::errors;
 use agentkit_store::{ExecutionReceiptRecord, ResolutionOutcome};
@@ -23,6 +25,8 @@ const CHAT_RESOLVE_KEYS: [&str; 6] = [
     "note",
     "resolvedBy",
 ];
+
+const BARRIER_RESOLVE_KEYS: [&str; 2] = ["chatId", "barrierId"];
 
 const MAX_RESULT_BYTES: usize = agentkit_store::MAX_RESOLUTION_RESULT_BYTES;
 
@@ -111,6 +115,22 @@ pub(super) fn parse_resolve_for_chat(text: &str) -> Result<ResolveInput> {
     parse_resolve_scoped(text, "chatId", &CHAT_RESOLVE_KEYS)
 }
 
+/// The barrier route's `{chatId, barrierId}`: the chat whose call a
+/// barrier blocks, and the id its refusal or card named.
+pub(super) fn parse_barrier(text: &str) -> Result<(String, String)> {
+    let object = parse_object(text, "the resolve input")?;
+    if let Some(unknown) = object.as_object().and_then(|map| {
+        map.keys()
+            .find(|key| !BARRIER_RESOLVE_KEYS.contains(&key.as_str()))
+    }) {
+        return Err(errors::invalid(format!("unknown field \"{unknown}\"")));
+    }
+    Ok((
+        required_string(&object, "chatId")?,
+        required_string(&object, "barrierId")?,
+    ))
+}
+
 fn records_json(records: &[ExecutionReceiptRecord]) -> Result<String> {
     serde_json::to_string(records).map_err(|_| errors::internal("serializing execution receipts"))
 }
@@ -183,6 +203,28 @@ impl SessionService {
         serde_json::to_string(&record)
             .map_err(|_| errors::internal("serializing execution receipt"))
     }
+
+    /// ADR 0038: lift one uncertainty barrier of a chat by the id a
+    /// refusal or card named, the operator's exit when barriers block a
+    /// call. Answers the removed barrier (barriers keep no audit, so the
+    /// host records the decision); never executes or re-admits the effect.
+    #[napi(catch_unwind)]
+    pub async fn resolve_uncertainty_barrier(&self, input_json: String) -> Result<String> {
+        let guard = self.core.lock().await;
+        let core = guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let (chat_id, barrier_id) = parse_barrier(&input_json)?;
+        let barrier = core
+            .runtime
+            .host()
+            .store()
+            .resolve_uncertainty_barrier(chat_id, barrier_id)
+            .await
+            .map_err(errors::store)?;
+        serde_json::to_string(&barrier)
+            .map_err(|_| errors::internal("serializing uncertainty barrier"))
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +243,21 @@ mod tests {
 
     fn parse_chat(body: Value) -> Result<ResolveInput> {
         parse_resolve_for_chat(&body.to_string())
+    }
+
+    #[test]
+    fn the_barrier_surface_takes_a_chat_and_a_barrier_only() {
+        let parsed = parse_barrier(&json!({"chatId": "c", "barrierId": "barrier:b"}).to_string());
+        assert_eq!(parsed.unwrap(), ("c".to_owned(), "barrier:b".to_owned()));
+        for body in [
+            json!({"chatId": "c"}),
+            json!({"barrierId": "barrier:b"}),
+            json!({"chatId": "c", "barrierId": ""}),
+            json!({"chatId": "c", "barrierId": "barrier:b", "outcome": "acknowledged"}),
+        ] {
+            let refused = parse_barrier(&body.to_string()).unwrap_err();
+            assert_eq!(code_of(refused), "invalid_input", "{body}");
+        }
     }
 
     #[test]

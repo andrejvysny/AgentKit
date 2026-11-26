@@ -11,6 +11,7 @@ pub mod failure_catalog;
 mod failure_table;
 mod failure_table_agents;
 mod failure_table_files;
+mod failure_table_sandbox;
 mod layout;
 mod legacy_name;
 mod manifest;

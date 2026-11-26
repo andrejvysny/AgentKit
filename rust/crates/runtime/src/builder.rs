@@ -51,6 +51,7 @@ use crate::lanes::memory::{
 use crate::lanes::memory_capture::{MEMORY_EXTRACT_TASK_KIND, MemoryCaptureLane};
 use crate::lanes::native::NativeLane;
 use crate::lanes::output::{OutputLaneContributor, spawn_sweeper};
+use crate::lanes::sandbox::SandboxLane;
 use crate::lanes::subagent::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
 use crate::runtime::AgentRuntime;
 
@@ -84,6 +85,7 @@ pub struct AgentRuntimeBuilder {
     turn_kinds: Vec<String>,
     extra_executors: Vec<(String, Arc<dyn TaskExecutor<agentkit_store::SqliteStore>>)>,
     native_lane: Option<NativeLane>,
+    sandbox_lane: Option<SandboxLane>,
     memory: Option<(Arc<dyn MemoryRepository>, Arc<dyn RetrievalIndex>)>,
     memory_sweep: bool,
     embedder: Option<Arc<dyn Embedder>>,
@@ -125,6 +127,7 @@ impl AgentRuntimeBuilder {
             turn_kinds: Vec::new(),
             extra_executors: Vec::new(),
             native_lane: None,
+            sandbox_lane: None,
             memory: None,
             memory_sweep: false,
             embedder: None,
@@ -247,6 +250,18 @@ impl AgentRuntimeBuilder {
     /// (ADR 0025): the consumer supplies the concrete ports (ADR 0026).
     pub fn native_lane(mut self, lane: NativeLane) -> Self {
         self.native_lane = Some(lane);
+        self
+    }
+
+    /// Offer the `sandbox` toolset (ADR 0038): the builder builds the
+    /// workspace service over the lane's backend and repository on the
+    /// runtime's clock, registers the pack as a contributor and its
+    /// permission guard among the guards, and runs the service's startup
+    /// recovery before the worker starts. A run gets the tools only when
+    /// the lane's resolver answers an attachment for it. Without this call
+    /// the runtime offers no sandbox tools.
+    pub fn sandbox_lane(mut self, lane: SandboxLane) -> Self {
+        self.sandbox_lane = Some(lane);
         self
     }
 
@@ -378,6 +393,7 @@ impl AgentRuntimeBuilder {
             turn_kinds,
             extra_executors,
             native_lane,
+            sandbox_lane,
             memory,
             memory_sweep,
             embedder,
@@ -403,6 +419,10 @@ impl AgentRuntimeBuilder {
             }
             None => None,
         };
+        // Refused before anything is spawned: an invalid service config.
+        let sandbox = sandbox_lane
+            .map(|lane| lane.build(runtime.clone()))
+            .transpose()?;
         // The output store: the store handle learns where its files live
         // BEFORE it is cloned into the host, so deleting a chat removes them.
         let store = match &output {
@@ -566,6 +586,7 @@ impl AgentRuntimeBuilder {
                 as Arc<dyn ToolContributor>,
             Arc::new(LspLaneContributor::new(Arc::clone(&lsp_lane))) as Arc<dyn ToolContributor>,
         ]);
+        tool_contributors.extend(sandbox.as_ref().map(|lane| lane.contributor.clone()));
         let mut tool_guards: Vec<Arc<dyn ToolGuard>> = Vec::new();
         if let Some(guard) = external_guard {
             tool_guards.push(Arc::new(guard));
@@ -584,6 +605,9 @@ impl AgentRuntimeBuilder {
             // unconfigured.
             Arc::new(SubagentLaneGuard::new(Arc::clone(&subagent_lane))) as Arc<dyn ToolGuard>,
         ]);
+        // The sandbox mode table and its export and network approvals;
+        // judges only the `sandbox` namespace.
+        tool_guards.extend(sandbox.as_ref().map(|lane| lane.guard.clone()));
         // The model loop, when there is a provider to run it. Without one
         // the composition root has no model loop at all: the kinds the
         // builder would serve are held by a typed refusal, so a turn that
@@ -768,6 +792,12 @@ impl AgentRuntimeBuilder {
         // whose parent already settled are reaped before any new turn can
         // spawn under the same identities.
         subagent_lane.reap_orphans().await?;
+        // Sandbox operations of the previous life are settled, made
+        // uncertain or fenced before any new sandbox call can run.
+        let sandbox = sandbox.map(|lane| lane.service);
+        if let Some(service) = &sandbox {
+            crate::lanes::sandbox::recover(service).await?;
+        }
         let worker = host.start_worker();
         Ok(AgentRuntime {
             host,
@@ -781,6 +811,7 @@ impl AgentRuntimeBuilder {
             advisor: advisor_lane,
             lsp: lsp_lane,
             memory,
+            sandbox,
             worker: Some(worker),
             _output_sweeper: output_sweeper,
             _memory_sweeper: memory_sweeper,

@@ -1114,6 +1114,28 @@ export interface ResolveUncertainExecutionForChatInput {
   resolvedBy?: string;
 }
 
+/**
+ * ADR 0038: a durable uncertainty barrier — the residue of an imported
+ * effect whose receipt could not be placed. It blocks the identical call
+ * until an answer names its id; two that match one call end that call.
+ */
+export interface UncertaintyBarrierJson {
+  barrierId: string;
+  chatId?: string;
+  runId?: string;
+  toolName: string;
+  /** Absent: the arguments are unknown, so the tool is blocked by name. */
+  argsSha256?: string;
+  argsHashProvenance: "canonical" | "ts-canonical";
+  reason: string;
+}
+
+/** ADR 0038: one uncertainty barrier of a chat, by the id a refusal or card named. */
+export interface ResolveUncertaintyBarrierInput {
+  chatId: string;
+  barrierId: string;
+}
+
 export interface CreateSessionInputJson {
   sessionId?: string;
   title?: string;
@@ -1497,6 +1519,21 @@ export class NativeSessionService extends NativeSessionManagement {
       this.raw.resolveUncertainExecutionForChat(JSON.stringify(input)),
     );
     return JSON.parse(text) as ExecutionReceiptJson;
+  }
+
+  /**
+   * ADR 0038: lift one uncertainty barrier of a chat by the id a refusal or
+   * card named — the operator's exit when barriers block a call. Answers the
+   * removed barrier: barriers keep no audit, so the host records the
+   * decision. Never executes or re-admits the effect.
+   */
+  async resolveUncertaintyBarrier(
+    input: ResolveUncertaintyBarrierInput,
+  ): Promise<UncertaintyBarrierJson> {
+    const text = await lift(() =>
+      this.raw.resolveUncertaintyBarrier(JSON.stringify(input)),
+    );
+    return JSON.parse(text) as UncertaintyBarrierJson;
   }
 
   async getState(sessionId: string): Promise<Record<string, unknown>> {

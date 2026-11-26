@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 /// Outcome of the replay barrier that runs before the guard chain.
+#[non_exhaustive]
 pub enum PreGuard {
     Proceed,
     Replay(ToolResult),
@@ -12,12 +13,35 @@ pub enum PreGuard {
     /// no answer covers this generation. The wrapper folds it into the
     /// approval flow: the human is asked, the ask carries the exact
     /// unresolved generation, and a refusal is the fallback when this host
-    /// cannot park.
+    /// cannot park. `arguments_unknown`: the unresolved evidence recorded
+    /// no argument fingerprint (a barrier blocking the tool by name), so
+    /// the earlier call may have had other arguments.
     Uncertain {
         refusal: ToolResult,
         generation: String,
+        arguments_unknown: bool,
     },
+    /// The operation is uncertain and the answer this call carries names
+    /// exactly its unresolved `generation` on an uncertainty card: the
+    /// call proceeds, and that answer stays spendable when a guard asks
+    /// again on resume (the card showed the uncertainty and those asks).
+    Reauthorized {
+        generation: String,
+    },
+    /// The call ends with this refusal and must not ask: no answer could
+    /// open it (more than one unresolved execution blocks it, and one
+    /// answer names one generation).
+    Refused(ToolResult),
 }
+
+/// `ToolContext::metadata` key under which the governed wrappers hand a
+/// tool body the `execution_id` its call was admitted under
+/// ([`Admission::Granted`]). Set right before the body runs and removed
+/// for every call that was not admitted, so a body that finds it knows the
+/// durable ledger recorded the call first; a body that needs the id (an
+/// effect keyed by it, ADR 0038 INV-2) refuses without it. Hosts never set
+/// it themselves.
+pub const EXECUTION_ID_METADATA_KEY: &str = "agentkit.executionId";
 
 /// Outcome of atomic admission after the guard chain.
 pub enum Admission {

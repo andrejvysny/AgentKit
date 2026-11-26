@@ -13,12 +13,15 @@ use std::{
     time::Duration,
 };
 
+mod card;
 mod execution_recheck;
 
 /// Tool namespaces no standing grant may cover: each call asks the owner
 /// again (`memory_forget` deletes the owner's own notes; a remembered yes
-/// must never become blanket authority to forget).
-const NO_STANDING_NAMESPACES: [&str; 1] = ["memory"];
+/// must never become blanket authority to forget). A sandbox export is
+/// approved on its own content hash and a network host by its own grant
+/// (ADR 0038), so a remembered yes never covers a `sandbox` call either.
+const NO_STANDING_NAMESPACES: [&str; 2] = ["memory", "sandbox"];
 
 fn standing_eligible(context: &ToolGuardContext) -> bool {
     !NO_STANDING_NAMESPACES.contains(&context.namespace.as_str())
@@ -330,6 +333,29 @@ async fn visible(guards: &[Arc<dyn ToolGuard>], context: &ToolGuardContext) -> b
     true
 }
 
+/// An earlier execution of this operation without a durable result, as
+/// the ledger reported it before the guards ran.
+enum Unresolved {
+    /// No answer on an uncertainty card names it: the call asks about
+    /// `generation`, or returns `refusal` when this host cannot ask.
+    Ask {
+        refusal: Box<ToolResult>,
+        generation: String,
+        arguments_unknown: bool,
+    },
+    /// The answer this call carries names exactly `generation`, on an
+    /// uncertainty card.
+    Answered { generation: String },
+}
+
+impl Unresolved {
+    fn generation(&self) -> &str {
+        match self {
+            Self::Ask { generation, .. } | Self::Answered { generation } => generation,
+        }
+    }
+}
+
 struct GuardedTool {
     tool: Arc<dyn Tool>,
     guards: Vec<Arc<dyn ToolGuard>>,
@@ -405,7 +431,7 @@ impl Tool for GuardedTool {
         let definition = self.tool.definition();
         let durable = staged.durable.clone();
         let effect_context = self.tool.effect_context();
-        let mut uncertainty: Option<(ToolResult, String)> = None;
+        let mut unresolved: Option<Unresolved> = None;
         if let Some(durable) = &durable {
             match durable
                 .before_guards(
@@ -417,7 +443,9 @@ impl Tool for GuardedTool {
                 )
                 .await?
             {
-                crate::PreGuard::Replay(result) => return Ok(result),
+                crate::PreGuard::Replay(result) | crate::PreGuard::Refused(result) => {
+                    return Ok(result);
+                }
                 // The operation is uncertain and no answer names this
                 // generation. Do NOT refuse yet: fold it into the approval
                 // flow below so the human can authorize the exact
@@ -427,8 +455,19 @@ impl Tool for GuardedTool {
                 crate::PreGuard::Uncertain {
                     refusal,
                     generation,
+                    arguments_unknown,
                 } => {
-                    uncertainty = Some((refusal, generation));
+                    unresolved = Some(Unresolved::Ask {
+                        refusal: Box::new(refusal),
+                        generation,
+                        arguments_unknown,
+                    });
+                }
+                // The call's answer names the pending generation on an
+                // uncertainty card, which showed the guards' asks too: a
+                // guard that asks again on resume is answered by that yes.
+                crate::PreGuard::Reauthorized { generation } => {
+                    unresolved = Some(Unresolved::Answered { generation });
                 }
                 crate::PreGuard::Proceed => {}
             }
@@ -457,18 +496,21 @@ impl Tool for GuardedTool {
                 _ => return Ok(guard_refusal(&context, "guard error")),
             }
         }
-        if let Some((_, generation)) = &uncertainty {
+        if let Some(Unresolved::Ask {
+            generation,
+            arguments_unknown,
+            ..
+        }) = &unresolved
+        {
             // The wrapper — not any guard — raises this ask: it is the
-            // only party that knows the exact unresolved generation.
-            approvable.push(ApprovalAsk {
-                reason: format!("uncertain:{generation}"),
-                preview: Some(format!(
-                    "The previous run of {} was admitted without a recorded result; its effect is unknown. Approve running it again?",
-                    definition.name
-                )),
-                requested_mode: None,
-                uncertainty_generation: Some(generation.clone()),
-            });
+            // only party that knows the exact unresolved generation. It
+            // leads the card, and the other guards' previews follow it
+            // (`card::approval_spec`): one yes answers every ask on the
+            // card, so the owner sees all of them first.
+            approvable.insert(
+                0,
+                card::uncertainty_ask(&definition.name, generation, *arguments_unknown),
+            );
         }
         let mut standing_digest = None;
         if !approvable.is_empty()
@@ -477,7 +519,7 @@ impl Tool for GuardedTool {
                     &context,
                     &input,
                     &approvable,
-                    uncertainty.as_ref(),
+                    unresolved.as_ref(),
                     effect_context.as_ref(),
                     &mut standing_digest,
                 )
@@ -549,7 +591,7 @@ impl GuardedTool {
         context: &ToolContext,
         input: &Value,
         approvable: &[ApprovalAsk],
-        uncertainty: Option<&(ToolResult, String)>,
+        unresolved: Option<&Unresolved>,
         effect_context: Option<&Value>,
         selected_standing_digest: &mut Option<String>,
     ) -> Result<Option<ToolResult>, CoreError> {
@@ -576,9 +618,11 @@ impl GuardedTool {
             )));
         }
         // 1. One-use answered approval (exact call, exact arguments). For
-        //    an uncertain reissue the grant must also name the exact
-        //    unresolved generation; any other grant stays unspendable and
-        //    the call asks afresh.
+        //    an uncertain reissue (asked about now, or already answered
+        //    when a guard asks again) the grant must also name the exact
+        //    unresolved generation, on an uncertainty card; any other grant
+        //    stays unspendable and the call asks afresh.
+        let generation = unresolved.map(Unresolved::generation);
         let spendable = context
             .tool_call_id
             .as_deref()
@@ -587,12 +631,8 @@ impl GuardedTool {
                     .as_ref()?
                     .approval_grant(call_id)
                     .filter(|grant| grant.args_sha256 == args)
-                    .filter(|grant| match &uncertainty {
-                        Some((_, generation)) => {
-                            grant.uncertainty_generation.as_deref() == Some(generation.as_str())
-                        }
-                        None => grant.uncertainty_generation.is_none(),
-                    })
+                    .filter(|grant| grant.uncertainty_generation.as_deref() == generation)
+                    .filter(|grant| generation.is_none() || grant.uncertainty_card)
                     .map(|grant| (call_id.to_owned(), grant))
             })
             .filter(|(call_id, _)| {
@@ -627,7 +667,7 @@ impl GuardedTool {
                 .as_ref()
                 .is_some_and(|durable| durable.approval_grant(call_id).is_some())
         });
-        if uncertainty.is_none()
+        if unresolved.is_none()
             && !is_duplicate
             && standing_eligible(&self.snapshot)
             && let Some(durable) = &durable
@@ -653,7 +693,7 @@ impl GuardedTool {
         //    absent; for an uncertain call that final answer is the honest
         //    uncertainty refusal (which names the generation), never a
         //    generic guard message.
-        let spec = approval_spec(
+        let spec = card::approval_spec(
             context,
             definition,
             approvable,
@@ -667,8 +707,8 @@ impl GuardedTool {
             // no effect started, so no receipt can be uncertain.
             return Ok(Some(guard_refusal(context, "awaiting human approval")));
         }
-        if let Some((refusal, _)) = uncertainty {
-            return Ok(Some(refusal.clone()));
+        if let Some(Unresolved::Ask { refusal, .. }) = unresolved {
+            return Ok(Some(refusal.as_ref().clone()));
         }
         Ok(Some(guard_refusal(context, &approvable[0].reason)))
     }
@@ -678,111 +718,6 @@ impl GuardedTool {
             arguments: Some(input.clone()),
             ..self.snapshot.clone()
         }
-    }
-}
-
-/// The durable approval request the answer path will settle. Content and
-/// hash mirror the TypeScript projection field-for-field and in order:
-/// the same call, in the same ask state, parks the same request bytes.
-/// Identity: `(run, tool call)` for an ordinary ask, plus the uncertainty
-/// generation for an uncertain reissue. The extra component is load-
-/// bearing, not decoration: the SAME run can present a second uncertain
-/// generation for one tool-call identity (answer generation N → the
-/// approved execution is admitted → a crash leaves that admission
-/// unresolved as generation N+1). The store keys the human-request row by
-/// input id and refuses same-id-different-content rewrites, so an id
-/// derived only from run + call would make the second ask a content-hash
-/// COLLISION against the already-answered first row: the park would die
-/// `park_failed` and the human could never be asked about N+1. With the
-/// generation in the id each ask gets its own row, its own answer, and
-/// its own hash. Safety is unchanged by the shape: a generation's answer
-/// still authorizes exactly its own reissue — the one-use grant is spent
-/// at admission (UNIQUE approval index), and both the host's `covers`
-/// gate and the store's pending-generation gate compare the grant's
-/// `uncertainty_generation` against the unresolved receipt's execution id
-/// — so generation N's answer can never spend itself on generation N+1.
-fn approval_spec(
-    context: &ToolContext,
-    definition: &agentkit_core::ToolDefinition,
-    approvable: &[ApprovalAsk],
-    args_sha256: String,
-    standing: Option<(String, String)>,
-    context_sha256: Option<String>,
-) -> agentkit_core::HumanRequestSpec {
-    let tool_call_id = context
-        .tool_call_id
-        .clone()
-        .unwrap_or_else(|| "unknown".to_owned());
-    // The exact unresolved execution an uncertain reissue asks about; an
-    // answer is bound to this generation (it is part of the hashed
-    // envelope AND of the request identity), so answering an older
-    // uncertainty can never authorize a newer one — nor collide with it.
-    let uncertainty = approvable
-        .iter()
-        .find_map(|ask| ask.uncertainty_generation.clone());
-    let request_id = match &uncertainty {
-        Some(generation) => format!("hreq:{}:{tool_call_id}:{generation}", context.run_id),
-        None => format!("hreq:{}:{tool_call_id}", context.run_id),
-    };
-    let prompt = approvable
-        .iter()
-        .find_map(|ask| ask.preview.clone())
-        .unwrap_or_else(|| format!("Approve {}?", definition.name));
-    let requested_mode = approvable.iter().find_map(|ask| ask.requested_mode.clone());
-    let mut content = serde_json::Map::new();
-    content.insert("prompt".into(), prompt.clone().into());
-    content.insert("toolName".into(), definition.name.clone().into());
-    content.insert("kind".into(), "approval".into());
-    content.insert("argsSha256".into(), args_sha256.clone().into());
-    if let Some(generation) = &uncertainty {
-        content.insert("approvalGeneration".into(), generation.clone().into());
-    }
-    if let Some(hash) = &context_sha256 {
-        content.insert("contextSha256".into(), hash.clone().into());
-    }
-    if let Some(mode) = &requested_mode {
-        content.insert("requestedMode".into(), mode.clone().into());
-    }
-    if let Some((digest, label)) = &standing {
-        content.insert(
-            "standing".into(),
-            serde_json::json!({"digest": digest, "label": label}),
-        );
-    }
-    // `contentHash`: sha-256 over exactly the TS envelope, insertion order
-    // included (preserve_order keeps it).
-    let mut envelope = serde_json::Map::new();
-    envelope.insert("requestId".into(), request_id.clone().into());
-    envelope.insert("toolCallId".into(), tool_call_id.clone().into());
-    envelope.insert("prompt".into(), prompt.into());
-    // Guard-issued approvals never expire (the TS wrapper sets no
-    // `expiresAt` either; only tools that suspend with their own request
-    // may carry one).
-    envelope.insert("kind".into(), "approval".into());
-    envelope.insert("argsSha256".into(), args_sha256.into());
-    if let Some(generation) = &uncertainty {
-        envelope.insert("approvalGeneration".into(), generation.clone().into());
-    }
-    if let Some(hash) = &context_sha256 {
-        envelope.insert("contextSha256".into(), hash.clone().into());
-    }
-    if let Some(mode) = &requested_mode {
-        envelope.insert("requestedMode".into(), mode.clone().into());
-    }
-    if let Some((digest, label)) = &standing {
-        envelope.insert(
-            "standing".into(),
-            serde_json::json!({"digest": digest, "label": label}),
-        );
-    }
-    let content_hash = agentkit_kernel::sha256_hex(
-        serde_json::to_string(&Value::Object(envelope)).unwrap_or_else(|_| "{}".into()),
-    );
-    agentkit_core::HumanRequestSpec {
-        request_id,
-        content: Value::Object(content),
-        content_hash,
-        expires_at: None,
     }
 }
 
@@ -857,5 +792,14 @@ mod standing_tests {
     fn no_standing_grant_covers_the_memory_namespace() {
         assert!(!standing_eligible(&context("memory", "memory_forget")));
         assert!(standing_eligible(&context("coding", "run_command")));
+    }
+
+    #[test]
+    fn no_standing_grant_covers_the_sandbox_namespace() {
+        assert!(!standing_eligible(&context(
+            "sandbox",
+            "sandbox_export_file"
+        )));
+        assert!(!standing_eligible(&context("sandbox", "sandbox_run")));
     }
 }

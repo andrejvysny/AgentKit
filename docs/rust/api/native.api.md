@@ -1801,6 +1801,7 @@ export class NativeSessionService extends NativeSessionManagement {
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
     resolveUncertainExecution(input: ResolveUncertainExecutionInput): Promise<ExecutionReceiptJson>;
     resolveUncertainExecutionForChat(input: ResolveUncertainExecutionForChatInput): Promise<ExecutionReceiptJson>;
+    resolveUncertaintyBarrier(input: ResolveUncertaintyBarrierInput): Promise<UncertaintyBarrierJson>;
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>;
     static revokeProviderConnection(connectionId: string): Promise<boolean>;
@@ -2441,6 +2442,14 @@ export interface ResolveUncertainExecutionInput {
     sessionId: string;
 }
 
+// @public
+export interface ResolveUncertaintyBarrierInput {
+    // (undocumented)
+    barrierId: string;
+    // (undocumented)
+    chatId: string;
+}
+
 // @public (undocumented)
 export function revokeMcpOAuth(store: NativeMcpOAuthStore, options: NativeManagedOAuthOptions, callbacks: McpOAuthCallbacks): Promise<void>;
 
@@ -2599,6 +2608,7 @@ class SessionService {
     // (undocumented)
     resolveUncertainExecution(inputJson: string): Promise<string>
     resolveUncertainExecutionForChat(inputJson: string): Promise<string>
+    resolveUncertaintyBarrier(inputJson: string): Promise<string>
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>
     // (undocumented)
@@ -3128,6 +3138,23 @@ export interface UnavailableRunSkill {
     id: string;
     // (undocumented)
     reason: string;
+}
+
+// @public
+export interface UncertaintyBarrierJson {
+    // (undocumented)
+    argsHashProvenance: "canonical" | "ts-canonical";
+    argsSha256?: string;
+    // (undocumented)
+    barrierId: string;
+    // (undocumented)
+    chatId?: string;
+    // (undocumented)
+    reason: string;
+    // (undocumented)
+    runId?: string;
+    // (undocumented)
+    toolName: string;
 }
 
 // @public (undocumented)

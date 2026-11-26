@@ -1,5 +1,7 @@
 //! Factual command refusals from trusted native execution, not operator recovery.
-//! The caller must prove that its admitted command never reached OS spawn.
+//! The caller must prove that its admitted command never reached OS spawn (the
+//! coding pack's commands) or sandbox dispatch (the sandbox pack's operations,
+//! refused before the workspace service wrote their row; ADR 0038).
 //! SQLite can authenticate admission identity, not independently observe effects.
 
 use crate::execution_receipts::read_row;
@@ -9,6 +11,14 @@ use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
 pub(crate) const AUTHORITY_FIELD: &str = "nativeAdmissionAuthoritySha256";
+
+/// The trusted tools whose drivers can prove that nothing started.
+const NO_START_TOOLS: [&str; 4] = [
+    "run_command",
+    "run_tests",
+    "sandbox_run",
+    "sandbox_write_file",
+];
 
 pub(crate) fn admission_authority(proof: &LeaseFence, attempt_id: &str) -> String {
     let material = json!([
@@ -58,7 +68,7 @@ impl SqliteStore {
             let mut record = read_row(&row)?;
             let mut raw = agentkit_contracts::parse_javascript_json(&row.3)?;
             let authority = admission_authority(&proof, &attempt_id);
-            if !matches!(record.tool_name.as_str(), "run_command" | "run_tests")
+            if !NO_START_TOOLS.contains(&record.tool_name.as_str())
                 || record.attempt_id != attempt_id || raw[AUTHORITY_FIELD].as_str() != Some(authority.as_str()) {
                 return Ok(false);
             }

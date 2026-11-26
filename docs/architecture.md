@@ -44,10 +44,12 @@ rules (R1–R13) over `cargo metadata`; violations live in
 | 3 | `agentkit-chat` | Chat execution and governance: `AgentExecutor`, compaction, correction passes, proposals, project instructions |
 | 3 | `agentkit-agents` | Agent definitions, teammates, subagents and the advisor |
 | 3 | `agentkit-memory` | Long-term memory: records, supersession, the `MemoryRepository`, `RetrievalIndex`, `Embedder` and `Reranker` ports, `MemoryService` ([ADR 0035](adr/0035-long-term-memory.md)); no SQL |
+| 3 | `agentkit-workspaces` | Sandbox workspaces: workspace, member, operation projection, network grant and request types, the `SandboxBackend` and `WorkspaceRepository` ports and the `WorkspaceService` over them ([ADR 0038](adr/0038-agent-sandbox-workspaces.md)); no SQL, no backend |
 | 3 | `agentkit-native-exec` | Durable executor for vendor agent runtimes: `NativeAgentExecutor`, `NativeDispatchExecutor`, one owned process per attempt |
 | 4 | `agentkit-store` | SQLite actor: tasks, attempts, leases, event log, conversations, sessions, native ledgers; the TypeScript-database importer lives inside it behind the `ts-import` feature ([ADR 0024](adr/0024-repository-ports.md)) |
 | 4 | `agentkit-providers` | Concrete LLM provider adapters and provider HTTP plumbing |
 | 4 | `agentkit-toolpacks-coding` | Confined coding tools: filesystem read/search/edit, read-only git, sandboxed commands |
+| 4 | `agentkit-toolpacks-sandbox` | Sandbox tool pack over `agentkit-workspaces`: the six `sandbox` tools, their guide and `SandboxPermissionGuard`, with the host ports `SandboxBindingResolver` and `SandboxExportSink` ([ADR 0038](adr/0038-agent-sandbox-workspaces.md)) |
 | 4 | `agentkit-lsp` | LSP client, language-server lifecycle, code-intelligence tools |
 | 4 | `agentkit-mcp` | MCP client and server transports on `rmcp` |
 | 4 | `agentkit-connections` | App-scoped connections, consent, secret-store and network ports |
@@ -95,6 +97,12 @@ supervisor and broker factory (ADR 0026).
 root: it registers executors per task kind (`executor(kind, executor)`,
 `turn_kinds(kinds)`, `native_lane(lane)` — ADR 0026), wires the provider,
 coding and authority lanes, and refuses a kind registered twice at build time.
+`sandbox_lane(lane)` (ADR 0038) takes the consumer's `SandboxBackend`,
+`WorkspaceRepository`, `ServiceConfig`, `SandboxBindingResolver` and
+`SandboxExportSink`, builds the `WorkspaceService` on the runtime's clock,
+registers the `sandbox` pack and its `SandboxPermissionGuard`, and runs the
+service's startup recovery before the worker starts; the host reaches the
+service through `AgentRuntime::sandbox_service()` (quiesce at shutdown).
 It is the only crate that names concrete adapter types. The Node binding
 builds its service through it; Rust embedders use the same builder.
 

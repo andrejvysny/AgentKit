@@ -6,7 +6,6 @@
     "R12 agentkit-chat src/chat/history.rs",
     "R12 agentkit-core src/run.rs",
     "R12 agentkit-engine src/runner.rs",
-    "R12 agentkit-governance src/durable_execution.rs",
     "R12 agentkit-native-exec src/lib.rs",
     "R12 agentkit-sessions src/run_profiles.rs",
     "R1b agentkit-agents -> agentkit-store",

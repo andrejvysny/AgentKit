@@ -32,6 +32,7 @@ pub fn agentkit_runtime::AgentRuntime::memory(&self) -> core::option::Option<&al
 pub fn agentkit_runtime::AgentRuntime::native_provider_factory(&self) -> &alloc::rcs::arc::Arc<agentkit_providers::native_provider_factory::NativeProviderFactory>
 pub fn agentkit_runtime::AgentRuntime::profiles(&self) -> &alloc::rcs::arc::Arc<agentkit_sessions::profiles::ProfileRegistry>
 pub fn agentkit_runtime::AgentRuntime::providers(&self) -> &alloc::rcs::arc::Arc<agentkit_chat::provider_registry::ProviderRegistry>
+pub fn agentkit_runtime::AgentRuntime::sandbox_service(&self) -> core::option::Option<&alloc::rcs::arc::Arc<agentkit_workspaces::service::WorkspaceService>>
 pub fn agentkit_runtime::AgentRuntime::service(&self) -> &agentkit_sessions::session::AgentSessionService<agentkit_store::actor::SqliteStore>
 pub fn agentkit_runtime::AgentRuntime::subagent_lane(&self) -> &alloc::rcs::arc::Arc<agentkit_runtime::SubagentLane>
 pub fn agentkit_runtime::AgentRuntime::take_worker(&mut self) -> core::option::Option<agentkit_chat::WorkerHandle>
@@ -57,6 +58,7 @@ pub fn agentkit_runtime::AgentRuntimeBuilder::output_tool_limit(self, impl core:
 pub fn agentkit_runtime::AgentRuntimeBuilder::plan(self, agentkit_runtime::PlanConfiguration) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::profiles(self, alloc::vec::Vec<serde_json::value::Value>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::reranker(self, alloc::rcs::arc::Arc<dyn agentkit_memory::ports::Reranker>) -> Self
+pub fn agentkit_runtime::AgentRuntimeBuilder::sandbox_lane(self, agentkit_runtime::SandboxLane) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::session_defaults(self, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::sqlite_memory(self) -> Self
 pub fn agentkit_runtime::AgentRuntimeBuilder::subagent_max_concurrency(self, i64) -> Self
@@ -90,6 +92,14 @@ pub fn agentkit_runtime::RefusingExecutor::new(impl core::convert::Into<alloc::s
 pub fn agentkit_runtime::RefusingExecutor::no_model_provider() -> Self
 impl agentkit_engine::ports::TaskExecutor<agentkit_store::actor::SqliteStore> for agentkit_runtime::RefusingExecutor
 pub fn agentkit_runtime::RefusingExecutor::execute<'life0, 'async_trait>(&'life0 self, agentkit_engine::context::ExecutionContext<agentkit_store::actor::SqliteStore>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_engine::error::EngineResult<(), agentkit_store::StoreError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_runtime::SandboxLane
+pub agentkit_runtime::SandboxLane::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>
+pub agentkit_runtime::SandboxLane::backend: alloc::rcs::arc::Arc<dyn agentkit_workspaces::backend::SandboxBackend>
+pub agentkit_runtime::SandboxLane::config: agentkit_workspaces::service::config::ServiceConfig
+pub agentkit_runtime::SandboxLane::environment: agentkit_toolpacks_sandbox::pack::SandboxEnvironment
+pub agentkit_runtime::SandboxLane::export_sink: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_sandbox::ports::SandboxExportSink>
+pub agentkit_runtime::SandboxLane::repository: alloc::rcs::arc::Arc<dyn agentkit_workspaces::repository::WorkspaceRepository>
+pub agentkit_runtime::SandboxLane::resolver: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_sandbox::ports::SandboxBindingResolver>
 pub struct agentkit_runtime::SessionExecutionAuthority<R: agentkit_sessions::repository::SessionBackend>
 impl<R: agentkit_sessions::repository::SessionBackend> agentkit_runtime::SessionExecutionAuthority<R>
 pub fn agentkit_runtime::SessionExecutionAuthority<R>::new(agentkit_sessions::session::AgentSessionService<R>) -> Self

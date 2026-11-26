@@ -302,6 +302,80 @@ string** for a non-2xx response. A `run.failed` written by the host instead
 carries the `AgentKitHostError.code` that caused it, or `internal_error`
 (`packages/host/src/turn/turn-runner.ts`).
 
+### Sandbox tool codes
+
+The `sandbox` tools (`agentkit-toolpacks-sandbox` over `agentkit-workspaces`,
+[ADR 0038](adr/0038-agent-sandbox-workspaces.md)) answer a user-level error as
+`ok: false`, `<code>: <message>` and `data.errorCode`. A refused
+`sandbox_run` or `sandbox_write_file` that never reached the backend carries
+the ledger's not-started shape instead: `errorCode: "command_not_started"`,
+`phase: "before_spawn"`, `started: false`, and the code below in `data.code`.
+A refusal by `SandboxPermissionGuard` is a guard-phase envelope with
+`errorCode: "tool_guard_refused"`; its reason is `<code>: <detail>`, so
+`data.failure.code` is the code below (`failure_catalog::from_refusal`). An
+ask (`export_approval_required`, `network_approval_required`) is not a result:
+the call parks for the owner, whose request carries the approval card. Each code has a
+row (class, default sentence, next step) in `core/src/failure_table_sandbox.rs`;
+the codes the pack shares with other tools (`invalid_arguments`, `read_only`,
+`file_too_large`, `tool_result_uncertain`) keep their existing rows. No event
+type is added.
+
+`tool_result_uncertain` ends a call in two ways: a body's own unknown outcome,
+and the ledger's barrier. A body's own unknown outcome (`sandbox_run` or
+`sandbox_write_file`: a lost ack, a timeout, an observe error) carries
+`data.uncertain: true` and `data.approvalGeneration`, the operation id, which
+is the execution id. The ledger keeps that receipt admitted, so the same call
+under any tool-call id (a redelivery included) asks the owner on an
+uncertainty card naming that generation, and one yes runs it once. A command
+the desktop quit interrupted, whose receipt was read, is a result and is
+recorded as one. When more than one distinct unresolved execution blocks a
+call (this run, another run, every matching barrier) the call ends with it
+and `data.unresolvedGenerations` instead of asking, because one approval
+names one generation. The list starts with the ones an operator can resolve
+now, `data.approvalGeneration` names the first, and this run's own receipt
+comes last (it can be resolved only after the run ends). A barrier is
+resolved by its id through `SessionService.resolveUncertaintyBarrier({chatId,
+barrierId})` (napi; `SqliteStore::resolve_uncertainty_barrier` in Rust),
+which removes the barrier and answers it; a receipt through
+`resolveUncertainExecution` as before. `sandbox_export_file` answers
+`invalid_arguments` before anything is asked when the escaped path is over
+1,024 characters or the title over 200.
+
+An uncertain re-run's approval request (Rust only) carries the reserved content
+key `cardKind: "uncertain"` and the id `hreq:<run>:<call>:uncertain:<generation>`.
+Its prompt leads with the uncertainty line, then "This call also asks:" with
+every other guard's ask (at most 4,000 characters, cut visibly): its preview,
+or for an ask without one the first line of its reason (at most 200
+characters), or `Approve <tool>?`. It requests no mode.
+
+| Code | Raised by | Meaning |
+| --- | --- | --- |
+| `sandbox_not_attached` | pack, service | The run has no pinned workspace, or the attachment changed since the tools were staged. |
+| `sandbox_unavailable` | service | The machine cannot start (image missing, runtime down). |
+| `sandbox_busy` | service | Another operation held the workspace past the lease wait; the message names the holder. |
+| `sandbox_fenced` | service | The workspace is fenced after an unknown outcome; the owner must recover it. |
+| `network_denied` | service; `sandbox_run` result | A connection was refused by policy; the message names host and port, and a request was recorded for the owner. |
+| `quota_exceeded` | service | The disk quota is reached. |
+| `path_outside_workspace` | pack, service | A path resolves outside the workspace folder or home. |
+| `not_a_regular_file` | service | A file tool was pointed at a directory, link or special file. |
+| `sandbox_operation_conflict` | service | The execution id is known with other arguments; never reported as not started. |
+| `sandbox_stale_generation` | service, backend | The call named a machine generation older than the current one. |
+| `sandbox_not_found` | service, backend | A file, machine or record does not exist. |
+| `sandbox_cancelled` | service | The caller cancelled before dispatch; nothing started. |
+| `sandbox_backend_failed` | service, backend | Backend fault (including a call that did not answer within the call timeout). |
+| `sandbox_store_failed` | service | Workspace repository refusal or fault. |
+| `durable_execution_required` | pack | A changing tool ran without an execution id from the durable ledger. |
+| `plan_mode` | pack (guard and body) | Run, write or export in Plan mode: final refusal. |
+| `permission_unavailable` | pack | The host's permission authority could not answer; the call fails closed. |
+| `write_failed` | `sandbox_write_file` result | The write ran and did not succeed. |
+| `unknown_sandbox_tool` | guard | A `sandbox`-namespace call named no sandbox tool. |
+| `export_approval_required` | guard (ask reason) | An export outside Full access waits for the owner's approval of its exact content. |
+| `network_approval_required` | guard (ask reason) | Pending network requests wait for the owner's decision. |
+| `export_not_approved` | `sandbox_export_file` | The call carries no answer approving the file's current content (or the answer was to an uncertain re-run). |
+| `export_stale` | guard, `sandbox_export_file` | The file changed after it was shown for approval; nothing was exported. |
+| `export_refused` | host `SandboxExportSink` | The host refused the export (type, size, policy). |
+| `export_failed` | host `SandboxExportSink` | The host could not store the export. |
+
 ## `run.usage` — per-call delta semantics
 
 Token accounting is reported **per provider call**, not once per run — a run

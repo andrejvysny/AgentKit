@@ -1,7 +1,7 @@
 //! Schema lint over every static AgentKit tool definition: the coding tool
-//! pack, the subagent tools, the advisor tool and the language-server tools
-//! (native tool use spec, "Schema rules" L1 to L12; requirements TU-04 and
-//! TU-05).
+//! pack, the sandbox tool pack, the subagent tools, the advisor tool and the
+//! language-server tools (native tool use spec, "Schema rules" L1 to L12;
+//! requirements TU-04 and TU-05).
 //!
 //! This crate is where the layering lets one test reach all of them. The
 //! exception list is empty by construction: a rule a tool breaks is fixed in
@@ -19,16 +19,27 @@ use agentkit_core::{
     ExampleLane, Tool, ToolConstraint, ToolContext, ToolDefinition, ToolLimits, ToolRegistry,
     ToolResult, meta_definitions, presented_description,
 };
-use agentkit_governance::{ContributedTool, ToolContributionContext, ToolContributor};
+use agentkit_governance::{
+    ContributedTool, GovernanceResult, ToolContributionContext, ToolContributor,
+};
 use agentkit_lsp::{LSP_ARG_ALIASES, lsp_tool_definitions};
 use agentkit_memory::{MEMORY_TOOL_NAMES, memory_tool_definitions};
 use agentkit_providers::{
     ChatCompletionsProvider, SchemaLane, TrustedTransport, build_responses_request_with_warnings,
     schema_lane_violations,
 };
+use agentkit_testkit::{FakeSandboxBackend, InMemoryWorkspaceRepository, ManualClock};
 use agentkit_toolpacks_coding::{
     CODING_TOOL_NAMES, CodingLimitsOverride, CodingToolPackOptions, CodingWorkspace, SandboxMode,
     create_coding_tool_pack,
+};
+use agentkit_toolpacks_sandbox::{
+    ExportContext, ExportReceipt, ExportSinkError, SANDBOX_TOOL_NAMES, SandboxBinding,
+    SandboxBindingResolver, SandboxEnvironment, SandboxExportSink, SandboxPackOptions,
+    SandboxToolPack,
+};
+use agentkit_workspaces::{
+    AgentId, Binding, ExportFile, ServiceConfig, WorkspaceKey, WorkspaceKind, WorkspaceService,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -102,8 +113,73 @@ fn contribution() -> ToolContributionContext {
     }
 }
 
+/// A run attached to an agent home: the sandbox pack offers its tools.
+struct Attached;
+
+#[async_trait]
+impl SandboxBindingResolver for Attached {
+    async fn binding(
+        &self,
+        _: &ToolContributionContext,
+    ) -> GovernanceResult<Option<SandboxBinding>> {
+        Ok(Some(SandboxBinding {
+            binding: Binding {
+                key: WorkspaceKey::new("agent:lint"),
+                kind: WorkspaceKind::AgentHome,
+                owner_scope: "owner".into(),
+                folder: None,
+            },
+            agent_id: AgentId::new("lint"),
+            mode: agentkit_toolpacks_sandbox::SandboxMode::CHAT,
+        }))
+    }
+}
+
+struct NoExports;
+
+#[async_trait]
+impl SandboxExportSink for NoExports {
+    async fn export(
+        &self,
+        _: &ExportContext,
+        _: ExportFile,
+        _: &str,
+    ) -> Result<ExportReceipt, ExportSinkError> {
+        Err(ExportSinkError::Refused {
+            reason: "lint".into(),
+        })
+    }
+}
+
+/// The real sandbox tools, staged for an attached run over the testkit
+/// twins (nothing runs).
+async fn sandbox_tools() -> Vec<Arc<dyn Tool>> {
+    let clock = ManualClock::new(0);
+    let backend = Arc::new(FakeSandboxBackend::with_clock(clock.clone()));
+    let repo = Arc::new(InMemoryWorkspaceRepository::new());
+    let service = WorkspaceService::new(repo, backend, clock, ServiceConfig::new("sha256:lint"))
+        .expect("valid config");
+    let pack = SandboxToolPack::new(SandboxPackOptions {
+        service: Arc::new(service),
+        resolver: Arc::new(Attached),
+        export_sink: Arc::new(NoExports),
+        authority: None,
+        environment: SandboxEnvironment::new("lint"),
+    });
+    pack.contribute(&contribution())
+        .await
+        .expect("contribute")
+        .into_iter()
+        .map(|tool| match tool {
+            ContributedTool::Read(tool) | ContributedTool::DirectWrite(tool) => tool,
+            ContributedTool::Write(_) => panic!("sandbox tools are not proposal-governed"),
+        })
+        .collect()
+}
+
 /// Every static tool: the real coding tools (configured with one test
-/// command, as a project would), and the definitions of the rest.
+/// command, as a project would), the real sandbox tools, and the
+/// definitions of the rest.
 async fn all_tools() -> Vec<Arc<dyn Tool>> {
     let pack = create_coding_tool_pack(CodingToolPackOptions {
         workspace: CodingWorkspace {
@@ -135,6 +211,7 @@ async fn all_tools() -> Vec<Arc<dyn Tool>> {
             ContributedTool::Write(_) => panic!("coding tools are not proposal-governed"),
         })
         .collect();
+    tools.extend(sandbox_tools().await);
     for definition in subagent_tool_definitions() {
         tools.push(definition_only(definition, SUBAGENT_ARG_ALIASES));
     }
@@ -662,6 +739,7 @@ async fn every_static_tool_is_linted() {
         .collect();
     let expected: BTreeSet<String> = CODING_TOOL_NAMES
         .iter()
+        .chain(SANDBOX_TOOL_NAMES.iter())
         .chain(SUBAGENT_TOOL_NAMES.iter())
         .chain([REPORT_FINDINGS_TOOL].iter())
         .chain(LSP_TOOL_NAMES.iter())
@@ -673,7 +751,7 @@ async fn every_static_tool_is_linted() {
         names, expected,
         "a tool was added or removed without the lint"
     );
-    assert_eq!(tools.len(), 30);
+    assert_eq!(tools.len(), 36);
 }
 
 #[tokio::test]
@@ -1055,7 +1133,13 @@ fn description_gaps(def: &ToolDefinition, tool_names: &BTreeSet<String>) -> Vec<
 
 /// Tools whose descriptions already carry all three marked parts. They may
 /// not regress; the rest are the input list for T4.3.
-const STRUCTURE_COMPLIANT: [&str; 17] = [
+const STRUCTURE_COMPLIANT: [&str; 23] = [
+    "sandbox_run",
+    "sandbox_read_file",
+    "sandbox_write_file",
+    "sandbox_list_files",
+    "sandbox_export_file",
+    "sandbox_get_status",
     "memory_search",
     "memory_get",
     "memory_propose",

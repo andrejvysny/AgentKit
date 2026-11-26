@@ -31,6 +31,7 @@ mod proposals;
 mod provider_catalog;
 mod provider_connections;
 mod run_profiles;
+mod sandbox_repository;
 mod schema;
 mod session_ops;
 mod sessions_repository;
@@ -76,6 +77,7 @@ pub use provider_connections::{
     revoke_persisted_provider_connection,
 };
 pub use run_profiles::run_profile_digest;
+pub use sandbox_repository::SqliteWorkspaceRepository;
 pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::SettingsCommit;

@@ -158,6 +158,12 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS subagents;
          DROP TABLE IF EXISTS advisor_findings;
          DROP TABLE IF EXISTS advisor_reviews;
+         DROP TABLE IF EXISTS sandbox_network_request;
+         DROP TABLE IF EXISTS sandbox_network_grant;
+         DROP TABLE IF EXISTS sandbox_operation;
+         DROP TABLE IF EXISTS sandbox_member;
+         DROP TABLE IF EXISTS sandbox_workspace_lease;
+         DROP TABLE IF EXISTS sandbox_workspace;
          DROP TABLE IF EXISTS memory_vectors;
          DROP TABLE IF EXISTS memory_index_items;
          DROP TABLE IF EXISTS memory_fts;

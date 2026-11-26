@@ -83,6 +83,31 @@ fn codes_in_source() -> BTreeSet<String> {
             }
         }
     }
+    found.extend(sandbox_codes_in_source());
+    found
+}
+
+/// Codes the sandbox pack raises: `Refusal::new("code", ..)` in a body and
+/// `refusal_text("code", ..)` in its guard. The workspace service's codes
+/// are a `match`; the runtime's sandbox lane test checks those.
+fn sandbox_codes_in_source() -> BTreeSet<String> {
+    let mut files = vec![];
+    rust_files(
+        &crates_dir().join("toolpacks-sandbox").join("src"),
+        &mut files,
+    );
+    let mut found = BTreeSet::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let text = text.split("#[cfg(test)]").next().unwrap();
+        for constructor in ["Refusal::new(", "refusal_text("] {
+            for (at, _) in text.match_indices(constructor) {
+                if let Some(code) = leading_code(&text[at + constructor.len()..]) {
+                    found.insert(code.to_owned());
+                }
+            }
+        }
+    }
     found
 }
 
@@ -102,7 +127,14 @@ fn every_code_used_in_source_is_in_the_table() {
 #[test]
 fn the_scan_finds_codes_so_the_check_cannot_pass_by_finding_nothing() {
     let found = codes_in_source();
-    for code in ["tool_missing", "edit_no_match", "not_found", "read_only"] {
+    for code in [
+        "tool_missing",
+        "edit_no_match",
+        "not_found",
+        "read_only",
+        "export_stale",
+        "network_approval_required",
+    ] {
         assert!(found.contains(code), "scan lost {code}: {found:?}");
     }
 }

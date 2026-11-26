@@ -457,9 +457,14 @@ pub fn is_approval_request(content: &Value) -> bool {
 }
 
 /// The plan a pending request asks to approve, per the tool-name policy
-/// (mirrors `planRequestOf`).
+/// (mirrors `planRequestOf`). A request that names an uncertain generation
+/// asks to re-run a call whose effect is unknown, not to approve a plan:
+/// its yes never escalates the session's mode (Rust only; ADR 0038).
 pub fn plan_request_of(content: &Value, plan_tool_names: &[String]) -> Option<Value> {
-    if plan_tool_names.is_empty() || content.get("kind").and_then(Value::as_str) != Some("approval")
+    if plan_tool_names.is_empty()
+        || content.get("kind").and_then(Value::as_str) != Some("approval")
+        || content.get("approvalGeneration").is_some()
+        || content.get("uncertaintyGeneration").is_some()
     {
         return None;
     }

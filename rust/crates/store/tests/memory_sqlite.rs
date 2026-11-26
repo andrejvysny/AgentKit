@@ -867,7 +867,8 @@ fn a_version_21_database_gains_the_vector_tables_on_open() {
     {
         let raw = rusqlite::Connection::open(&path).expect("raw connection");
         raw.execute_batch(
-            "DROP INDEX memory_index_scope_key; DROP TABLE memory_vectors; \
+            "DROP TABLE sandbox_network_request; DROP TABLE sandbox_network_grant; DROP TABLE sandbox_operation; DROP TABLE sandbox_member; DROP TABLE sandbox_workspace_lease; DROP TABLE sandbox_workspace; \
+             DROP INDEX memory_index_scope_key; DROP TABLE memory_vectors; \
              ALTER TABLE embedding_models DROP COLUMN retired_at; PRAGMA user_version=21;",
         )
         .expect("downgrade");

@@ -8,13 +8,27 @@ use async_trait::async_trait;
 /// unresolved admitted receipt an answer explicitly reauthorized: the
 /// store's pending-generation gate only opens for exactly that value, so
 /// the grant cannot spend itself on a different (later) uncertainty.
+/// `uncertainty_card` is true when the answered request was an uncertainty
+/// card ([`CARD_KIND_KEY`] = [`UNCERTAIN_CARD_KIND`]): its prompt led with
+/// the unknown effect and listed what the call's guards asked. Only such
+/// an answer reauthorizes `uncertainty_generation`; an older card that
+/// carried a generation without showing it opens nothing and is asked
+/// again.
 #[derive(Clone, Debug)]
 pub struct ApprovalGrant {
     pub request_id: String,
     pub args_sha256: String,
     pub uncertainty_generation: Option<String>,
     pub context_sha256: Option<String>,
+    pub uncertainty_card: bool,
 }
+
+/// Approval-request content key naming what the card showed. Hashed with
+/// the request, so an answer is bound to it.
+pub const CARD_KIND_KEY: &str = "cardKind";
+
+/// [`CARD_KIND_KEY`] value of a card the uncertainty line leads.
+pub const UNCERTAIN_CARD_KIND: &str = "uncertain";
 
 /// Which approvable refusals may be remembered, and under what digest. The
 /// coding pack implements this for its shell tools: a policy that declines

@@ -49,6 +49,7 @@ agentkit-engine = { path = "crates/engine", version = "0.1.0" }
 agentkit-sessions = { path = "crates/sessions", version = "0.1.0" }
 agentkit-agents = { path = "crates/agents", version = "0.1.0" }
 agentkit-memory = { path = "crates/memory", version = "0.1.0" }
+agentkit-workspaces = { path = "crates/workspaces", version = "0.1.0" }
 agentkit-chat = { path = "crates/chat", version = "0.1.0" }
 agentkit-store = { path = "crates/store", version = "0.1.0" }
 agentkit-testkit = { path = "crates/testkit", version = "0.1.0" }
@@ -58,6 +59,7 @@ agentkit-http = { path = "crates/http", version = "0.1.0" }
 agentkit-mcp = { path = "crates/mcp", version = "0.1.0" }
 agentkit-lsp = { path = "crates/lsp", version = "0.1.0" }
 agentkit-toolpacks-coding = { path = "crates/toolpacks-coding", version = "0.1.0" }
+agentkit-toolpacks-sandbox = { path = "crates/toolpacks-sandbox", version = "0.1.0" }
 agentkit-runtime = { path = "crates/runtime", version = "0.1.0" }
 agentkit-napi = { path = "crates/napi", version = "0.1.0" }
 agentkit-rust = { path = "crates/agentkit", version = "0.1.0" }

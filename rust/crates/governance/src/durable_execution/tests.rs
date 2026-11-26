@@ -536,3 +536,147 @@ async fn static_fast_path_uncertain_receipt_resolves_then_the_retry_proceeds() {
         agentkit_store::ExecutionReceiptStatus::Completed
     );
 }
+
+/// An answer that names the generation but came from a card that did not
+/// lead with the uncertainty (no `cardKind`) never reauthorizes it, on the
+/// static path too: the call is refused before admission.
+#[tokio::test]
+async fn a_generation_answer_without_an_uncertainty_card_opens_nothing() {
+    let (store, context) = claimed_context().await;
+    let input = json!({"path": "a.txt"});
+    let execution = crash_with_uncertain_effect(&store, &context, &input).await;
+    let retry = retry_context(&store).await;
+    let grant = ApprovalGrant {
+        request_id: "hreq:run2:call-2:legacy".into(),
+        args_sha256: args_sha256(&input),
+        uncertainty_generation: Some(execution.clone()),
+        context_sha256: None,
+        uncertainty_card: false,
+    };
+    let durable = Arc::new(DurableExecution {
+        context: retry.clone(),
+        chat_id: "chat".into(),
+        is_mutating: None,
+        approvals: Arc::new([("call-2".to_owned(), grant)].into_iter().collect()),
+        standing: None,
+    });
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(Arc::new(Body {
+            definition: definition("mutate", "write"),
+            runs: runs.clone(),
+        }))
+        .unwrap();
+    let wrapped = wrap_static_writes(&registry, durable.clone(), &retry_contribution(&durable));
+    let refusal = wrapped
+        .get("mutate")
+        .unwrap()
+        .execute(tool_context(&retry, "call-2"), input)
+        .await
+        .unwrap();
+    let data = refusal.data.expect("the refusal carries model data");
+    assert_eq!(data["errorCode"], json!("tool_result_uncertain"));
+    assert_eq!(data["approvalGeneration"], json!(execution));
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    assert_eq!(store.list_executions("run2".into()).await.unwrap().len(), 0);
+}
+
+/// Owns its command start and reports the outcome unknown, as a sandbox
+/// command does when the service lost its ack.
+struct UnknownOutcome {
+    definition: ToolDefinition,
+    runs: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for UnknownOutcome {
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+    fn records_command_start(&self) -> bool {
+        true
+    }
+    async fn execute(&self, context: ToolContext, _: Value) -> Result<ToolResult, CoreError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolResult {
+            ok: false,
+            data: Some(json!({
+                "errorCode": "tool_result_uncertain",
+                "phase": "execution",
+                "uncertain": true,
+            })),
+            sources: vec![],
+            warnings: vec![],
+            truncated: false,
+            limits: context.limits,
+            model_data: None,
+            summary: None,
+            status: None,
+            model_content: None,
+        })
+    }
+}
+
+/// A body that reports its outcome unknown leaves the receipt admitted:
+/// the ledger reads it as uncertain, so the identical operation under a
+/// new call id is refused naming that generation and never runs again
+/// unasked. Other arguments are another operation.
+#[tokio::test]
+async fn an_unknown_outcome_stays_uncertain_and_blocks_the_identical_call() {
+    let (store, context) = claimed_context().await;
+    let durable = durable(&context, None);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let registry = wrapped(
+        Arc::new(UnknownOutcome {
+            definition: definition("mutate", "write"),
+            runs: runs.clone(),
+        }),
+        &durable,
+    );
+    let tool = registry.get("mutate").unwrap();
+    let input = json!({"path": "a.txt"});
+    let unknown = tool
+        .execute(tool_context(&context, "call-1"), input.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        unknown.data.unwrap()["errorCode"],
+        json!("tool_result_uncertain")
+    );
+    let receipts = store.list_executions("run".into()).await.unwrap();
+    assert_eq!(
+        receipts[0].status,
+        agentkit_store::ExecutionReceiptStatus::Admitted,
+        "an unknown outcome is never recorded as a result"
+    );
+    // The same call id again in this attempt, with arguments the schema
+    // refuses: its refusal record must not close the unknown outcome.
+    tool.record_schema_refusal(
+        &tool_context(&context, "call-1"),
+        &json!({"path": 7}),
+        "path must be a string",
+    )
+    .await;
+    let receipts = store.list_executions("run".into()).await.unwrap();
+    assert_eq!(
+        receipts[0].status,
+        agentkit_store::ExecutionReceiptStatus::Admitted,
+        "a schema refusal never completes another call's admission"
+    );
+    let refusal = tool
+        .execute(tool_context(&context, "call-2"), input)
+        .await
+        .unwrap();
+    let data = refusal.data.expect("the refusal carries model data");
+    assert_eq!(data["errorCode"], json!("tool_result_uncertain"));
+    assert_eq!(
+        data["approvalGeneration"],
+        json!(execution_id("run", "call-1", None))
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "never re-run unasked");
+    tool.execute(tool_context(&context, "call-3"), json!({"path": "b.txt"}))
+        .await
+        .unwrap();
+    assert_eq!(runs.load(Ordering::SeqCst), 2, "other arguments run");
+}

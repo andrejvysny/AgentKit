@@ -8,6 +8,7 @@ use agentkit_memory::MemoryService;
 use agentkit_providers::NativeProviderFactory;
 use agentkit_sessions::{AgentSessionService, ContentAuthority, ProfileRegistry};
 use agentkit_store::SqliteStore;
+use agentkit_workspaces::WorkspaceService;
 
 use crate::builder::AgentRuntimeBuilder;
 use crate::lanes::advisor::AdvisorLane;
@@ -29,6 +30,7 @@ pub struct AgentRuntime {
     pub(crate) advisor: Arc<AdvisorLane>,
     pub(crate) lsp: Arc<LspLane>,
     pub(crate) memory: Option<Arc<MemoryService>>,
+    pub(crate) sandbox: Option<Arc<WorkspaceService>>,
     pub(crate) worker: Option<WorkerHandle>,
     /// Periodic output retention sweep; stops with the runtime.
     pub(crate) _output_sweeper: Option<OutputSweeper>,
@@ -91,6 +93,15 @@ impl AgentRuntime {
     /// `memory(..)`.
     pub fn memory(&self) -> Option<&Arc<MemoryService>> {
         self.memory.as_ref()
+    }
+
+    /// The sandbox workspace service, when the builder was given
+    /// `sandbox_lane(..)`. Startup recovery already ran in `build()`; the
+    /// host calls `quiesce()` on it at shutdown, after the worker stopped
+    /// claiming turns, and drives the owner actions (recover, stop, reset,
+    /// grants) through it.
+    pub fn sandbox_service(&self) -> Option<&Arc<WorkspaceService>> {
+        self.sandbox.as_ref()
     }
 
     /// Hand the worker to the caller's shutdown sequence; `None` once taken.

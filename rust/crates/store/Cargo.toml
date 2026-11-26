@@ -28,6 +28,8 @@ agentkit-native = { workspace = true }
 agentkit-sessions = { workspace = true }
 # Private-file primitives (0700 directories, 0600 files) for output bytes.
 agentkit-sys = { workspace = true }
+# The workspaces context owns the repository port this crate adapts (ADR 0038).
+agentkit-workspaces = { workspace = true }
 async-trait.workspace = true
 chrono = { workspace = true, features = ["std"] }
 # AGENTKIT-72 at-rest sealing. `ring` is already in the workspace Cargo.lock

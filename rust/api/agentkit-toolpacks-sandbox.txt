@@ -1,0 +1,72 @@
+pub mod agentkit_toolpacks_sandbox
+pub enum agentkit_toolpacks_sandbox::ExportKind
+pub agentkit_toolpacks_sandbox::ExportKind::Artifact
+pub agentkit_toolpacks_sandbox::ExportKind::File
+impl agentkit_toolpacks_sandbox::ExportKind
+pub fn agentkit_toolpacks_sandbox::ExportKind::as_str(self) -> &'static str
+pub enum agentkit_toolpacks_sandbox::ExportSinkError
+pub agentkit_toolpacks_sandbox::ExportSinkError::Failed
+pub agentkit_toolpacks_sandbox::ExportSinkError::Failed::reason: alloc::string::String
+pub agentkit_toolpacks_sandbox::ExportSinkError::Refused
+pub agentkit_toolpacks_sandbox::ExportSinkError::Refused::reason: alloc::string::String
+impl agentkit_toolpacks_sandbox::ExportSinkError
+pub fn agentkit_toolpacks_sandbox::ExportSinkError::code(&self) -> &'static str
+pub enum agentkit_toolpacks_sandbox::SandboxMode
+pub agentkit_toolpacks_sandbox::SandboxMode::AskBeforeChanges
+pub agentkit_toolpacks_sandbox::SandboxMode::EditAutomatically
+pub agentkit_toolpacks_sandbox::SandboxMode::FullAccess
+pub agentkit_toolpacks_sandbox::SandboxMode::Plan
+pub agentkit_toolpacks_sandbox::SandboxMode::ReadOnly
+impl agentkit_toolpacks_sandbox::SandboxMode
+pub const agentkit_toolpacks_sandbox::SandboxMode::CHAT: agentkit_toolpacks_sandbox::SandboxMode
+pub fn agentkit_toolpacks_sandbox::SandboxMode::export_needs_approval(self) -> bool
+pub fn agentkit_toolpacks_sandbox::SandboxMode::from_coding_mode(agentkit_core::permission::CodingMode) -> Self
+pub fn agentkit_toolpacks_sandbox::SandboxMode::may_change(self) -> bool
+pub fn agentkit_toolpacks_sandbox::SandboxMode::parse(&str) -> Self
+impl core::convert::From<agentkit_core::permission::CodingMode> for agentkit_toolpacks_sandbox::SandboxMode
+pub fn agentkit_toolpacks_sandbox::SandboxMode::from(agentkit_core::permission::CodingMode) -> Self
+pub struct agentkit_toolpacks_sandbox::ExportContext
+pub agentkit_toolpacks_sandbox::ExportContext::agent_id: agentkit_workspaces::ids::AgentId
+pub agentkit_toolpacks_sandbox::ExportContext::chat_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_sandbox::ExportContext::execution_id: alloc::string::String
+pub agentkit_toolpacks_sandbox::ExportContext::path: alloc::string::String
+pub agentkit_toolpacks_sandbox::ExportContext::run_id: alloc::string::String
+pub agentkit_toolpacks_sandbox::ExportContext::tool_call_id: core::option::Option<alloc::string::String>
+pub agentkit_toolpacks_sandbox::ExportContext::workspace_key: agentkit_workspaces::workspace::WorkspaceKey
+pub struct agentkit_toolpacks_sandbox::ExportReceipt
+pub agentkit_toolpacks_sandbox::ExportReceipt::file_id: alloc::string::String
+pub agentkit_toolpacks_sandbox::ExportReceipt::kind: agentkit_toolpacks_sandbox::ExportKind
+pub struct agentkit_toolpacks_sandbox::SandboxBinding
+pub agentkit_toolpacks_sandbox::SandboxBinding::agent_id: agentkit_workspaces::ids::AgentId
+pub agentkit_toolpacks_sandbox::SandboxBinding::binding: agentkit_workspaces::service::types::Binding
+pub agentkit_toolpacks_sandbox::SandboxBinding::mode: agentkit_toolpacks_sandbox::SandboxMode
+pub struct agentkit_toolpacks_sandbox::SandboxEnvironment
+pub agentkit_toolpacks_sandbox::SandboxEnvironment::image_version: alloc::string::String
+pub agentkit_toolpacks_sandbox::SandboxEnvironment::os: alloc::string::String
+impl agentkit_toolpacks_sandbox::SandboxEnvironment
+pub fn agentkit_toolpacks_sandbox::SandboxEnvironment::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_toolpacks_sandbox::SandboxPackOptions
+pub agentkit_toolpacks_sandbox::SandboxPackOptions::authority: core::option::Option<alloc::rcs::arc::Arc<dyn agentkit_governance::authority::CodingPermissionAuthority>>
+pub agentkit_toolpacks_sandbox::SandboxPackOptions::environment: agentkit_toolpacks_sandbox::SandboxEnvironment
+pub agentkit_toolpacks_sandbox::SandboxPackOptions::export_sink: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_sandbox::SandboxExportSink>
+pub agentkit_toolpacks_sandbox::SandboxPackOptions::resolver: alloc::rcs::arc::Arc<dyn agentkit_toolpacks_sandbox::SandboxBindingResolver>
+pub agentkit_toolpacks_sandbox::SandboxPackOptions::service: alloc::rcs::arc::Arc<agentkit_workspaces::service::WorkspaceService>
+pub struct agentkit_toolpacks_sandbox::SandboxPermissionGuard
+impl agentkit_governance::guard::ToolGuard for agentkit_toolpacks_sandbox::SandboxPermissionGuard
+pub fn agentkit_toolpacks_sandbox::SandboxPermissionGuard::can_execute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::guard::ToolGuardContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<agentkit_governance::guard::ToolGuardVerdict>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub struct agentkit_toolpacks_sandbox::SandboxToolPack
+impl agentkit_toolpacks_sandbox::SandboxToolPack
+pub fn agentkit_toolpacks_sandbox::SandboxToolPack::new(agentkit_toolpacks_sandbox::SandboxPackOptions) -> Self
+pub fn agentkit_toolpacks_sandbox::SandboxToolPack::permission_guard(&self) -> agentkit_toolpacks_sandbox::SandboxPermissionGuard
+pub fn agentkit_toolpacks_sandbox::SandboxToolPack::toolset(&self) -> agentkit_core::toolset::Toolset
+impl agentkit_governance::contribution::ToolContributor for agentkit_toolpacks_sandbox::SandboxToolPack
+pub fn agentkit_toolpacks_sandbox::SandboxToolPack::contribute<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<alloc::vec::Vec<agentkit_governance::contribution::ContributedTool>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_toolpacks_sandbox::SandboxToolPack::namespace(&self) -> &str
+pub fn agentkit_toolpacks_sandbox::SandboxToolPack::toolsets(&self) -> alloc::vec::Vec<agentkit_core::toolset::Toolset>
+pub const agentkit_toolpacks_sandbox::SANDBOX_NAMESPACE: &str
+pub const agentkit_toolpacks_sandbox::SANDBOX_TOOLSET: &str
+pub const agentkit_toolpacks_sandbox::SANDBOX_TOOL_NAMES: [&str; 6]
+pub trait agentkit_toolpacks_sandbox::SandboxBindingResolver: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_sandbox::SandboxBindingResolver::binding<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_governance::contribution::ToolContributionContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = agentkit_governance::error::GovernanceResult<core::option::Option<agentkit_toolpacks_sandbox::SandboxBinding>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_toolpacks_sandbox::SandboxExportSink: core::marker::Send + core::marker::Sync
+pub fn agentkit_toolpacks_sandbox::SandboxExportSink::export<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_toolpacks_sandbox::ExportContext, agentkit_workspaces::service::types::ExportFile, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_toolpacks_sandbox::ExportReceipt, agentkit_toolpacks_sandbox::ExportSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait

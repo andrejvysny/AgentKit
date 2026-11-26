@@ -75,6 +75,8 @@ async fn approval_is_revalidated_in_the_receipt_transaction() {
         ("context", "contextSha256", json!("c".repeat(64))),
         ("generation", "approvalGeneration", json!("old")),
         ("malformed", "contextSha256", Value::Null),
+        ("card", "cardKind", json!("plain")),
+        ("card-type", "cardKind", json!(true)),
     ] {
         let mut wrong = request(id);
         wrong.content[field] = value;
@@ -179,5 +181,15 @@ async fn approval_is_revalidated_in_the_receipt_transaction() {
             .await
             .unwrap()
     );
+    assert_eq!(store.list_executions("run".into()).await.unwrap().len(), 2);
+    // An uncertainty card always names the generation it led with.
+    let mut unbound = request("unbound-card");
+    let content = unbound.content.as_object_mut().unwrap();
+    content.remove("approvalGeneration");
+    content.insert("cardKind".into(), json!("uncertain"));
+    answered(&store, unbound, "approval:ok").await;
+    let mut plain = admission("unbound-card");
+    plain.approval_generation = None;
+    assert!(store.admit_execution(lease.fence(), plain).await.is_err());
     assert_eq!(store.list_executions("run".into()).await.unwrap().len(), 2);
 }

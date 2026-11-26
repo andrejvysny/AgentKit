@@ -175,6 +175,8 @@ impl ToolContributor for WriterContributor {
 struct AskGuard {
     tool: &'static str,
     requested_mode: Option<&'static str>,
+    /// What the guard shows the owner (`memory_forget` shows the record).
+    preview: Option<&'static str>,
 }
 
 #[async_trait]
@@ -185,7 +187,7 @@ impl ToolGuard for AskGuard {
         }
         Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
             reason: format!("approval_required: {}", self.tool),
-            preview: None,
+            preview: self.preview.map(str::to_owned),
             requested_mode: self.requested_mode.map(str::to_owned),
             uncertainty_generation: None,
         }))
@@ -309,6 +311,8 @@ struct Shape {
     legacy: Vec<agentkit_core::LegacyName>,
     emit: Option<&'static str>,
     classification: Option<agentkit_core::Classification>,
+    /// The preview the ask-everything guard shows with its ask.
+    guard_preview: Option<&'static str>,
 }
 
 impl Default for Shape {
@@ -318,6 +322,7 @@ impl Default for Shape {
             legacy: vec![],
             emit: None,
             classification: None,
+            guard_preview: None,
         }
     }
 }
@@ -381,6 +386,7 @@ async fn fixture_shaped(
                 } else {
                     None
                 },
+                preview: shape.guard_preview,
             })],
             standing: standing.then(|| Arc::new(KeyPolicy) as Arc<dyn StandingApprovalPolicy>),
             tool_classification: shape.classification,
@@ -1066,6 +1072,416 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
     );
 }
 
+/// A guard that asks on every call (the coding pack in Ask mode) asks again
+/// when the approved re-run of an uncertain effect resumes. The answer that
+/// names the generation still opens it exactly once: no second,
+/// generation-less request is parked (an ask loop no answer could end).
+#[tokio::test]
+async fn an_uncertain_effect_under_an_asking_guard_runs_after_one_answer() {
+    let f = fixture_with("write_file", ARGS_A, "write_file", false, None).await;
+    let generation = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request.content["approvalGeneration"], generation);
+    let prompt = request.content["prompt"].as_str().unwrap_or_default();
+    assert!(prompt.contains("its effect is unknown"), "{prompt}");
+
+    f.service
+        .approve(&request.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.status(&turn).await,
+        TaskStatus::Completed,
+        "the guard's second ask is answered by the generation-bound yes"
+    );
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1, "re-run exactly once");
+    assert!(f.pending(&turn).await.is_empty(), "nothing asked again");
+}
+
+/// Pull the next attempt down mid-body (process death), then recover and
+/// resume the run: the admitted execution stays without a result.
+async fn crash_next_attempt(f: &Fixture, turn: &str, hits: usize) {
+    f.gate.arm();
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let gate = f.gate.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the execution started");
+    running.abort();
+    assert_eq!(f.hits.load(Ordering::SeqCst), hits);
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", turn).await.unwrap();
+}
+
+/// The asking-guard variant of the same-run second uncertainty: the yes to
+/// generation N opens exactly one execution although the guard asks again,
+/// and when that execution dies too, the spent yes to N never opens N+1.
+#[tokio::test]
+async fn under_an_asking_guard_a_generation_answer_opens_only_its_generation() {
+    let options = HostOptions {
+        max_attempts: 10,
+        ..Default::default()
+    };
+    let f = fixture_with_options("write_file", ARGS_A, "write_file", false, None, options).await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let ordinary = f.pending(&turn).await.into_iter().next().unwrap();
+    f.service
+        .approve(&ordinary.input_id, "ans-0", None, None)
+        .await
+        .unwrap();
+    crash_next_attempt(&f, &turn, 1).await;
+    let first = agentkit_governance::execution_id(&turn, "call-1", Some(&ordinary.input_id));
+    f.host.run_once().await.unwrap();
+    let request_n = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request_n.content["approvalGeneration"], first);
+    f.service
+        .approve(&request_n.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    // The guard asks again on resume; the yes to N still opens N, once.
+    crash_next_attempt(&f, &turn, 2).await;
+    let second = agentkit_governance::execution_id(&turn, "call-1", Some(&request_n.input_id));
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 2, "N's yes never opens N+1");
+    let request_next = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request_next.content["approvalGeneration"], second);
+    f.service
+        .approve(&request_next.input_id, "ans-2", None, None)
+        .await
+        .unwrap();
+    f.gate.release();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 3);
+    assert!(f.pending(&turn).await.is_empty());
+}
+
+/// What a `memory_forget`-like guard shows the owner with its ask.
+const FORGET_PREVIEW: &str = "Forget this memory?\n[user] the door code is 4711 (m_1a2b)";
+const UNCERTAIN_LINE: &str =
+    "The previous run of write_file was admitted without a recorded result; its effect is unknown.";
+
+async fn previewing_fixture(options: HostOptions) -> Fixture {
+    let shape = Shape {
+        guard_preview: Some(FORGET_PREVIEW),
+        ..Shape::default()
+    };
+    fixture_shaped(
+        "write_file",
+        ARGS_A,
+        "write_file",
+        false,
+        None,
+        options,
+        shape,
+    )
+    .await
+}
+
+/// The uncertainty card leads with the uncertainty and shows what the
+/// guard asked below it: its one yes answers both asks, so the owner sees
+/// both before answering — never a hidden record behind a re-run card.
+#[tokio::test]
+async fn the_uncertainty_card_shows_what_the_other_guards_asked() {
+    let f = previewing_fixture(HostOptions::default()).await;
+    let generation = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let card = f.pending(&turn).await.remove(0);
+    assert_eq!(card.content["approvalGeneration"], generation);
+    let prompt = card.content["prompt"].as_str().unwrap_or_default();
+    assert!(prompt.starts_with(UNCERTAIN_LINE), "{prompt}");
+    let shown = prompt
+        .find(FORGET_PREVIEW)
+        .expect("the guard's preview is on the card");
+    assert!(
+        shown > UNCERTAIN_LINE.len(),
+        "below the uncertainty: {prompt}"
+    );
+    assert_eq!(card.content["cardKind"], "uncertain");
+
+    f.service
+        .approve(&card.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1, "re-run exactly once");
+    assert!(f.pending(&turn).await.is_empty(), "nothing asked again");
+}
+
+/// A card parked by the release before the uncertainty card existed: the
+/// guard's preview was the prompt and the generation rode along unseen.
+/// Its yes never re-runs the uncertain effect; the call asks again on the
+/// uncertainty card instead.
+#[tokio::test]
+async fn a_yes_on_a_card_that_hid_the_uncertainty_never_reruns_it() {
+    let f = previewing_fixture(HostOptions::default()).await;
+    let generation = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let card = f.pending(&turn).await.remove(0);
+    let mut legacy = card.content.clone();
+    legacy.as_object_mut().unwrap().remove("cardKind");
+    legacy["prompt"] = FORGET_PREVIEW.into();
+    assert_eq!(legacy["approvalGeneration"], generation);
+    f.store
+        .create_input(
+            CreateAgentInput {
+                input_id: format!("hreq:{turn}:call-1:{generation}"),
+                session_id: "s1".into(),
+                kind: AgentInputKind::HumanRequest,
+                content: legacy,
+                content_hash: "legacy-card".into(),
+                target_task_id: Some(turn.clone()),
+                on_settled: None,
+                attempt_id: card.attempt_id.clone(),
+                tool_call_id: Some("call-1".into()),
+                expires_at: None,
+            },
+            1_700_000_000_001,
+        )
+        .await
+        .unwrap();
+    f.service
+        .approve(
+            &format!("hreq:{turn}:call-1:{generation}"),
+            "ans-old",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        0,
+        "the hidden uncertainty never re-ran"
+    );
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    let pending = f.pending(&turn).await;
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(
+        pending[0].input_id, card.input_id,
+        "asked on the uncertainty card"
+    );
+    assert_eq!(pending[0].content["cardKind"], "uncertain");
+}
+
+/// The same in production order, end to end: the run's approved execution
+/// dies, the release before uncertainty cards parked and the owner answered
+/// a card that hid the uncertainty, then this release resumes the run. That
+/// answer opens nothing; the uncertainty card's own yes runs the call once.
+#[tokio::test]
+async fn after_a_hidden_uncertainty_answer_the_uncertainty_card_runs_the_call_once() {
+    let f = previewing_fixture(HostOptions {
+        max_attempts: 10,
+        ..Default::default()
+    })
+    .await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let ordinary = f.pending(&turn).await.remove(0);
+    f.service
+        .approve(&ordinary.input_id, "ans-0", None, None)
+        .await
+        .unwrap();
+    crash_next_attempt(&f, &turn, 1).await;
+    let generation = agentkit_governance::execution_id(&turn, "call-1", Some(&ordinary.input_id));
+    // The older release's card: the guard's preview, the generation unseen,
+    // its id `hreq:<run>:<call>:<generation>`; answered before this resume.
+    let legacy_id = format!("hreq:{turn}:call-1:{generation}");
+    let mut legacy = ordinary.content.clone();
+    legacy["approvalGeneration"] = generation.clone().into();
+    f.store
+        .create_input(
+            CreateAgentInput {
+                input_id: legacy_id.clone(),
+                session_id: "s1".into(),
+                kind: AgentInputKind::HumanRequest,
+                content: legacy,
+                content_hash: "legacy-card".into(),
+                target_task_id: Some(turn.clone()),
+                on_settled: None,
+                attempt_id: ordinary.attempt_id.clone(),
+                tool_call_id: Some("call-1".into()),
+                expires_at: None,
+            },
+            1_700_000_000_001,
+        )
+        .await
+        .unwrap();
+    f.store
+        .transition_input(
+            legacy_id.clone(),
+            vec![AgentInputStatus::Pending],
+            AgentInputStatus::Answered,
+            agentkit_store::AgentInputPatch {
+                applied_task_id: None,
+                applied_message_id: Some("approval:ans-old".into()),
+                answer_id: Some("ans-old".into()),
+            },
+            1_700_000_000_002,
+        )
+        .await
+        .unwrap();
+    f.gate.release();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        1,
+        "the hidden answer opened nothing"
+    );
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    let card = f.pending(&turn).await.remove(0);
+    assert_ne!(card.input_id, legacy_id);
+    assert_eq!(card.content["approvalGeneration"], generation);
+    assert_eq!(card.content["cardKind"], "uncertain");
+    let prompt = card.content["prompt"].as_str().unwrap_or_default();
+    assert!(
+        prompt.starts_with(UNCERTAIN_LINE) && prompt.contains(FORGET_PREVIEW),
+        "{prompt}"
+    );
+
+    f.service
+        .approve(&card.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 2, "one yes, one dispatch");
+    assert!(f.pending(&turn).await.is_empty());
+}
+
+/// A plan tool's uncertain re-run is not a plan approval: the card asks for
+/// no mode, and its yes leaves the session's execution mode as it was.
+#[tokio::test]
+async fn an_uncertainty_card_never_escalates_the_session_mode() {
+    let policy = Arc::new(ModePolicy {
+        tool: "submit_plan",
+        granted: "default",
+        deny_with: Mutex::new(None),
+    });
+    let f = fixture("submit_plan", false, Some(policy)).await;
+    f.seed_uncertain("run-old", "submit_plan", ARGS_A).await;
+    let before = f.service.get_execution("s1").await.unwrap();
+    f.set_ask(true);
+    let turn = f.send("plan it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let card = f.pending(&turn).await.remove(0);
+    f.service
+        .approve(&card.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.service.get_execution("s1").await.unwrap(),
+        before,
+        "the re-run answer escalated nothing"
+    );
+    assert!(card.content.get("requestedMode").is_none(), "{card:?}");
+    assert_eq!(card.content["cardKind"], "uncertain");
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1);
+}
+
+/// The error code of the tool record that answers `call_id` in `turn`.
+async fn tool_error_code(f: &Fixture, turn: &str, call_id: &str) -> Value {
+    let record = f
+        .store
+        .messages("s1", true)
+        .await
+        .unwrap()
+        .into_iter()
+        .rfind(|message| {
+            message.role == "tool"
+                && message.tool_call_id.as_deref() == Some(call_id)
+                && message.run_id.as_deref() == Some(turn)
+        })
+        .expect("a tool record answers the call");
+    let envelope = match &record.content {
+        Value::String(text) => serde_json::from_str(text).unwrap(),
+        other => other.clone(),
+    };
+    envelope["data"]["errorCode"].clone()
+}
+
+/// An other-run uncertainty N, and the approved re-run of N (E1) dies too:
+/// one answer names one generation, so no answer can open both. The call
+/// ends with the uncertain refusal instead of parking on an ask no answer
+/// can lift (it used to re-park on N's answered row: waiting, nothing
+/// pending, forever).
+async fn two_live_generations_end_the_call(guarded: &'static str) {
+    let options = HostOptions {
+        max_attempts: 10,
+        ..Default::default()
+    };
+    let f = fixture_with_options("write_file", ARGS_A, guarded, false, None, options).await;
+    let other_run = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let card = f.pending(&turn).await.remove(0);
+    assert_eq!(card.content["approvalGeneration"], other_run);
+    f.service
+        .approve(&card.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    crash_next_attempt(&f, &turn, 1).await;
+    f.gate.release();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.status(&turn).await,
+        TaskStatus::Completed,
+        "never a stall"
+    );
+    assert!(
+        f.pending(&turn).await.is_empty(),
+        "no ask no answer could lift"
+    );
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1, "one yes, one dispatch");
+    assert_eq!(
+        tool_error_code(&f, &turn, "call-1").await,
+        "tool_result_uncertain"
+    );
+}
+
+#[tokio::test]
+async fn two_live_generations_end_the_call_under_an_asking_guard() {
+    two_live_generations_end_the_call("write_file").await;
+}
+
+#[tokio::test]
+async fn two_live_generations_end_the_call_without_a_guard_ask() {
+    two_live_generations_end_the_call("other").await;
+}
+
 /// The tool records of one run that answer a given call.
 async fn tool_records(store: &SqliteStore, turn: &str, call_id: &str) -> Vec<String> {
     store
@@ -1551,6 +1967,7 @@ fn editor_shape(
         }],
         emit: Some(emit),
         classification,
+        guard_preview: None,
     }
 }
 

@@ -1,0 +1,668 @@
+pub mod agentkit_workspaces
+pub enum agentkit_workspaces::ByteSource
+pub agentkit_workspaces::ByteSource::Inline(alloc::vec::Vec<u8>)
+pub enum agentkit_workspaces::EntryKind
+pub agentkit_workspaces::EntryKind::Directory
+pub agentkit_workspaces::EntryKind::File
+pub agentkit_workspaces::EntryKind::Other
+pub agentkit_workspaces::EntryKind::Symlink
+pub enum agentkit_workspaces::GrantSource
+pub agentkit_workspaces::GrantSource::Default
+pub agentkit_workspaces::GrantSource::Owner
+pub enum agentkit_workspaces::HostPortError
+pub agentkit_workspaces::HostPortError::EmptyHost
+pub agentkit_workspaces::HostPortError::HostTooLong
+pub agentkit_workspaces::HostPortError::InvalidCharacter(char)
+pub agentkit_workspaces::HostPortError::InvalidLabel(alloc::string::String)
+pub agentkit_workspaces::HostPortError::PortZero
+pub agentkit_workspaces::HostPortError::Wildcard
+pub enum agentkit_workspaces::LeaseAcquire
+pub agentkit_workspaces::LeaseAcquire::Acquired(agentkit_workspaces::LeaseToken)
+pub agentkit_workspaces::LeaseAcquire::Held
+pub agentkit_workspaces::LeaseAcquire::Held::expires_at: i64
+pub agentkit_workspaces::LeaseAcquire::Held::holder: agentkit_workspaces::LeaseHolder
+pub enum agentkit_workspaces::MemberRole
+pub agentkit_workspaces::MemberRole::Member
+pub agentkit_workspaces::MemberRole::Reader
+pub enum agentkit_workspaces::NetworkDecision
+pub agentkit_workspaces::NetworkDecision::Approve
+pub agentkit_workspaces::NetworkDecision::Reject
+pub enum agentkit_workspaces::OperationKind
+pub agentkit_workspaces::OperationKind::Exec
+pub agentkit_workspaces::OperationKind::Exec::command: alloc::string::String
+pub agentkit_workspaces::OperationKind::Exec::cwd: agentkit_workspaces::RelPath
+pub agentkit_workspaces::OperationKind::Exec::output_limit: agentkit_workspaces::OutputLimit
+pub agentkit_workspaces::OperationKind::Exec::timeout_ms: u64
+pub agentkit_workspaces::OperationKind::WriteFile
+pub agentkit_workspaces::OperationKind::WriteFile::bytes: agentkit_workspaces::ByteSource
+pub agentkit_workspaces::OperationKind::WriteFile::mode: agentkit_workspaces::FileMode
+pub agentkit_workspaces::OperationKind::WriteFile::path: agentkit_workspaces::RelPath
+pub agentkit_workspaces::OperationKind::WriteFile::root: agentkit_workspaces::PathRoot
+pub agentkit_workspaces::OperationKind::WriteFile::sha256: agentkit_workspaces::Sha256
+impl agentkit_workspaces::OperationKind
+pub fn agentkit_workspaces::OperationKind::tag(&self) -> agentkit_workspaces::OperationKindTag
+pub enum agentkit_workspaces::OperationKindTag
+pub agentkit_workspaces::OperationKindTag::Exec
+pub agentkit_workspaces::OperationKindTag::WriteFile
+pub enum agentkit_workspaces::OperationPhase
+pub agentkit_workspaces::OperationPhase::Dispatching
+pub agentkit_workspaces::OperationPhase::Interrupted(agentkit_workspaces::OperationState)
+pub agentkit_workspaces::OperationPhase::Running
+pub agentkit_workspaces::OperationPhase::Terminal(agentkit_workspaces::OperationState)
+pub agentkit_workspaces::OperationPhase::Uncertain
+impl agentkit_workspaces::OperationPhase
+pub fn agentkit_workspaces::OperationPhase::can_transition_to(&self, &agentkit_workspaces::OperationPhase) -> bool
+pub fn agentkit_workspaces::OperationPhase::exit(&self) -> core::option::Option<i32>
+pub fn agentkit_workspaces::OperationPhase::is_open(&self) -> bool
+pub fn agentkit_workspaces::OperationPhase::is_settled(&self) -> bool
+pub fn agentkit_workspaces::OperationPhase::is_valid(&self) -> bool
+pub fn agentkit_workspaces::OperationPhase::terminal(agentkit_workspaces::OperationState) -> core::option::Option<agentkit_workspaces::OperationPhase>
+pub enum agentkit_workspaces::OperationState
+pub agentkit_workspaces::OperationState::Accepted
+pub agentkit_workspaces::OperationState::Cancelled
+pub agentkit_workspaces::OperationState::Failed
+pub agentkit_workspaces::OperationState::Failed::exit: core::option::Option<i32>
+pub agentkit_workspaces::OperationState::Failed::signal: core::option::Option<i32>
+pub agentkit_workspaces::OperationState::OutputLimit
+pub agentkit_workspaces::OperationState::Running
+pub agentkit_workspaces::OperationState::Succeeded
+pub agentkit_workspaces::OperationState::Succeeded::exit: i32
+pub agentkit_workspaces::OperationState::TimedOut
+pub agentkit_workspaces::OperationState::Unknown
+impl agentkit_workspaces::OperationState
+pub fn agentkit_workspaces::OperationState::exit(&self) -> core::option::Option<i32>
+pub fn agentkit_workspaces::OperationState::is_terminal(&self) -> bool
+pub enum agentkit_workspaces::PathRoot
+pub agentkit_workspaces::PathRoot::Home
+pub agentkit_workspaces::PathRoot::Workspace
+impl agentkit_workspaces::PathRoot
+pub fn agentkit_workspaces::PathRoot::guest_dir(self) -> &'static str
+pub enum agentkit_workspaces::RelPathError
+pub agentkit_workspaces::RelPathError::Absolute
+pub agentkit_workspaces::RelPathError::EscapesRoot
+pub agentkit_workspaces::RelPathError::Nul
+pub agentkit_workspaces::RelPathError::SegmentTooLong(usize)
+pub agentkit_workspaces::RelPathError::TooLong(usize)
+pub enum agentkit_workspaces::RepositoryError
+pub agentkit_workspaces::RepositoryError::Backend
+pub agentkit_workspaces::RepositoryError::Backend::reason: alloc::string::String
+pub agentkit_workspaces::RepositoryError::GrantNotFound(agentkit_workspaces::GrantId)
+pub agentkit_workspaces::RepositoryError::InvalidInput
+pub agentkit_workspaces::RepositoryError::InvalidInput::reason: alloc::string::String
+pub agentkit_workspaces::RepositoryError::LeaseLost
+pub agentkit_workspaces::RepositoryError::LeaseLost::workspace_id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::RepositoryError::OperationConflict(agentkit_workspaces::OperationId)
+pub agentkit_workspaces::RepositoryError::OperationNotFound(agentkit_workspaces::OperationId)
+pub agentkit_workspaces::RepositoryError::OperationOpen
+pub agentkit_workspaces::RepositoryError::OperationOpen::operation_id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::RepositoryError::OperationOpen::workspace_id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::RepositoryError::OperationTransition
+pub agentkit_workspaces::RepositoryError::OperationTransition::from: agentkit_workspaces::OperationPhase
+pub agentkit_workspaces::RepositoryError::OperationTransition::operation_id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::RepositoryError::OperationTransition::to: agentkit_workspaces::OperationPhase
+pub agentkit_workspaces::RepositoryError::OperationUncertain
+pub agentkit_workspaces::RepositoryError::OperationUncertain::operation_id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::RepositoryError::OperationUncertain::workspace_id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::RepositoryError::RequestNotFound(agentkit_workspaces::RequestId)
+pub agentkit_workspaces::RepositoryError::RequestNotPending
+pub agentkit_workspaces::RepositoryError::RequestNotPending::request_id: agentkit_workspaces::RequestId
+pub agentkit_workspaces::RepositoryError::RequestNotPending::state: agentkit_workspaces::RequestState
+pub agentkit_workspaces::RepositoryError::StaleGeneration
+pub agentkit_workspaces::RepositoryError::StaleGeneration::current: agentkit_workspaces::Generation
+pub agentkit_workspaces::RepositoryError::StaleGeneration::expected: agentkit_workspaces::Generation
+pub agentkit_workspaces::RepositoryError::StaleGeneration::workspace_id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::RepositoryError::WorkspaceNotFound(agentkit_workspaces::WorkspaceId)
+pub agentkit_workspaces::RepositoryError::WorkspaceStateConflict
+pub agentkit_workspaces::RepositoryError::WorkspaceStateConflict::state: agentkit_workspaces::WorkspaceState
+pub agentkit_workspaces::RepositoryError::WorkspaceStateConflict::workspace_id: agentkit_workspaces::WorkspaceId
+pub enum agentkit_workspaces::RequestDecision
+pub agentkit_workspaces::RequestDecision::Approve
+pub agentkit_workspaces::RequestDecision::Approve::grant: agentkit_workspaces::NetworkGrant
+pub agentkit_workspaces::RequestDecision::Reject
+pub enum agentkit_workspaces::RequestState
+pub agentkit_workspaces::RequestState::Approved
+pub agentkit_workspaces::RequestState::Pending
+pub agentkit_workspaces::RequestState::Rejected
+pub enum agentkit_workspaces::SandboxError
+pub agentkit_workspaces::SandboxError::Backend
+pub agentkit_workspaces::SandboxError::Backend::reason: alloc::string::String
+pub agentkit_workspaces::SandboxError::Busy
+pub agentkit_workspaces::SandboxError::Busy::holder: agentkit_workspaces::LeaseHolder
+pub agentkit_workspaces::SandboxError::Cancelled
+pub agentkit_workspaces::SandboxError::Fenced
+pub agentkit_workspaces::SandboxError::Fenced::reason: alloc::string::String
+pub agentkit_workspaces::SandboxError::FileTooLarge
+pub agentkit_workspaces::SandboxError::FileTooLarge::limit: u64
+pub agentkit_workspaces::SandboxError::FileTooLarge::size: u64
+pub agentkit_workspaces::SandboxError::NetworkDenied
+pub agentkit_workspaces::SandboxError::NetworkDenied::host: alloc::string::String
+pub agentkit_workspaces::SandboxError::NetworkDenied::port: u16
+pub agentkit_workspaces::SandboxError::NotARegularFile
+pub agentkit_workspaces::SandboxError::NotARegularFile::path: alloc::string::String
+pub agentkit_workspaces::SandboxError::NotAttached
+pub agentkit_workspaces::SandboxError::NotFound
+pub agentkit_workspaces::SandboxError::NotFound::what: alloc::string::String
+pub agentkit_workspaces::SandboxError::OperationConflict(agentkit_workspaces::OperationId)
+pub agentkit_workspaces::SandboxError::PathOutsideWorkspace
+pub agentkit_workspaces::SandboxError::PathOutsideWorkspace::path: alloc::string::String
+pub agentkit_workspaces::SandboxError::QuotaExceeded
+pub agentkit_workspaces::SandboxError::QuotaExceeded::quota_bytes: u64
+pub agentkit_workspaces::SandboxError::QuotaExceeded::used_bytes: u64
+pub agentkit_workspaces::SandboxError::Repository(agentkit_workspaces::RepositoryError)
+pub agentkit_workspaces::SandboxError::StaleGeneration
+pub agentkit_workspaces::SandboxError::StaleGeneration::current: agentkit_workspaces::Generation
+pub agentkit_workspaces::SandboxError::StaleGeneration::requested: agentkit_workspaces::Generation
+pub agentkit_workspaces::SandboxError::Unavailable
+pub agentkit_workspaces::SandboxError::Unavailable::reason: alloc::string::String
+impl agentkit_workspaces::SandboxError
+pub fn agentkit_workspaces::SandboxError::code(&self) -> &'static str
+pub enum agentkit_workspaces::ServiceConfigError
+pub agentkit_workspaces::ServiceConfigError::LeaseTtlTooShort
+pub agentkit_workspaces::ServiceConfigError::LeaseTtlTooShort::gap_ms: u64
+pub agentkit_workspaces::ServiceConfigError::LeaseTtlTooShort::ttl_ms: i64
+pub agentkit_workspaces::ServiceConfigError::ZeroInterval
+pub enum agentkit_workspaces::Settlement
+pub agentkit_workspaces::Settlement::Interrupted(agentkit_workspaces::OperationState)
+pub agentkit_workspaces::Settlement::Settled(agentkit_workspaces::OperationState)
+pub agentkit_workspaces::Settlement::Uncertain
+pub agentkit_workspaces::Settlement::Uncertain::fenced: bool
+pub agentkit_workspaces::Settlement::Uncertain::reason: alloc::string::String
+impl agentkit_workspaces::Settlement
+pub fn agentkit_workspaces::Settlement::is_uncertain(&self) -> bool
+pub enum agentkit_workspaces::Sha256Error
+pub agentkit_workspaces::Sha256Error::Length(usize)
+pub agentkit_workspaces::Sha256Error::NotLowercaseHex
+pub enum agentkit_workspaces::StopOutcome
+pub agentkit_workspaces::StopOutcome::Fenced
+pub agentkit_workspaces::StopOutcome::Fenced::reason: alloc::string::String
+pub agentkit_workspaces::StopOutcome::NotStarted
+pub agentkit_workspaces::StopOutcome::Stopped
+pub agentkit_workspaces::StopOutcome::Stopped::next_generation: agentkit_workspaces::Generation
+pub enum agentkit_workspaces::StopProof
+pub agentkit_workspaces::StopProof::Stopped
+pub agentkit_workspaces::StopProof::Unproven
+pub agentkit_workspaces::StopProof::Unproven::reason: alloc::string::String
+pub enum agentkit_workspaces::WorkspaceKind
+pub agentkit_workspaces::WorkspaceKind::AgentHome
+pub agentkit_workspaces::WorkspaceKind::ChatIsolated
+pub agentkit_workspaces::WorkspaceKind::HostFolder
+pub agentkit_workspaces::WorkspaceKind::ProjectChats
+pub agentkit_workspaces::WorkspaceKind::Shared
+pub enum agentkit_workspaces::WorkspaceState
+pub agentkit_workspaces::WorkspaceState::Busy
+pub agentkit_workspaces::WorkspaceState::Deleted
+pub agentkit_workspaces::WorkspaceState::Fenced
+pub agentkit_workspaces::WorkspaceState::Fenced::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::WorkspaceState::Fenced::reason: alloc::string::String
+pub agentkit_workspaces::WorkspaceState::Ready
+impl agentkit_workspaces::WorkspaceState
+pub fn agentkit_workspaces::WorkspaceState::admits_operations(&self) -> bool
+pub struct agentkit_workspaces::AgentId(_)
+impl agentkit_workspaces::AgentId
+pub fn agentkit_workspaces::AgentId::as_str(&self) -> &str
+pub fn agentkit_workspaces::AgentId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Display for agentkit_workspaces::AgentId
+pub fn agentkit_workspaces::AgentId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::BackendDescriptor
+pub agentkit_workspaces::BackendDescriptor::enforces_disk_quota: bool
+pub agentkit_workspaces::BackendDescriptor::kind: alloc::string::String
+pub agentkit_workspaces::BackendDescriptor::supports_status_after_host_loss: bool
+pub struct agentkit_workspaces::Binding
+pub agentkit_workspaces::Binding::folder: core::option::Option<agentkit_workspaces::RelPath>
+pub agentkit_workspaces::Binding::key: agentkit_workspaces::WorkspaceKey
+pub agentkit_workspaces::Binding::kind: agentkit_workspaces::WorkspaceKind
+pub agentkit_workspaces::Binding::owner_scope: alloc::string::String
+pub struct agentkit_workspaces::Denial
+pub agentkit_workspaces::Denial::at: i64
+pub agentkit_workspaces::Denial::host: alloc::string::String
+pub agentkit_workspaces::Denial::operation_id: core::option::Option<agentkit_workspaces::OperationId>
+pub agentkit_workspaces::Denial::port: u16
+pub struct agentkit_workspaces::DenialBatch
+pub agentkit_workspaces::DenialBatch::cursor: u64
+pub agentkit_workspaces::DenialBatch::denials: alloc::vec::Vec<agentkit_workspaces::Denial>
+pub struct agentkit_workspaces::DenialRecord
+pub agentkit_workspaces::DenialRecord::attempts: u64
+pub agentkit_workspaces::DenialRecord::id: agentkit_workspaces::RequestId
+pub agentkit_workspaces::DenialRecord::operation_id: core::option::Option<agentkit_workspaces::OperationId>
+pub agentkit_workspaces::DenialRecord::seen_at: i64
+pub agentkit_workspaces::DenialRecord::target: agentkit_workspaces::HostPort
+pub agentkit_workspaces::DenialRecord::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::DispatchAck
+pub agentkit_workspaces::DispatchAck::existing: bool
+pub agentkit_workspaces::DispatchAck::state: agentkit_workspaces::OperationState
+pub struct agentkit_workspaces::ExecRequest
+pub agentkit_workspaces::ExecRequest::command: alloc::string::String
+pub agentkit_workspaces::ExecRequest::directory: core::option::Option<agentkit_workspaces::RelPath>
+pub agentkit_workspaces::ExecRequest::output_limit: agentkit_workspaces::OutputLimit
+pub agentkit_workspaces::ExecRequest::timeout_ms: core::option::Option<u64>
+impl agentkit_workspaces::ExecRequest
+pub fn agentkit_workspaces::ExecRequest::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct agentkit_workspaces::ExportFile
+pub agentkit_workspaces::ExportFile::bytes: alloc::vec::Vec<u8>
+pub agentkit_workspaces::ExportFile::mtime_ms: i64
+pub agentkit_workspaces::ExportFile::sha256: agentkit_workspaces::Sha256
+pub agentkit_workspaces::ExportFile::size: u64
+pub struct agentkit_workspaces::FileChunk
+pub agentkit_workspaces::FileChunk::binary: bool
+pub agentkit_workspaces::FileChunk::bytes: alloc::vec::Vec<u8>
+pub agentkit_workspaces::FileChunk::eof: bool
+pub agentkit_workspaces::FileChunk::mtime_ms: i64
+pub agentkit_workspaces::FileChunk::size: u64
+pub struct agentkit_workspaces::FileMode(_)
+impl agentkit_workspaces::FileMode
+pub const agentkit_workspaces::FileMode::EXECUTABLE: agentkit_workspaces::FileMode
+pub const agentkit_workspaces::FileMode::REGULAR: agentkit_workspaces::FileMode
+pub fn agentkit_workspaces::FileMode::bits(self) -> u32
+pub fn agentkit_workspaces::FileMode::new(u32) -> core::result::Result<Self, agentkit_workspaces::FileModeError>
+impl core::convert::From<agentkit_workspaces::FileMode> for u32
+pub fn u32::from(agentkit_workspaces::FileMode) -> Self
+impl core::convert::TryFrom<u32> for agentkit_workspaces::FileMode
+pub type agentkit_workspaces::FileMode::Error = agentkit_workspaces::FileModeError
+pub fn agentkit_workspaces::FileMode::try_from(u32) -> core::result::Result<Self, Self::Error>
+pub struct agentkit_workspaces::FileModeError(pub u32)
+pub struct agentkit_workspaces::FileRef
+pub agentkit_workspaces::FileRef::path: agentkit_workspaces::RelPath
+pub agentkit_workspaces::FileRef::root: agentkit_workspaces::PathRoot
+impl agentkit_workspaces::FileRef
+pub fn agentkit_workspaces::FileRef::workspace(agentkit_workspaces::RelPath) -> Self
+pub struct agentkit_workspaces::Generation(pub u64)
+impl agentkit_workspaces::Generation
+pub const agentkit_workspaces::Generation::FIRST: agentkit_workspaces::Generation
+pub fn agentkit_workspaces::Generation::next(self) -> core::option::Option<agentkit_workspaces::Generation>
+impl core::fmt::Display for agentkit_workspaces::Generation
+pub fn agentkit_workspaces::Generation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::GrantId(_)
+impl agentkit_workspaces::GrantId
+pub fn agentkit_workspaces::GrantId::as_str(&self) -> &str
+pub fn agentkit_workspaces::GrantId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_workspaces::GrantId
+pub fn agentkit_workspaces::GrantId::mint(&dyn agentkit_kernel::runtime::Runtime) -> Self
+impl core::fmt::Display for agentkit_workspaces::GrantId
+pub fn agentkit_workspaces::GrantId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::HostPort
+impl agentkit_workspaces::HostPort
+pub fn agentkit_workspaces::HostPort::host(&self) -> &str
+pub fn agentkit_workspaces::HostPort::new(&str, u16) -> core::result::Result<Self, agentkit_workspaces::HostPortError>
+pub fn agentkit_workspaces::HostPort::port(&self) -> u16
+impl core::fmt::Display for agentkit_workspaces::HostPort
+pub fn agentkit_workspaces::HostPort::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::LeaseHolder
+pub agentkit_workspaces::LeaseHolder::agent_id: agentkit_workspaces::AgentId
+pub agentkit_workspaces::LeaseHolder::boot_id: alloc::string::String
+pub agentkit_workspaces::LeaseHolder::host_id: alloc::string::String
+pub agentkit_workspaces::LeaseHolder::label: alloc::string::String
+pub agentkit_workspaces::LeaseHolder::run_id: alloc::string::String
+pub struct agentkit_workspaces::LeaseInfo
+pub agentkit_workspaces::LeaseInfo::expires_at: i64
+pub agentkit_workspaces::LeaseInfo::fencing: u64
+pub agentkit_workspaces::LeaseInfo::holder: agentkit_workspaces::LeaseHolder
+pub agentkit_workspaces::LeaseInfo::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::LeaseToken
+pub agentkit_workspaces::LeaseToken::expires_at: i64
+pub agentkit_workspaces::LeaseToken::fencing: u64
+pub agentkit_workspaces::LeaseToken::token: alloc::string::String
+pub agentkit_workspaces::LeaseToken::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::ListEntries
+pub agentkit_workspaces::ListEntries::depth: u8
+pub agentkit_workspaces::ListEntries::max_entries: u32
+pub agentkit_workspaces::ListEntries::path: agentkit_workspaces::RelPath
+pub agentkit_workspaces::ListEntries::root: agentkit_workspaces::PathRoot
+pub struct agentkit_workspaces::ListEntry
+pub agentkit_workspaces::ListEntry::kind: agentkit_workspaces::EntryKind
+pub agentkit_workspaces::ListEntry::path: agentkit_workspaces::RelPath
+pub agentkit_workspaces::ListEntry::size: core::option::Option<u64>
+pub struct agentkit_workspaces::Listing
+pub agentkit_workspaces::Listing::entries: alloc::vec::Vec<agentkit_workspaces::ListEntry>
+pub agentkit_workspaces::Listing::truncated: bool
+pub struct agentkit_workspaces::MachineHandle
+pub agentkit_workspaces::MachineHandle::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::MachineHandle::opaque: alloc::string::String
+pub agentkit_workspaces::MachineHandle::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::MachineSpec
+pub agentkit_workspaces::MachineSpec::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::MachineSpec::image_digest: alloc::string::String
+pub agentkit_workspaces::MachineSpec::limits: agentkit_workspaces::ResourceLimits
+pub agentkit_workspaces::MachineSpec::network: agentkit_workspaces::NetworkPolicy
+pub agentkit_workspaces::MachineSpec::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::Member
+pub agentkit_workspaces::Member::added_at: i64
+pub agentkit_workspaces::Member::agent_id: agentkit_workspaces::AgentId
+pub agentkit_workspaces::Member::role: agentkit_workspaces::MemberRole
+pub agentkit_workspaces::Member::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::NetworkGrant
+pub agentkit_workspaces::NetworkGrant::granted_at: i64
+pub agentkit_workspaces::NetworkGrant::id: agentkit_workspaces::GrantId
+pub agentkit_workspaces::NetworkGrant::revoked_at: core::option::Option<i64>
+pub agentkit_workspaces::NetworkGrant::source: agentkit_workspaces::GrantSource
+pub agentkit_workspaces::NetworkGrant::target: agentkit_workspaces::HostPort
+pub agentkit_workspaces::NetworkGrant::workspace_id: agentkit_workspaces::WorkspaceId
+impl agentkit_workspaces::NetworkGrant
+pub fn agentkit_workspaces::NetworkGrant::is_active(&self) -> bool
+pub struct agentkit_workspaces::NetworkPolicy
+pub agentkit_workspaces::NetworkPolicy::grants: alloc::vec::Vec<agentkit_workspaces::HostPort>
+impl agentkit_workspaces::NetworkPolicy
+pub fn agentkit_workspaces::NetworkPolicy::allows(&self, &agentkit_workspaces::HostPort) -> bool
+pub fn agentkit_workspaces::NetworkPolicy::from_grants(&[agentkit_workspaces::NetworkGrant]) -> Self
+pub struct agentkit_workspaces::NetworkRequest
+pub agentkit_workspaces::NetworkRequest::count: u64
+pub agentkit_workspaces::NetworkRequest::first_seen: i64
+pub agentkit_workspaces::NetworkRequest::id: agentkit_workspaces::RequestId
+pub agentkit_workspaces::NetworkRequest::operation_id: core::option::Option<agentkit_workspaces::OperationId>
+pub agentkit_workspaces::NetworkRequest::state: agentkit_workspaces::RequestState
+pub agentkit_workspaces::NetworkRequest::target: agentkit_workspaces::HostPort
+pub agentkit_workspaces::NetworkRequest::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::NewWorkspace
+pub agentkit_workspaces::NewWorkspace::id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::NewWorkspace::image_digest: alloc::string::String
+pub agentkit_workspaces::NewWorkspace::initial_grants: alloc::vec::Vec<agentkit_workspaces::NetworkGrant>
+pub agentkit_workspaces::NewWorkspace::key: agentkit_workspaces::WorkspaceKey
+pub agentkit_workspaces::NewWorkspace::kind: agentkit_workspaces::WorkspaceKind
+pub agentkit_workspaces::NewWorkspace::now: i64
+pub agentkit_workspaces::NewWorkspace::owner_scope: alloc::string::String
+pub struct agentkit_workspaces::Observation
+pub agentkit_workspaces::Observation::eof: bool
+pub agentkit_workspaces::Observation::next_seq: u64
+pub agentkit_workspaces::Observation::output: alloc::vec::Vec<u8>
+pub agentkit_workspaces::Observation::state: agentkit_workspaces::OperationState
+pub agentkit_workspaces::Observation::truncated: bool
+pub struct agentkit_workspaces::OpContext
+pub agentkit_workspaces::OpContext::agent_id: agentkit_workspaces::AgentId
+pub agentkit_workspaces::OpContext::args_sha256: agentkit_workspaces::Sha256
+pub agentkit_workspaces::OpContext::cancellation: tokio_util::sync::cancellation_token::CancellationToken
+pub agentkit_workspaces::OpContext::operation_id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::OpContext::run_id: alloc::string::String
+impl agentkit_workspaces::OpContext
+pub fn agentkit_workspaces::OpContext::new(agentkit_workspaces::OperationId, agentkit_workspaces::Sha256, impl core::convert::Into<alloc::string::String>, agentkit_workspaces::AgentId) -> Self
+pub struct agentkit_workspaces::Operation
+pub agentkit_workspaces::Operation::actor_agent_id: agentkit_workspaces::AgentId
+pub agentkit_workspaces::Operation::args_sha256: agentkit_workspaces::Sha256
+pub agentkit_workspaces::Operation::ended_at: core::option::Option<i64>
+pub agentkit_workspaces::Operation::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::Operation::id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::Operation::image_digest: alloc::string::String
+pub agentkit_workspaces::Operation::kind: agentkit_workspaces::OperationKindTag
+pub agentkit_workspaces::Operation::log_path: core::option::Option<agentkit_workspaces::RelPath>
+pub agentkit_workspaces::Operation::phase: agentkit_workspaces::OperationPhase
+pub agentkit_workspaces::Operation::run_id: alloc::string::String
+pub agentkit_workspaces::Operation::started_at: i64
+pub agentkit_workspaces::Operation::summary: alloc::string::String
+pub agentkit_workspaces::Operation::truncated: bool
+pub agentkit_workspaces::Operation::workspace_id: agentkit_workspaces::WorkspaceId
+impl agentkit_workspaces::Operation
+pub fn agentkit_workspaces::Operation::same_identity(&self, &agentkit_workspaces::Operation) -> bool
+pub struct agentkit_workspaces::OperationId(_)
+impl agentkit_workspaces::OperationId
+pub fn agentkit_workspaces::OperationId::as_str(&self) -> &str
+pub fn agentkit_workspaces::OperationId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_workspaces::OperationId
+pub fn agentkit_workspaces::OperationId::from_execution_id(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Display for agentkit_workspaces::OperationId
+pub fn agentkit_workspaces::OperationId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::OperationOutcome
+pub agentkit_workspaces::OperationOutcome::ended_at: core::option::Option<i64>
+pub agentkit_workspaces::OperationOutcome::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::OperationOutcome::image_digest: alloc::string::String
+pub agentkit_workspaces::OperationOutcome::log_path: core::option::Option<agentkit_workspaces::RelPath>
+pub agentkit_workspaces::OperationOutcome::log_truncated: bool
+pub agentkit_workspaces::OperationOutcome::network_denied: alloc::vec::Vec<agentkit_workspaces::HostPort>
+pub agentkit_workspaces::OperationOutcome::operation_id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::OperationOutcome::output: alloc::vec::Vec<u8>
+pub agentkit_workspaces::OperationOutcome::output_cut: bool
+pub agentkit_workspaces::OperationOutcome::replayed: bool
+pub agentkit_workspaces::OperationOutcome::settlement: agentkit_workspaces::Settlement
+pub agentkit_workspaces::OperationOutcome::started_at: i64
+pub agentkit_workspaces::OperationOutcome::workspace_id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::OperationOutcome::written: core::option::Option<agentkit_workspaces::FileRef>
+pub struct agentkit_workspaces::OperationRequest
+pub agentkit_workspaces::OperationRequest::args_sha256: agentkit_workspaces::Sha256
+pub agentkit_workspaces::OperationRequest::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::OperationRequest::id: agentkit_workspaces::OperationId
+pub agentkit_workspaces::OperationRequest::kind: agentkit_workspaces::OperationKind
+pub agentkit_workspaces::OperationRequest::workspace_id: agentkit_workspaces::WorkspaceId
+pub struct agentkit_workspaces::OperationUpdate
+pub agentkit_workspaces::OperationUpdate::ended_at: core::option::Option<i64>
+pub agentkit_workspaces::OperationUpdate::log_path: core::option::Option<agentkit_workspaces::RelPath>
+pub agentkit_workspaces::OperationUpdate::phase: agentkit_workspaces::OperationPhase
+pub agentkit_workspaces::OperationUpdate::truncated: bool
+pub struct agentkit_workspaces::OutputLimit
+pub agentkit_workspaces::OutputLimit::max_bytes: u64
+pub agentkit_workspaces::OutputLimit::max_lines: core::option::Option<u64>
+impl agentkit_workspaces::OutputLimit
+pub const agentkit_workspaces::OutputLimit::LOG: agentkit_workspaces::OutputLimit
+pub const agentkit_workspaces::OutputLimit::MODEL: agentkit_workspaces::OutputLimit
+pub struct agentkit_workspaces::QuiesceReport
+pub agentkit_workspaces::QuiesceReport::fenced: alloc::vec::Vec<agentkit_workspaces::WorkspaceId>
+pub agentkit_workspaces::QuiesceReport::stopped: alloc::vec::Vec<agentkit_workspaces::WorkspaceId>
+pub struct agentkit_workspaces::ReadFile
+pub agentkit_workspaces::ReadFile::limit_bytes: u64
+pub agentkit_workspaces::ReadFile::max_file_bytes: u64
+pub agentkit_workspaces::ReadFile::offset: u64
+pub agentkit_workspaces::ReadFile::path: agentkit_workspaces::RelPath
+pub agentkit_workspaces::ReadFile::raw: bool
+pub agentkit_workspaces::ReadFile::root: agentkit_workspaces::PathRoot
+pub struct agentkit_workspaces::RecoveryReport
+pub agentkit_workspaces::RecoveryReport::fenced: alloc::vec::Vec<agentkit_workspaces::WorkspaceId>
+pub agentkit_workspaces::RecoveryReport::leases_broken: u32
+pub agentkit_workspaces::RecoveryReport::settled: alloc::vec::Vec<agentkit_workspaces::OperationId>
+pub agentkit_workspaces::RecoveryReport::stopped: alloc::vec::Vec<agentkit_workspaces::WorkspaceId>
+pub agentkit_workspaces::RecoveryReport::uncertain: alloc::vec::Vec<agentkit_workspaces::OperationId>
+pub struct agentkit_workspaces::RelPath(_)
+impl agentkit_workspaces::RelPath
+pub fn agentkit_workspaces::RelPath::as_str(&self) -> &str
+pub fn agentkit_workspaces::RelPath::is_root(&self) -> bool
+pub fn agentkit_workspaces::RelPath::join(&self, &agentkit_workspaces::RelPath) -> core::result::Result<agentkit_workspaces::RelPath, agentkit_workspaces::RelPathError>
+pub fn agentkit_workspaces::RelPath::parse(&str) -> core::result::Result<Self, agentkit_workspaces::RelPathError>
+pub fn agentkit_workspaces::RelPath::root() -> Self
+pub fn agentkit_workspaces::RelPath::segments(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn agentkit_workspaces::RelPath::starts_with(&self, &agentkit_workspaces::RelPath) -> bool
+impl core::convert::From<agentkit_workspaces::RelPath> for alloc::string::String
+pub fn alloc::string::String::from(agentkit_workspaces::RelPath) -> Self
+impl core::convert::TryFrom<alloc::string::String> for agentkit_workspaces::RelPath
+pub type agentkit_workspaces::RelPath::Error = agentkit_workspaces::RelPathError
+pub fn agentkit_workspaces::RelPath::try_from(alloc::string::String) -> core::result::Result<Self, Self::Error>
+impl core::fmt::Display for agentkit_workspaces::RelPath
+pub fn agentkit_workspaces::RelPath::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::RequestDecided
+pub agentkit_workspaces::RequestDecided::grant: core::option::Option<agentkit_workspaces::NetworkGrant>
+pub agentkit_workspaces::RequestDecided::request: agentkit_workspaces::NetworkRequest
+pub struct agentkit_workspaces::RequestId(_)
+impl agentkit_workspaces::RequestId
+pub fn agentkit_workspaces::RequestId::as_str(&self) -> &str
+pub fn agentkit_workspaces::RequestId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_workspaces::RequestId
+pub fn agentkit_workspaces::RequestId::mint(&dyn agentkit_kernel::runtime::Runtime) -> Self
+impl core::fmt::Display for agentkit_workspaces::RequestId
+pub fn agentkit_workspaces::RequestId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::ResourceLimits
+pub agentkit_workspaces::ResourceLimits::disk_gib: u64
+pub agentkit_workspaces::ResourceLimits::memory_mib: u64
+pub agentkit_workspaces::ResourceLimits::pids: u32
+pub agentkit_workspaces::ResourceLimits::vcpu: u32
+impl agentkit_workspaces::ResourceLimits
+pub const agentkit_workspaces::ResourceLimits::DEFAULT: agentkit_workspaces::ResourceLimits
+impl core::default::Default for agentkit_workspaces::ResourceLimits
+pub fn agentkit_workspaces::ResourceLimits::default() -> Self
+pub struct agentkit_workspaces::RunningOperation
+pub agentkit_workspaces::RunningOperation::holder: core::option::Option<agentkit_workspaces::LeaseHolder>
+pub agentkit_workspaces::RunningOperation::operation: agentkit_workspaces::Operation
+pub struct agentkit_workspaces::ServiceConfig
+pub agentkit_workspaces::ServiceConfig::call_timeout_ms: u64
+pub agentkit_workspaces::ServiceConfig::cancel_grace_ms: u64
+pub agentkit_workspaces::ServiceConfig::default_grants: alloc::vec::Vec<agentkit_workspaces::HostPort>
+pub agentkit_workspaces::ServiceConfig::host_id: alloc::string::String
+pub agentkit_workspaces::ServiceConfig::idle_stop_ms: i64
+pub agentkit_workspaces::ServiceConfig::image_digest: alloc::string::String
+pub agentkit_workspaces::ServiceConfig::lease_ttl_ms: i64
+pub agentkit_workspaces::ServiceConfig::lease_wait_ms: u64
+pub agentkit_workspaces::ServiceConfig::limits: agentkit_workspaces::ResourceLimits
+pub agentkit_workspaces::ServiceConfig::max_active_machines: usize
+pub agentkit_workspaces::ServiceConfig::model_output: agentkit_workspaces::OutputLimit
+pub agentkit_workspaces::ServiceConfig::poll_interval_ms: u64
+impl agentkit_workspaces::ServiceConfig
+pub fn agentkit_workspaces::ServiceConfig::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agentkit_workspaces::ServiceConfig::quota_bytes(&self) -> u64
+pub fn agentkit_workspaces::ServiceConfig::renewal_gap_ms(&self) -> u64
+pub fn agentkit_workspaces::ServiceConfig::validate(&self) -> core::result::Result<(), agentkit_workspaces::ServiceConfigError>
+pub struct agentkit_workspaces::Sha256(_)
+impl agentkit_workspaces::Sha256
+pub fn agentkit_workspaces::Sha256::as_str(&self) -> &str
+pub fn agentkit_workspaces::Sha256::of(&[u8]) -> Self
+pub fn agentkit_workspaces::Sha256::parse(&str) -> core::result::Result<Self, agentkit_workspaces::Sha256Error>
+impl core::convert::From<agentkit_workspaces::Sha256> for alloc::string::String
+pub fn alloc::string::String::from(agentkit_workspaces::Sha256) -> Self
+impl core::convert::TryFrom<alloc::string::String> for agentkit_workspaces::Sha256
+pub type agentkit_workspaces::Sha256::Error = agentkit_workspaces::Sha256Error
+pub fn agentkit_workspaces::Sha256::try_from(alloc::string::String) -> core::result::Result<Self, Self::Error>
+impl core::fmt::Display for agentkit_workspaces::Sha256
+pub fn agentkit_workspaces::Sha256::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::StorageUsage
+pub agentkit_workspaces::StorageUsage::quota_bytes: u64
+pub agentkit_workspaces::StorageUsage::used_bytes: u64
+impl agentkit_workspaces::StorageUsage
+pub fn agentkit_workspaces::StorageUsage::is_exhausted(&self) -> bool
+pub struct agentkit_workspaces::TokioPause
+impl agentkit_workspaces::Pause for agentkit_workspaces::TokioPause
+pub fn agentkit_workspaces::TokioPause::pause<'life0, 'async_trait>(&'life0 self, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_workspaces::Workspace
+pub agentkit_workspaces::Workspace::created_at: i64
+pub agentkit_workspaces::Workspace::generation: agentkit_workspaces::Generation
+pub agentkit_workspaces::Workspace::holds_user_files: bool
+pub agentkit_workspaces::Workspace::id: agentkit_workspaces::WorkspaceId
+pub agentkit_workspaces::Workspace::image_digest: alloc::string::String
+pub agentkit_workspaces::Workspace::key: agentkit_workspaces::WorkspaceKey
+pub agentkit_workspaces::Workspace::kind: agentkit_workspaces::WorkspaceKind
+pub agentkit_workspaces::Workspace::last_used_at: i64
+pub agentkit_workspaces::Workspace::owner_scope: alloc::string::String
+pub agentkit_workspaces::Workspace::state: agentkit_workspaces::WorkspaceState
+pub struct agentkit_workspaces::WorkspaceId(_)
+impl agentkit_workspaces::WorkspaceId
+pub fn agentkit_workspaces::WorkspaceId::as_str(&self) -> &str
+pub fn agentkit_workspaces::WorkspaceId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl agentkit_workspaces::WorkspaceId
+pub fn agentkit_workspaces::WorkspaceId::mint(&dyn agentkit_kernel::runtime::Runtime) -> Self
+impl core::fmt::Display for agentkit_workspaces::WorkspaceId
+pub fn agentkit_workspaces::WorkspaceId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::WorkspaceKey(_)
+impl agentkit_workspaces::WorkspaceKey
+pub fn agentkit_workspaces::WorkspaceKey::as_str(&self) -> &str
+pub fn agentkit_workspaces::WorkspaceKey::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Display for agentkit_workspaces::WorkspaceKey
+pub fn agentkit_workspaces::WorkspaceKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_workspaces::WorkspaceService
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::add_member(&self, &agentkit_workspaces::WorkspaceId, &agentkit_workspaces::AgentId) -> core::result::Result<agentkit_workspaces::Member, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::check_member(&self, &agentkit_workspaces::Workspace, &agentkit_workspaces::AgentId) -> core::result::Result<(), agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::lookup(&self, &agentkit_workspaces::Binding) -> core::result::Result<core::option::Option<agentkit_workspaces::Workspace>, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::resolve(&self, &agentkit_workspaces::Binding) -> core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::SandboxError>
+impl agentkit_workspaces::WorkspaceService
+pub fn agentkit_workspaces::WorkspaceService::config(&self) -> &agentkit_workspaces::ServiceConfig
+pub fn agentkit_workspaces::WorkspaceService::new(alloc::rcs::arc::Arc<dyn agentkit_workspaces::WorkspaceRepository>, alloc::rcs::arc::Arc<dyn agentkit_workspaces::SandboxBackend>, alloc::rcs::arc::Arc<dyn agentkit_kernel::runtime::Runtime>, agentkit_workspaces::ServiceConfig) -> core::result::Result<Self, agentkit_workspaces::ServiceConfigError>
+pub fn agentkit_workspaces::WorkspaceService::with_pause(self, alloc::rcs::arc::Arc<dyn agentkit_workspaces::Pause>) -> Self
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::copy_in(&self, &agentkit_workspaces::OpContext, &agentkit_workspaces::Binding, &str, alloc::vec::Vec<u8>) -> core::result::Result<agentkit_workspaces::OperationOutcome, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::exec(&self, &agentkit_workspaces::OpContext, &agentkit_workspaces::Binding, agentkit_workspaces::ExecRequest) -> core::result::Result<agentkit_workspaces::OperationOutcome, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::write_file(&self, &agentkit_workspaces::OpContext, &agentkit_workspaces::Binding, agentkit_workspaces::WriteRequest) -> core::result::Result<agentkit_workspaces::OperationOutcome, agentkit_workspaces::SandboxError>
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::decide_request(&self, &agentkit_workspaces::WorkspaceId, &agentkit_workspaces::RequestId, agentkit_workspaces::NetworkDecision) -> core::result::Result<agentkit_workspaces::RequestDecided, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::grant(&self, &agentkit_workspaces::WorkspaceId, &agentkit_workspaces::HostPort, agentkit_workspaces::GrantSource) -> core::result::Result<agentkit_workspaces::NetworkGrant, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::pending_requests(&self, &agentkit_workspaces::WorkspaceId) -> core::result::Result<alloc::vec::Vec<agentkit_workspaces::NetworkRequest>, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::revoke(&self, &agentkit_workspaces::GrantId) -> core::result::Result<agentkit_workspaces::NetworkGrant, agentkit_workspaces::SandboxError>
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::delete(&self, &agentkit_workspaces::WorkspaceId) -> core::result::Result<(), agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::recover(&self, &agentkit_workspaces::WorkspaceId) -> core::result::Result<agentkit_workspaces::StopOutcome, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::reset_home(&self, &agentkit_workspaces::WorkspaceId) -> core::result::Result<(), agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::stop(&self, &agentkit_workspaces::WorkspaceId) -> core::result::Result<agentkit_workspaces::StopOutcome, agentkit_workspaces::SandboxError>
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::evict_idle(&self, i64) -> core::result::Result<alloc::vec::Vec<agentkit_workspaces::WorkspaceId>, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::recover_all(&self) -> core::result::Result<agentkit_workspaces::RecoveryReport, agentkit_workspaces::SandboxError>
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::list(&self, &agentkit_workspaces::Binding, &agentkit_workspaces::AgentId, &agentkit_workspaces::FileRef, u8) -> core::result::Result<agentkit_workspaces::Listing, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::read_file(&self, &agentkit_workspaces::Binding, &agentkit_workspaces::AgentId, &agentkit_workspaces::FileRef, u64, u64) -> core::result::Result<agentkit_workspaces::FileChunk, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::read_for_export(&self, &agentkit_workspaces::Binding, &agentkit_workspaces::AgentId, &agentkit_workspaces::FileRef) -> core::result::Result<agentkit_workspaces::ExportFile, agentkit_workspaces::SandboxError>
+pub async fn agentkit_workspaces::WorkspaceService::status(&self, &agentkit_workspaces::Binding, &agentkit_workspaces::AgentId) -> core::result::Result<agentkit_workspaces::WorkspaceStatus, agentkit_workspaces::SandboxError>
+impl agentkit_workspaces::WorkspaceService
+pub async fn agentkit_workspaces::WorkspaceService::quiesce(&self) -> core::result::Result<agentkit_workspaces::QuiesceReport, agentkit_workspaces::SandboxError>
+pub struct agentkit_workspaces::WorkspaceStatus
+pub agentkit_workspaces::WorkspaceStatus::grants: alloc::vec::Vec<agentkit_workspaces::NetworkGrant>
+pub agentkit_workspaces::WorkspaceStatus::pending_requests: alloc::vec::Vec<agentkit_workspaces::NetworkRequest>
+pub agentkit_workspaces::WorkspaceStatus::running: core::option::Option<agentkit_workspaces::RunningOperation>
+pub agentkit_workspaces::WorkspaceStatus::storage: core::option::Option<agentkit_workspaces::StorageUsage>
+pub agentkit_workspaces::WorkspaceStatus::working_dir: alloc::string::String
+pub agentkit_workspaces::WorkspaceStatus::workspace: core::option::Option<agentkit_workspaces::Workspace>
+pub struct agentkit_workspaces::WorkspaceUpsert
+pub agentkit_workspaces::WorkspaceUpsert::created: bool
+pub agentkit_workspaces::WorkspaceUpsert::workspace: agentkit_workspaces::Workspace
+pub struct agentkit_workspaces::WriteRequest
+pub agentkit_workspaces::WriteRequest::bytes: alloc::vec::Vec<u8>
+pub agentkit_workspaces::WriteRequest::file: agentkit_workspaces::FileRef
+pub agentkit_workspaces::WriteRequest::mode: agentkit_workspaces::FileMode
+pub const agentkit_workspaces::COPY_IN_MAX_BYTES: u64
+pub const agentkit_workspaces::DEFAULT_GRANTS: [(&str, u16); 3]
+pub const agentkit_workspaces::DENIALS_PER_OPERATION_MAX: usize
+pub const agentkit_workspaces::EXEC_TIMEOUT_DEFAULT_MS: u64
+pub const agentkit_workspaces::EXEC_TIMEOUT_MAX_MS: u64
+pub const agentkit_workspaces::EXPORT_FILE_MAX_BYTES: u64
+pub const agentkit_workspaces::HOST_MAX_BYTES: usize
+pub const agentkit_workspaces::LEASE_WAIT_MS: u64
+pub const agentkit_workspaces::LIST_DEPTH_MAX: u8
+pub const agentkit_workspaces::LIST_DEPTH_MIN: u8
+pub const agentkit_workspaces::LIST_MAX_ENTRIES: u32
+pub const agentkit_workspaces::OBSERVE_CHUNK_MAX_BYTES: u64
+pub const agentkit_workspaces::PENDING_REQUESTS_MAX: usize
+pub const agentkit_workspaces::READ_FILE_MAX_BYTES: u64
+pub const agentkit_workspaces::REL_PATH_MAX_BYTES: usize
+pub const agentkit_workspaces::REL_PATH_SEGMENT_MAX_BYTES: usize
+pub const agentkit_workspaces::WRITE_FILE_MAX_BYTES: u64
+pub trait agentkit_workspaces::Pause: core::marker::Send + core::marker::Sync
+pub fn agentkit_workspaces::Pause::pause<'life0, 'async_trait>(&'life0 self, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_workspaces::Pause for agentkit_workspaces::TokioPause
+pub fn agentkit_workspaces::TokioPause::pause<'life0, 'async_trait>(&'life0 self, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agentkit_workspaces::SandboxBackend: core::marker::Send + core::marker::Sync
+pub fn agentkit_workspaces::SandboxBackend::apply_network_policy<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, &'life2 agentkit_workspaces::NetworkPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::cancel<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, &'life2 agentkit_workspaces::OperationId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::describe(&self) -> agentkit_workspaces::BackendDescriptor
+pub fn agentkit_workspaces::SandboxBackend::destroy_storage<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::dispatch<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, &'life2 agentkit_workspaces::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::DispatchAck, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::drain_denials<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::DenialBatch, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::ensure_machine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineSpec) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::MachineHandle, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::list<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, &'life2 agentkit_workspaces::ListEntries) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Listing, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::observe<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, &'life2 agentkit_workspaces::OperationId, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Observation, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::read_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::MachineHandle, &'life2 agentkit_workspaces::ReadFile) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::FileChunk, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::reset_home<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::stop_machine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, agentkit_workspaces::Generation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::StopProof, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::SandboxBackend::storage_usage<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::StorageUsage, agentkit_workspaces::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait agentkit_workspaces::WorkspaceRepository: core::marker::Send + core::marker::Sync
+pub fn agentkit_workspaces::WorkspaceRepository::acquire_lease<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, &'life2 agentkit_workspaces::LeaseHolder, &'life3 str, i64, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::LeaseAcquire, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::add_member<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::Member) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Member, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::advance_and_unfence<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, agentkit_workspaces::Generation, agentkit_workspaces::Generation, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::advance_generation<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, agentkit_workspaces::Generation, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::break_lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::create_or_get_workspace<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::NewWorkspace) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::WorkspaceUpsert, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::decide_request<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::RequestId, &'life2 agentkit_workspaces::RequestDecision) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::RequestDecided, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::fence<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, &'life2 str, agentkit_workspaces::Generation, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::insert_grant<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::NetworkGrant) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::NetworkGrant, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::insert_operation<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, &'life2 agentkit_workspaces::Operation, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::LeaseInfo>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_active_grants<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::NetworkGrant>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_leases<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::LeaseInfo>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_members<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::Member>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_open_operations<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::Operation>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_operations<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::Operation>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_pending_requests<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::NetworkRequest>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::list_workspaces<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::Workspace>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::mark_deleted<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::mark_ready<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::member<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, &'life2 agentkit_workspaces::AgentId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::Member>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::operation<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::OperationId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::Operation>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::record_denial<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::DenialRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::NetworkRequest, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::release_lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::remove_member<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, &'life2 agentkit_workspaces::AgentId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::renew_lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, i64, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::LeaseToken, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::revoke_grant<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::GrantId, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::NetworkGrant, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::set_holds_user_files<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, bool, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::touch_workspace<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::unfence<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Workspace, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::update_operation<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::LeaseToken, &'life2 agentkit_workspaces::OperationId, &'life3 agentkit_workspaces::OperationUpdate, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::Operation, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::workspace<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::Workspace>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::WorkspaceRepository::workspace_by_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::WorkspaceKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::Workspace>, agentkit_workspaces::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_workspaces::default_grants(&agentkit_workspaces::WorkspaceId, &dyn agentkit_kernel::runtime::Runtime, i64) -> alloc::vec::Vec<agentkit_workspaces::NetworkGrant>

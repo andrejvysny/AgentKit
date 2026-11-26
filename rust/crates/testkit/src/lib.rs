@@ -19,6 +19,10 @@
 //! [`conformance`] (the no-op reranker is `agentkit_memory::NoopReranker`).
 //! [`InMemoryOutputStore`] is the core `OutputStore` held in memory (roadmap
 //! 2.1, ADR 0034), with its own suite.
+//! [`InMemoryWorkspaceRepository`] is the workspaces context's
+//! `WorkspaceRepository` held in memory (ADR 0038), with its own suite.
+//! [`FakeSandboxBackend`] is its scriptable `SandboxBackend` with scripted
+//! faults; the backend suite runs on it.
 
 pub mod cache_provider;
 pub mod conformance;
@@ -30,8 +34,10 @@ mod mem_repository;
 mod memory;
 mod output_memory;
 pub mod prefix_harness;
+mod sandbox_backend;
 pub mod scripted;
 mod session_memory;
+mod workspace_memory;
 
 pub use mcp_memory::{
     InMemoryMcpConfigFixture, InMemoryMcpConfigRepository, InMemoryMcpConfigRepositoryError,
@@ -41,11 +47,15 @@ pub use mem_index::InMemoryRetrievalIndex;
 pub use mem_repository::InMemoryMemoryRepository;
 pub use memory::{InMemoryRepositoryError, InMemorySessionSettle, InMemoryTaskRepository};
 pub use output_memory::{InMemoryOutputStore, ManualClock};
+pub use sandbox_backend::{
+    CONNECT_REFUSED_EXIT, DISK_FULL_EXIT, FakeSandboxBackend, Program, ProgramEnd, UNSCRIPTED_EXIT,
+};
 pub use session_memory::{
     CONTEXT_SUMMARIES_NAMESPACE, InMemorySessionFixture, InMemorySessionRepository,
     InMemorySessionRepositoryError, PROMPT_TEMPLATES_NAMESPACE, PROVIDER_CAPABILITIES_NAMESPACE,
     PROVIDERS_NAMESPACE, ReceiptRefusal,
 };
+pub use workspace_memory::InMemoryWorkspaceRepository;
 
 pub use scripted::{
     SCRIPTED_BACKEND_ID, SCRIPTED_OBSERVED_MODEL, SCRIPTED_VERSION, ScriptedAdapter,

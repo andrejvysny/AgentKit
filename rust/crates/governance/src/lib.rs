@@ -19,13 +19,15 @@ mod proposal_tool;
 mod proposals;
 mod staging;
 
-pub use approval::{ApprovalGrant, StandingApprovalPolicy};
+pub use approval::{ApprovalGrant, CARD_KIND_KEY, StandingApprovalPolicy, UNCERTAIN_CARD_KIND};
 pub use authority::{CodingPermissionAuthority, PermissionContext};
 pub use contribution::{
     ContributedTool, GovernedWriteTool, ToolContributionContext, ToolContributor,
 };
 pub use core_run_ownership::OwnedCoreRun;
-pub use durable::{Admission, CommandCompletion, DurableExecutionPort, PreGuard};
+pub use durable::{
+    Admission, CommandCompletion, DurableExecutionPort, EXECUTION_ID_METADATA_KEY, PreGuard,
+};
 pub use durable_execution::{
     DurableExecution, MutatingPolicy, args_sha256, execution_context_sha256, execution_id,
     ts_args_sha256, ts_canonical_json, wrap_static_writes,

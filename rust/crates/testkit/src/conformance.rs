@@ -9,5 +9,7 @@ pub mod native_backend;
 pub mod output_store;
 pub mod reranker;
 pub mod retrieval_index;
+pub mod sandbox_backend;
 pub mod session_repository;
 pub mod task_repository;
+pub mod workspace_repository;

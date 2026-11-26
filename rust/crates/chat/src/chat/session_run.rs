@@ -525,12 +525,17 @@ pub(crate) async fn resolve_approved_calls(
             let generation = request.content.get("approvalGeneration");
             let legacy_generation = request.content.get("uncertaintyGeneration");
             let context_hash = request.content.get("contextSha256");
+            let card = request.content.get(agentkit_governance::CARD_KIND_KEY);
             if generation.is_some_and(|value| !value.is_string())
                 || legacy_generation.is_some_and(|value| !value.is_string())
                 || context_hash.is_some_and(|value| !value.is_string())
                 || generation.is_some()
                     && legacy_generation.is_some()
                     && generation != legacy_generation
+                || card.is_some_and(|value| {
+                    value.as_str() != Some(agentkit_governance::UNCERTAIN_CARD_KIND)
+                })
+                || card.is_some() && generation.or(legacy_generation).is_none()
             {
                 continue;
             }
@@ -546,6 +551,10 @@ pub(crate) async fn resolve_approved_calls(
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 context_sha256: context_hash.and_then(Value::as_str).map(str::to_owned),
+                // Only a card the uncertainty led reauthorizes the
+                // generation; an older card that carried it unseen yields
+                // a grant that opens nothing, so the call asks again.
+                uncertainty_card: card.is_some(),
             });
             break;
         }

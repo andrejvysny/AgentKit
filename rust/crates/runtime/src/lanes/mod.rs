@@ -7,4 +7,5 @@ pub(crate) mod memory;
 pub(crate) mod memory_capture;
 pub(crate) mod native;
 pub(crate) mod output;
+pub(crate) mod sandbox;
 pub(crate) mod subagent;

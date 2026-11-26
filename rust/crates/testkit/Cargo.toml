@@ -23,6 +23,9 @@ agentkit-mcp = { workspace = true }
 # The memory context owns the ports this crate's twins and suites cover.
 agentkit-memory = { workspace = true }
 agentkit-native = { workspace = true }
+# The workspaces context owns the repository port this crate's twin and
+# suite cover (ADR 0038).
+agentkit-workspaces = { workspace = true }
 async-trait.workspace = true
 futures.workspace = true
 serde_json.workspace = true

@@ -26,6 +26,9 @@ agentkit-store = { workspace = true }
 agentkit-sys = { workspace = true }
 agentkit-lsp = { workspace = true }
 agentkit-toolpacks-coding = { workspace = true }
+# The sandbox lane (ADR 0038): the pack and the workspace service it wires.
+agentkit-toolpacks-sandbox = { workspace = true }
+agentkit-workspaces = { workspace = true }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

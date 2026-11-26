@@ -344,6 +344,13 @@ export declare class SessionService {
    */
   resolveUncertainExecutionForChat(inputJson: string): Promise<string>
   /**
+   * ADR 0038: lift one uncertainty barrier of a chat by the id a
+   * refusal or card named, the operator's exit when barriers block a
+   * call. Answers the removed barrier (barriers keep no audit, so the
+   * host records the decision); never executes or re-admits the effect.
+   */
+  resolveUncertaintyBarrier(inputJson: string): Promise<string>
+  /**
    * Register a JS-executed tool. `definitionJson` is the portable tool
    * definition: `{name, version?, effect?, capability?, description?,
    * inputSchema, outputSchema?, timeoutMs?}`.

@@ -65,6 +65,31 @@ pub async fn agentkit_testkit::conformance::reranker::run<T, F, Fut>(F) where T:
 pub mod agentkit_testkit::conformance::retrieval_index
 pub const agentkit_testkit::conformance::retrieval_index::CASES: &[&str]
 pub async fn agentkit_testkit::conformance::retrieval_index::run<T, F, Fut>(F) where T: agentkit_memory::ports::RetrievalIndex + 'static, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
+pub mod agentkit_testkit::conformance::sandbox_backend
+pub mod agentkit_testkit::conformance::sandbox_backend::commands
+pub const agentkit_testkit::conformance::sandbox_backend::commands::APPEND_MARK: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::BACKGROUND: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::CONNECT: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::CONNECT_HOST: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::CONNECT_PORT: u16
+pub const agentkit_testkit::conformance::sandbox_backend::commands::EXIT_3: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::PRINT_HI: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::SLEEP: &str
+pub const agentkit_testkit::conformance::sandbox_backend::commands::YES: &str
+pub fn agentkit_testkit::conformance::sandbox_backend::commands::fake_harness(agentkit_testkit::FakeSandboxBackend) -> agentkit_testkit::conformance::sandbox_backend::SandboxHarness
+pub fn agentkit_testkit::conformance::sandbox_backend::commands::script_fake(&agentkit_testkit::FakeSandboxBackend)
+pub struct agentkit_testkit::conformance::sandbox_backend::SandboxHarness
+pub agentkit_testkit::conformance::sandbox_backend::SandboxHarness::backend: alloc::rcs::arc::Arc<dyn agentkit_workspaces::backend::SandboxBackend>
+pub agentkit_testkit::conformance::sandbox_backend::SandboxHarness::driver: alloc::rcs::arc::Arc<dyn agentkit_testkit::conformance::sandbox_backend::SandboxDriver>
+pub agentkit_testkit::conformance::sandbox_backend::SandboxHarness::image_digest: alloc::string::String
+pub agentkit_testkit::conformance::sandbox_backend::SandboxHarness::workspace_id: agentkit_workspaces::ids::WorkspaceId
+pub const agentkit_testkit::conformance::sandbox_backend::CASES: &[&str]
+pub trait agentkit_testkit::conformance::sandbox_backend::SandboxDriver: core::marker::Send + core::marker::Sync
+pub fn agentkit_testkit::conformance::sandbox_backend::SandboxDriver::elapse<'life0, 'async_trait>(&'life0 self, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_testkit::conformance::sandbox_backend::SandboxDriver for agentkit_testkit::FakeSandboxBackend
+pub fn agentkit_testkit::FakeSandboxBackend::elapse<'life0, 'async_trait>(&'life0 self, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::conformance::sandbox_backend::fake_harness(agentkit_testkit::FakeSandboxBackend) -> agentkit_testkit::conformance::sandbox_backend::SandboxHarness
+pub async fn agentkit_testkit::conformance::sandbox_backend::run<F, Fut>(F) where F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = agentkit_testkit::conformance::sandbox_backend::SandboxHarness>
 pub mod agentkit_testkit::conformance::session_repository
 pub const agentkit_testkit::conformance::session_repository::CASES: &[&str]
 pub const agentkit_testkit::conformance::session_repository::CONTEXT_SUMMARIES_NAMESPACE: &str
@@ -100,6 +125,9 @@ pub async fn agentkit_testkit::conformance::session_repository::run<T, F, Fut>(F
 pub mod agentkit_testkit::conformance::task_repository
 pub const agentkit_testkit::conformance::task_repository::CASES: &[&str]
 pub async fn agentkit_testkit::conformance::task_repository::run<R, F, Fut>(F) where R: agentkit_engine::repository::TaskRepository, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = R>
+pub mod agentkit_testkit::conformance::workspace_repository
+pub const agentkit_testkit::conformance::workspace_repository::CASES: &[&str]
+pub async fn agentkit_testkit::conformance::workspace_repository::run<T, F, Fut>(F) where T: agentkit_workspaces::repository::WorkspaceRepository + 'static, F: core::ops::function::Fn() -> Fut, Fut: core::future::future::Future<Output = T>
 pub mod agentkit_testkit::context_fixtures
 pub struct agentkit_testkit::context_fixtures::RecordingTransport<R: agentkit_engine::repository::TaskRepository>
 impl<R: agentkit_engine::repository::TaskRepository> agentkit_testkit::context_fixtures::RecordingTransport<R>
@@ -273,9 +301,63 @@ pub fn agentkit_testkit::InMemorySessionRepositoryError::session_conflict(&self)
 pub fn agentkit_testkit::InMemorySessionRepositoryError::task_input_reason(&self) -> core::option::Option<agentkit_engine::repository::TaskInputReason>
 impl core::convert::From<agentkit_kernel::timestamp::TimestampOutOfRange> for agentkit_testkit::InMemorySessionRepositoryError
 pub fn agentkit_testkit::InMemorySessionRepositoryError::from(agentkit_kernel::timestamp::TimestampOutOfRange) -> Self
+pub enum agentkit_testkit::ProgramEnd
+pub agentkit_testkit::ProgramEnd::Exit(i32)
+pub agentkit_testkit::ProgramEnd::Signal(i32)
 pub enum agentkit_testkit::ReceiptRefusal
 pub agentkit_testkit::ReceiptRefusal::NotUncertain
 pub agentkit_testkit::ReceiptRefusal::RunActive
+pub struct agentkit_testkit::FakeSandboxBackend
+impl agentkit_testkit::FakeSandboxBackend
+pub fn agentkit_testkit::FakeSandboxBackend::advance(&self, u64)
+pub fn agentkit_testkit::FakeSandboxBackend::background_ended(&self) -> u32
+pub fn agentkit_testkit::FakeSandboxBackend::clock(&self) -> alloc::rcs::arc::Arc<agentkit_testkit::ManualClock>
+pub fn agentkit_testkit::FakeSandboxBackend::die_after_next_dispatch(&self) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::dispatch_calls(&self, &agentkit_workspaces::ids::OperationId) -> u32
+pub fn agentkit_testkit::FakeSandboxBackend::dispatch_calls_total(&self) -> u32
+pub fn agentkit_testkit::FakeSandboxBackend::endless_next_exec(&self) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::fill_disk(&self, &agentkit_workspaces::ids::WorkspaceId) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::hang_next_dispatch(&self) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::home_file(&self, &agentkit_workspaces::ids::WorkspaceId, &str) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn agentkit_testkit::FakeSandboxBackend::home_resets(&self, &agentkit_workspaces::ids::WorkspaceId) -> u32
+pub fn agentkit_testkit::FakeSandboxBackend::live_machines(&self) -> alloc::vec::Vec<(agentkit_workspaces::ids::WorkspaceId, agentkit_workspaces::ids::Generation)>
+pub fn agentkit_testkit::FakeSandboxBackend::lose_next_ack(&self) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::machine_policy(&self, &agentkit_workspaces::ids::WorkspaceId, agentkit_workspaces::ids::Generation) -> core::option::Option<agentkit_workspaces::network::NetworkPolicy>
+pub fn agentkit_testkit::FakeSandboxBackend::machines_started(&self) -> u32
+pub fn agentkit_testkit::FakeSandboxBackend::make_unreachable(&self, &agentkit_workspaces::ids::WorkspaceId) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::new() -> Self
+pub fn agentkit_testkit::FakeSandboxBackend::operation_state(&self, &agentkit_workspaces::ids::WorkspaceId, agentkit_workspaces::ids::Generation, &agentkit_workspaces::ids::OperationId) -> core::option::Option<agentkit_workspaces::operation::OperationState>
+pub fn agentkit_testkit::FakeSandboxBackend::output_held(&self, &agentkit_workspaces::ids::WorkspaceId, agentkit_workspaces::ids::Generation, &agentkit_workspaces::ids::OperationId) -> u64
+pub fn agentkit_testkit::FakeSandboxBackend::panic_next_dispatch(&self) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::prove_absence(&self, bool) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::refuse_stop(&self, bool) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::script(&self, &str, agentkit_testkit::Program) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::serve_generation(&self, &agentkit_workspaces::ids::WorkspaceId, agentkit_workspaces::ids::Generation) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::served_generation(&self, &agentkit_workspaces::ids::WorkspaceId) -> core::option::Option<agentkit_workspaces::ids::Generation>
+pub fn agentkit_testkit::FakeSandboxBackend::set_descriptor(&self, agentkit_workspaces::machine::BackendDescriptor) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::set_observe_max_bytes(&self, u64) -> &Self
+pub fn agentkit_testkit::FakeSandboxBackend::stop_calls(&self) -> u32
+pub fn agentkit_testkit::FakeSandboxBackend::volume_file(&self, &agentkit_workspaces::ids::WorkspaceId, &str) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn agentkit_testkit::FakeSandboxBackend::volume_file_mode(&self, &agentkit_workspaces::ids::WorkspaceId, &str) -> core::option::Option<agentkit_workspaces::operation::FileMode>
+pub fn agentkit_testkit::FakeSandboxBackend::with_clock(alloc::rcs::arc::Arc<agentkit_testkit::ManualClock>) -> Self
+impl agentkit_testkit::conformance::sandbox_backend::SandboxDriver for agentkit_testkit::FakeSandboxBackend
+pub fn agentkit_testkit::FakeSandboxBackend::elapse<'life0, 'async_trait>(&'life0 self, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl agentkit_workspaces::backend::SandboxBackend for agentkit_testkit::FakeSandboxBackend
+pub fn agentkit_testkit::FakeSandboxBackend::apply_network_policy<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, &'life2 agentkit_workspaces::network::NetworkPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::cancel<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, &'life2 agentkit_workspaces::ids::OperationId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::describe(&self) -> agentkit_workspaces::machine::BackendDescriptor
+pub fn agentkit_testkit::FakeSandboxBackend::destroy_storage<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::dispatch<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, &'life2 agentkit_workspaces::operation::OperationRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::DispatchAck, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::drain_denials<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::network::DenialBatch, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::ensure_machine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineSpec) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::MachineHandle, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::list<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, &'life2 agentkit_workspaces::machine::ListEntries) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::Listing, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::observe<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, &'life2 agentkit_workspaces::ids::OperationId, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::Observation, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::read_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::machine::MachineHandle, &'life2 agentkit_workspaces::machine::ReadFile) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::FileChunk, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::reset_home<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::stop_machine<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, agentkit_workspaces::ids::Generation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::StopProof, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::FakeSandboxBackend::storage_usage<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::machine::StorageUsage, agentkit_workspaces::error::SandboxError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::default::Default for agentkit_testkit::FakeSandboxBackend
+pub fn agentkit_testkit::FakeSandboxBackend::default() -> Self
 pub struct agentkit_testkit::HashEmbedder
 impl agentkit_testkit::HashEmbedder
 pub fn agentkit_testkit::HashEmbedder::new() -> Self
@@ -441,6 +523,43 @@ pub fn agentkit_testkit::InMemoryTaskRepository::submit<'life0, 'async_trait>(&'
 pub fn agentkit_testkit::InMemoryTaskRepository::submit_child<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, agentkit_engine::model::SubmitTask, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_engine::model::TaskRecord, agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::InMemoryTaskRepository::update_progress<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, serde_json::value::Value, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::InMemoryTaskRepository::wait_for_children<'life0, 'async_trait>(&'life0 self, agentkit_engine::model::LeaseFence, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_testkit::InMemoryRepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct agentkit_testkit::InMemoryWorkspaceRepository
+impl agentkit_testkit::InMemoryWorkspaceRepository
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::new() -> Self
+impl agentkit_workspaces::repository::WorkspaceRepository for agentkit_testkit::InMemoryWorkspaceRepository
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::acquire_lease<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, &'life2 agentkit_workspaces::lease::LeaseHolder, &'life3 str, i64, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::lease::LeaseAcquire, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::add_member<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::workspace::Member) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Member, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::advance_and_unfence<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, agentkit_workspaces::ids::Generation, agentkit_workspaces::ids::Generation, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::advance_generation<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, agentkit_workspaces::ids::Generation, &'life2 str, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::break_lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::create_or_get_workspace<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::workspace::NewWorkspace) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::WorkspaceUpsert, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::decide_request<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::RequestId, &'life2 agentkit_workspaces::network::RequestDecision) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::network::RequestDecided, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::fence<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, &'life2 str, agentkit_workspaces::ids::Generation, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::insert_grant<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::network::NetworkGrant) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::network::NetworkGrant, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::insert_operation<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, &'life2 agentkit_workspaces::operation::Operation, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::lease::LeaseInfo>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_active_grants<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::network::NetworkGrant>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_leases<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::lease::LeaseInfo>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_members<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::workspace::Member>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_open_operations<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::operation::Operation>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_operations<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, usize) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::operation::Operation>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_pending_requests<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::network::NetworkRequest>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::list_workspaces<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agentkit_workspaces::workspace::Workspace>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::mark_deleted<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::mark_ready<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::member<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, &'life2 agentkit_workspaces::ids::AgentId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::workspace::Member>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::operation<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::OperationId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::operation::Operation>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::record_denial<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::network::DenialRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::network::NetworkRequest, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::release_lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::remove_member<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, &'life2 agentkit_workspaces::ids::AgentId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::renew_lease<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, i64, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::lease::LeaseToken, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::revoke_grant<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::GrantId, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::network::NetworkGrant, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::set_holds_user_files<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, bool, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::touch_workspace<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::unfence<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::workspace::Workspace, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::update_operation<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::lease::LeaseToken, &'life2 agentkit_workspaces::ids::OperationId, &'life3 agentkit_workspaces::operation::OperationUpdate, i64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agentkit_workspaces::operation::Operation, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::workspace<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::ids::WorkspaceId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::workspace::Workspace>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn agentkit_testkit::InMemoryWorkspaceRepository::workspace_by_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 agentkit_workspaces::workspace::WorkspaceKey) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agentkit_workspaces::workspace::Workspace>, agentkit_workspaces::error::RepositoryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct agentkit_testkit::ManualClock
 impl agentkit_testkit::ManualClock
 pub fn agentkit_testkit::ManualClock::advance(&self, i64)
@@ -449,6 +568,18 @@ pub fn agentkit_testkit::ManualClock::set(&self, i64)
 impl agentkit_kernel::runtime::Runtime for agentkit_testkit::ManualClock
 pub fn agentkit_testkit::ManualClock::id(&self) -> alloc::string::String
 pub fn agentkit_testkit::ManualClock::now_ms(&self) -> i64
+pub struct agentkit_testkit::Program
+impl agentkit_testkit::Program
+pub fn agentkit_testkit::Program::append(self, &str, impl core::convert::AsRef<[u8]>) -> Self
+pub fn agentkit_testkit::Program::connect(&str, u16) -> Self
+pub fn agentkit_testkit::Program::connects_after(self, u64) -> Self
+pub fn agentkit_testkit::Program::endless(impl core::convert::AsRef<[u8]>) -> Self
+pub fn agentkit_testkit::Program::exit(i32) -> Self
+pub fn agentkit_testkit::Program::hang() -> Self
+pub fn agentkit_testkit::Program::killed_by(i32) -> Self
+pub fn agentkit_testkit::Program::leave_background(self) -> Self
+pub fn agentkit_testkit::Program::runs_for(self, u64) -> Self
+pub fn agentkit_testkit::Program::stdout(self, impl core::convert::AsRef<[u8]>) -> Self
 pub struct agentkit_testkit::ScriptedAdapter
 impl agentkit_testkit::scripted::ScriptedAdapter
 pub fn agentkit_testkit::scripted::ScriptedAdapter::new(impl core::convert::Into<alloc::string::String>) -> Self
@@ -501,7 +632,9 @@ impl agentkit_native::ports::ProcessSupervisor for agentkit_testkit::scripted::S
 pub fn agentkit_testkit::scripted::ScriptedSupervisor::drain_owned<'life0, 'async_trait>(&'life0 self, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = alloc::vec::Vec<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agentkit_testkit::scripted::ScriptedSupervisor::spawn<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 agentkit_native::ports::LaunchPlan, &'life2 agentkit_native::ports::ResourceLimits, &'life3 tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::boxed::Box<dyn agentkit_native::ports::OwnedChildHandle>, agentkit_native::error::NativeError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn agentkit_testkit::scripted::ScriptedSupervisor::terminate_owned<'life0, 'async_trait>(&'life0 self, u32, u64, agentkit_native::ports::InterruptPolicy) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<agentkit_native::ports::InterruptReceipt>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub const agentkit_testkit::CONNECT_REFUSED_EXIT: i32
 pub const agentkit_testkit::CONTEXT_SUMMARIES_NAMESPACE: &str
+pub const agentkit_testkit::DISK_FULL_EXIT: i32
 pub const agentkit_testkit::HASH_EMBEDDER_DIMS: u32
 pub const agentkit_testkit::PROMPT_TEMPLATES_NAMESPACE: &str
 pub const agentkit_testkit::PROVIDERS_NAMESPACE: &str
@@ -509,6 +642,7 @@ pub const agentkit_testkit::PROVIDER_CAPABILITIES_NAMESPACE: &str
 pub const agentkit_testkit::SCRIPTED_BACKEND_ID: &str
 pub const agentkit_testkit::SCRIPTED_OBSERVED_MODEL: &str
 pub const agentkit_testkit::SCRIPTED_VERSION: &str
+pub const agentkit_testkit::UNSCRIPTED_EXIT: i32
 pub fn agentkit_testkit::plain_chat_target(&str) -> agentkit_native::target::NativeExecutionTarget
 pub fn agentkit_testkit::scripted_turn_input() -> agentkit_native::ports::TurnInput
 pub fn agentkit_testkit::supported() -> agentkit_native::capability::CapabilityState

@@ -25,10 +25,12 @@ const LAYERS = {
   "agentkit-automation": 3,
   "agentkit-remote": 3,
   "agentkit-native-exec": 3,
+  "agentkit-workspaces": 3,
   "agentkit-store": 4,
   "agentkit-providers": 4,
   "agentkit-toolpacks-coding": 4,
   "agentkit-toolpacks-web": 4,
+  "agentkit-toolpacks-sandbox": 4,
   "agentkit-lsp": 4,
   "agentkit-mcp": 4,
   "agentkit-connections": 4,
@@ -73,6 +75,7 @@ const CONTEXT_DEPS = {
   "agentkit-automation": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-remote": ["agentkit-engine", "agentkit-sessions"],
   "agentkit-native-exec": ["agentkit-engine", "agentkit-sessions"],
+  "agentkit-workspaces": ["agentkit-engine"],
 };
 const SKIP_DIRS = new Set(["tests", "benches", "examples", "target"]);
 // R5 (G1): a static is process-global mutable state when its type has

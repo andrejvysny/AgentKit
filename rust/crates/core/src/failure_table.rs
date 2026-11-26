@@ -1,5 +1,6 @@
 //! The one table of tool failure codes (TU-10), part 1: the pipeline and guards.
-//! Parts 2 and 3 are `failure_table_files.rs` and `failure_table_agents.rs`.
+//! Parts 2 to 4 are `failure_table_files.rs`, `failure_table_agents.rs` and
+//! `failure_table_sandbox.rs`.
 //! Every code a tool, guard or
 //! pipeline stage can raise is listed here with its class, a default sentence
 //! (used when only the bare code is known) and one concrete next step.
@@ -415,6 +416,7 @@ pub(crate) fn all() -> impl Iterator<Item = &'static Spec> {
         CORE,
         crate::failure_table_files::FILES,
         crate::failure_table_agents::AGENTS,
+        crate::failure_table_sandbox::SANDBOX,
     ]
     .into_iter()
     .flatten()

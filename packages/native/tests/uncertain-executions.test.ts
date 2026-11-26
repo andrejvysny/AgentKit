@@ -57,3 +57,39 @@ nativeTest(
   },
   20_000,
 );
+
+nativeTest(
+  "the barrier route answers not_found for a barrier the chat does not see",
+  async () => {
+    const store = await NativeStore.inMemory();
+    const service = await store.createService({
+      profiles: [testProfile("p1", { permissionMode: "read_only" })],
+    });
+    try {
+      await service.createSession({ sessionId: "s1", profileId: "p1" });
+      // A missing barrier and another chat's answer alike.
+      await expect(
+        service.resolveUncertaintyBarrier({
+          chatId: "s1",
+          barrierId: "barrier:missing",
+        }),
+      ).rejects.toMatchObject({ code: "not_found" });
+      // The route takes a chat and a barrier id, nothing else.
+      await expect(
+        service.resolveUncertaintyBarrier({
+          chatId: "s1",
+          barrierId: "barrier:missing",
+          outcome: "acknowledged",
+        } as never),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      await service.close();
+      await expect(
+        service.resolveUncertaintyBarrier({ chatId: "s1", barrierId: "b" }),
+      ).rejects.toMatchObject({ code: "closed" });
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);

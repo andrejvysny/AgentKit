@@ -1,4 +1,5 @@
-//! Explicit operator resolution of an uncertain execution receipt.
+//! Explicit operator resolution of an uncertain execution receipt, and the
+//! operator's exit from an uncertainty barrier.
 //!
 //! An `admitted` receipt without a result blocks every identical reissue
 //! forever (ADR 0020). Only a human can know whether the effect happened, so
@@ -6,10 +7,12 @@
 //! note, time and actor are written into the receipt JSON itself. No schema
 //! change: status and audit live in the existing `record` column.
 
-use crate::execution_receipts::{barrier_id_of, read_execution_receipt, read_row};
+use crate::execution_receipts::{
+    barrier_id_of, read_execution_receipt, read_row, select_chat_barrier,
+};
 use crate::{
     ExecutionReceiptRecord, ExecutionReceiptStatus, ExecutionResolution, ResolutionOutcome,
-    SqliteStore, StoreError, TaskRecord,
+    SqliteStore, StoreError, TaskRecord, UncertaintyBarrierRecord,
     util::{get, json},
 };
 use rusqlite::{OptionalExtension, params};
@@ -129,6 +132,38 @@ impl SqliteStore {
             clear_barriers(&transaction, &record)?;
             transaction.commit()?;
             Ok(record)
+        })
+        .await
+    }
+
+    /// Lift one uncertainty barrier of `chat_id` by its id: the operator's
+    /// exit from a barrier (ADR 0038). A barrier never clears by itself (an
+    /// answer re-runs its call once and leaves it in place), and two that
+    /// match one call end that call with the uncertain refusal naming both.
+    /// A barrier is residue of an import that no live run can complete, so
+    /// no active-run check applies. Scope is what the chat's runs see
+    /// (`select_chat_barrier`); a missing barrier and another chat's both
+    /// answer `NotFound`. The row is deleted and returned: barriers carry no
+    /// audit column, so the caller records the decision, and an import run
+    /// again over the same source recreates it.
+    pub async fn resolve_uncertainty_barrier(
+        &self,
+        chat_id: String,
+        barrier_id: String,
+    ) -> Result<UncertaintyBarrierRecord, StoreError> {
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let Some(barrier) = select_chat_barrier(&transaction, &chat_id, &barrier_id)? else {
+                return Err(StoreError::NotFound(format!(
+                    "uncertainty barrier {barrier_id}"
+                )));
+            };
+            transaction.execute(
+                "DELETE FROM uncertainty_barriers WHERE barrier_id = ?",
+                [&barrier.barrier_id],
+            )?;
+            transaction.commit()?;
+            Ok(barrier)
         })
         .await
     }

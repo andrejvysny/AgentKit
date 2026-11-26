@@ -1,0 +1,32 @@
+[package]
+name = "agentkit-toolpacks-sandbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Sandbox tool pack for AgentKit: the sandbox toolset over the workspaces context"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[lints]
+workspace = true
+
+[dependencies]
+agentkit-core = { workspace = true }
+agentkit-governance = { workspace = true }
+agentkit-workspaces = { workspace = true }
+async-trait.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The in-memory repository twin, the fake backend and the manual clock.
+agentkit-testkit = { workspace = true }
+agentkit-kernel = { workspace = true }
+# The end-to-end test stages the tools through governance with the real
+# durable execution ledger over an in-memory SQLite store. Dev-only: the
+# pack itself never names the store (R11).
+agentkit-engine = { workspace = true }
+agentkit-store = { workspace = true }
+tokio.workspace = true
+tokio-util.workspace = true

@@ -308,6 +308,41 @@ pub(crate) fn select_barriers(
     rows.map(|row| read_barrier(&row?)).collect()
 }
 
+/// The barrier `barrier_id` as chat `chat_id` sees it: the chat's own, one
+/// of a run bound to the chat or of a task in its scope, or one with no
+/// attributable identity (what `select_barriers` returns for any run of the
+/// chat). `None` for a missing barrier and for another chat's alike.
+pub(crate) fn select_chat_barrier(
+    db: &Connection,
+    chat_id: &str,
+    barrier_id: &str,
+) -> Result<Option<UncertaintyBarrierRecord>, StoreError> {
+    let row = db
+        .query_row(
+            &format!(
+                "SELECT {BARRIER_COLUMNS} FROM uncertainty_barriers \
+                 WHERE barrier_id = ?2 AND ((chat_id IS NULL AND run_id IS NULL) \
+                    OR chat_id = ?1 \
+                    OR run_id IN (SELECT run_id FROM run_bindings WHERE chat_id = ?1) \
+                    OR run_id IN (SELECT id FROM tasks WHERE scope = ?1))"
+            ),
+            params![chat_id, barrier_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.as_ref().map(read_barrier).transpose()
+}
+
 /// Insert-if-absent. Re-imports of the same source row derive the same
 /// deterministic `barrier_id` and refresh provenance in place (never the
 /// reason of an existing row, which may name a stricter refusal).
@@ -396,6 +431,18 @@ fn validate_approval(
     let generation = content.get("approvalGeneration");
     let legacy = content.get("uncertaintyGeneration");
     let hash = content.get("contextSha256");
+    // An uncertainty card (`cardKind: "uncertain"`, written by governance
+    // staging) always names the generation it led with. Whether a
+    // generation answer came from such a card is the host's gate (an
+    // older card opens nothing there); the store keeps accepting a
+    // generation without it, for rows older releases and TypeScript
+    // hosts recorded.
+    let card = content.get("cardKind");
+    if card.is_some_and(|value| value.as_str() != Some("uncertain"))
+        || card.is_some() && generation.or(legacy).is_none()
+    {
+        return Err(mismatch());
+    }
     if generation.is_some_and(|value| !value.is_string())
         || legacy.is_some_and(|value| !value.is_string())
         || generation.is_some() && legacy.is_some() && generation != legacy

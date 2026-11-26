@@ -1,0 +1,32 @@
+[package]
+name = "agentkit-workspaces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit workspaces context: sandbox workspace types, the SandboxBackend and WorkspaceRepository ports and the workspace service (no storage, no backend)"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The `Runtime` port mints ids and is the service's clock; `sha256_hex`
+# hashes write payloads.
+agentkit-kernel = { workspace = true }
+async-trait.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+# The workspace service waits (lease wait, polling) through `TokioPause` and
+# bounds backend calls with `select!`.
+tokio.workspace = true
+# The caller's cancellation token (the tool context's), honoured mid-run.
+tokio-util.workspace = true
+
+[dev-dependencies]
+# Integration tests only (`tests/`): the in-memory repository twin and the
+# fake backend. A unit test would compile this crate twice.
+agentkit-testkit = { workspace = true }
+serde_json.workspace = true

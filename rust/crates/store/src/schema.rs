@@ -21,8 +21,8 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// `agent_inputs` that turns the durable input queue into a per-agent
 /// ordered mailbox; version 16 adds the `tasks_agent` expression index so
 /// per-agent task reads (reconcile, history pages, deletion gate) are not
-/// full scans.
-pub const SCHEMA_VERSION: i64 = 22;
+/// full scans; version 23 adds the sandbox workspace tables (ADR 0038).
+pub const SCHEMA_VERSION: i64 = 23;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -333,6 +333,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 22 {
             migrate_memory_vectors(&mut connection)?;
         }
+        if version < 23 {
+            migrate_sandbox(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -473,6 +476,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 22 {
         sql.push_str(MEMORY_VECTORS_SCHEMA);
     }
+    if version >= 23 {
+        sql.push_str(SANDBOX_SCHEMA);
+    }
     sql
 }
 
@@ -544,6 +550,39 @@ fn migrate_memory_vectors(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(MEMORY_VECTORS_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 22)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Sandbox workspaces (ADR 0038, WP-1.3), additive at schema version 23:
+/// the records, members, operation projection, network grants and requests
+/// behind the workspaces context's `WorkspaceRepository`, and the
+/// per-workspace lease. `lease_fencing` on the workspace row is the last
+/// fencing number issued, so it keeps increasing after the lease row is
+/// released or broken. A key is unique among records that are not deleted;
+/// a target has at most one active grant and at most one undecided-or-
+/// rejected request. Timestamps are Unix milliseconds.
+const SANDBOX_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS sandbox_workspace(id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('agent_home','project_chats','chat_isolated','shared','host_folder')), key TEXT NOT NULL, owner_scope TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('ready','busy','fenced','deleted')), fence_reason TEXT, generation INTEGER NOT NULL CHECK(generation>=0), image_digest TEXT NOT NULL, holds_user_files INTEGER NOT NULL CHECK(holds_user_files IN (0,1)), created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, lease_fencing INTEGER NOT NULL DEFAULT 0 CHECK(lease_fencing>=0), fence_generation INTEGER CHECK(fence_generation>=0), CHECK((state='fenced')=(fence_generation IS NOT NULL)));
+CREATE UNIQUE INDEX IF NOT EXISTS sandbox_workspace_live_key ON sandbox_workspace(key) WHERE state<>'deleted';
+CREATE INDEX IF NOT EXISTS sandbox_workspace_state ON sandbox_workspace(state);
+CREATE TABLE IF NOT EXISTS sandbox_workspace_lease(workspace_id TEXT PRIMARY KEY REFERENCES sandbox_workspace(id) ON DELETE CASCADE, token TEXT NOT NULL, fencing INTEGER NOT NULL CHECK(fencing>=1), expires_at INTEGER NOT NULL, agent_id TEXT NOT NULL, run_id TEXT NOT NULL, label TEXT NOT NULL, host_id TEXT NOT NULL, boot_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sandbox_member(workspace_id TEXT NOT NULL REFERENCES sandbox_workspace(id) ON DELETE CASCADE, agent_id TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('member','reader')), added_at INTEGER NOT NULL, PRIMARY KEY(workspace_id, agent_id)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sandbox_operation(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES sandbox_workspace(id) ON DELETE CASCADE, generation INTEGER NOT NULL CHECK(generation>=0), kind TEXT NOT NULL CHECK(kind IN ('exec','write_file')), actor_agent_id TEXT NOT NULL, run_id TEXT NOT NULL, phase TEXT NOT NULL CHECK(phase IN ('dispatching','running','terminal','uncertain','interrupted')), receipt TEXT, started_at INTEGER NOT NULL, ended_at INTEGER, log_path TEXT, truncated INTEGER NOT NULL CHECK(truncated IN (0,1)), image_digest TEXT NOT NULL, summary TEXT NOT NULL, args_sha256 TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS sandbox_operation_workspace ON sandbox_operation(workspace_id, started_at, id);
+CREATE INDEX IF NOT EXISTS sandbox_operation_phase ON sandbox_operation(phase, started_at, id);
+CREATE TABLE IF NOT EXISTS sandbox_network_grant(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES sandbox_workspace(id) ON DELETE CASCADE, host TEXT NOT NULL, port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535), source TEXT NOT NULL CHECK(source IN ('default','owner')), granted_at INTEGER NOT NULL, revoked_at INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS sandbox_network_grant_active ON sandbox_network_grant(workspace_id, host, port) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS sandbox_network_grant_workspace ON sandbox_network_grant(workspace_id, granted_at, id);
+CREATE TABLE IF NOT EXISTS sandbox_network_request(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES sandbox_workspace(id) ON DELETE CASCADE, host TEXT NOT NULL, port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535), operation_id TEXT, first_seen INTEGER NOT NULL, count INTEGER NOT NULL CHECK(count>=1), state TEXT NOT NULL CHECK(state IN ('pending','approved','rejected')));
+CREATE UNIQUE INDEX IF NOT EXISTS sandbox_network_request_open ON sandbox_network_request(workspace_id, host, port) WHERE state<>'approved';
+CREATE INDEX IF NOT EXISTS sandbox_network_request_workspace ON sandbox_network_request(workspace_id, state, first_seen, id);
+"#;
+
+fn migrate_sandbox(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(SANDBOX_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 23)?;
     transaction.commit()?;
     Ok(())
 }
