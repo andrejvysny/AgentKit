@@ -43,6 +43,7 @@ const LAYERS = {
   "agentkit-egress": 4,
   "agentkit-sandbox-launcher": 4,
   "agentkit-sandbox-container": 4,
+  "agentkit-sandbox-microvm": 4,
   "agentkit-runtime": 5,
   "agentkit-napi": 6,
   "agentkit-http": 6,

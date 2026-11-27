@@ -25,6 +25,11 @@ tokio.workspace = true
 # Unpredictable names for temp files and for log directories set aside.
 uuid.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# A microVM guest's control listener and egress connections (ADR 0040 §4);
+# its sockets are close-on-exec from creation and it holds the unsafe.
+tokio-vsock = "=0.7.3"
+
 [dev-dependencies]
 # Scratch roots for the file and server tests.
 tempfile.workspace = true

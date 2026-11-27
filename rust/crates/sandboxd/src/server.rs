@@ -12,6 +12,7 @@
 //! answers `bye` only after both.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,17 +24,24 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc};
 
-use crate::config::{Config, ProcessMode};
+use crate::config::{Config, Link, ProcessMode, Transport};
 use crate::conn::{FrameReader, Replier, spawn_writer};
 use crate::error::{HandshakeError, StartupError};
 use crate::optable::{OpTable, is_terminal};
 use crate::reaper::Reaper;
-use crate::shim::{SHIM_MAX_CONNECTIONS, bind, run_shim};
+use crate::shim::{SHIM_MAX_CONNECTIONS, Upstream, bind, run_shim};
+#[cfg(target_os = "linux")]
+use crate::transport::{accept_once, listen};
 use crate::{envfile, exec, files, listing, output, usage, write};
 
 /// How long the supervisor retries its dial of the control socket.
 const DIAL_WINDOW: Duration = Duration::from_secs(30);
 const DIAL_RETRY: Duration = Duration::from_millis(200);
+/// How long the supervisor waits for the host's control connection on
+/// vsock. The microVM helper stops connecting 30 s after the machine
+/// starts (ADR 0040 §3), so none comes later.
+#[cfg(target_os = "linux")]
+const ACCEPT_WINDOW: Duration = Duration::from_secs(30);
 /// How long the host has to send `hello`.
 const HANDSHAKE_WINDOW: Duration = Duration::from_secs(30);
 /// Data frames buffered per open write stream.
@@ -79,12 +87,49 @@ impl Server {
     }
 }
 
-/// Start the egress shim, dial the control socket, handshake and serve.
+/// Start the egress shim, dial the control socket, handshake and serve:
+/// [`run_with`] over the container's [`Transport::default`].
 pub async fn run(config: Config) -> Result<Exit, StartupError> {
+    run_with(config, Transport::default()).await
+}
+
+/// [`run`] over `transport`. A control vsock port is listened on before
+/// anything else starts, so no other process can take it; its one
+/// accepted connection is served like a dialed socket.
+pub async fn run_with(config: Config, transport: Transport) -> Result<Exit, StartupError> {
+    let upstream = match transport.egress {
+        Link::Socket => Upstream::Socket(config.egress_socket.clone()),
+        #[cfg(target_os = "linux")]
+        Link::Vsock(port) => Upstream::Vsock(port),
+    };
+    match transport.control {
+        Link::Socket => {
+            let path = config.control_socket.clone();
+            run_session(config, upstream, dial(&path)).await
+        }
+        #[cfg(target_os = "linux")]
+        Link::Vsock(port) => {
+            let listener = listen(port)?;
+            let control = accept_once(listener, port, ACCEPT_WINDOW);
+            run_session(config, upstream, control).await
+        }
+    }
+}
+
+/// Start the egress shim, wait for the control channel, handshake and
+/// serve; the same for every transport.
+pub(crate) async fn run_session<S>(
+    config: Config,
+    upstream: Upstream,
+    control: impl Future<Output = Result<S, StartupError>>,
+) -> Result<Exit, StartupError>
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
     let shim = match bind(config.shim_addr).await {
         Ok(listener) => Some(tokio::spawn(run_shim(
             listener,
-            config.egress_socket.clone(),
+            upstream,
             SHIM_MAX_CONNECTIONS,
         ))),
         Err(error) => {
@@ -92,8 +137,7 @@ pub async fn run(config: Config) -> Result<Exit, StartupError> {
             None
         }
     };
-    let stream = dial(&config.control_socket).await;
-    let outcome = match stream {
+    let outcome = match control.await {
         Ok(stream) => serve(config, stream).await.map_err(StartupError::from),
         Err(error) => Err(error),
     };

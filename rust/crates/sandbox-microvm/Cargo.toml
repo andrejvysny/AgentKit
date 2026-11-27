@@ -1,0 +1,82 @@
+[package]
+name = "agentkit-sandbox-microvm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Track B macOS microVM launcher (ADR 0040): the launcher protocol over one Virtualization.framework helper process per machine"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "agentkit-sandbox-vmhelper"
+path = "src/bin/agentkit-sandbox-vmhelper/main.rs"
+
+[dependencies]
+agentkit-sandbox-proto.workspace = true
+# Private roots, the state lock, signals and reaping of helper processes.
+agentkit-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The kernel and root disk are verified by SHA-256 at startup.
+sha2.workspace = true
+thiserror.workspace = true
+# Listener, per-workspace locks, helper processes and their pipes.
+tokio = { workspace = true, features = ["process"] }
+# A fresh random channel token for each started generation (v4).
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# `O_NOFOLLOW`; on macOS also process start times (`proc_pidinfo`) and the
+# helper's signal mask.
+libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSError", "NSString", "NSURL"] }
+objc2-virtualization = { workspace = true, features = [
+    "std",
+    "block2",
+    "dispatch2",
+    "VZBootLoader",
+    "VZDiskImageStorageDeviceAttachment",
+    "VZEntropyDeviceConfiguration",
+    "VZFileSerialPortAttachment",
+    "VZGenericPlatformConfiguration",
+    "VZLinuxBootLoader",
+    "VZMemoryBalloonDeviceConfiguration",
+    "VZPlatformConfiguration",
+    "VZSerialPortAttachment",
+    "VZSerialPortConfiguration",
+    "VZSocketDevice",
+    "VZSocketDeviceConfiguration",
+    "VZStorageDeviceAttachment",
+    "VZStorageDeviceConfiguration",
+    "VZVirtioBlockDeviceConfiguration",
+    "VZVirtioConsoleDeviceSerialPortConfiguration",
+    "VZVirtioEntropyDeviceConfiguration",
+    "VZVirtioSocketConnection",
+    "VZVirtioSocketDevice",
+    "VZVirtioSocketDeviceConfiguration",
+    "VZVirtioSocketListener",
+    "VZVirtioTraditionalMemoryBalloonDeviceConfiguration",
+    "VZVirtualMachine",
+    "VZVirtualMachineConfiguration",
+    "VZVirtualMachineDelegate",
+] }
+
+[dev-dependencies]
+# The backend conformance suite over ContainerBackend and a real VmLauncher.
+agentkit-egress.workspace = true
+agentkit-sandbox-container.workspace = true
+agentkit-testkit.workspace = true
+agentkit-workspaces.workspace = true
+async-trait.workspace = true
+# Scratch data roots, socket roots and fake helpers.
+tempfile.workspace = true

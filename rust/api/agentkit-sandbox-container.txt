@@ -27,6 +27,7 @@ pub agentkit_sandbox_container::ContainerBackendConfig::handshake_timeout: core:
 pub agentkit_sandbox_container::ContainerBackendConfig::image_digest: core::option::Option<alloc::string::String>
 pub agentkit_sandbox_container::ContainerBackendConfig::launcher_socket: std::path::PathBuf
 pub agentkit_sandbox_container::ContainerBackendConfig::launcher_timeout: core::time::Duration
+pub agentkit_sandbox_container::ContainerBackendConfig::microvm_disk_bytes: core::option::Option<u64>
 pub agentkit_sandbox_container::ContainerBackendConfig::request_timeout: core::time::Duration
 pub agentkit_sandbox_container::ContainerBackendConfig::socket_dir: std::path::PathBuf
 pub agentkit_sandbox_container::ContainerBackendConfig::stop_grace_ms: u64

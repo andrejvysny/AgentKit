@@ -43,6 +43,13 @@ futures-util = "=0.3.34"
 tokio-stream = "=0.1.19"
 keyring = "=3.6.3"
 zeroize = "=1.9.1"
+# Virtualization.framework bindings of the macOS microVM helper; crates opt
+# into the classes they use.
+objc2 = "=0.6.5"
+objc2-foundation = { version = "=0.3.2", default-features = false }
+objc2-virtualization = { version = "=0.3.2", default-features = false }
+block2 = "=0.6.2"
+dispatch2 = { version = "=0.3.1", default-features = false, features = ["std", "objc2"] }
 
 agentkit-contracts = { path = "crates/contracts", version = "0.1.0" }
 agentkit-kernel = { path = "crates/kernel", version = "0.1.0" }
@@ -77,6 +84,7 @@ agentkit-sandboxd = { path = "crates/sandboxd", version = "0.1.0" }
 agentkit-egress = { path = "crates/egress", version = "0.1.0" }
 agentkit-sandbox-launcher = { path = "crates/sandbox-launcher", version = "0.1.0" }
 agentkit-sandbox-container = { path = "crates/sandbox-container", version = "0.1.0" }
+agentkit-sandbox-microvm = { path = "crates/sandbox-microvm", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

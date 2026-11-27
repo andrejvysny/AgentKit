@@ -22,7 +22,9 @@ use crate::registry::{Admission, Registry};
 ///
 /// - `describe`: kind `container`; no status after host loss (the
 ///   supervisor ends everything when its channel closes); no hard disk
-///   quota (the service checks usage).
+///   quota (the service checks usage). Over the microVM launcher
+///   (`microvm_disk_bytes` set): kind `microvm` and a hard quota, the
+///   workspace disk's size.
 /// - A machine whose channel failed, or whose guest broke the protocol,
 ///   is unreachable: its calls answer `Unavailable` until it is stopped,
 ///   and `ensure_machine` answers its generation stale, so the service
@@ -189,7 +191,10 @@ impl Inner {
     /// workload's reach). After an incomplete guest answer every launcher
     /// failure is an error: the figure gates the quota check.
     pub(crate) async fn usage(&self, ws: &WorkspaceId) -> Result<StorageUsage, SandboxError> {
-        let quota_bytes = self.registry.quota_bytes(ws);
+        let quota_bytes = self
+            .config
+            .microvm_disk_bytes
+            .unwrap_or_else(|| self.registry.quota_bytes(ws));
         let live = self.registry.live(ws).filter(|m| m.unreachable().is_none());
         let mut guest_incomplete = false;
         if let Some(machine) = live {

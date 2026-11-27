@@ -1,9 +1,13 @@
 pub mod agentkit_sandboxd
 pub enum agentkit_sandboxd::ConfigError
+pub agentkit_sandboxd::ConfigError::Conflict
+pub agentkit_sandboxd::ConfigError::Conflict::name: &'static str
+pub agentkit_sandboxd::ConfigError::Conflict::with: &'static str
 pub agentkit_sandboxd::ConfigError::Invalid
 pub agentkit_sandboxd::ConfigError::Invalid::name: &'static str
 pub agentkit_sandboxd::ConfigError::Invalid::reason: &'static str
 pub agentkit_sandboxd::ConfigError::Missing(&'static str)
+pub agentkit_sandboxd::ConfigError::Unsupported(&'static str)
 pub enum agentkit_sandboxd::Exit
 pub agentkit_sandboxd::Exit::ChannelLost
 pub agentkit_sandboxd::Exit::Shutdown
@@ -25,11 +29,18 @@ pub agentkit_sandboxd::ProcessMode::Supervisor
 impl agentkit_sandboxd::ProcessMode
 pub fn agentkit_sandboxd::ProcessMode::detect() -> Self
 pub enum agentkit_sandboxd::StartupError
+pub agentkit_sandboxd::StartupError::Accept
+pub agentkit_sandboxd::StartupError::Accept::port: u32
+pub agentkit_sandboxd::StartupError::Accept::secs: u64
+pub agentkit_sandboxd::StartupError::Accept::source: core::io::error::Error
 pub agentkit_sandboxd::StartupError::Dial
 pub agentkit_sandboxd::StartupError::Dial::path: std::path::PathBuf
 pub agentkit_sandboxd::StartupError::Dial::secs: u64
 pub agentkit_sandboxd::StartupError::Dial::source: core::io::error::Error
 pub agentkit_sandboxd::StartupError::Handshake(agentkit_sandboxd::HandshakeError)
+pub agentkit_sandboxd::StartupError::Listen
+pub agentkit_sandboxd::StartupError::Listen::port: u32
+pub agentkit_sandboxd::StartupError::Listen::source: core::io::error::Error
 pub struct agentkit_sandboxd::Config
 pub agentkit_sandboxd::Config::channel_token: alloc::string::String
 pub agentkit_sandboxd::Config::control_socket: std::path::PathBuf
@@ -47,6 +58,11 @@ pub fn agentkit_sandboxd::Config::from_env() -> core::result::Result<Self, agent
 pub fn agentkit_sandboxd::Config::from_lookup(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::result::Result<Self, agentkit_sandboxd::ConfigError>
 impl core::fmt::Debug for agentkit_sandboxd::Config
 pub fn agentkit_sandboxd::Config::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct agentkit_sandboxd::Transport
+impl agentkit_sandboxd::Transport
+pub fn agentkit_sandboxd::Transport::from_env() -> core::result::Result<Self, agentkit_sandboxd::ConfigError>
+pub fn agentkit_sandboxd::Transport::from_lookup(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::result::Result<Self, agentkit_sandboxd::ConfigError>
 pub fn agentkit_sandboxd::harden_process(agentkit_sandboxd::ProcessMode) -> core::io::error::Result<()>
 pub async fn agentkit_sandboxd::run(agentkit_sandboxd::Config) -> core::result::Result<agentkit_sandboxd::Exit, agentkit_sandboxd::StartupError>
+pub async fn agentkit_sandboxd::run_with(agentkit_sandboxd::Config, agentkit_sandboxd::Transport) -> core::result::Result<agentkit_sandboxd::Exit, agentkit_sandboxd::StartupError>
 pub async fn agentkit_sandboxd::serve<S>(agentkit_sandboxd::Config, S) -> core::result::Result<agentkit_sandboxd::Exit, agentkit_sandboxd::HandshakeError> where S: tokio::io::async_read::AsyncRead + tokio::io::async_write::AsyncWrite + core::marker::Send + 'static

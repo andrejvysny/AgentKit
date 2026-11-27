@@ -60,6 +60,11 @@ pub struct ContainerBackendConfig {
     pub image_digest: Option<String>,
     /// Limits of each machine's egress proxy (NET-8).
     pub egress: EgressConfig,
+    /// `Some` when the launcher starts microVMs (ADR 0040) whose workspace
+    /// disk holds this many bytes: `describe` then answers kind `microvm`
+    /// with a hard disk quota, and storage usage reports this quota.
+    /// `None` (the default) is the container launcher.
+    pub microvm_disk_bytes: Option<u64>,
 }
 
 /// Why a configuration cannot be used.
@@ -87,6 +92,7 @@ impl ContainerBackendConfig {
             stop_grace_ms: 10_000,
             image_digest: None,
             egress: EgressConfig::default(),
+            microvm_disk_bytes: None,
         }
     }
 
@@ -125,6 +131,10 @@ impl ContainerBackendConfig {
                 self.image_digest.as_ref().is_none_or(|d| !d.is_empty()),
                 "image_digest must not be empty",
             ),
+            (
+                self.microvm_disk_bytes != Some(0),
+                "microvm_disk_bytes must be positive",
+            ),
         ];
         if let Some((_, problem)) = checks.iter().find(|(ok, _)| !ok) {
             return Err(ContainerConfigError::Invalid(problem));
@@ -161,7 +171,11 @@ mod tests {
             request_timeout: Duration::ZERO,
             ..config()
         };
-        for bad in [relative, short, zero] {
+        let no_disk = ContainerBackendConfig {
+            microvm_disk_bytes: Some(0),
+            ..config()
+        };
+        for bad in [relative, short, zero, no_disk] {
             assert!(matches!(
                 bad.validate(),
                 Err(ContainerConfigError::Invalid(_))

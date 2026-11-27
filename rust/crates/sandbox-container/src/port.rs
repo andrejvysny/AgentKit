@@ -15,17 +15,30 @@ use async_trait::async_trait;
 use crate::backend::{ContainerBackend, check_workspace, detached};
 use crate::mapping;
 
-/// The backend family this adapter reports.
+/// The backend family this adapter reports over the container launcher.
 const KIND: &str = "container";
+/// The family it reports over the microVM launcher (ADR 0040).
+const MICROVM_KIND: &str = "microvm";
+
+/// What the backend reports: a microVM's workspace disk is a hard quota;
+/// a container's volume is not, so the service checks usage.
+pub(crate) fn descriptor(microvm_disk_bytes: Option<u64>) -> BackendDescriptor {
+    BackendDescriptor {
+        kind: if microvm_disk_bytes.is_some() {
+            MICROVM_KIND
+        } else {
+            KIND
+        }
+        .to_owned(),
+        supports_status_after_host_loss: false,
+        enforces_disk_quota: microvm_disk_bytes.is_some(),
+    }
+}
 
 #[async_trait]
 impl SandboxBackend for ContainerBackend {
     fn describe(&self) -> BackendDescriptor {
-        BackendDescriptor {
-            kind: KIND.to_owned(),
-            supports_status_after_host_loss: false,
-            enforces_disk_quota: false,
-        }
+        descriptor(self.inner.config.microvm_disk_bytes)
     }
 
     async fn ensure_machine(&self, spec: &MachineSpec) -> Result<MachineHandle, SandboxError> {
@@ -161,5 +174,25 @@ impl SandboxBackend for ContainerBackend {
         let (inner, ws) = (self.inner.clone(), ws.clone());
         let request = Request::Destroy { workspace_id };
         detached(async move { inner.volumes(&ws, request).await }).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_microvm_launcher_reports_its_kind_and_a_hard_quota() {
+        let container = descriptor(None);
+        assert_eq!(
+            (container.kind.as_str(), container.enforces_disk_quota),
+            ("container", false)
+        );
+        let vm = descriptor(Some(20 << 30));
+        assert_eq!(
+            (vm.kind.as_str(), vm.enforces_disk_quota),
+            ("microvm", true)
+        );
+        assert!(!vm.supports_status_after_host_loss);
     }
 }

@@ -1,4 +1,5 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::path::Path;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
@@ -31,7 +32,7 @@ async fn connections_are_piped_to_the_egress_socket() {
     let echo = upper_echo(&egress);
     let listener = bind(loopback()).await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let shim = tokio::spawn(run_shim(listener, egress, 4));
+    let shim = tokio::spawn(run_shim(listener, Upstream::Socket(egress), 4));
     let mut client = TcpStream::connect(addr).await.unwrap();
     client.write_all(b"connect example.com:443").await.unwrap();
     let mut answer = vec![0; 23];
@@ -46,7 +47,8 @@ async fn without_an_egress_socket_the_client_is_closed() {
     let dir = tempfile::tempdir().unwrap();
     let listener = bind(loopback()).await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let shim = tokio::spawn(run_shim(listener, dir.path().join("absent.sock"), 4));
+    let absent = Upstream::Socket(dir.path().join("absent.sock"));
+    let shim = tokio::spawn(run_shim(listener, absent, 4));
     let mut client = TcpStream::connect(addr).await.unwrap();
     let mut buf = [0; 8];
     let read = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
@@ -71,7 +73,7 @@ async fn connections_over_the_bound_are_closed_at_accept() {
     });
     let listener = bind(loopback()).await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let shim = tokio::spawn(run_shim(listener, egress, 1));
+    let shim = tokio::spawn(run_shim(listener, Upstream::Socket(egress), 1));
     let _first = TcpStream::connect(addr).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     let mut second = TcpStream::connect(addr).await.unwrap();

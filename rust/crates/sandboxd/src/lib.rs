@@ -18,6 +18,10 @@
 //!   [`ProcessMode`]; as PID 1 every process but the supervisor ends.
 //! - Egress: a TCP shim on `127.0.0.1:3128` piping to the host's egress
 //!   socket.
+//! - Transport: in a container both links are unix sockets; in a microVM
+//!   guest (Linux, ADR 0040 §4) the supervisor listens on a vsock port
+//!   for its one control connection and the shim pipes to the host over
+//!   vsock ([`Transport`]). The session over either is the same.
 //!
 //! Logs go to stderr and name lifecycle events only, never a command or
 //! its output.
@@ -39,14 +43,18 @@ mod paths;
 mod reaper;
 mod server;
 mod shim;
+// Only a vsock guest (Linux) accepts its control channel; the tests drive
+// the same accept path over a unix listener everywhere.
+#[cfg(any(target_os = "linux", test))]
+mod transport;
 mod usage;
 mod write;
 
 use std::io;
 
-pub use config::{Config, ProcessMode};
+pub use config::{Config, ProcessMode, Transport};
 pub use error::{ConfigError, HandshakeError, StartupError};
-pub use server::{Exit, run, serve};
+pub use server::{Exit, run, run_with, serve};
 
 /// Make the process non-dumpable and a child subreaper (Linux), before
 /// anything else runs. Embedded supervisors share their process and

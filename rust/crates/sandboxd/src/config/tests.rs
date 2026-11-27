@@ -141,3 +141,133 @@ fn the_channel_token_is_required_and_never_printed() {
     assert!(!printed.contains(TOKEN), "{printed}");
     assert!(printed.contains("<redacted>"));
 }
+
+#[test]
+fn without_vsock_ports_both_links_are_the_unix_sockets() {
+    for vars in [
+        &[][..],
+        &[
+            (CONTROL_SOCKET, "/tmp/c.sock"),
+            (EGRESS_SOCKET, "/tmp/e.sock"),
+        ][..],
+    ] {
+        let transport = Transport::from_lookup(lookup(vars)).unwrap();
+        assert_eq!(transport, Transport::default(), "{vars:?}");
+        assert_eq!(
+            (transport.control, transport.egress),
+            (Link::Socket, Link::Socket)
+        );
+    }
+}
+
+#[test]
+fn vsock_ports_parse_as_unsigned_32_bit_numbers() {
+    for (value, port) in [("1024", 1024), ("0", 0), ("4294967294", u32::MAX - 1)] {
+        let pairs = [(CONTROL_VSOCK_PORT, value)];
+        let vars = lookup(&pairs);
+        assert_eq!(
+            vsock_port(&vars, CONTROL_VSOCK_PORT, CONTROL_SOCKET),
+            Ok(Some(port)),
+            "{value:?}"
+        );
+    }
+    let none: [(&str, &str); 0] = [];
+    let unset = lookup(&none);
+    assert_eq!(
+        vsock_port(&unset, EGRESS_VSOCK_PORT, EGRESS_SOCKET),
+        Ok(None)
+    );
+}
+
+#[test]
+fn bad_vsock_ports_are_refused() {
+    let bad = ["", "x", "-1", " 1024", "1024 ", "4294967295", "4294967296"];
+    for (name, value) in [CONTROL_VSOCK_PORT, EGRESS_VSOCK_PORT]
+        .into_iter()
+        .flat_map(|name| bad.map(|value| (name, value)))
+    {
+        let refused = Transport::from_lookup(lookup(&[(name, value)]));
+        assert_eq!(
+            refused,
+            Err(ConfigError::Invalid {
+                name,
+                reason: "not a vsock port (0 to 4294967294)",
+            }),
+            "{name}={value:?}"
+        );
+    }
+}
+
+#[test]
+fn a_vsock_port_conflicts_with_the_socket_of_its_link() {
+    let control = Transport::from_lookup(lookup(&[
+        (CONTROL_VSOCK_PORT, "1024"),
+        (CONTROL_SOCKET, "/tmp/c.sock"),
+    ]));
+    assert_eq!(
+        control,
+        Err(ConfigError::Conflict {
+            name: CONTROL_VSOCK_PORT,
+            with: CONTROL_SOCKET,
+        })
+    );
+    let egress = Transport::from_lookup(lookup(&[
+        (EGRESS_VSOCK_PORT, "1025"),
+        (EGRESS_SOCKET, "/tmp/e.sock"),
+    ]));
+    assert_eq!(
+        egress,
+        Err(ConfigError::Conflict {
+            name: EGRESS_VSOCK_PORT,
+            with: EGRESS_SOCKET,
+        })
+    );
+    assert_eq!(
+        control.unwrap_err().to_string(),
+        "AGENTKIT_CONTROL_VSOCK_PORT and AGENTKIT_CONTROL_SOCKET are both set"
+    );
+    // The other link's socket is no conflict.
+    let pairs = [(CONTROL_VSOCK_PORT, "1024"), (EGRESS_SOCKET, "/tmp/e.sock")];
+    let mixed = lookup(&pairs);
+    assert_eq!(
+        vsock_port(&mixed, CONTROL_VSOCK_PORT, CONTROL_SOCKET),
+        Ok(Some(1024))
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn vsock_is_refused_off_linux() {
+    for name in [CONTROL_VSOCK_PORT, EGRESS_VSOCK_PORT] {
+        let refused = Transport::from_lookup(lookup(&[(name, "1024")]));
+        assert_eq!(refused, Err(ConfigError::Unsupported(name)));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn vsock_ports_select_vsock_links_one_by_one() {
+    let both = Transport::from_lookup(lookup(&[
+        (CONTROL_VSOCK_PORT, "1024"),
+        (EGRESS_VSOCK_PORT, "1025"),
+    ]))
+    .unwrap();
+    assert_eq!(
+        (both.control, both.egress),
+        (Link::Vsock(1024), Link::Vsock(1025))
+    );
+    let control_only = Transport::from_lookup(lookup(&[
+        (CONTROL_VSOCK_PORT, "1024"),
+        (EGRESS_SOCKET, "/tmp/e.sock"),
+    ]))
+    .unwrap();
+    assert_eq!(
+        (control_only.control, control_only.egress),
+        (Link::Vsock(1024), Link::Socket)
+    );
+    let egress_only = Transport::from_lookup(lookup(&[(EGRESS_VSOCK_PORT, "1025")])).unwrap();
+    assert_eq!(
+        (egress_only.control, egress_only.egress),
+        (Link::Socket, Link::Vsock(1025))
+    );
+}

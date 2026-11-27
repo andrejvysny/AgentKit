@@ -55,6 +55,7 @@ rules (R1–R13) over `cargo metadata`; violations live in
 | 4 | `agentkit-egress` | Host-side CONNECT proxy, one unix socket per sandbox machine, grants by host and port, public-address rules from `agentkit-kernel` (ADR 0039) |
 | 4 | `agentkit-sandbox-launcher` | Fixed-template container launcher service; the only holder of the Docker or Podman socket (ADR 0039) |
 | 4 | `agentkit-sandbox-container` | Track B server `SandboxBackend` over the launcher, the guest channel and the egress proxy (ADR 0039) |
+| 4 | `agentkit-sandbox-microvm` | Track B macOS launcher: the launcher protocol over one Virtualization.framework helper process (`agentkit-sandbox-vmhelper`) per machine, composed with `agentkit-sandbox-container` ([ADR 0040](adr/0040-sandbox-macos-microvm-backend.md)) |
 | 4 | `agentkit-lsp` | LSP client, language-server lifecycle, code-intelligence tools |
 | 4 | `agentkit-mcp` | MCP client and server transports on `rmcp` |
 | 4 | `agentkit-connections` | App-scoped connections, consent, secret-store and network ports |

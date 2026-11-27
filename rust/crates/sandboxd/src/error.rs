@@ -20,6 +20,18 @@ pub enum ConfigError {
         /// What is wrong with it.
         reason: &'static str,
     },
+    /// Two variables name different transports for one link.
+    #[error("{name} and {with} are both set")]
+    Conflict {
+        /// The vsock port variable.
+        name: &'static str,
+        /// The unix socket variable of the same link.
+        with: &'static str,
+    },
+    /// A variable asks for a transport this platform lacks (vsock off
+    /// Linux).
+    #[error("{0} is not supported on this platform")]
+    Unsupported(&'static str),
 }
 
 /// The first exchange on the control channel failed; the supervisor
@@ -56,7 +68,7 @@ pub enum HandshakeError {
     Channel(#[source] FrameError),
 }
 
-/// Why [`crate::run`] returned before serving.
+/// Why [`crate::run`] or [`crate::run_with`] returned before serving.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
     /// The control socket did not accept a connection within the dial
@@ -68,6 +80,27 @@ pub enum StartupError {
         /// The dial window in seconds.
         secs: u64,
         /// The last connect error.
+        #[source]
+        source: io::Error,
+    },
+    /// The control vsock port could not be listened on.
+    #[error("cannot listen on vsock port {port}: {source}")]
+    Listen {
+        /// The vsock port.
+        port: u32,
+        /// Why the bind or listen failed.
+        #[source]
+        source: io::Error,
+    },
+    /// No control connection arrived on the vsock port within the accept
+    /// window.
+    #[error("no control connection on vsock port {port} within {secs} s: {source}")]
+    Accept {
+        /// The vsock port.
+        port: u32,
+        /// The accept window in seconds.
+        secs: u64,
+        /// The last accept error, or a timeout when none failed.
         #[source]
         source: io::Error,
     },
