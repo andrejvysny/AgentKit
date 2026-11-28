@@ -32,6 +32,13 @@ pub enum ConfigError {
     /// Linux).
     #[error("{0} is not supported on this platform")]
     Unsupported(&'static str),
+    /// A vsock link is set while the supervisor runs as root (effective
+    /// uid 0). A microVM guest starts it as an unprivileged user, so the
+    /// commands it starts never run as root.
+    #[error(
+        "{0} is set but the supervisor runs as root; a microVM guest must start it as an unprivileged user"
+    )]
+    Root(&'static str),
 }
 
 /// The first exchange on the control channel failed; the supervisor

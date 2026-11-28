@@ -9,14 +9,22 @@
 //! SIGKILLed, which ends the VM with it.
 //!
 //! `proven: true` only when the covered helper has exited and been reaped
-//! (or none was held) and the stopped-through record, which also drops the
+//! (or none was held), no process has the workspace's disks open any more
+//! (polled for up to [`crate::disks::RELEASE_WAIT`]: a helper's exit,
+//! whatever its status, does not prove that Apple's VM service process let
+//! go of the VM), and the stopped-through record, which also drops the
 //! helper record, is durable. Anything less is `proven: false` with a
-//! reason; the machine then stays held, so a later stop retries.
+//! reason; the machine then stays held, so a later stop retries. While a
+//! machine of a higher generation is held the disks are its own: it was
+//! started only once every earlier VM had released them, so they are not
+//! checked.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use agentkit_sandbox_proto::launcher::Reply;
+use tokio::task::JoinSet;
 
 use super::{Service, log};
 use crate::error::{ServiceError, VmShutdownError, bounded};
@@ -53,11 +61,22 @@ impl Service {
         grace: Duration,
     ) -> Result<(), String> {
         let mut covered = BTreeSet::from([generation]);
-        let held = self.machine(ws).filter(|m| m.generation <= generation);
-        if let Some(machine) = held {
+        let machine = self.machine(ws);
+        let newer = machine.as_ref().is_some_and(|m| m.generation > generation);
+        let held = machine.filter(|m| m.generation <= generation);
+        let mut ended = None;
+        if let Some(machine) = &held {
             covered.insert(machine.generation);
-            machine.stop(grace).await?;
-            self.remove(ws, &machine);
+            ended = Some(machine.stop(grace).await?);
+        }
+        if !newer {
+            self.disks_released(ws).await.map_err(|why| match ended {
+                Some(exit) => format!("the helper ended ({exit}), but {why}"),
+                None => why,
+            })?;
+        }
+        if let Some(machine) = &held {
+            self.remove(ws, machine);
         }
         self.state
             .record_stopped(ws.as_str(), generation)
@@ -74,16 +93,39 @@ impl Service {
         Ok(())
     }
 
-    /// Stop every held machine with the longest grace, for a shutdown.
-    pub(crate) async fn stop_all(&self) -> Result<(), VmShutdownError> {
+    /// Wait, off the runtime, until no process holds the disks of `ws`.
+    pub(super) async fn disks_released(&self, ws: &WorkspaceId) -> Result<(), String> {
+        let (disks, ws, within) = (self.disks.clone(), ws.clone(), self.release_wait);
+        tokio::task::spawn_blocking(move || disks.wait_released(&ws, within))
+            .await
+            .map_err(|error| format!("the disk check failed: {error}"))?
+    }
+
+    /// For a shutdown: refuse every request from now on, then stop every
+    /// held machine at once with the longest grace.
+    pub(crate) async fn stop_all(self: &Arc<Self>) -> Result<(), VmShutdownError> {
         let grace = self.config.stop_grace_max_ms;
-        let mut unproven = Vec::new();
-        for (ws, generation) in self.held() {
-            match self.stop(&ws, generation, grace).await {
-                Ok(Reply::Stopped { proven: true, .. }) => {}
-                _ => unproven.push(ws),
+        let held = self.close_and_held();
+        let mut stops = JoinSet::new();
+        for (ws, generation) in held.iter().cloned() {
+            let service = Arc::clone(self);
+            stops.spawn(async move {
+                let reply = service.stop(&ws, generation, grace).await;
+                matches!(reply, Ok(Reply::Stopped { proven: true, .. })).then_some(ws)
+            });
+        }
+        let mut proven = HashSet::new();
+        while let Some(joined) = stops.join_next().await {
+            if let Ok(Some(ws)) = joined {
+                proven.insert(ws);
             }
         }
+        let mut unproven: Vec<String> = held
+            .into_iter()
+            .map(|(ws, _)| ws)
+            .filter(|ws| !proven.contains(ws))
+            .collect();
+        unproven.sort();
         if unproven.is_empty() {
             Ok(())
         } else {

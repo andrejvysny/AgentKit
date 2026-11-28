@@ -16,13 +16,17 @@ platform `unsafe`.
 - `dir`: one-component directory-descriptor steps for walking a tree
   without following links (`open_dir_at_nofollow`, `create_dir_at`,
   `stat_at_nofollow`, `read_dir_names`, `create_new_rw_file_at`,
-  `sync_dir`).
+  `sync_dir`, which is `F_FULLFSYNC` on Apple platforms).
 - `supervisor`: init-process primitives for the sandbox supervisor
   (ADR 0039): `prctl` non-dumpable and child-subreaper (Linux),
   `spawn_in_new_session` (`setsid` + `fchdir` before exec),
   `kill_all_processes` (`kill(-1)`, refused unless PID 1), `reap_any` /
-  `reap_child` (`waitpid` WNOHANG), `descendants` (`/proc`, Linux) and
-  `sync_filesystems`.
+  `reap_child` (`waitpid` WNOHANG), `descendants` (`/proc`, Linux),
+  `raise_open_file_limit` (`RLIMIT_NOFILE`) and `sync_filesystems`.
+- `procinfo`: `lookup_process` (a pid's start time and zombie state, so a
+  recycled pid is told apart) and `pids_holding` (the processes with a
+  descriptor on a file: every process's descriptors from `proc_pidinfo` on
+  macOS, `/proc/<pid>/fd` on Linux).
 - `private_fs`: `create_private_dir` (0700) and `create_private_file` (0600)
   for state directories holding secret material.
 

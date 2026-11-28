@@ -165,7 +165,12 @@ pub fn inspect(ws: &str) -> Request {
 
 /// One request on a fresh connection, as the adapter sends them.
 pub async fn call(launcher: &VmLauncher, request: Request) -> Reply {
-    let mut stream = UnixStream::connect(launcher.listen_socket()).await.unwrap();
+    call_at(launcher.listen_socket(), request).await
+}
+
+/// [`call`] by the launcher's socket path.
+pub async fn call_at(socket: &Path, request: Request) -> Reply {
+    let mut stream = UnixStream::connect(socket).await.unwrap();
     let frame = encode_control(&Envelope::new(7, &request)).unwrap();
     stream.write_all(&frame).await.unwrap();
     let mut decoder = FrameDecoder::new();

@@ -39,7 +39,7 @@ libc.workspace = true
 block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
-objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSError", "NSString", "NSURL"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSError", "NSFileHandle", "NSString", "NSURL"] }
 objc2-virtualization = { workspace = true, features = [
     "std",
     "block2",
@@ -47,7 +47,7 @@ objc2-virtualization = { workspace = true, features = [
     "VZBootLoader",
     "VZDiskImageStorageDeviceAttachment",
     "VZEntropyDeviceConfiguration",
-    "VZFileSerialPortAttachment",
+    "VZFileHandleSerialPortAttachment",
     "VZGenericPlatformConfiguration",
     "VZLinuxBootLoader",
     "VZMemoryBalloonDeviceConfiguration",

@@ -87,6 +87,14 @@ pub fn agentkit_sys::process::real_uid() -> core::result::Result<u32, agentkit_s
 pub fn agentkit_sys::process::signal_process(u32, agentkit_sys::process::Signal) -> core::result::Result<agentkit_sys::process::SignalOutcome, agentkit_sys::process::SysError>
 pub fn agentkit_sys::process::spawn_in_new_group(&mut std::process::Command)
 pub fn agentkit_sys::process::spawn_in_new_group_tokio(&mut tokio::process::Command)
+pub mod agentkit_sys::procinfo
+pub enum agentkit_sys::procinfo::ProcessLookup
+pub agentkit_sys::procinfo::ProcessLookup::Found
+pub agentkit_sys::procinfo::ProcessLookup::Found::started: u64
+pub agentkit_sys::procinfo::ProcessLookup::Found::zombie: bool
+pub agentkit_sys::procinfo::ProcessLookup::Gone
+pub fn agentkit_sys::procinfo::lookup_process(u32) -> core::io::error::Result<agentkit_sys::procinfo::ProcessLookup>
+pub fn agentkit_sys::procinfo::pids_holding(&std::path::Path, usize) -> core::io::error::Result<alloc::vec::Vec<u32>>
 pub mod agentkit_sys::supervisor
 pub enum agentkit_sys::supervisor::Reaped
 pub agentkit_sys::supervisor::Reaped::Child
@@ -97,6 +105,7 @@ pub agentkit_sys::supervisor::Reaped::NoneReady
 pub fn agentkit_sys::supervisor::descendants(u32) -> core::io::error::Result<alloc::vec::Vec<u32>>
 pub fn agentkit_sys::supervisor::is_init() -> bool
 pub fn agentkit_sys::supervisor::kill_all_processes(agentkit_sys::process::Signal) -> core::io::error::Result<agentkit_sys::process::SignalOutcome>
+pub fn agentkit_sys::supervisor::raise_open_file_limit(u64) -> core::io::error::Result<u64>
 pub fn agentkit_sys::supervisor::reap_any() -> core::io::error::Result<agentkit_sys::supervisor::Reaped>
 pub fn agentkit_sys::supervisor::reap_child(u32) -> core::io::error::Result<agentkit_sys::process::ChildExit>
 pub fn agentkit_sys::supervisor::set_child_subreaper() -> core::io::error::Result<()>
@@ -121,6 +130,11 @@ pub enum agentkit_sys::KillProbe
 pub agentkit_sys::KillProbe::Alive
 pub agentkit_sys::KillProbe::Gone
 pub agentkit_sys::KillProbe::NotPermitted
+pub enum agentkit_sys::ProcessLookup
+pub agentkit_sys::ProcessLookup::Found
+pub agentkit_sys::ProcessLookup::Found::started: u64
+pub agentkit_sys::ProcessLookup::Found::zombie: bool
+pub agentkit_sys::ProcessLookup::Gone
 pub enum agentkit_sys::Reaped
 pub agentkit_sys::Reaped::Child
 pub agentkit_sys::Reaped::Child::exit: agentkit_sys::process::ChildExit
@@ -177,6 +191,7 @@ pub fn agentkit_sys::kill_all_processes(agentkit_sys::process::Signal) -> core::
 pub fn agentkit_sys::kill_probe(i32) -> agentkit_sys::process::KillProbe
 pub fn agentkit_sys::link_at(&std::fs::File, &str, &str) -> core::io::error::Result<()>
 pub fn agentkit_sys::lock_exclusive(&std::fs::File) -> core::result::Result<(), agentkit_sys::process::SysError>
+pub fn agentkit_sys::lookup_process(u32) -> core::io::error::Result<agentkit_sys::procinfo::ProcessLookup>
 pub fn agentkit_sys::open_dir_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::open_dir_nofollow(&std::path::Path) -> core::io::error::Result<std::fs::File>
 pub fn agentkit_sys::open_file_at_nofollow(&std::fs::File, &str) -> core::io::error::Result<std::fs::File>
@@ -185,6 +200,8 @@ pub fn agentkit_sys::own_parent_pid() -> core::result::Result<u32, agentkit_sys:
 pub fn agentkit_sys::own_process_group() -> u32
 pub fn agentkit_sys::peek_child_exit(u32) -> core::result::Result<agentkit_sys::process::ChildExit, core::io::error::Error>
 pub fn agentkit_sys::pid_alive(u32) -> bool
+pub fn agentkit_sys::pids_holding(&std::path::Path, usize) -> core::io::error::Result<alloc::vec::Vec<u32>>
+pub fn agentkit_sys::raise_open_file_limit(u64) -> core::io::error::Result<u64>
 pub fn agentkit_sys::read_dir_names(&std::fs::File, usize) -> core::io::error::Result<agentkit_sys::dir::DirNames>
 pub fn agentkit_sys::real_uid() -> core::result::Result<u32, agentkit_sys::process::SysError>
 pub fn agentkit_sys::reap_any() -> core::io::error::Result<agentkit_sys::supervisor::Reaped>

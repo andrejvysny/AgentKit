@@ -76,6 +76,13 @@ pub(crate) enum ServiceError {
     /// `max_machines` helpers run already; nothing was recorded.
     #[error("{0}")]
     AtCapacity(String),
+    /// A process still has the workspace's disks open (a VM that outlived
+    /// its helper); nothing was recorded.
+    #[error("{0}")]
+    DisksHeld(String),
+    /// The launcher is shutting down and starts nothing more.
+    #[error("the launcher is shutting down")]
+    ShuttingDown,
     /// The helper failed to start or to connect.
     #[error("{0}")]
     Helper(String),
@@ -97,9 +104,11 @@ impl ServiceError {
             // Capacity is transient, as in the container launcher: `busy`
             // at an ensure would make the adapter answer the generation
             // stale and the service burn generations over a full host.
-            ServiceError::AtCapacity(_) | ServiceError::Helper(_) | ServiceError::Local(_) => {
-                LauncherErrorCode::RuntimeFailed
-            }
+            ServiceError::AtCapacity(_)
+            | ServiceError::DisksHeld(_)
+            | ServiceError::ShuttingDown
+            | ServiceError::Helper(_)
+            | ServiceError::Local(_) => LauncherErrorCode::RuntimeFailed,
         };
         LauncherError {
             code,

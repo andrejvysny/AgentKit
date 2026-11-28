@@ -7,6 +7,7 @@ pub agentkit_sandboxd::ConfigError::Invalid
 pub agentkit_sandboxd::ConfigError::Invalid::name: &'static str
 pub agentkit_sandboxd::ConfigError::Invalid::reason: &'static str
 pub agentkit_sandboxd::ConfigError::Missing(&'static str)
+pub agentkit_sandboxd::ConfigError::Root(&'static str)
 pub agentkit_sandboxd::ConfigError::Unsupported(&'static str)
 pub enum agentkit_sandboxd::Exit
 pub agentkit_sandboxd::Exit::ChannelLost

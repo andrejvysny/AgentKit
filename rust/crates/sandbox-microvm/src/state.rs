@@ -12,11 +12,14 @@
 //! No channel token is ever written here. A file that cannot be read stops
 //! the launcher from starting (fail closed). One launcher per state
 //! directory: the store holds an exclusive `flock` on `launcher.lock` for
-//! its whole life.
+//! its whole life, and every write holds it too, so a write still running
+//! after the store was dropped (its caller cancelled) never lands beside
+//! a new launcher's.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use agentkit_sandbox_proto::valid_workspace_id;
 use serde::{Deserialize, Serialize};
@@ -40,7 +43,7 @@ pub(crate) struct HelperRecord {
     pub generation: u64,
     /// Its pid.
     pub pid: u32,
-    /// Its start time ([`crate::procinfo`]).
+    /// Its start time ([`agentkit_sys::lookup_process`]).
     pub started: u64,
 }
 
@@ -86,8 +89,9 @@ pub(crate) enum StateError {
 pub(crate) struct StateStore {
     dir: PathBuf,
     records: Mutex<BTreeMap<String, Record>>,
-    /// Holds the directory's lock until the store is dropped.
-    _lock: std::fs::File,
+    /// The directory's lock, held until the store and every write it
+    /// started are gone.
+    lock: Arc<std::fs::File>,
 }
 
 impl StateStore {
@@ -104,7 +108,7 @@ impl StateStore {
         Ok(Self {
             dir: dir.to_path_buf(),
             records: Mutex::new(records),
-            _lock: lock,
+            lock: Arc::new(lock),
         })
     }
 
@@ -179,10 +183,14 @@ impl StateStore {
         };
         let bytes = serde_json::to_vec_pretty(&file)
             .map_err(|error| StateError::Invalid(error.to_string()))?;
-        let dir = self.dir.clone();
-        tokio::task::spawn_blocking(move || write_atomic(&dir, &bytes))
-            .await
-            .map_err(|error| StateError::Io(io::Error::other(error.to_string())))??;
+        let (dir, lock) = (self.dir.clone(), Arc::clone(&self.lock));
+        tokio::task::spawn_blocking(move || {
+            let written = write_atomic(&dir, &bytes);
+            drop(lock);
+            written
+        })
+        .await
+        .map_err(|error| StateError::Io(io::Error::other(error.to_string())))??;
         *records = file.workspaces;
         Ok(())
     }

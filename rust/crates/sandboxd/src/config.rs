@@ -20,6 +20,8 @@ const CHANNEL_TOKEN_MAX_BYTES: usize = 256;
 /// `VMADDR_PORT_ANY`: a wildcard that binds an ephemeral port, so not a
 /// port the host could name.
 const VSOCK_PORT_ANY: u32 = u32::MAX;
+/// The effective uid a vsock link is refused under.
+const ROOT_UID: u32 = 0;
 
 /// How the supervisor relates to the other processes of its own process:
 /// what it may reap and what it kills when an operation ends.
@@ -151,7 +153,10 @@ fn printable(
 /// `AGENTKIT_CONTROL_VSOCK_PORT` makes it listen on that vsock port for
 /// its one control connection instead, and `AGENTKIT_EGRESS_VSOCK_PORT`
 /// sends egress to the host (CID 2) on that port; the socket path of a
-/// link on vsock is then unused.
+/// link on vsock is then unused. A vsock link is refused while the process
+/// runs as root: the guest's init starts the supervisor as an
+/// unprivileged user, so the commands it starts never run as root, and a
+/// supervisor started as root is a broken guest image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Transport {
     pub(crate) control: Link,
@@ -176,17 +181,31 @@ impl Transport {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
 
-    /// [`Transport::from_env`] over any variable source. A vsock port set
-    /// together with the socket variable of its link is a conflict, and
-    /// off Linux any vsock port is refused.
+    /// [`Transport::from_env`] over any variable source, for this process.
+    /// A vsock port set together with the socket variable of its link is a
+    /// conflict, any vsock port is refused while the process runs as root
+    /// (effective uid 0), and off Linux any vsock port is refused.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
-        let control = vsock_port(&lookup, CONTROL_VSOCK_PORT, CONTROL_SOCKET)?;
-        let egress = vsock_port(&lookup, EGRESS_VSOCK_PORT, EGRESS_SOCKET)?;
-        Ok(Self {
-            control: link(control, CONTROL_VSOCK_PORT)?,
-            egress: link(egress, EGRESS_VSOCK_PORT)?,
-        })
+        // An uid that cannot be read counts as root: vsock is then refused.
+        let euid = agentkit_sys::effective_uid().unwrap_or(ROOT_UID);
+        parse(&lookup, euid)
     }
+}
+
+/// The links `lookup` names, for a process running as `euid`.
+fn parse(lookup: &impl Fn(&str) -> Option<String>, euid: u32) -> Result<Transport, ConfigError> {
+    let control = vsock_port(lookup, CONTROL_VSOCK_PORT, CONTROL_SOCKET)?;
+    let egress = vsock_port(lookup, EGRESS_VSOCK_PORT, EGRESS_SOCKET)?;
+    let named = [(control, CONTROL_VSOCK_PORT), (egress, EGRESS_VSOCK_PORT)];
+    if euid == ROOT_UID
+        && let Some(name) = named.iter().find_map(|&(port, name)| port.map(|_| name))
+    {
+        return Err(ConfigError::Root(name));
+    }
+    Ok(Transport {
+        control: link(control, CONTROL_VSOCK_PORT)?,
+        egress: link(egress, EGRESS_VSOCK_PORT)?,
+    })
 }
 
 /// The vsock port in `name`, `None` when unset. `socket` is the variable

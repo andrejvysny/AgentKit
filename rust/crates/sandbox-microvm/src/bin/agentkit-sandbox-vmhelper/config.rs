@@ -1,26 +1,31 @@
 //! Building the Virtualization.framework configuration (ADR 0040, section
 //! 3): Linux boot loader with the launcher's command line and no initrd;
 //! `vda` root disk read-only, `vdb` workspace and `vdc` home read-write;
-//! `hvc0` console to a file; one virtio socket device, one entropy device,
-//! one traditional balloon; generic platform; no network device.
+//! `hvc0` console through a pipe into a capped file ([`crate::console`]);
+//! one virtio socket device, one entropy device, one traditional balloon;
+//! generic platform; no network device.
 
 use std::fs::OpenOptions;
+use std::os::fd::IntoRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use agentkit_sandbox_microvm::helper::{HELPER_PROTOCOL, HelperConfig};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_foundation::{NSArray, NSError, NSString, NSURL};
+use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
     VZDiskImageCachingMode, VZDiskImageStorageDeviceAttachment, VZDiskImageSynchronizationMode,
-    VZEntropyDeviceConfiguration, VZFileSerialPortAttachment, VZGenericPlatformConfiguration,
+    VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment, VZGenericPlatformConfiguration,
     VZLinuxBootLoader, VZMemoryBalloonDeviceConfiguration, VZSerialPortConfiguration,
     VZSocketDeviceConfiguration, VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
     VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
     VZVirtioSocketDeviceConfiguration, VZVirtioTraditionalMemoryBalloonDeviceConfiguration,
     VZVirtualMachineConfiguration,
 };
+
+use crate::console::{CONSOLE_LOG_MAX_BYTES, Drain};
 
 /// Refuse a configuration the launcher would never write.
 pub(crate) fn check(config: &HelperConfig) -> Result<(), String> {
@@ -45,16 +50,16 @@ pub(crate) fn check(config: &HelperConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// The validated VM configuration.
+/// The validated VM configuration, and the drain of its console.
 pub(crate) fn build(
     config: &HelperConfig,
-) -> Result<Retained<VZVirtualMachineConfiguration>, String> {
+) -> Result<(Retained<VZVirtualMachineConfiguration>, Arc<Drain>), String> {
     let disks = [
         disk(&config.root_disk, true)?,
         disk(&config.workspace_disk, false)?,
         disk(&config.home_disk, false)?,
     ];
-    let console = console(&config.console_log)?;
+    let (console, drain) = console(&config.console_log)?;
     // SAFETY: every object is created and wired on this thread before a VM
     // exists, and every argument is a valid retained object of the type
     // the setter takes.
@@ -78,7 +83,7 @@ pub(crate) fn build(
         let balloons: [&VZMemoryBalloonDeviceConfiguration; 1] = [&balloon];
         vm.setMemoryBalloonDevices(&NSArray::from_slice(&balloons));
         vm.validateWithError().map_err(|e| ns_error(&e))?;
-        Ok(vm)
+        Ok((vm, drain))
     }
 }
 
@@ -128,9 +133,18 @@ fn disk(path: &str, read_only: bool) -> Result<Retained<VZVirtioBlockDeviceConfi
     }
 }
 
-/// The `hvc0` console, written to `path` (created 0600, truncated).
-fn console(path: &str) -> Result<Retained<VZVirtioConsoleDeviceSerialPortConfiguration>, String> {
-    OpenOptions::new()
+/// The `hvc0` console: the guest's output goes into a pipe whose drain
+/// writes `path` (created 0600, truncated, capped). No guest input.
+fn console(
+    path: &str,
+) -> Result<
+    (
+        Retained<VZVirtioConsoleDeviceSerialPortConfiguration>,
+        Arc<Drain>,
+    ),
+    String,
+> {
+    let log = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
@@ -138,18 +152,27 @@ fn console(path: &str) -> Result<Retained<VZVirtioConsoleDeviceSerialPortConfigu
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
         .map_err(|error| format!("console log {path}: {error}"))?;
+    let (reader, writer) = std::io::pipe().map_err(|error| format!("console pipe: {error}"))?;
+    let drain = Drain::spawn(reader, log, CONSOLE_LOG_MAX_BYTES);
+    // The file handle owns the write end from here on and closes it when
+    // it is released.
+    let handle = NSFileHandle::initWithFileDescriptor_closeOnDealloc(
+        NSFileHandle::alloc(),
+        writer.into_raw_fd(),
+        true,
+    );
     // SAFETY: plain Objective-C initialisers and a setter on valid
-    // retained arguments.
+    // retained arguments; a nil reading handle means no guest input.
     unsafe {
-        let attachment = VZFileSerialPortAttachment::initWithURL_append_error(
-            VZFileSerialPortAttachment::alloc(),
-            &file_url(path),
-            false,
-        )
-        .map_err(|e| format!("console log {path}: {}", ns_error(&e)))?;
+        let attachment =
+            VZFileHandleSerialPortAttachment::initWithFileHandleForReading_fileHandleForWriting(
+                VZFileHandleSerialPortAttachment::alloc(),
+                None,
+                Some(&handle),
+            );
         let serial = VZVirtioConsoleDeviceSerialPortConfiguration::new();
         serial.setAttachment(Some(&attachment));
-        Ok(serial)
+        Ok((serial, drain))
     }
 }
 

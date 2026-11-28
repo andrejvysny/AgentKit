@@ -17,14 +17,21 @@
 //! Signed with exactly one entitlement, `com.apple.security.virtualization`
 //! (`entitlements/vmhelper.plist`, `scripts/sign-helper.sh`).
 
-// The bridges are plain descriptors, so their tests run on every Unix.
+// The bridges and the console drain are plain descriptors, so their tests
+// run on every Unix.
 #[cfg(any(target_os = "macos", test))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod bridge;
 #[cfg(target_os = "macos")]
 mod config;
+#[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod console;
 #[cfg(target_os = "macos")]
 mod delegate;
+#[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod egress;
 #[cfg(target_os = "macos")]
 mod events;
 #[cfg(target_os = "macos")]

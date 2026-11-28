@@ -9,11 +9,16 @@
 //! - Usage is allocated bytes (`st_blocks * 512`), not the apparent size.
 //! - `reset_home` recreates `home.img`; `destroy` removes the directory's
 //!   files and the directory.
+//! - Released: no process has either disk open. A helper's exit does not
+//!   prove it, because the VM runs in Apple's VM service process; a stop
+//!   is proven, and a new machine opens the disks, only once they are
+//!   ([`Disks::wait_released`]).
 
 use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::dirs::private_child;
 use crate::naming::WorkspaceId;
@@ -24,6 +29,12 @@ const CONSOLE_LOG: &str = "console.log";
 const HELPER_LOG: &str = "helper.log";
 /// Mode of every file the launcher creates.
 const FILE_MODE: u32 = 0o600;
+/// Longest wait for a machine's disks to be released.
+pub(crate) const RELEASE_WAIT: Duration = Duration::from_secs(10);
+/// Pause between two looks for holders.
+const RELEASE_POLL: Duration = Duration::from_millis(100);
+/// Most holders named in a refusal.
+const HOLDERS_MAX: usize = 8;
 
 /// The paths of one workspace's files.
 #[derive(Debug, Clone)]
@@ -93,6 +104,32 @@ impl Disks {
         create_sparse(&files.home_disk, self.home_bytes)
     }
 
+    /// Wait until no process has the workspace or home disk of `ws` open,
+    /// looking again until `within` passed. Blocking. A look whose holders
+    /// cannot be listed counts as held, and the last reason is answered.
+    pub(crate) fn wait_released(&self, ws: &WorkspaceId, within: Duration) -> Result<(), String> {
+        let files = self.files(ws);
+        let deadline = Instant::now() + within;
+        loop {
+            let why = match holders(&files.workspace_disk, &files.home_disk) {
+                Ok(found) if found.is_empty() => return Ok(()),
+                Ok(found) => {
+                    let pids: Vec<String> = found.iter().map(u32::to_string).collect();
+                    format!("still open in pid {}", pids.join(", "))
+                }
+                Err(why) => why,
+            };
+            if Instant::now() >= deadline {
+                let secs = within.as_secs();
+                return Err(format!(
+                    "the disks of {} are not released after {secs} s: {why}",
+                    ws.as_str()
+                ));
+            }
+            std::thread::sleep(RELEASE_POLL);
+        }
+    }
+
     /// Remove every file of `ws` and its directory. Absent is success.
     pub(crate) fn destroy(&self, ws: &WorkspaceId) -> io::Result<()> {
         let files = self.files(ws);
@@ -149,6 +186,21 @@ pub(crate) fn open_log(path: &Path) -> io::Result<std::fs::File> {
         .open(path)
 }
 
+/// The processes that have either disk open, each once.
+fn holders(workspace: &Path, home: &Path) -> Result<Vec<u32>, String> {
+    let mut found = Vec::new();
+    for path in [workspace, home] {
+        let pids = agentkit_sys::pids_holding(path, HOLDERS_MAX).map_err(|error| {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            format!("the holders of {name} cannot be listed: {error}")
+        })?;
+        found.extend(pids);
+    }
+    found.sort_unstable();
+    found.dedup();
+    Ok(found)
+}
+
 fn allocated(path: &Path) -> io::Result<u64> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => Ok(meta.blocks().saturating_mul(512)),
@@ -203,6 +255,33 @@ mod tests {
         disks.destroy(&ws).unwrap();
         assert!(!files.dir.exists());
         assert_eq!(disks.usage(&ws).unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn disks_are_released_only_once_nobody_holds_them() {
+        let scratch = tempfile::tempdir().unwrap();
+        let disks = disks(scratch.path());
+        let ws = WorkspaceId::parse("ws").unwrap();
+        // A child another test forks holds this process's descriptors for a
+        // moment, so a release gets time.
+        let settle = Duration::from_secs(2);
+        disks.wait_released(&ws, settle).unwrap();
+        let files = disks.prepare(&ws).unwrap();
+        disks.wait_released(&ws, settle).unwrap();
+        let held = std::fs::File::open(&files.home_disk).unwrap();
+        let refused = disks
+            .wait_released(&ws, Duration::from_millis(200))
+            .unwrap_err();
+        assert!(
+            refused.contains(&std::process::id().to_string()),
+            "{refused}"
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(held);
+        });
+        disks.wait_released(&ws, Duration::from_secs(5)).unwrap();
+        release.join().unwrap();
     }
 
     #[test]

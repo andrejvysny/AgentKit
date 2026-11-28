@@ -6,8 +6,9 @@
 //! the two sockets); the channel token is required and never logged.
 //!
 //! Exit status: 0 after `shutdown`; 1 when the control channel was lost;
-//! 2 when it could not start (configuration, hardening, dial, listen,
-//! accept, handshake); 70 when processes outlived a sweep.
+//! 2 when it could not start (configuration, a vsock link while running as
+//! root included, hardening, dial, listen, accept, handshake); 70 when
+//! processes outlived a sweep.
 
 use agentkit_sandboxd::{
     Config, ConfigError, Exit, ProcessMode, Transport, harden_process, run_with,

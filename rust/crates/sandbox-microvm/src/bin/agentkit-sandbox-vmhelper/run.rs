@@ -3,14 +3,13 @@
 //! (guest initiated, host port 1025, any number), wait for what ends it,
 //! then stop: close the control bridge (the guest's supervisor exits and
 //! its init powers off), ask the guest to stop, after 3 s force the stop,
-//! exit.
+//! let the console drain settle, exit.
 
 use std::io::{BufRead, BufReader, Read, Stdin};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,7 +19,9 @@ use agentkit_sandbox_microvm::helper::{
 use objc2_virtualization::{VZVirtualMachine, VZVirtualMachineState};
 
 use crate::bridge::{self, Closer};
+use crate::console::Drain;
 use crate::delegate::{Channels, HelperDelegate};
+use crate::egress::{Bridge, DiagLimit, EgressSlots, IdleWatch, Slot};
 use crate::events::{diag, emit};
 use crate::lifetime::{self, Event};
 use crate::vm::{Vm, VsockConn};
@@ -32,8 +33,8 @@ const GUEST_LISTEN_DEADLINE: Duration = Duration::from_secs(30);
 const CONTROL_SOCKET_DEADLINE: Duration = Duration::from_secs(30);
 /// Pause between vsock connect attempts while the guest boots.
 const VSOCK_RETRY: Duration = Duration::from_millis(10);
-/// Longest wait for one attempt's answer before the next attempt.
-const VSOCK_ATTEMPT_WAIT: Duration = Duration::from_secs(2);
+/// How often a pending connect attempt checks whether the helper stops.
+const VSOCK_ANSWER_POLL: Duration = Duration::from_millis(250);
 /// The guest's time to power off after the control channel closed.
 const GUEST_STOP: Duration = Duration::from_secs(3);
 /// Time a forced stop may take.
@@ -42,6 +43,19 @@ const FORCE_STOP: Duration = Duration::from_secs(5);
 const STOP_WATCHDOG: Duration = Duration::from_secs(15);
 /// Most egress connections bridged at once (as the container's shim).
 const EGRESS_MAX: usize = 64;
+/// An egress bridge no byte crossed for this long is shut down.
+const EGRESS_IDLE: Duration = Duration::from_secs(10 * 60);
+/// How often idle egress bridges are looked for.
+const EGRESS_SWEEP: Duration = Duration::from_secs(10);
+/// At most one egress diagnostic line per this long.
+const EGRESS_DIAG_EVERY: Duration = Duration::from_secs(10);
+/// Open descriptors the helper asks for: a bridge holds two, the
+/// framework one more per connection, and macOS starts a process at 256.
+const OPEN_FILES: u64 = 4096;
+/// At a stop, the console counts as drained after this long without
+/// output, or after the second bound.
+const CONSOLE_QUIET: Duration = Duration::from_millis(100);
+const CONSOLE_SETTLE: Duration = Duration::from_millis(500);
 
 /// Run the helper; answers the exit status.
 pub(crate) fn main() -> i32 {
@@ -51,6 +65,7 @@ pub(crate) fn main() -> i32 {
     if std::env::args_os().len() > 1 {
         return refuse("the helper takes no arguments; its configuration comes on stdin");
     }
+    raise_open_files();
     let mut stdin = BufReader::new(std::io::stdin());
     let config = match read_config(&mut stdin) {
         Ok(config) => config,
@@ -61,25 +76,37 @@ pub(crate) fn main() -> i32 {
     lifetime::watch_stdin(stdin, events_tx.clone());
     lifetime::watch_parent(events_tx.clone());
     let (egress_tx, egress) = mpsc::channel();
+    let egress_diag = Arc::new(DiagLimit::new(EGRESS_DIAG_EVERY));
     let delegate = HelperDelegate::new(Channels {
         events: events_tx.clone(),
         egress: egress_tx,
+        slots: EgressSlots::new(EGRESS_MAX),
+        egress_diag: Arc::clone(&egress_diag),
     });
-    let vm = match boot(&config, delegate) {
-        Ok(vm) => Arc::new(vm),
+    let (vm, console) = match boot(&config, delegate) {
+        Ok((vm, console)) => (Arc::new(vm), console),
         Err(why) => return refuse(&why),
     };
     emit(&HelperEvent::Started);
     let closer = Closer::default();
     match vm.listen(EGRESS_PORT) {
-        Ok(()) => start_egress(egress, PathBuf::from(&config.egress_socket)),
+        Ok(()) => start_egress(egress, PathBuf::from(&config.egress_socket), egress_diag),
         Err(why) => {
             let _ = events_tx.send(Event::Stop(format!("egress listener: {why}")));
         }
     }
     start_control(Arc::clone(&vm), &config, closer.clone(), events_tx);
     let reason = wait_for_end(&events);
-    stop(&vm, &closer, reason)
+    stop(&vm, &closer, &console, reason)
+}
+
+/// Room for every bridge at once.
+fn raise_open_files() {
+    match agentkit_sys::raise_open_file_limit(OPEN_FILES) {
+        Ok(limit) if limit < OPEN_FILES => diag(&format!("open files are limited to {limit}")),
+        Ok(_) => {}
+        Err(error) => diag(&format!("the open file limit was not raised: {error}")),
+    }
 }
 
 /// The first stdin line as a checked configuration. An error never
@@ -106,46 +133,67 @@ fn read_config(stdin: &mut BufReader<Stdin>) -> Result<HelperConfig, String> {
     Ok(config)
 }
 
+/// The started VM and the drain of its console.
 fn boot(
     config: &HelperConfig,
     delegate: objc2::rc::Retained<HelperDelegate>,
-) -> Result<Vm, String> {
+) -> Result<(Vm, Arc<Drain>), String> {
     // SAFETY: a class method without preconditions.
     if !unsafe { VZVirtualMachine::isSupported() } {
         return Err("Virtualization.framework is not supported on this host".into());
     }
-    let configuration = crate::config::build(config)?;
+    let (configuration, console) = crate::config::build(config)?;
     let vm = Vm::new(&configuration, delegate);
     vm.start()
         .map_err(|why| format!("the VM did not start: {why}"))?;
-    Ok(vm)
+    Ok((vm, console))
 }
 
-/// Bridge every guest connection to the egress port to a new connection
-/// to the egress socket.
-fn start_egress(connections: Receiver<VsockConn>, socket: PathBuf) {
+/// Bridge every guest connection to the egress port (each came with its
+/// slot) to a new connection to the egress socket, and shut down bridges
+/// left idle.
+fn start_egress(
+    connections: Receiver<(VsockConn, Slot)>,
+    socket: PathBuf,
+    diag_limit: Arc<DiagLimit>,
+) {
     thread::spawn(move || {
-        let active = Arc::new(AtomicUsize::new(0));
-        for conn in connections {
-            if active.load(Ordering::SeqCst) >= EGRESS_MAX {
-                continue;
-            }
-            active.fetch_add(1, Ordering::SeqCst);
-            let (active, socket) = (Arc::clone(&active), socket.clone());
-            thread::spawn(move || {
-                if let Err(error) = bridge_egress(&conn, &socket) {
-                    diag(&format!("egress connection failed: {error}"));
+        let idle = Arc::new(IdleWatch::new(EGRESS_IDLE));
+        loop {
+            match connections.recv_timeout(EGRESS_SWEEP) {
+                Ok((conn, slot)) => {
+                    let (socket, idle) = (socket.clone(), Arc::clone(&idle));
+                    let diag_limit = Arc::clone(&diag_limit);
+                    thread::spawn(move || {
+                        if let Err(error) = bridge_egress(conn, &socket, &idle) {
+                            limited(&diag_limit, &format!("egress connection failed: {error}"));
+                        }
+                        drop(slot);
+                    });
                 }
-                drop(conn);
-                active.fetch_sub(1, Ordering::SeqCst);
-            });
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+            idle.sweep(Instant::now());
         }
     });
 }
 
-fn bridge_egress(conn: &VsockConn, socket: &Path) -> std::io::Result<()> {
+fn bridge_egress(conn: VsockConn, socket: &Path, idle: &IdleWatch) -> std::io::Result<()> {
     let host = UnixStream::connect(socket)?;
-    bridge::splice_half_close(conn.stream.try_clone()?, host)
+    // Moves the stream out; the rest of `conn`, the framework's connection
+    // object, is dropped when this function returns, after the bridge.
+    let bridge = Bridge::new(conn.stream, host);
+    idle.watch(&bridge);
+    bridge.run();
+    Ok(())
+}
+
+/// One diagnostic line through `limit`.
+fn limited(limit: &DiagLimit, text: &str) {
+    if let Some(line) = limit.line(Instant::now(), text) {
+        diag(&line);
+    }
 }
 
 /// The one control bridge; when it ends, the VM stops.
@@ -162,48 +210,50 @@ fn start_control(vm: Arc<Vm>, config: &HelperConfig, closer: Closer, events: Sen
 
 fn control(vm: &Vm, socket: &Path, closer: &Closer) -> Result<(), String> {
     let guest = connect_guest(vm, closer)?;
-    if !closer.add(&guest.stream) {
+    // Moves the stream out; the rest of `guest`, the framework's connection
+    // object, is dropped when this function returns, after the bridge.
+    let guest_stream = Arc::new(guest.stream);
+    if !closer.add(&guest_stream) {
         return Err("stopping".into());
     }
     emit(&HelperEvent::Connected);
     let deadline = Instant::now() + CONTROL_SOCKET_DEADLINE;
     let host = bridge::connect_until(socket, deadline, || closer.is_closed())
         .map_err(|error| format!("the control socket did not accept: {error}"))?;
+    let host = Arc::new(host);
     if !closer.add(&host) {
         return Err("stopping".into());
     }
-    let guest_stream = guest
-        .stream
-        .try_clone()
-        .map_err(|error| error.to_string())?;
-    bridge::splice_until_either_closes(guest_stream, host).map_err(|error| error.to_string())?;
-    // The framework's connection object lives until the bridge ended.
-    drop(guest);
+    bridge::splice_until_either_closes(guest_stream, host);
     Ok(())
 }
 
 /// Connect to the guest's control port, retrying while the guest boots.
-/// Every attempt answers on one channel, so an answer that comes after
-/// its attempt's wait is still taken; the guest accepts one connection.
+/// One attempt at a time: the next is asked for only after the framework
+/// answered the previous one, so no two attempts race for the guest's one
+/// accepted connection.
 fn connect_guest(vm: &Vm, closer: &Closer) -> Result<VsockConn, String> {
     let deadline = Instant::now() + GUEST_LISTEN_DEADLINE;
     let (answer, answers) = mpsc::channel();
-    let mut last = String::from("no answer");
+    let (mut pending, mut last) = (false, String::from("no answer"));
     while Instant::now() < deadline {
         if closer.is_closed() {
             return Err("stopping".into());
         }
-        vm.connect(CONTROL_PORT, answer.clone());
+        if !pending {
+            vm.connect(CONTROL_PORT, answer.clone());
+            pending = true;
+        }
         let wait = deadline
             .saturating_duration_since(Instant::now())
-            .min(VSOCK_ATTEMPT_WAIT);
+            .min(VSOCK_ANSWER_POLL);
         match answers.recv_timeout(wait) {
             Ok(Ok(conn)) => return Ok(conn),
             Ok(Err(why)) => {
-                last = why;
+                (pending, last) = (false, why);
                 thread::sleep(VSOCK_RETRY);
             }
-            Err(_) => last = "the framework did not answer".into(),
+            Err(_) => last = "the framework has not answered the attempt".into(),
         }
     }
     Err(format!(
@@ -223,7 +273,7 @@ fn wait_for_end(events: &Receiver<Event>) -> String {
 
 /// Stop the VM and answer the exit status: 0 only when it reached the
 /// stopped state.
-fn stop(vm: &Vm, closer: &Closer, reason: String) -> i32 {
+fn stop(vm: &Vm, closer: &Closer, console: &Drain, reason: String) -> i32 {
     lifetime::arm_watchdog(STOP_WATCHDOG);
     closer.close();
     if !ended(vm.state()) {
@@ -236,6 +286,7 @@ fn stop(vm: &Vm, closer: &Closer, reason: String) -> i32 {
         vm.force_stop(FORCE_STOP);
     }
     let state = vm.state();
+    console.settle(CONSOLE_QUIET, CONSOLE_SETTLE);
     emit(&HelperEvent::Stopped { reason });
     if state == VZVirtualMachineState::Stopped {
         0

@@ -11,6 +11,9 @@ fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
 }
 
 const TOKEN: &str = "s3cret-t0ken";
+/// The guest supervisor's user; tests that set vsock ports never read the
+/// uid they run as (the Linux suite runs as root in a container).
+const AGENT_UID: u32 = 1000;
 
 #[test]
 fn defaults_fill_the_fixed_layout() {
@@ -235,11 +238,35 @@ fn a_vsock_port_conflicts_with_the_socket_of_its_link() {
     );
 }
 
+#[test]
+fn a_vsock_link_is_refused_as_root() {
+    for name in [CONTROL_VSOCK_PORT, EGRESS_VSOCK_PORT] {
+        let pairs = [(name, "1024")];
+        assert_eq!(
+            parse(&lookup(&pairs), ROOT_UID),
+            Err(ConfigError::Root(name)),
+            "{name}"
+        );
+    }
+    let both = [(CONTROL_VSOCK_PORT, "1024"), (EGRESS_VSOCK_PORT, "1025")];
+    let refused = parse(&lookup(&both), ROOT_UID).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "AGENTKIT_CONTROL_VSOCK_PORT is set but the supervisor runs as root; a microVM guest must start it as an unprivileged user"
+    );
+    let sockets = [(CONTROL_SOCKET, "/tmp/c.sock")];
+    assert_eq!(
+        parse(&lookup(&sockets), ROOT_UID),
+        Ok(Transport::default()),
+        "a container's supervisor may run as root"
+    );
+}
+
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn vsock_is_refused_off_linux() {
     for name in [CONTROL_VSOCK_PORT, EGRESS_VSOCK_PORT] {
-        let refused = Transport::from_lookup(lookup(&[(name, "1024")]));
+        let refused = parse(&lookup(&[(name, "1024")]), AGENT_UID);
         assert_eq!(refused, Err(ConfigError::Unsupported(name)));
     }
 }
@@ -247,25 +274,25 @@ fn vsock_is_refused_off_linux() {
 #[cfg(target_os = "linux")]
 #[test]
 fn vsock_ports_select_vsock_links_one_by_one() {
-    let both = Transport::from_lookup(lookup(&[
-        (CONTROL_VSOCK_PORT, "1024"),
-        (EGRESS_VSOCK_PORT, "1025"),
-    ]))
+    let both = parse(
+        &lookup(&[(CONTROL_VSOCK_PORT, "1024"), (EGRESS_VSOCK_PORT, "1025")]),
+        AGENT_UID,
+    )
     .unwrap();
     assert_eq!(
         (both.control, both.egress),
         (Link::Vsock(1024), Link::Vsock(1025))
     );
-    let control_only = Transport::from_lookup(lookup(&[
-        (CONTROL_VSOCK_PORT, "1024"),
-        (EGRESS_SOCKET, "/tmp/e.sock"),
-    ]))
+    let control_only = parse(
+        &lookup(&[(CONTROL_VSOCK_PORT, "1024"), (EGRESS_SOCKET, "/tmp/e.sock")]),
+        AGENT_UID,
+    )
     .unwrap();
     assert_eq!(
         (control_only.control, control_only.egress),
         (Link::Vsock(1024), Link::Socket)
     );
-    let egress_only = Transport::from_lookup(lookup(&[(EGRESS_VSOCK_PORT, "1025")])).unwrap();
+    let egress_only = parse(&lookup(&[(EGRESS_VSOCK_PORT, "1025")]), AGENT_UID).unwrap();
     assert_eq!(
         (egress_only.control, egress_only.egress),
         (Link::Socket, Link::Vsock(1025))

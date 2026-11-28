@@ -2,10 +2,12 @@
 //!
 //! - the data root and the socket root: created with mode 0700 when
 //!   absent; each must then be a directory (not a link) owned by this user
-//!   that grants group and others nothing. Only the leaf is checked:
-//!   macOS's per-user `$TMPDIR` lies below the `/var` link, and the roots
-//!   grant nobody else entry, so nothing inside them can be replaced by
-//!   another user;
+//!   that grants group and others nothing. Only the leaf is checked, a
+//!   restriction the configuration documents: macOS's per-user `$TMPDIR`
+//!   lies below the `/var` link, so the ancestors cannot be required to be
+//!   plain private directories, and they must instead be writable by this
+//!   user and root only. The roots grant nobody else entry, so nothing
+//!   inside them can be replaced by another user;
 //! - `<socket_root>/<machine_dir_name(ws, gen)>`, mode 0700, where the
 //!   adapter binds a machine's control and egress sockets and the helper
 //!   (the same user) connects to them. No guest sees any host directory.

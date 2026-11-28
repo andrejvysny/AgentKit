@@ -3,6 +3,12 @@
 //! the egress shim's connections to the host's vsock port. Accepting once
 //! is generic over the listener, so its tests run over a unix listener
 //! where vsock does not exist; only the vsock bindings are Linux-only.
+//!
+//! Only the host may open the control channel: a connection from any
+//! other CID (a guest process over the loopback transport) is refused and
+//! the wait goes on. The host's helper connects to the control port once
+//! per machine lifetime and never re-dials, so nothing the guest does
+//! after the one connection can reach the host's control socket.
 
 use std::future::Future;
 use std::io;
@@ -14,6 +20,8 @@ use tokio::time::Instant;
 use crate::error::StartupError;
 
 const ACCEPT_RETRY: Duration = Duration::from_millis(200);
+/// `VMADDR_CID_HOST`: the only peer the control port accepts.
+pub(crate) const HOST_CID: u32 = 2;
 
 /// A bound listener the control channel is accepted from.
 pub(crate) trait ControlListener: Send + Sync {
@@ -56,6 +64,19 @@ pub(crate) async fn accept_once<L: ControlListener>(
     })
 }
 
+/// Refuse a control connection whose peer is not the host.
+pub(crate) fn check_peer(cid: u32) -> io::Result<()> {
+    if cid == HOST_CID {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "refused a control connection from CID {cid}; only the host (CID {HOST_CID}) may connect"
+        ),
+    ))
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) use vsock::{connect_host, listen};
 
@@ -65,8 +86,10 @@ mod vsock {
 
     use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockAddr, VsockListener, VsockStream};
 
-    use super::ControlListener;
+    use super::{ControlListener, HOST_CID, check_peer};
     use crate::error::StartupError;
+
+    const _: () = assert!(VMADDR_CID_HOST == HOST_CID);
 
     /// Listen on `port` for any CID. Sockets are close-on-exec from
     /// creation (`SOCK_CLOEXEC`, `accept4`), so none reaches a command.
@@ -78,8 +101,12 @@ mod vsock {
     impl ControlListener for VsockListener {
         type Stream = VsockStream;
 
+        /// The next connection from the host; dropping a refused one
+        /// closes it.
         async fn accept_stream(&self) -> io::Result<VsockStream> {
-            self.accept().await.map(|(stream, _peer)| stream)
+            let (stream, peer) = self.accept().await?;
+            check_peer(peer.cid())?;
+            Ok(stream)
         }
     }
 

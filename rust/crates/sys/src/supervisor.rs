@@ -13,6 +13,8 @@
 //! - `waitpid(2)` with `WNOHANG`: [`reap_any`] and [`reap_child`].
 //! - Every process below a pid, from `/proc` (Linux): [`descendants`].
 //! - `sync(2)`: [`sync_filesystems`].
+//! - `RLIMIT_NOFILE` (macOS, Linux): [`raise_open_file_limit`], for a process
+//!   that bridges many connections at once.
 //!
 //! Linux implements the `prctl` and `/proc` parts; other Unix platforms
 //! refuse them with [`std::io::ErrorKind::Unsupported`] and implement the
@@ -234,6 +236,33 @@ pub fn spawn_in_new_session(cmd: &mut std::process::Command, cwd: File) -> io::R
 /// See [`spawn_in_new_session`].
 #[cfg(not(unix))]
 pub fn spawn_in_new_session(_cmd: &mut std::process::Command, _cwd: File) -> io::Result<()> {
+    Err(unsupported())
+}
+
+/// Raise the soft limit of open descriptors (`RLIMIT_NOFILE`) to `want`,
+/// or to the hard limit when that is lower; never lowers it. Answers the
+/// soft limit in force afterwards.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn raise_open_file_limit(want: u64) -> io::Result<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a writable local of the type `getrlimit` fills.
+    crate::fs::check(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) })?;
+    let target = want.min(limit.rlim_max);
+    if limit.rlim_cur >= target {
+        return Ok(limit.rlim_cur);
+    }
+    limit.rlim_cur = target;
+    // SAFETY: `setrlimit` only reads `limit`, an initialised value.
+    crate::fs::check(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) })?;
+    Ok(target)
+}
+
+/// See [`raise_open_file_limit`].
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn raise_open_file_limit(_want: u64) -> io::Result<u64> {
     Err(unsupported())
 }
 

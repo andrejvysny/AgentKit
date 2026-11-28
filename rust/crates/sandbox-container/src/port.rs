@@ -20,8 +20,8 @@ const KIND: &str = "container";
 /// The family it reports over the microVM launcher (ADR 0040).
 const MICROVM_KIND: &str = "microvm";
 
-/// What the backend reports: a microVM's workspace disk is a hard quota;
-/// a container's volume is not, so the service checks usage.
+/// What the backend reports: a microVM's disks are a hard quota; a
+/// container's volume is not, so the service checks usage.
 pub(crate) fn descriptor(microvm_disk_bytes: Option<u64>) -> BackendDescriptor {
     BackendDescriptor {
         kind: if microvm_disk_bytes.is_some() {

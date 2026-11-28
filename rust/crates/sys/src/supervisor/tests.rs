@@ -123,6 +123,16 @@ fn below_walks_the_whole_subtree_only() {
     assert_eq!(all, [2, 3, 4, 5]);
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn the_open_file_limit_only_grows() {
+    let now = raise_open_file_limit(1).unwrap();
+    assert!(now >= 1, "never lowered");
+    assert_eq!(raise_open_file_limit(now).unwrap(), now);
+    let raised = raise_open_file_limit(now.saturating_add(16)).unwrap();
+    assert!(raised >= now, "{now} -> {raised}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn descendants_lists_a_spawned_child() {

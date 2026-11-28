@@ -24,7 +24,7 @@ use crate::registry::{Admission, Registry};
 ///   supervisor ends everything when its channel closes); no hard disk
 ///   quota (the service checks usage). Over the microVM launcher
 ///   (`microvm_disk_bytes` set): kind `microvm` and a hard quota, the
-///   workspace disk's size.
+///   workspace and home disk sizes together, which is what usage counts.
 /// - A machine whose channel failed, or whose guest broke the protocol,
 ///   is unreachable: its calls answer `Unavailable` until it is stopped,
 ///   and `ensure_machine` answers its generation stale, so the service

@@ -6,12 +6,20 @@
 //!   stop that outlasts its grace asks that task to SIGKILL the child; a
 //!   pid is never signalled from outside it, so a reaped (and possibly
 //!   reused) pid is never hit.
+//! - The waiter takes the exit with `wait()` and, should the child signal
+//!   be missed, with a `try_wait()` every [`REAP_TICK`]. It keeps the exit
+//!   status and logs a non-zero one: a helper exits 0 only when its VM
+//!   reached the stopped state, so any other status says the VM's end was
+//!   not observed.
 //! - A reader task drains stdout continuously and publishes the last
 //!   event; stderr goes to the machine's `helper.log`.
-//! - "Stopped" is proven only when the waiter's `wait()` returned.
+//! - A reaped helper is not yet a stopped machine: the VM lives in Apple's
+//!   VM service process, so the service also waits for the disks to be
+//!   released ([`crate::disks::Disks::wait_released`]).
 
+use std::fmt;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
@@ -21,12 +29,32 @@ use tokio::sync::{mpsc, watch};
 
 use crate::error::bounded;
 use crate::helper::{EVENT_LINE_MAX_BYTES, HelperEvent};
-use crate::procinfo::{self, Lookup};
+use agentkit_sys::{ProcessLookup, lookup_process};
 
 /// How long a SIGKILLed helper gets to be reaped.
 const KILL_WAIT: Duration = Duration::from_secs(5);
 /// How long writing the configuration line may take.
 const CONFIG_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the waiter polls for an exit besides waiting for it.
+const REAP_TICK: Duration = Duration::from_millis(250);
+
+/// How a reaped helper ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Exited {
+    /// `wait` answered this status.
+    Status(ExitStatus),
+    /// Another reaper collected it first; its status is unknown.
+    Unknown,
+}
+
+impl fmt::Display for Exited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Exited::Status(status) => write!(f, "{status}"),
+            Exited::Unknown => f.write_str("status unknown"),
+        }
+    }
+}
 
 /// What the helper reported last on stdout.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +74,7 @@ pub(crate) struct Machine {
     /// Never printed: no `Debug` on this type.
     pub(crate) token: String,
     stdin: StdMutex<Option<ChildStdin>>,
-    exited: watch::Receiver<bool>,
+    exited: watch::Receiver<Option<Exited>>,
     phase: watch::Receiver<Phase>,
     kill: mpsc::Sender<()>,
 }
@@ -64,8 +92,8 @@ impl Machine {
         let pid = child.id().unwrap_or(0);
         // Not reaped before the waiter task runs, so the pid is still this
         // child's here.
-        let started = match procinfo::lookup(pid) {
-            Ok(Lookup::Found { started, .. }) => started,
+        let started = match lookup_process(pid) {
+            Ok(ProcessLookup::Found { started, .. }) => started,
             other => {
                 let _ = child.start_kill();
                 return Err(std::io::Error::other(format!(
@@ -79,9 +107,9 @@ impl Machine {
         if let Some(stdout) = stdout {
             tokio::spawn(read_events(stdout, phase_tx));
         }
-        let (exited_tx, exited) = watch::channel(false);
+        let (exited_tx, exited) = watch::channel(None);
         let (kill, kill_rx) = mpsc::channel(1);
-        tokio::spawn(wait_for_exit(child, kill_rx, exited_tx));
+        tokio::spawn(wait_for_exit(child, kill_rx, exited_tx, generation));
         Ok(Self {
             generation,
             pid,
@@ -137,21 +165,21 @@ impl Machine {
         }
     }
 
-    /// True while the helper process has not exited.
+    /// True while the helper process has not been reaped.
     pub(crate) fn running(&self) -> bool {
-        !*self.exited.borrow()
+        self.exited.borrow().is_none()
     }
 
     /// Close stdin, give the helper `grace` to exit, then SIGKILL it.
-    /// `Ok` only once the waiter has reaped it.
-    pub(crate) async fn stop(&self, grace: Duration) -> Result<(), String> {
+    /// `Ok` with how it ended, once the waiter has reaped it.
+    pub(crate) async fn stop(&self, grace: Duration) -> Result<Exited, String> {
         drop(self.take_stdin());
-        if self.wait_exit(grace).await {
-            return Ok(());
+        if let Some(exit) = self.wait_exit(grace).await {
+            return Ok(exit);
         }
         let _ = self.kill.try_send(());
-        if self.wait_exit(KILL_WAIT).await {
-            return Ok(());
+        if let Some(exit) = self.wait_exit(KILL_WAIT).await {
+            return Ok(exit);
         }
         Err(format!(
             "helper pid {} did not exit after SIGKILL",
@@ -159,10 +187,13 @@ impl Machine {
         ))
     }
 
-    async fn wait_exit(&self, within: Duration) -> bool {
+    async fn wait_exit(&self, within: Duration) -> Option<Exited> {
         let mut exited = self.exited.clone();
-        let reaped = exited.wait_for(|exited| *exited);
-        matches!(tokio::time::timeout(within, reaped).await, Ok(Ok(_)))
+        let reaped = exited.wait_for(Option::is_some);
+        match tokio::time::timeout(within, reaped).await {
+            Ok(Ok(exit)) => *exit,
+            _ => None,
+        }
     }
 
     fn take_stdin(&self) -> Option<ChildStdin> {
@@ -193,24 +224,25 @@ fn helper_command(helper: &Path, stderr_log: std::fs::File) -> Command {
     command
 }
 
-/// Own `child` until it is reaped; SIGKILL it when asked. Publishes `true`
-/// once `wait()` returned.
+/// Own `child` until it is reaped; SIGKILL it when asked. Publishes how it
+/// ended once `wait()` or a `try_wait()` tick collected it.
 async fn wait_for_exit(
     mut child: Child,
     mut kill: mpsc::Receiver<()>,
-    exited: watch::Sender<bool>,
+    exited: watch::Sender<Option<Exited>>,
+    generation: u64,
 ) {
+    let pid = child.id().unwrap_or(0);
+    let mut tick = tokio::time::interval(REAP_TICK);
     let mut kill_open = true;
-    loop {
+    let outcome = loop {
         tokio::select! {
-            outcome = child.wait() => {
-                // An error is ECHILD: another reaper (a later launcher's
-                // recovery in this process) collected it, so it is gone.
-                if let Err(error) = outcome {
-                    crate::service::log(&format!("waiting for a helper failed: {error}"));
-                }
-                break;
-            }
+            outcome = child.wait() => break outcome,
+            _ = tick.tick() => match child.try_wait() {
+                Ok(None) => {}
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => break Err(error),
+            },
             request = kill.recv(), if kill_open => match request {
                 Some(()) => {
                     let _ = child.start_kill();
@@ -218,8 +250,24 @@ async fn wait_for_exit(
                 None => kill_open = false,
             },
         }
-    }
-    let _ = exited.send(true);
+    };
+    let exit = match outcome {
+        Ok(status) => {
+            if !status.success() {
+                crate::service::log(&format!(
+                    "helper pid {pid} of generation {generation} ended: {status}"
+                ));
+            }
+            Exited::Status(status)
+        }
+        // ECHILD: another reaper (a later launcher's recovery in this
+        // process) collected it, so it is gone.
+        Err(error) => {
+            crate::service::log(&format!("waiting for helper pid {pid} failed: {error}"));
+            Exited::Unknown
+        }
+    };
+    let _ = exited.send(Some(exit));
 }
 
 /// Publish each event line of `stdout`; a line over the bound or not an

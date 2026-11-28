@@ -270,3 +270,34 @@ async fn startup_refuses_bad_configs_and_a_second_launcher() {
     assert_eq!(inspected(reply), (None, None), "the first still serves");
     first.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutdown_refuses_new_requests_and_stops_machines_at_once() {
+    let mut fixture = Fixture::new(STUBBORN);
+    fixture.config.stop_grace_max_ms = 1_500;
+    let launcher = fixture.start().await;
+    let digest = launcher.image_digest().to_owned();
+    let mut pids = Vec::new();
+    for ws in ["ws-a", "ws-b", "ws-c"] {
+        pids.push(pid_of(
+            &ensured(call(&launcher, ensure(ws, 1, &digest)).await).0,
+        ));
+    }
+    let socket = launcher.listen_socket().to_path_buf();
+    let begun = Instant::now();
+    let shutdown = tokio::spawn(launcher.shutdown());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let late = call_at(&socket, ensure("ws-d", 1, &digest)).await;
+    assert_eq!(refusal(late), LauncherErrorCode::RuntimeFailed);
+    shutdown.await.unwrap().unwrap();
+    // Three stubborn helpers each take the whole grace: one after the
+    // other would be 4.5 s.
+    assert!(
+        begun.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        begun.elapsed()
+    );
+    for pid in pids {
+        assert!(!agentkit_sys::pid_alive(pid), "pid {pid} was stopped");
+    }
+}

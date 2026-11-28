@@ -1,12 +1,10 @@
-//! Byte bridges between a guest vsock connection and a host unix socket,
-//! on plain descriptors (a vsock descriptor supports every call a
-//! `UnixStream` makes), so they are tested without a VM.
-//!
-//! - The control bridge ends as soon as either side closes or fails, and
-//!   then shuts both down: the guest's session is over (ADR 0039, "no
-//!   host-loss survival").
-//! - An egress bridge passes each side's end of stream on as a half close
-//!   and ends when both directions have; a failed side ends both.
+//! The control bridge between the guest's vsock connection and the host's
+//! control socket, on plain descriptors (a vsock descriptor supports every
+//! call a `UnixStream` makes), so it is tested without a VM. It ends as
+//! soon as either side closes or fails, and then shuts both down: the
+//! guest's session is over (ADR 0039, "no host-loss survival"). Both
+//! directions share each stream through an `Arc`, so no descriptor is
+//! duplicated. Egress bridges are [`crate::egress`].
 
 use std::io;
 use std::net::Shutdown;
@@ -46,35 +44,15 @@ fn retryable(error: &io::Error) -> bool {
 }
 
 /// Copy both ways until either side ends, then shut both down.
-pub(crate) fn splice_until_either_closes(a: UnixStream, b: UnixStream) -> io::Result<()> {
-    let (a2, b2) = (a.try_clone()?, b.try_clone()?);
+pub(crate) fn splice_until_either_closes(a: Arc<UnixStream>, b: Arc<UnixStream>) {
+    let (a2, b2) = (Arc::clone(&a), Arc::clone(&b));
     let forward = thread::spawn(move || {
-        let _ = io::copy(&mut &a2, &mut &b2);
+        let _ = io::copy(&mut &*a2, &mut &*b2);
         shut_both(&a2, &b2);
     });
-    let _ = io::copy(&mut &b, &mut &a);
+    let _ = io::copy(&mut &*b, &mut &*a);
     shut_both(&a, &b);
     let _ = forward.join();
-    Ok(())
-}
-
-/// Copy both ways, passing an end of stream on as a half close, until both
-/// directions ended.
-pub(crate) fn splice_half_close(a: UnixStream, b: UnixStream) -> io::Result<()> {
-    let (a2, b2) = (a.try_clone()?, b.try_clone()?);
-    let forward = thread::spawn(move || one_way(&a2, &b2));
-    one_way(&b, &a);
-    let _ = forward.join();
-    Ok(())
-}
-
-fn one_way(from: &UnixStream, to: &UnixStream) {
-    match io::copy(&mut &*from, &mut &*to) {
-        Ok(_) => {
-            let _ = to.shutdown(Shutdown::Write);
-        }
-        Err(_) => shut_both(from, to),
-    }
 }
 
 fn shut_both(a: &UnixStream, b: &UnixStream) {
@@ -90,21 +68,19 @@ pub(crate) struct Closer(Arc<Mutex<CloserState>>);
 #[derive(Default)]
 struct CloserState {
     closed: bool,
-    streams: Vec<UnixStream>,
+    streams: Vec<Arc<UnixStream>>,
 }
 
 impl Closer {
     /// Shut `stream` down at [`Closer::close`]; false (and shut down now)
     /// when that already happened.
-    pub(crate) fn add(&self, stream: &UnixStream) -> bool {
+    pub(crate) fn add(&self, stream: &Arc<UnixStream>) -> bool {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if state.closed {
             let _ = stream.shutdown(Shutdown::Both);
             return false;
         }
-        if let Ok(clone) = stream.try_clone() {
-            state.streams.push(clone);
-        }
+        state.streams.push(Arc::clone(stream));
         true
     }
 
@@ -153,6 +129,7 @@ mod tests {
     fn the_control_bridge_ends_when_one_side_closes() {
         let (guest, guest_end) = UnixStream::pair().unwrap();
         let (host, mut host_end) = UnixStream::pair().unwrap();
+        let (guest_end, host) = (Arc::new(guest_end), Arc::new(host));
         let bridge = thread::spawn(move || splice_until_either_closes(guest_end, host));
         let mut guest = guest;
         guest.write_all(b"hello").unwrap();
@@ -164,40 +141,22 @@ mod tests {
         guest.read_exact(&mut back).unwrap();
         assert_eq!(&back, b"back");
         drop(host_end);
-        bridge.join().unwrap().unwrap();
+        bridge.join().unwrap();
         let mut rest = Vec::new();
         guest.read_to_end(&mut rest).unwrap();
         assert!(rest.is_empty(), "the guest side was shut down");
     }
 
     #[test]
-    fn an_egress_bridge_passes_half_closes_on() {
-        let (mut guest, guest_end) = UnixStream::pair().unwrap();
-        let (proxy_end, mut proxy) = UnixStream::pair().unwrap();
-        let bridge = thread::spawn(move || splice_half_close(guest_end, proxy_end));
-        guest.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
-        guest.shutdown(Shutdown::Write).unwrap();
-        let mut request = Vec::new();
-        proxy.read_to_end(&mut request).unwrap();
-        assert_eq!(request, b"GET / HTTP/1.0\r\n\r\n");
-        proxy.write_all(b"HTTP/1.0 200 OK\r\n\r\n").unwrap();
-        drop(proxy);
-        let mut response = Vec::new();
-        guest.read_to_end(&mut response).unwrap();
-        assert_eq!(response, b"HTTP/1.0 200 OK\r\n\r\n");
-        bridge.join().unwrap().unwrap();
-    }
-
-    #[test]
     fn a_closer_shuts_streams_down_now_and_later() {
         let closer = Closer::default();
         let (a, mut a_peer) = UnixStream::pair().unwrap();
-        assert!(closer.add(&a));
+        assert!(closer.add(&Arc::new(a)));
         closer.close();
         let mut buf = Vec::new();
         a_peer.read_to_end(&mut buf).unwrap();
         let (b, mut b_peer) = UnixStream::pair().unwrap();
-        assert!(!closer.add(&b) && closer.is_closed());
+        assert!(!closer.add(&Arc::new(b)) && closer.is_closed());
         b_peer.read_to_end(&mut buf).unwrap();
         assert!(buf.is_empty());
     }

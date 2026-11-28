@@ -129,3 +129,50 @@ async fn anything_before_hello_ends_the_session_like_a_dialed_one() {
         Err(StartupError::Handshake(HandshakeError::NotHello))
     ));
 }
+
+#[test]
+fn only_the_host_cid_may_open_the_control_channel() {
+    check_peer(HOST_CID).unwrap();
+    for cid in [0, 1, 3, 42, u32::MAX] {
+        let refused = check_peer(cid).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{cid}");
+    }
+}
+
+/// Answers a scripted peer CID per accepted connection, checked as the
+/// vsock listener checks it.
+struct ScriptedPeers {
+    inner: UnixListener,
+    cids: std::sync::Mutex<Vec<u32>>,
+}
+
+impl ControlListener for ScriptedPeers {
+    type Stream = UnixStream;
+
+    async fn accept_stream(&self) -> io::Result<UnixStream> {
+        let (stream, _) = self.inner.accept().await?;
+        let cid = self.cids.lock().unwrap().remove(0);
+        check_peer(cid)?;
+        Ok(stream)
+    }
+}
+
+#[tokio::test]
+async fn a_refused_peer_leaves_the_wait_for_the_host_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("control.sock");
+    let listener = ScriptedPeers {
+        inner: UnixListener::bind(&path).unwrap(),
+        cids: std::sync::Mutex::new(vec![1, HOST_CID]),
+    };
+    let accepting = tokio::spawn(accept_once(listener, PORT, Duration::from_secs(10)));
+    let mut local = UnixStream::connect(&path).await.unwrap();
+    let mut buf = [0; 1];
+    assert_eq!(
+        local.read(&mut buf).await.unwrap_or(0),
+        0,
+        "refused and closed"
+    );
+    let _host = UnixStream::connect(&path).await.unwrap();
+    assert!(accepting.await.unwrap().is_ok(), "the host's connection");
+}

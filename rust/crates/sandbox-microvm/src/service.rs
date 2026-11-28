@@ -3,21 +3,24 @@
 //! `ensure`, `stop`, `reset_home` and `destroy` hold the workspace's lock
 //! for their whole run. At most one machine per workspace is held: the
 //! running one, or one whose helper exited and that no stop has proven
-//! gone yet.
+//! gone yet. Once a shutdown began ([`Service::close_and_held`]) every
+//! request is refused and no machine is held any more.
 
 mod ensure;
 mod stop;
 mod storage;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+use std::time::Duration;
 
 use agentkit_sandbox_proto::launcher::{Reply, Request};
 
 use crate::config::VmLauncherConfig;
 use crate::dirs::SocketDirs;
-use crate::disks::Disks;
-use crate::error::bounded;
+use crate::disks::{Disks, RELEASE_WAIT};
+use crate::error::{ServiceError, bounded};
 use crate::images::Images;
 use crate::locks::WorkspaceLocks;
 use crate::machine::Machine;
@@ -40,6 +43,10 @@ pub(crate) struct Service {
     /// The socket root's lock: no second launcher binds there while this
     /// service lives.
     _socket_lock: std::fs::File,
+    /// Set (under the `machines` lock) when a shutdown began.
+    closing: AtomicBool,
+    /// Longest wait for a workspace's disks to be released.
+    release_wait: Duration,
 }
 
 impl Service {
@@ -47,15 +54,10 @@ impl Service {
         config: Arc<VmLauncherConfig>,
         images: Images,
         state: StateStore,
+        disks: Disks,
         socket_lock: std::fs::File,
         own_uid: u32,
     ) -> Self {
-        let disks = Disks::new(
-            config.data_root.join("workspaces"),
-            own_uid,
-            config.workspace_disk_bytes,
-            config.home_disk_bytes,
-        );
         let sockets = SocketDirs::new(config.socket_root.clone(), own_uid);
         Self {
             image_digest: config.image_digest(),
@@ -68,6 +70,8 @@ impl Service {
             sockets,
             creating: tokio::sync::Mutex::new(()),
             _socket_lock: socket_lock,
+            closing: AtomicBool::new(false),
+            release_wait: RELEASE_WAIT,
         }
     }
 
@@ -76,6 +80,7 @@ impl Service {
     pub(crate) async fn handle(&self, request: Request) -> Reply {
         let summary = describe(&request);
         let outcome = match request {
+            _ if self.closing.load(Ordering::SeqCst) => Err(ServiceError::ShuttingDown),
             Request::Ensure {
                 workspace_id,
                 generation,
@@ -114,8 +119,27 @@ impl Service {
         self.machines_lock().get(ws.as_str()).cloned()
     }
 
-    fn insert(&self, ws: &WorkspaceId, machine: Arc<Machine>) {
-        self.machines_lock().insert(ws.as_str().to_owned(), machine);
+    /// Hold `machine` for `ws`; false (nothing held) once a shutdown began,
+    /// whose snapshot of the held machines would miss it.
+    fn insert(&self, ws: &WorkspaceId, machine: Arc<Machine>) -> bool {
+        let mut machines = self.machines_lock();
+        if self.closing.load(Ordering::SeqCst) {
+            return false;
+        }
+        machines.insert(ws.as_str().to_owned(), machine);
+        true
+    }
+
+    /// Begin a shutdown: refuse every request from now on and answer every
+    /// workspace with a held machine, and its generation. Under the
+    /// `machines` lock, so a machine inserted later cannot exist.
+    fn close_and_held(&self) -> Vec<(String, u64)> {
+        let machines = self.machines_lock();
+        self.closing.store(true, Ordering::SeqCst);
+        machines
+            .iter()
+            .map(|(ws, machine)| (ws.clone(), machine.generation))
+            .collect()
     }
 
     /// Forget `machine` of `ws` (and nothing that replaced it).
@@ -135,15 +159,6 @@ impl Service {
             .values()
             .filter(|m| m.running())
             .count()
-    }
-
-    /// Every workspace with a held machine, and its generation.
-    fn held(&self) -> Vec<(String, u64)> {
-        let machines = self.machines_lock();
-        machines
-            .iter()
-            .map(|(ws, machine)| (ws.clone(), machine.generation))
-            .collect()
     }
 
     fn machines_lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Machine>>> {
@@ -194,3 +209,6 @@ fn outcome_text(reply: &Reply) -> String {
 pub(crate) fn log(message: &str) {
     eprintln!("agentkit-sandbox-microvm: {message}");
 }
+
+#[cfg(test)]
+mod tests;

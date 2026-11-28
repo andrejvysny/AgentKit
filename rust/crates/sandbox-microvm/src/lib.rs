@@ -12,11 +12,14 @@
 //! - Generations: a generation never runs twice. `ensure` refuses one at
 //!   or below a generation proven stopped or below one it started; `stop`
 //!   answers `proven` only when the helper of the covered generation has
-//!   exited and been reaped. The records persist in `<data_root>/state`.
+//!   exited and been reaped and no process has the workspace's disks open
+//!   any more. The records persist in `<data_root>/state`.
 //! - Startup: the kernel and root disk are verified by SHA-256; every
 //!   helper recorded by an earlier run that is still ours (pid and process
-//!   start time) is SIGKILLed and proven gone, and its generation recorded
-//!   stopped.
+//!   start time) is SIGKILLed and proven gone, and once its disks are
+//!   released its generation is recorded stopped.
+//! - Shutdown: [`VmLauncher::shutdown`] refuses every request from its
+//!   start, then stops every machine at once.
 //! - Disks: `<data_root>/workspaces/<ws>/{workspace,home}.img`, raw and
 //!   sparse, formatted by the guest; usage is allocated bytes.
 //! - Access: the socket is 0600 in the 0700 socket root and only this
@@ -36,7 +39,6 @@ mod images;
 mod locks;
 mod machine;
 mod naming;
-mod procinfo;
 mod recovery;
 mod server;
 mod service;
@@ -51,6 +53,7 @@ pub use config::{ImageFile, VmLauncherConfig};
 pub use error::{VmConfigError, VmShutdownError, VmStartupError};
 
 use crate::dirs::{SocketDirs, private_child};
+use crate::disks::{Disks, RELEASE_WAIT};
 use crate::images::Images;
 use crate::service::{Service, log};
 use crate::state::StateStore;
@@ -94,7 +97,13 @@ impl VmLauncher {
         let state = StateStore::open(&config.data_root.join("state"))
             .map_err(|error| VmStartupError::State(error.to_string()))?;
         let sockets = SocketDirs::new(config.socket_root.clone(), own_uid);
-        let recovered = recovery::recover(&state, &sockets)
+        let disks = Disks::new(
+            config.data_root.join("workspaces"),
+            own_uid,
+            config.workspace_disk_bytes,
+            config.home_disk_bytes,
+        );
+        let recovered = recovery::recover(&state, &sockets, &disks, RELEASE_WAIT)
             .await
             .map_err(VmStartupError::Recovery)?;
         let listen_socket = config.listen_socket();
@@ -104,6 +113,7 @@ impl VmLauncher {
             Arc::clone(&config),
             images,
             state,
+            disks,
             socket_lock,
             own_uid,
         ));
@@ -140,8 +150,10 @@ impl VmLauncher {
         &self.image_digest
     }
 
-    /// Stop every machine (the longest grace, then SIGKILL), record the
-    /// proven ones stopped, then stop serving.
+    /// Refuse every request from now on, stop every machine at once (the
+    /// longest grace, then SIGKILL), record the proven ones stopped, then
+    /// stop serving. A request already running may finish; a machine it
+    /// would start is stopped instead of held.
     pub async fn shutdown(self) -> Result<(), VmShutdownError> {
         let outcome = self.service.stop_all().await;
         self.close().await;

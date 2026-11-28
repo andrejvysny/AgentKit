@@ -1,7 +1,6 @@
 use std::process::{Child, Command};
 
 use super::*;
-use crate::naming::WorkspaceId;
 
 fn sleeper() -> Child {
     Command::new("/bin/sleep").arg("60").spawn().unwrap()
@@ -13,15 +12,21 @@ fn pid_of(child: Child) -> u32 {
 }
 
 fn started(pid: u32) -> u64 {
-    match lookup(pid).unwrap() {
-        Lookup::Found { started, .. } => started,
-        Lookup::Gone => panic!("pid {pid} not found"),
+    match lookup_process(pid).unwrap() {
+        ProcessLookup::Found { started, .. } => started,
+        ProcessLookup::Gone => panic!("pid {pid} not found"),
     }
 }
 
 fn uid() -> u32 {
     agentkit_sys::effective_uid().unwrap()
 }
+
+fn disks(root: &std::path::Path) -> Disks {
+    Disks::new(root.join("workspaces"), uid(), 1 << 30, 1 << 28)
+}
+
+const RELEASE: Duration = Duration::from_millis(200);
 
 #[tokio::test]
 async fn a_recorded_helper_that_is_ours_is_killed_and_proven_stopped() {
@@ -37,14 +42,47 @@ async fn a_recorded_helper_that_is_ours_is_killed_and_proven_stopped() {
     };
     state.record_created(&ws, 3).await.unwrap();
     state.record_helper(&ws, helper).await.unwrap();
-    assert_eq!(recover(&state, &sockets).await.unwrap(), 1);
+    let disks = disks(scratch.path());
+    assert_eq!(recover(&state, &sockets, &disks, RELEASE).await.unwrap(), 1);
     assert!(
-        !matches!(lookup(pid).unwrap(), Lookup::Found { started, .. } if started == helper.started),
+        !matches!(lookup_process(pid).unwrap(), ProcessLookup::Found { started, .. } if started == helper.started),
         "the helper is gone"
     );
     let record = state.get(&ws).await;
     assert_eq!((record.stopped_through, record.helper), (3, None));
-    assert_eq!(recover(&state, &sockets).await.unwrap(), 0, "nothing left");
+    assert_eq!(
+        recover(&state, &sockets, &disks, RELEASE).await.unwrap(),
+        0,
+        "nothing left"
+    );
+}
+
+#[tokio::test]
+async fn a_helper_gone_while_its_disks_stay_open_fails_the_startup() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = StateStore::open(scratch.path()).unwrap();
+    let sockets = SocketDirs::new(scratch.path().join("sockets"), uid());
+    let disks = disks(scratch.path());
+    let ws = WorkspaceId::parse("ws").unwrap();
+    let files = disks.prepare(&ws).unwrap();
+    // The recorded helper is gone; a process (this one) still has a disk
+    // open, as Apple's VM service would after a helper was killed.
+    let gone = HelperRecord {
+        generation: 2,
+        pid: 0,
+        started: 1,
+    };
+    state.record_created(&ws, 2).await.unwrap();
+    state.record_helper(&ws, gone).await.unwrap();
+    let held = std::fs::File::open(&files.workspace_disk).unwrap();
+    let refused = recover(&state, &sockets, &disks, RELEASE)
+        .await
+        .unwrap_err();
+    assert!(refused.contains("still open"), "{refused}");
+    assert_eq!(state.get(&ws).await.stopped_through, 0, "nothing recorded");
+    drop(held);
+    assert_eq!(recover(&state, &sockets, &disks, RELEASE).await.unwrap(), 1);
+    assert_eq!(state.get(&ws).await.stopped_through, 2);
 }
 
 #[test]

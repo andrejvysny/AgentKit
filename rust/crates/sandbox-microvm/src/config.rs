@@ -62,11 +62,18 @@ pub struct VmLauncherConfig {
     /// Holds `workspaces/<ws>/{workspace,home}.img` and `state/`. Created
     /// with mode 0700 when absent; must be owned by this user, not a link,
     /// and grant nothing to group or others.
+    ///
+    /// Restriction: only this directory itself is checked, not its
+    /// ancestors (macOS's per-user `$TMPDIR` lies below the `/var` link).
+    /// Every ancestor must be writable by this user and root only, as
+    /// `$HOME/Library/...` and `$TMPDIR` are: another user who can write an
+    /// ancestor can swap the whole root.
     pub data_root: PathBuf,
-    /// Short per-user directory (mode 0700, same rules as `data_root`)
-    /// holding the launcher's socket `launcher.sock` and one directory per
-    /// machine, `machine_dir_name(ws, gen)`, for the adapter's control and
-    /// egress sockets. The adapter's `socket_dir` is this directory.
+    /// Short per-user directory (mode 0700, same rules and the same
+    /// ancestor restriction as `data_root`) holding the launcher's socket
+    /// `launcher.sock` and one directory per machine,
+    /// `machine_dir_name(ws, gen)`, for the adapter's control and egress
+    /// sockets. The adapter's `socket_dir` is this directory.
     pub socket_root: PathBuf,
     /// The signed `agentkit-sandbox-vmhelper` binary.
     pub helper: PathBuf,

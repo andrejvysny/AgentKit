@@ -11,6 +11,7 @@ pub mod dir;
 pub mod fs;
 pub mod private_fs;
 pub mod process;
+pub mod procinfo;
 pub mod supervisor;
 
 pub use dir::{
@@ -28,7 +29,8 @@ pub use process::{
     own_parent_pid, own_process_group, peek_child_exit, pid_alive, real_uid, signal_process,
     spawn_in_new_group, spawn_in_new_group_tokio,
 };
+pub use procinfo::{ProcessLookup, lookup_process, pids_holding};
 pub use supervisor::{
-    Reaped, descendants, is_init, kill_all_processes, reap_any, reap_child, set_child_subreaper,
-    set_non_dumpable, spawn_in_new_session, sync_filesystems,
+    Reaped, descendants, is_init, kill_all_processes, raise_open_file_limit, reap_any, reap_child,
+    set_child_subreaper, set_non_dumpable, spawn_in_new_session, sync_filesystems,
 };

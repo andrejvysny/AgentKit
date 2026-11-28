@@ -99,7 +99,8 @@ async fn the_conformance_suite_passes_over_real_microvms() {
         image("AGENTKIT_MICROVM_KERNEL", "AGENTKIT_MICROVM_KERNEL_SHA256"),
         image("AGENTKIT_MICROVM_ROOT", "AGENTKIT_MICROVM_ROOT_SHA256"),
     );
-    let disk_bytes = config.workspace_disk_bytes;
+    // The quota covers both disks, as usage does.
+    let disk_bytes = config.workspace_disk_bytes + config.home_disk_bytes;
     let launcher = VmLauncher::start(config)
         .await
         .expect("the launcher starts");

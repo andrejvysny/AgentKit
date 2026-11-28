@@ -192,11 +192,27 @@ pub fn create_new_rw_file_at(_dir: &File, _name: &str, _mode: u32) -> io::Result
 }
 
 /// `fsync(2)` of an open directory, so a rename inside it survives a
-/// crash. A filesystem that cannot sync directories (`EINVAL`) counts as
-/// synced: there is nothing more the caller could do.
+/// crash. On Apple platforms `fsync` leaves the data in the drive's cache,
+/// so `fcntl(F_FULLFSYNC)` comes first; a filesystem without it gets the
+/// plain `fsync`. A filesystem that cannot sync directories (`EINVAL`)
+/// counts as synced: there is nothing more the caller could do.
 #[cfg(unix)]
 pub fn sync_dir(dir: &File) -> io::Result<()> {
     use std::os::fd::AsRawFd;
+    #[cfg(target_vendor = "apple")]
+    {
+        // SAFETY: `dir` is an open descriptor kept alive by the borrow;
+        // `F_FULLFSYNC` takes no argument and reads no caller memory.
+        match crate::fs::check(unsafe { libc::fcntl(dir.as_raw_fd(), libc::F_FULLFSYNC) }) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EINVAL | libc::ENOTSUP | libc::ENOTTY)
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
     // SAFETY: `dir` is an open descriptor kept alive by the borrow;
     // `fsync(2)` reads no caller memory.
     match crate::fs::check(unsafe { libc::fsync(dir.as_raw_fd()) }) {

@@ -60,10 +60,13 @@ pub struct ContainerBackendConfig {
     pub image_digest: Option<String>,
     /// Limits of each machine's egress proxy (NET-8).
     pub egress: EgressConfig,
-    /// `Some` when the launcher starts microVMs (ADR 0040) whose workspace
-    /// disk holds this many bytes: `describe` then answers kind `microvm`
-    /// with a hard disk quota, and storage usage reports this quota.
-    /// `None` (the default) is the container launcher.
+    /// `Some` when the launcher starts microVMs (ADR 0040): the workspace
+    /// and home disk sizes added up. `describe` then answers kind
+    /// `microvm` with a hard disk quota, and storage usage reports this
+    /// quota. Usage counts both trees (the guest's walk of `/workspace`
+    /// and `/home/agent`, or the launcher's allocated bytes of both
+    /// disks), so the quota covers both disks too. `None` (the default) is
+    /// the container launcher.
     pub microvm_disk_bytes: Option<u64>,
 }
 

@@ -1,10 +1,13 @@
 //! The read-only inputs every machine boots from: the kernel and the root
 //! disk. Their SHA-256 is checked against the configuration at startup;
-//! before each machine starts, their identity (device, inode, size and
-//! modification time) is checked against what was hashed, so a file
-//! replaced or rewritten since startup is refused without hashing it
-//! again. The change time is left out: a metadata-only change (an extended
-//! attribute, a mode) must not refuse every start.
+//! before each machine starts, their identity (device, inode, size,
+//! modification time and change time) is checked against what was hashed,
+//! so a file replaced or rewritten since startup is refused without
+//! hashing it again. The change time is what makes this hold: a writer can
+//! set the modification time back (`utimes`), but the kernel sets the
+//! change time on every write and no caller can choose it. The price: a
+//! metadata-only change (a mode, an extended attribute) also refuses every
+//! start until the launcher restarts and hashes the files again.
 
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
@@ -25,6 +28,7 @@ struct Fingerprint {
     ino: u64,
     len: u64,
     mtime: (i64, i64),
+    ctime: (i64, i64),
 }
 
 impl Fingerprint {
@@ -34,6 +38,7 @@ impl Fingerprint {
             ino: meta.ino(),
             len: meta.len(),
             mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
         }
     }
 }
@@ -144,6 +149,10 @@ mod tests {
         std::fs::write(&root, b"abc").unwrap();
         let images = Images::verify(&image(&kernel, ABC), &image(&root, ABC)).unwrap();
         images.check_unchanged().unwrap();
+        let mode = std::fs::metadata(&kernel).unwrap().permissions();
+        std::fs::set_permissions(&kernel, mode).unwrap();
+        let refused = images.check_unchanged().unwrap_err();
+        assert!(refused.contains("kernel"), "a change time moved: {refused}");
         let wrong = "0".repeat(64);
         let refused = Images::verify(&image(&kernel, ABC), &image(&root, &wrong)).unwrap_err();
         assert!(refused.contains("root disk"), "{refused}");

@@ -15,10 +15,13 @@
 //! - the running generation answers its machine and its token again.
 //!
 //! A start is refused (`runtime_failed`, nothing recorded) while
-//! `max_machines` helpers run, and when the kernel or root disk changed
-//! since startup (`image_mismatch`). `ensured` is answered once the helper
-//! reports `connected`; a helper that reports anything else, or nothing
-//! within `connect_timeout`, is stopped and the generation stays burnt.
+//! `max_machines` helpers run, while a process still has the workspace's
+//! disks open after [`crate::disks::RELEASE_WAIT`] (a VM that outlived its
+//! helper; two VMs never share a disk), and when the kernel or root disk
+//! changed since startup (`image_mismatch`). `ensured` is answered once
+//! the helper reports `connected`; a helper that reports anything else, or
+//! nothing within `connect_timeout`, is stopped and the generation stays
+//! burnt.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -99,6 +102,9 @@ impl Service {
         shape: Shape,
         record: Record,
     ) -> Result<Started, ServiceError> {
+        self.disks_released(ws)
+            .await
+            .map_err(ServiceError::DisksHeld)?;
         let slot = self.creating.lock().await;
         self.refuse_at_capacity()?;
         self.images
@@ -163,7 +169,8 @@ impl Service {
     }
 
     /// Record the helper durably and hold it; a helper that cannot be
-    /// recorded is killed at once.
+    /// recorded is killed at once, and one that a shutdown keeps from being
+    /// held is stopped.
     async fn keep(&self, ws: &WorkspaceId, machine: &Arc<Machine>) -> Result<(), ServiceError> {
         let helper = HelperRecord {
             generation: machine.generation,
@@ -179,7 +186,10 @@ impl Service {
             }
             return Err(ServiceError::Local(error.to_string()));
         }
-        self.insert(ws, Arc::clone(machine));
+        if !self.insert(ws, Arc::clone(machine)) {
+            self.discard(ws, machine).await;
+            return Err(ServiceError::ShuttingDown);
+        }
         Ok(())
     }
 
@@ -188,10 +198,15 @@ impl Service {
         machine.wait_connected(self.config.connect_timeout).await
     }
 
-    /// Stop a helper whose start failed. Once reaped it is forgotten (its
-    /// generation stays burnt); otherwise it stays held for a stop.
+    /// Stop a helper whose start failed. Once reaped and its disks released
+    /// it is forgotten (its generation stays burnt); otherwise it stays held
+    /// for a stop.
     async fn discard(&self, ws: &WorkspaceId, machine: &Arc<Machine>) {
-        match machine.stop(Duration::ZERO).await {
+        let stopped = match machine.stop(Duration::ZERO).await {
+            Ok(_) => self.disks_released(ws).await,
+            Err(why) => Err(why),
+        };
+        match stopped {
             Ok(()) => {
                 self.remove(ws, machine);
                 if let Err(error) = self.state.clear_helper(ws).await {
@@ -202,7 +217,7 @@ impl Service {
                 }
             }
             Err(why) => log(&format!(
-                "failed helper of {} not stopped: {why}",
+                "failed helper of {} not proven stopped: {why}",
                 ws.as_str()
             )),
         }
