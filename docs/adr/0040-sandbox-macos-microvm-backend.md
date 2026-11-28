@@ -8,7 +8,10 @@ build and the real musl `agentkit-sandboxd` as the guest supervisor.
 Amended 2026-11-28 after the review of the first implementation: stop
 proofs need released disks, the console is capped, egress is bounded, the
 guest supervisor never runs as root, and sections 3 and 4 describe what
-was built.
+was built. Amended again 2026-11-28 after the review of the image build:
+the kernel hardening, the init's disk, boot-log and `/dev` rules, the
+manifest pin of `NOTICE`, the release step for the image lock, and the
+known difference in how the supervisor is protected (section 4).
 
 ## Context
 
@@ -182,6 +185,24 @@ OCI image (arm64) plus a VM layer: `e2fsprogs` and
 `virtio_blk`, `ext4`, `vsock` with the virtio transport, virtio balloon,
 virtio entropy and `hvc` console built in.
 
+The kernel config (`vm/kernel/agentkit.config` on `allnoconfig`;
+`check-config.sh` fails the build when a line does not hold or names a
+symbol the tree does not define) turns on PAN, pointer authentication, BTI
+for user space, E0PD, `VMAP_STACK`, `RODATA_FULL_DEFAULT_ENABLED`,
+hardened usercopy, `FORTIFY_SOURCE`, slab freelist randomization and
+hardening, random kmalloc caches, `INIT_ON_ALLOC_DEFAULT_ON`, list
+hardening, `BUG_ON_DATA_CORRUPTION`, `PANIC_ON_OOPS`, an
+`mmap_min_addr` of 32768 and `PROC_MEM_FORCE_PTRACE`. It leaves out
+io_uring (`EXPERT` is set only to unhide that prompt and `VT`'s), virtual
+terminals, `bpf()`, userfaultfd, kexec, perf events, kprobes, ftrace,
+debugfs, keys, `process_vm_*`, checkpoint/restore, `binfmt_misc`, FUSE,
+loop devices, packet sockets, user namespaces, the vsock loopback
+transport, the socket diag interfaces and the SIT tunnel. Not possible on
+6.12 with GCC: BTI for the kernel itself (clang only) and turning off
+`AF_UNIX_OOB` (it has no prompt). `SHUFFLE_PAGE_ALLOCATOR` is built in but
+shuffles only with `page_alloc.shuffle=1` on the command line, which the
+`VmLauncher` does not pass yet.
+
 Kernel command line (the `VmLauncher` composes it; keys are fixed):
 
 ```
@@ -191,14 +212,23 @@ agentkit.control_port=1024 agentkit.egress_port=1025
 ```
 
 `agentkit-vm-init` (PID 1, shell):
-1. Mounts `proc`, `sys`, `devtmpfs`; reads the `agentkit.*` keys, then
-   bind-mounts an empty root-only file over `/proc/cmdline` so uid 1000
+1. Mounts `proc`, `sys`, `devtmpfs` (remounted `nosuid,noexec`); reads
+   the `agentkit.*` keys, then bind-mounts an empty root-only file over
+   `/proc/cmdline` and the device tree's `/chosen/bootargs` so uid 1000
    cannot read the token.
-2. Formats vdb and vdc with `mkfs.ext4` when they carry no ext4 signature;
-   mounts vdb at `/workspace` and vdc at `/home/agent` (owner 1000:1000);
-   tmpfs at `/tmp` and `/run` as the container template does.
-3. Sets `kernel.dmesg_restrict=1` (the kernel log holds the command
-   line), applies the image's `/etc/sandbox/environment` and starts
+2. Formats vdb and vdc with `mkfs.ext4` only when their first 64 KiB read
+   as zeros: the host creates each disk sparse, so `mkfs` may assume the
+   whole disk is zeroed (`assume_storage_prezeroed`). A disk it cannot read,
+   or one holding anything but an ext4 superblock, powers the VM off and is
+   never formatted. So a VM killed while formatting can leave a disk that
+   fails every later start until `reset_home` or `destroy`. Mounts vdb at
+   `/workspace` and vdc at `/home/agent` (owner 1000:1000); tmpfs at `/tmp`
+   and `/run` as the container template does.
+3. Sets `kernel.dmesg_restrict=1` and `/dev/kmsg` to mode 0600 (the kernel
+   log holds the command line), `fs.protected_symlinks` and
+   `fs.protected_hardlinks` to 1 and `fs.protected_fifos` and
+   `fs.protected_regular` to 2, applies the image's
+   `/etc/sandbox/environment` and starts
    `agentkit-sandboxd` as uid 1000, gid 1000 with the supplementary groups
    cleared (`setpriv --reuid=1000 --regid=1000 --clear-groups`), never as
    root, so no workload command runs as root, with
@@ -206,6 +236,10 @@ agentkit.control_port=1024 agentkit.egress_port=1025
    `AGENTKIT_GENERATION`, `AGENTKIT_IMAGE_DIGEST`,
    `AGENTKIT_CHANNEL_TOKEN`; powers off when it exits. (The init belongs
    to the image build; this is its contract.)
+
+Any failed step powers the VM off through `/proc/sysrq-trigger`, retried
+for 10 s (mounting `/proc` again if needed); as the last resort PID 1
+exits, which panics the kernel, and `panic=-1` ends the VM as well.
 
 `agentkit-sandboxd` gains a vsock transport (Linux only): with
 `AGENTKIT_CONTROL_VSOCK_PORT` set it **listens** on that vsock port (bound
@@ -228,6 +262,18 @@ harmless: the control connection is host-initiated, made once per machine
 by the helper and never re-dialed, and the supervisor's listener is
 closed after it, so a guest process has no channel to present it on.
 
+Known difference from the container backend: there `agentkit-sandboxd` is
+PID 1 of the container's PID namespace, and the kernel drops the SIGKILL
+and SIGSTOP a process inside the namespace sends it. In the VM it runs as
+uid 1000 beside the workload in the one PID namespace, so a workload
+process can kill or stop it (ptrace stays refused, as it is non-dumpable).
+Killing it powers the VM off (the init sees it exit); stopping it leaves
+the control channel unanswered. Either harms only the workload's own
+machine and gives it no access. The option is to start the supervisor as
+PID 1 of a new PID namespace (the init, still root, unshares the PID
+namespace and forks; `setpriv` then drops to uid 1000). That needs
+`CONFIG_PID_NS=y`, which the v1 kernel does not have; not done in v1.
+
 ### 5. Image artifacts and manifest
 
 `sandbox-image/vm/` builds, inside Docker (Linux arm64, pinned inputs):
@@ -246,13 +292,24 @@ closed after it, so a guest process has no channel to present it on.
     {"role": "root", "path": "root.ext4", "size": 0, "sha256": "…"}
   ],
   "kernel": {"version": "6.12.x", "configSha256": "…"},
-  "licenses": "NOTICE"
+  "licenses": "NOTICE",
+  "licensesSha256": "…"
 }
 ```
 
 A consumer pins the sha256 of `vm-manifest.json`; the manifest pins every
-file. The kernel's GPL-2.0 source obligation is met by recording the exact
-upstream tarball and config.
+file it names. `files` lists exactly the two a consumer needs to boot, the
+kernel and the root disk (a consumer refuses any other role);
+`kernel.configSha256` pins `kernel.config` and `licensesSha256` pins
+`NOTICE`. The kernel's GPL-2.0 source obligation is met by recording the
+exact upstream tarball and config.
+
+`vm/build-root.sh` refuses an OCI image whose `agentkit-sandboxd` does not
+hash to `SANDBOXD_SHA256_ARM64`, and warns (without failing) when the
+image's index digest differs from `lock/image-digests.txt`. Release step:
+run `sandbox-image/build.sh verify`, which rebuilds the image twice and
+refreshes the lock, then `vm/build.sh root` and `manifest`, so the shipped
+root disk comes from the verified image.
 
 ### 6. Conformance
 

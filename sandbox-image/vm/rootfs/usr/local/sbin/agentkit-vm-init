@@ -1,13 +1,15 @@
 #!/bin/sh
 # agentkit-vm-init: PID 1 of the agent sandbox microVM (ADR 0040 §4).
 #
-# 1. Mount proc, sys, devtmpfs (and /run, which holds the empty file); read
-#    the agentkit.* keys of the kernel command line, then cover every
-#    readable copy of the command line with an empty root-only file, so uid
-#    1000 cannot read the channel token.
-# 2. Format vdb and vdc when they carry no ext4 signature; mount vdb on
-#    /workspace and vdc on /home/agent (owner 1000:1000); tmpfs on /tmp,
-#    /var/tmp and /run, plus the /dev entries a container runtime provides.
+# 1. Mount proc, sys, devtmpfs (nosuid, noexec) and /run, which holds the
+#    empty file; read the agentkit.* keys of the kernel command line, then
+#    cover every readable copy of the command line with an empty root-only
+#    file, so uid 1000 cannot read the channel token. Close the boot log
+#    (dmesg, /dev/kmsg) to uid 1000 and turn on the fs.protected_* checks.
+# 2. Format vdb and vdc when their first 64 KiB are all zeros (a new disk);
+#    any other content but ext4 powers off. Mount vdb on /workspace and vdc
+#    on /home/agent (owner 1000:1000); tmpfs on /tmp, /var/tmp and /run,
+#    plus the /dev entries a container runtime provides.
 # 3. Start agentkit-sandboxd as uid/gid 1000 (setpriv: groups cleared, no
 #    capabilities, no_new_privs) from /etc/sandbox/environment plus the
 #    AGENTKIT_* variables; power off when it exits. Workloads must never run
@@ -26,15 +28,25 @@ ENV_FILE=/etc/sandbox/environment
 
 log() { echo "agentkit-vm-init: $*"; }
 
+# sysrq schedules the power-off, so wait for it, asking again each second
+# and mounting /proc first when it is missing (a failure before or in
+# mount_early). Exiting is the last resort: PID 1 exiting panics the kernel,
+# and panic=-1 ends the VM as well.
 power_off() {
   kill -KILL -1 2>/dev/null
   sync
   umount /home/agent 2>/dev/null || mount -o remount,ro /home/agent 2>/dev/null
   umount /workspace 2>/dev/null || mount -o remount,ro /workspace 2>/dev/null
   sync
-  echo o > /proc/sysrq-trigger
-  # sysrq schedules the power-off; wait for it rather than exit (a panic).
-  while :; do sleep 1; done
+  attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    [ -e /proc/sysrq-trigger ] || mount -t proc -o nosuid,nodev,noexec proc /proc
+    echo o > /proc/sysrq-trigger
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  log "no power-off after 10 s; exiting"
+  exit 1
 }
 
 fail() {
@@ -49,11 +61,15 @@ is_mounted() {
 mount_early() {
   mount -t proc -o nosuid,nodev,noexec proc /proc || fail "cannot mount /proc"
   mount -t sysfs -o nosuid,nodev,noexec sysfs /sys || fail "cannot mount /sys"
-  # The kernel mounts devtmpfs itself (DEVTMPFS_MOUNT); mount it only if not.
+  # The kernel mounts devtmpfs itself (DEVTMPFS_MOUNT), without nosuid and
+  # noexec; mount it only if not, and remount it with both either way.
   if ! is_mounted /dev; then
-    mount -t devtmpfs -o nosuid,mode=0755 devtmpfs /dev || fail "cannot mount /dev"
+    mount -t devtmpfs -o nosuid,noexec,mode=0755 devtmpfs /dev || fail "cannot mount /dev"
   fi
-  exec </dev/console >/dev/console 2>&1
+  mount -o remount,nosuid,noexec /dev || fail "cannot remount /dev nosuid,noexec"
+  # `command`: a failed redirection of a special builtin ends the shell,
+  # and PID 1 exiting is a panic, not fail().
+  command exec </dev/console >/dev/console 2>&1 || fail "cannot open /dev/console"
   mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=0755,size=16777216 tmpfs /run \
     || fail "cannot mount /run"
 }
@@ -89,13 +105,22 @@ read_keys() {
 # (SECURITY_DMESG_RESTRICT) and this sets it again.
 hide_cmdline() {
   mkdir -m 0700 /run/agentkit-vm || fail "cannot create /run/agentkit-vm"
-  : > "$EMPTY" && chmod 0400 "$EMPTY" || fail "cannot create $EMPTY"
+  command : > "$EMPTY" && chmod 0400 "$EMPTY" || fail "cannot create $EMPTY"
   mount --bind "$EMPTY" /proc/cmdline || fail "cannot cover /proc/cmdline"
   bootargs=/sys/firmware/devicetree/base/chosen/bootargs
   if [ -e "$bootargs" ]; then
     mount --bind "$EMPTY" "$bootargs" || fail "cannot cover $bootargs"
   fi
   echo 1 > /proc/sys/kernel/dmesg_restrict || fail "cannot restrict dmesg"
+}
+
+# /dev/kmsg is the boot log too. The fs.protected_* checks (off in the
+# kernel, on in a distribution's init) cover /tmp, /var/tmp and /dev/shm.
+restrict_kernel() {
+  chmod 0600 /dev/kmsg || fail "cannot restrict /dev/kmsg"
+  for pair in protected_symlinks:1 protected_hardlinks:1 protected_fifos:2 protected_regular:2; do
+    echo "${pair#*:}" > "/proc/sys/fs/${pair%%:*}" || fail "cannot set fs.${pair%%:*}"
+  done
 }
 
 wait_for_block() {
@@ -107,22 +132,43 @@ wait_for_block() {
   done
 }
 
-# ext2/3/4 superblock magic 0xEF53, little-endian at byte 1080.
-has_ext_signature() {
-  [ "$(od -An -tx1 -j1080 -N2 "$1" 2>/dev/null | tr -d ' \n')" = 53ef ]
+# Prints what the first 64 KiB of DEVICE hold: "ext" (the ext2/3/4
+# superblock magic 0xEF53, little-endian at byte 1080), "zero" or "other".
+# Fails when DEVICE cannot be read, so a read error never passes for a new
+# disk.
+disk_content() {
+  magic=$(od -An -tx1 -j1080 -N2 "$1") || return 1
+  # Unquoted on purpose: printf joins od's space-separated bytes.
+  if [ "$(printf %s $magic)" = 53ef ]; then
+    echo ext
+    return 0
+  fi
+  cmp -s -n 65536 "$1" /dev/zero
+  case $? in
+    0) echo zero ;;
+    1) echo other ;;
+    *) return 1 ;;
+  esac
 }
 
 # usage: prepare_disk DEVICE MOUNTPOINT LABEL
 prepare_disk() {
   wait_for_block "$1"
+  content=$(disk_content "$1") || fail "cannot read $1"
   fresh=no
-  if ! has_ext_signature "$1"; then
-    log "formatting $1 ($3)"
-    mkfs.ext4 -q -F -L "$3" -m 0 \
-      -E root_owner=1000:1000,lazy_itable_init=1,lazy_journal_init=1,nodiscard "$1" \
-      || fail "cannot format $1"
-    fresh=yes
-  fi
+  case $content in
+    ext) ;;
+    zero)
+      # The host creates each disk sparse, so a new one reads as zeros
+      # throughout: mkfs may skip zeroing the inode tables and the journal,
+      # and no lazy init writes them later (the host file stays sparse).
+      log "formatting $1 ($3)"
+      mkfs.ext4 -q -F -L "$3" -m 0 \
+        -E root_owner=1000:1000,assume_storage_prezeroed=1,nodiscard "$1" \
+        || fail "cannot format $1"
+      fresh=yes ;;
+    *) fail "$1 holds neither ext4 nor zeros; it is not formatted" ;;
+  esac
   mount -t ext4 -o rw,nosuid,nodev,noatime "$1" "$2" || fail "cannot mount $1 on $2"
   # The container backend's volumes start empty; mkfs adds lost+found, which
   # would show in the agent's listings. e2fsck recreates it if ever needed.
@@ -187,6 +233,7 @@ start_sandboxd() {
 mount_early
 read_keys
 hide_cmdline
+restrict_kernel
 prepare_disk /dev/vdb /workspace workspace
 prepare_disk /dev/vdc /home/agent home
 mount_runtime

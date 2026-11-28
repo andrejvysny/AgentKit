@@ -33,12 +33,13 @@ COPY kernel/agentkit.config kernel/check-config.sh /build/
 RUN tar -xf /build/linux.tar.xz -C /build \
  && mv "/build/linux-${KERNEL_VERSION}" /build/linux \
  && cd /build/linux \
+ && KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S UTC')" \
  && export ARCH=arm64 KBUILD_BUILD_USER=agentkit KBUILD_BUILD_HOST=agentkit KBUILD_BUILD_VERSION=1 \
-           KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S UTC')" \
+           KBUILD_BUILD_TIMESTAMP \
  && make -s allnoconfig \
  && scripts/kconfig/merge_config.sh -m -O . .config /build/agentkit.config \
  && make -s olddefconfig \
- && sh /build/check-config.sh /build/agentkit.config .config \
+ && sh /build/check-config.sh /build/agentkit.config .config . \
  && make -s -j"$(nproc)" Image \
  && mkdir /out \
  && cp arch/arm64/boot/Image /out/Image \

@@ -13,6 +13,11 @@ FROM sandbox AS vm
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
+# The guest supervisor in the image must be the pinned one
+# (SANDBOXD_SHA256_ARM64 in ../manifest.env), whatever image.oci.tar is.
+ARG SANDBOXD_SHA256
+RUN test -n "${SANDBOXD_SHA256}" \
+ && echo "${SANDBOXD_SHA256}  /usr/local/bin/agentkit-sandboxd" | sha256sum --check --strict
 # The image's apt sources already name the snapshot. Files whose content
 # depends on the build time are removed as in ../Dockerfile; the packages
 # the layer adds are recorded for the NOTICE.

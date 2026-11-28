@@ -3,11 +3,11 @@
 #
 #   vm/build.sh kernel      out/Image and out/kernel.config (upstream tarball + agentkit.config)
 #   vm/build.sh root        out/root.ext4 from ../out/image.oci.tar plus the VM layer (build-root.sh)
-#   vm/build.sh manifest    out/vm-manifest.json and out/NOTICE from the files in out/
+#   vm/build.sh manifest    out/NOTICE and out/vm-manifest.json (pins both) from the files in out/
 #   vm/build.sh all         kernel, root, manifest
 #   vm/build.sh verify      build root.ext4 twice (second: --no-cache) and compare the sha256
 #   vm/build.sh smoke       static checks in a Linux container (file, e2fsck -fn, modes, kernel config)
-#   vm/build.sh clean       remove out/work and the kernel and root build cache of the builder
+#   vm/build.sh clean       remove out/work and ALL build cache of the shared builder (../build.sh's too)
 set -euo pipefail
 
 VM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,9 +64,13 @@ cmd_kernel() {
   echo "kernel.config $(sha256_of "$OUT/kernel.config")"
 }
 
+# Takes build-root.sh's arguments and hashes the disk it wrote.
 cmd_root() {
+  local out
   "$VM/build-root.sh" "$@"
-  echo "root.ext4 $(sha256_of "$OUT/root.ext4") $(size_of "$OUT/root.ext4")"
+  [[ "${1:-}" == "--no-cache" ]] && shift
+  out="${1:-$OUT}"
+  echo "root.ext4 $(sha256_of "$out/root.ext4") $(size_of "$out/root.ext4")"
 }
 
 need_outputs() {
@@ -77,9 +81,13 @@ need_outputs() {
 }
 
 # vm-manifest.json in the shape of ADR 0040 §5; a consumer pins its sha256.
+# NOTICE comes first, since the manifest pins it. Both are written to a
+# temporary file and renamed, so a failed run leaves no partial file.
 cmd_manifest() {
   need_outputs
-  python3 -I - "$OUT" "$VM_NAME" "$VM_VERSION" "$VM_ARCH" "$KERNEL_VERSION" <<'EOF' > "$OUT/vm-manifest.json"
+  write_notice > "$OUT/NOTICE.tmp"
+  mv "$OUT/NOTICE.tmp" "$OUT/NOTICE"
+  python3 -I - "$OUT" "$VM_NAME" "$VM_VERSION" "$VM_ARCH" "$KERNEL_VERSION" <<'EOF' > "$OUT/vm-manifest.json.tmp"
 import hashlib, json, os, sys
 out, name, version, arch, kernel_version = sys.argv[1:]
 def sha256(path):
@@ -99,10 +107,11 @@ manifest = {
     "files": [entry("kernel", "Image"), entry("root", "root.ext4")],
     "kernel": {"version": kernel_version, "configSha256": sha256("kernel.config")},
     "licenses": "NOTICE",
+    "licensesSha256": sha256("NOTICE"),
 }
 print(json.dumps(manifest, indent=2))
 EOF
-  write_notice > "$OUT/NOTICE"
+  mv "$OUT/vm-manifest.json.tmp" "$OUT/vm-manifest.json"
   echo "vm-manifest.json $(sha256_of "$OUT/vm-manifest.json")"
   cat "$OUT/vm-manifest.json"
 }

@@ -5,6 +5,10 @@
 # layer in root/Dockerfile. Writes OUT_DIR/root.ext4 (default vm/out),
 # OUT_DIR/root-oci-digest.txt (the index digest it was built from) and
 # OUT_DIR/vm-packages.txt (Debian packages the VM layer added).
+# The build fails unless the image's agentkit-sandboxd has the sha256
+# SANDBOXD_SHA256_ARM64; an index digest other than the one in
+# ../lock/image-digests.txt is only a warning (release step: run
+# ../build.sh verify, which refreshes the lock, then rebuild the root).
 set -euo pipefail
 
 VM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,8 +61,19 @@ ensure_builder() {
   fi
 }
 
+# A warning, not a failure: the lock is refreshed only by ../build.sh verify,
+# which rebuilds the image twice from a fresh builder.
+check_lock() {
+  local locked
+  locked="$(sed -n 's/^index //p' "$IMAGE_DIR/lock/image-digests.txt")"
+  [[ "$locked" == "$1" ]] && return 0
+  log "WARNING: $OCI_TAR has index $1, but lock/image-digests.txt records ${locked:-no index}."
+  log "WARNING: this root disk is not from the verified image; before a release run ../build.sh verify (it refreshes the lock) and rebuild."
+}
+
 ensure_oci_image
 digest="$(index_digest)"
+check_lock "$digest"
 rm -rf "$WORK/oci" "$WORK/root"
 mkdir -p "$WORK/oci" "$WORK/root"
 tar -xf "$OCI_TAR" -C "$WORK/oci"
@@ -70,6 +85,7 @@ docker buildx build --builder "$BUILDER" --platform linux/arm64 \
   --build-arg "BASE_IMAGE=$BASE_IMAGE" \
   --build-arg "DEBIAN_SNAPSHOT=$DEBIAN_SNAPSHOT" \
   --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
+  --build-arg "SANDBOXD_SHA256=$SANDBOXD_SHA256_ARM64" \
   --build-arg "ROOT_SIZE_MIB=$ROOT_SIZE_MIB" \
   --build-arg "ROOT_LABEL=$ROOT_LABEL" \
   --build-arg "ROOT_UUID=$ROOT_UUID" \
