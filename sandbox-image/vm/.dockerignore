@@ -1,0 +1,6 @@
+# Allow-list: only these files reach the VM build context.
+*
+!kernel/agentkit.config
+!kernel/check-config.sh
+!rootfs/
+!root/hosts

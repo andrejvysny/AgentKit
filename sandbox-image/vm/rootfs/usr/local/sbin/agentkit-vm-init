@@ -1,0 +1,201 @@
+#!/bin/sh
+# agentkit-vm-init: PID 1 of the agent sandbox microVM (ADR 0040 §4).
+#
+# 1. Mount proc, sys, devtmpfs (and /run, which holds the empty file); read
+#    the agentkit.* keys of the kernel command line, then cover every
+#    readable copy of the command line with an empty root-only file, so uid
+#    1000 cannot read the channel token.
+# 2. Format vdb and vdc when they carry no ext4 signature; mount vdb on
+#    /workspace and vdc on /home/agent (owner 1000:1000); tmpfs on /tmp,
+#    /var/tmp and /run, plus the /dev entries a container runtime provides.
+# 3. Start agentkit-sandboxd as uid/gid 1000 (setpriv: groups cleared, no
+#    capabilities, no_new_privs) from /etc/sandbox/environment plus the
+#    AGENTKIT_* variables; power off when it exits. Workloads must never run
+#    as root: root could read the token and remount the disks.
+#
+# Any failure powers the VM off: a PID 1 that exits is a kernel panic. So no
+# `set -e`; every step checks its own result.
+set -u
+umask 022
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+EMPTY=/run/agentkit-vm/empty
+SANDBOXD=/usr/local/bin/agentkit-sandboxd
+ENV_FILE=/etc/sandbox/environment
+
+log() { echo "agentkit-vm-init: $*"; }
+
+power_off() {
+  kill -KILL -1 2>/dev/null
+  sync
+  umount /home/agent 2>/dev/null || mount -o remount,ro /home/agent 2>/dev/null
+  umount /workspace 2>/dev/null || mount -o remount,ro /workspace 2>/dev/null
+  sync
+  echo o > /proc/sysrq-trigger
+  # sysrq schedules the power-off; wait for it rather than exit (a panic).
+  while :; do sleep 1; done
+}
+
+fail() {
+  log "$*; powering off"
+  power_off
+}
+
+is_mounted() {
+  grep -q "^[^ ]* $1 " /proc/mounts
+}
+
+mount_early() {
+  mount -t proc -o nosuid,nodev,noexec proc /proc || fail "cannot mount /proc"
+  mount -t sysfs -o nosuid,nodev,noexec sysfs /sys || fail "cannot mount /sys"
+  # The kernel mounts devtmpfs itself (DEVTMPFS_MOUNT); mount it only if not.
+  if ! is_mounted /dev; then
+    mount -t devtmpfs -o nosuid,mode=0755 devtmpfs /dev || fail "cannot mount /dev"
+  fi
+  exec </dev/console >/dev/console 2>&1
+  mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=0755,size=16777216 tmpfs /run \
+    || fail "cannot mount /run"
+}
+
+# Sets generation, image, token, control_port, egress_port. The keys are
+# fixed by the VmLauncher; sandboxd validates the values again.
+read_keys() {
+  generation='' image='' token='' control_port='' egress_port=''
+  read -r cmdline < /proc/cmdline || fail "cannot read /proc/cmdline"
+  set -f
+  for word in $cmdline; do
+    case $word in
+      agentkit.generation=*) generation=${word#*=} ;;
+      agentkit.image=*) image=${word#*=} ;;
+      agentkit.token=*) token=${word#*=} ;;
+      agentkit.control_port=*) control_port=${word#*=} ;;
+      agentkit.egress_port=*) egress_port=${word#*=} ;;
+    esac
+  done
+  set +f
+  unset cmdline word
+  [ -n "$token" ] || fail "agentkit.token is missing"
+  [ -n "$image" ] || fail "agentkit.image is missing"
+  for pair in "generation:$generation" "control_port:$control_port" "egress_port:$egress_port"; do
+    case ${pair#*:} in
+      ''|*[!0-9]*) fail "agentkit.${pair%%:*} is not a decimal number" ;;
+    esac
+  done
+}
+
+# /proc/cmdline, and on a device-tree boot /chosen/bootargs, hold the token.
+# The boot log holds it too; the kernel restricts dmesg to root
+# (SECURITY_DMESG_RESTRICT) and this sets it again.
+hide_cmdline() {
+  mkdir -m 0700 /run/agentkit-vm || fail "cannot create /run/agentkit-vm"
+  : > "$EMPTY" && chmod 0400 "$EMPTY" || fail "cannot create $EMPTY"
+  mount --bind "$EMPTY" /proc/cmdline || fail "cannot cover /proc/cmdline"
+  bootargs=/sys/firmware/devicetree/base/chosen/bootargs
+  if [ -e "$bootargs" ]; then
+    mount --bind "$EMPTY" "$bootargs" || fail "cannot cover $bootargs"
+  fi
+  echo 1 > /proc/sys/kernel/dmesg_restrict || fail "cannot restrict dmesg"
+}
+
+wait_for_block() {
+  i=0
+  while [ ! -b "$1" ]; do
+    i=$((i + 1))
+    [ "$i" -le 200 ] || fail "$1 did not appear"
+    sleep 0.05
+  done
+}
+
+# ext2/3/4 superblock magic 0xEF53, little-endian at byte 1080.
+has_ext_signature() {
+  [ "$(od -An -tx1 -j1080 -N2 "$1" 2>/dev/null | tr -d ' \n')" = 53ef ]
+}
+
+# usage: prepare_disk DEVICE MOUNTPOINT LABEL
+prepare_disk() {
+  wait_for_block "$1"
+  fresh=no
+  if ! has_ext_signature "$1"; then
+    log "formatting $1 ($3)"
+    mkfs.ext4 -q -F -L "$3" -m 0 \
+      -E root_owner=1000:1000,lazy_itable_init=1,lazy_journal_init=1,nodiscard "$1" \
+      || fail "cannot format $1"
+    fresh=yes
+  fi
+  mount -t ext4 -o rw,nosuid,nodev,noatime "$1" "$2" || fail "cannot mount $1 on $2"
+  # The container backend's volumes start empty; mkfs adds lost+found, which
+  # would show in the agent's listings. e2fsck recreates it if ever needed.
+  if [ "$fresh" = yes ]; then
+    rmdir "$2/lost+found" || fail "cannot remove lost+found on $2"
+  fi
+  chown 1000:1000 "$2" && chmod 0755 "$2" || fail "cannot set the owner of $2"
+}
+
+# The container template's tmpfs (/tmp 256 MiB, /var/tmp 64 MiB, noexec) and
+# what a container runtime adds to /dev.
+mount_runtime() {
+  mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777,size=268435456 tmpfs /tmp \
+    || fail "cannot mount /tmp"
+  mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777,size=67108864 tmpfs /var/tmp \
+    || fail "cannot mount /var/tmp"
+  mkdir -p /dev/pts /dev/shm
+  mount -t devpts -o nosuid,noexec,gid=5,mode=0620,ptmxmode=0666 devpts /dev/pts \
+    || fail "cannot mount /dev/pts"
+  mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777,size=67108864 tmpfs /dev/shm \
+    || fail "cannot mount /dev/shm"
+  for link in fd:/proc/self/fd stdin:/proc/self/fd/0 stdout:/proc/self/fd/1 stderr:/proc/self/fd/2; do
+    [ -e "/dev/${link%%:*}" ] || ln -s "${link#*:}" "/dev/${link%%:*}"
+  done
+}
+
+# The kernel leaves lo down; the egress shim listens on 127.0.0.1:3128.
+# The image has no ip(8), so set IFF_UP with SIOCGIFFLAGS/SIOCSIFFLAGS.
+loopback_up() {
+  python3 -I -S -c '
+import fcntl, socket, struct
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+flags = struct.unpack("16sH22x", fcntl.ioctl(s, 0x8913, struct.pack("16sH22x", b"lo", 0)))[1]
+fcntl.ioctl(s, 0x8914, struct.pack("16sH22x", b"lo", flags | 1))
+' || fail "cannot bring lo up"
+}
+
+# The token goes into sandboxd's environment only: never exported in this
+# shell, never on a command line.
+start_sandboxd() {
+  (
+    for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
+      unset "$name"
+    done
+    while IFS= read -r line; do
+      case $line in
+        ''|'#'*) ;;
+        *=*) export "$line" ;;
+      esac
+    done < "$ENV_FILE"
+    export AGENTKIT_GENERATION="$generation" AGENTKIT_IMAGE_DIGEST="$image" \
+      AGENTKIT_CHANNEL_TOKEN="$token" AGENTKIT_CONTROL_VSOCK_PORT="$control_port" \
+      AGENTKIT_EGRESS_VSOCK_PORT="$egress_port"
+    cd /workspace || exit 2
+    exec setpriv --reuid=1000 --regid=1000 --clear-groups --inh-caps=-all \
+      --bounding-set=-all --no-new-privs "$SANDBOXD"
+  ) &
+  sandboxd_pid=$!
+  unset token
+}
+
+mount_early
+read_keys
+hide_cmdline
+prepare_disk /dev/vdb /workspace workspace
+prepare_disk /dev/vdc /home/agent home
+mount_runtime
+loopback_up
+[ -r "$ENV_FILE" ] || fail "$ENV_FILE is missing"
+command -v setpriv >/dev/null || fail "setpriv is missing"
+start_sandboxd
+# This shell is PID 1: wait also reaps orphans that reach it.
+wait "$sandboxd_pid"
+status=$?
+log "agentkit-sandboxd exited with status $status"
+power_off
